@@ -62,6 +62,16 @@ tasks.register<JavaExec>("viewer") {
     if (project.hasProperty("pdf")) args(project.property("pdf").toString())
 }
 
+// Run: ./gradlew :jpdfium:run -PmainClass=com.example.Main
+tasks.register<JavaExec>("run") {
+    group       = "application"
+    description = "Run a main class from the test classpath"
+    if (project.hasProperty("mainClass")) mainClass.set(project.property("mainClass").toString())
+    if (project.hasProperty("args")) args(project.property("args").toString().split(" "))
+    classpath = sourceSets.test.get().runtimeClasspath
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
 // ── Integration tests (real PDFium, tagged "integration") ─────────────────────
 // Run: ./gradlew :jpdfium:integrationTest
 tasks.register<Test>("integrationTest") {

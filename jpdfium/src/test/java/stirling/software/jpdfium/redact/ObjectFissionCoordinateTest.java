@@ -54,9 +54,7 @@ import static org.junit.jupiter.api.Assertions.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class ObjectFissionCoordinateTest {
 
-    // ===========================================================================
     // Constants
-    // ===========================================================================
 
     private static final String SSN_PATTERN = "\\d{3}-\\d{2}-\\d{4}";
     private static final String SSN1 = "123-45-6789";
@@ -78,9 +76,7 @@ class ObjectFissionCoordinateTest {
             "\"b\":" + NUM + ",\"t\":" + NUM + "\\}"
     );
 
-    // ===========================================================================
     // Helper records & methods
-    // ===========================================================================
 
     record CharPos(int index, int unicode, double ox, double oy,
                    double l, double r, double b, double t) {
@@ -210,9 +206,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 1. FONT ENCODING - Coordinate Preservation
-    // ===========================================================================
 
     @Order(1)
     @ParameterizedTest(name = "[{0}] suffix text does not shift after SSN redaction")
@@ -242,9 +236,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 2. PATTERN POSITION - start / end / entire / cross-object
-    // ===========================================================================
 
     @Order(2)
     @Test
@@ -320,9 +312,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 3. MULTI-SSN SAME LINE
-    // ===========================================================================
 
     @Order(3)
     @Test
@@ -367,9 +357,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 4. TEXT REMOVAL VERIFICATION
-    // ===========================================================================
 
     @Order(4)
     @ParameterizedTest(name = "[{0}] SSN patterns completely removed")
@@ -395,9 +383,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 5. NON-REDACTED TEXT SURVIVAL
-    // ===========================================================================
 
     @Order(5)
     @ParameterizedTest(name = "[{0}] non-redacted text survives")
@@ -414,9 +400,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 6. TEXT OPERATORS - char/word spacing, h-scaling, text rise, leading
-    // ===========================================================================
 
     @Order(6)
     @ParameterizedTest(name = "[{0}] operator: suffix preserved after SSN redaction")
@@ -489,9 +473,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 7. TEXT TRANSFORMS - rotation, scale, skew, mirror, CTM
-    // ===========================================================================
 
     @Order(7)
     @ParameterizedTest(name = "[{0}] transformed text: SSN removed")
@@ -534,9 +516,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 8. PAGE STRUCTURE - rotated pages, mediabox, cropbox, multistream
-    // ===========================================================================
 
     @Order(8)
     @ParameterizedTest(name = "page rotation {0} deg: SSN removed")
@@ -567,9 +547,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 9. FONT SIZES
-    // ===========================================================================
 
     @Order(9)
     @ParameterizedTest(name = "font size {0}pt: SSN removed + suffix preserved")
@@ -591,9 +569,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 10. RENDERING MODES (Tr 0–7)
-    // ===========================================================================
 
     @Order(10)
     @ParameterizedTest(name = "rendering mode Tr{0}: SSN removed")
@@ -607,9 +583,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 11. COLOR PRESERVATION
-    // ===========================================================================
 
     @Order(11)
     @ParameterizedTest(name = "[{0}] colored text: SSN removed + suffix survives")
@@ -628,9 +602,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 12. UNICODE / i18n (WinAnsi-encodable)
-    // ===========================================================================
 
     @Order(12)
     @ParameterizedTest(name = "[{0}] unicode text: SSN removed + suffix preserved")
@@ -655,9 +627,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 13. MULTI-PATTERN / MULTI-PII
-    // ===========================================================================
 
     @Order(13)
     @Test
@@ -685,9 +655,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 14. PATTERN-SPECIFIC: email, phone, CC
-    // ===========================================================================
 
     @Order(14)
     @Test
@@ -727,9 +695,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 15. EDGE CASES - empty page, image-only, single char
-    // ===========================================================================
 
     @Order(15)
     @Test
@@ -767,9 +733,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 16. COMPLEX STRUCTURES
-    // ===========================================================================
 
     @Order(16)
     @Test
@@ -852,9 +816,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 17. STRESS TESTS
-    // ===========================================================================
 
     @Order(17)
     @Test
@@ -897,9 +859,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 18. VISUAL REGRESSION
-    // ===========================================================================
 
     @Order(18)
     @ParameterizedTest(name = "[{0}] visual regression: <=5% pixel diff")
@@ -942,9 +902,7 @@ class ObjectFissionCoordinateTest {
                 String.format("%s: %.1f%% pixels differ (max 5%%). Possible text shift.", pdf, pct));
     }
 
-    // ===========================================================================
     // 19. OVERLAPPING TEXT OBJECTS
-    // ===========================================================================
 
     @Order(19)
     @Test
@@ -968,9 +926,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 20. INLINE IMAGE (text + non-text interleaved)
-    // ===========================================================================
 
     @Order(20)
     @Test
@@ -984,9 +940,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 21. MULTILINE COORDINATE PRESERVATION
-    // ===========================================================================
 
     @Order(21)
     @Test
@@ -1013,9 +967,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 22. MIRRORED TEXT
-    // ===========================================================================
 
     @Order(22)
     @Test
@@ -1026,9 +978,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 23. WIDTH FIDELITY REGRESSION
-    // ===========================================================================
 
     @Order(23)
     @Test
@@ -1046,9 +996,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 24. RE-REDACTION IDEMPOTENCY
-    // ===========================================================================
 
     @Order(24)
     @Test
@@ -1075,9 +1023,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-    // ===========================================================================
     // 25. CASE SENSITIVITY
-    // ===========================================================================
 
     @Order(25)
     @Test

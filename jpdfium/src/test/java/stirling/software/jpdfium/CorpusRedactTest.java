@@ -49,7 +49,6 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("corpus")
 class CorpusRedactTest {
 
-    // -- Configuration ---------------------------------------------------------
 
     /** Render DPI for visual comparison. 72 keeps the test fast. */
     private static final int DPI = 72;
@@ -63,7 +62,6 @@ class CorpusRedactTest {
     /** Max local redact PDFs to include alongside downloaded corpus. */
     private static final int MAX_LOCAL_PDFS = 20;
 
-    // -- Structural failure thresholds -----------------------------------------
 
     /**
      * If more than this fraction of characters vanish after redaction, the PDF
@@ -106,7 +104,6 @@ class CorpusRedactTest {
     private static List<Path> corpusPdfs;
     private static final List<PdfReport> reports = new ArrayList<>();
 
-    // -- Setup -----------------------------------------------------------------
 
     @BeforeAll
     static void downloadCorpus() throws Exception {
@@ -134,7 +131,6 @@ class CorpusRedactTest {
                 corpusPdfs.size(), REPORT_DIR.toAbsolutePath());
     }
 
-    // -- Test factory ----------------------------------------------------------
 
     @TestFactory
     Stream<DynamicTest> redactCorpusPreservesNonTargetContent() {
@@ -150,7 +146,6 @@ class CorpusRedactTest {
         ));
     }
 
-    // -- Per-PDF test logic ----------------------------------------------------
 
     private void testSinglePdf(Path pdf) throws Exception {
         String stem = pdf.getFileName().toString().replace(".pdf", "");
@@ -171,7 +166,6 @@ class CorpusRedactTest {
 
     private void testSinglePdfInner(Path pdf, String stem, Path pdfOutDir,
                                      PdfReport report) throws Exception {
-        // --- Open and count pages ---
         int pageCount;
         try (var doc = PdfDocument.open(pdf)) {
             pageCount = doc.pageCount();
@@ -185,7 +179,6 @@ class CorpusRedactTest {
         report.pageCount = pageCount;
         int pagesToTest = Math.min(pageCount, MAX_PAGES_PER_PDF);
 
-        // --- Extract text BEFORE redaction (for structural checks) ---
         String[] textBefore = new String[pagesToTest];
         BufferedImage[] originals = new BufferedImage[pagesToTest];
         try (var doc = PdfDocument.open(pdf)) {
@@ -197,7 +190,6 @@ class CorpusRedactTest {
             }
         }
 
-        // --- Perform word redaction ---
         byte[] redactedBytes;
         int totalMatches = 0;
         try (var doc = PdfDocument.open(pdf)) {
@@ -217,7 +209,6 @@ class CorpusRedactTest {
         }
         report.totalMatches = totalMatches;
 
-        // --- Extract text and render AFTER redaction ---
         String[] textAfter = new String[pagesToTest];
         BufferedImage[] redacted = new BufferedImage[pagesToTest];
         try (var doc = PdfDocument.open(redactedBytes)) {
@@ -229,7 +220,6 @@ class CorpusRedactTest {
             }
         }
 
-        // --- Analyze each page ---
         List<String> failures = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
@@ -258,7 +248,6 @@ class CorpusRedactTest {
             }
         }
 
-        // --- Determine severity ---
         if (!failures.isEmpty()) {
             report.severity = Severity.FAIL;
             report.issues.addAll(failures);
@@ -272,7 +261,6 @@ class CorpusRedactTest {
         addReport(report);
         writeHtmlReport();
 
-        // --- Assert on structural failures (FAIL severity only) ---
         if (report.severity == Severity.FAIL) {
             fail(String.format(
                     "Structural failure in %s:%n%s%nReport: %s",
@@ -281,7 +269,6 @@ class CorpusRedactTest {
         }
     }
 
-    // -- Page-level analysis ---------------------------------------------------
 
     private PageAnalysis analyzePage(
             BufferedImage before, BufferedImage after,
@@ -291,7 +278,6 @@ class CorpusRedactTest {
         PageAnalysis pa = new PageAnalysis();
         pa.pageIndex = pageIndex;
 
-        // --- Visual diff ---
         if (before.getWidth() != after.getWidth() || before.getHeight() != after.getHeight()) {
             pa.sizeMismatch = true;
             VisualDiff.save(before, outDir.resolve("page-" + pageIndex + "-before.png"));
@@ -308,7 +294,6 @@ class CorpusRedactTest {
         VisualDiff.save(after, outDir.resolve("page-" + pageIndex + "-after.png"));
         VisualDiff.save(diff.diffImage(), outDir.resolve("page-" + pageIndex + "-diff.png"));
 
-        // --- Text-level structural analysis ---
         // Count Unicode characters (the "u" field in the JSON)
         pa.charsBefore = countChars(jsonBefore);
         pa.charsAfter = countChars(jsonAfter);
@@ -316,7 +301,6 @@ class CorpusRedactTest {
                 ? 1.0 - ((double) pa.charsAfter / pa.charsBefore)
                 : 0;
 
-        // --- Non-target word survival check ---
         // Extract words from BEFORE text, filter out target words, sample some,
         // and verify they still exist in AFTER text.
         String plainBefore = extractPlainText(jsonBefore);
@@ -397,13 +381,11 @@ class CorpusRedactTest {
         return sampled;
     }
 
-    // -- Report helpers --------------------------------------------------------
 
     private static synchronized void addReport(PdfReport report) {
         reports.add(report);
     }
 
-    // -- HTML report generation ------------------------------------------------
 
     private static synchronized void writeHtmlReport() {
         try {
@@ -545,7 +527,6 @@ class CorpusRedactTest {
         }
     }
 
-    // -- CSS -------------------------------------------------------------------
 
     private static final String REPORT_CSS = """
             <style>
@@ -585,7 +566,6 @@ class CorpusRedactTest {
             </style>
             """;
 
-    // -- Data classes ----------------------------------------------------------
 
     enum Severity { FAIL, WARN, PASS, SKIP }
 

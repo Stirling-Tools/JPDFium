@@ -1,4 +1,4 @@
-// Stub implementation — returns hardcoded valid data so the Java layer can be
+// Stub implementation - returns hardcoded valid data so the Java layer can be
 // tested before the real PDFium native library is compiled.
 #include "jpdfium.h"
 #include <cstring>

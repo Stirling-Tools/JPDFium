@@ -49,16 +49,12 @@ public class GettingStartedExample {
         NativeLoader.ensureLoaded();
         System.out.println("Platform: " + NativeLoader.detectPlatform());
 
-        // --------------------------------------------------------------------
         // 1. Open a PDF from file or bytes
-        // --------------------------------------------------------------------
         System.out.println("\n=== 1. Open PDF ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             System.out.printf("Opened: %s - %d pages%n", input.getFileName(), doc.pageCount());
 
-            // ----------------------------------------------------------------
             // 2. Query page info
-            // ----------------------------------------------------------------
             System.out.println("\n=== 2. Page Info ===");
             try (PdfPage page = doc.page(0)) {
                 PageSize size = page.size();
@@ -67,9 +63,7 @@ public class GettingStartedExample {
                         size.width() * 25.4 / 72, size.height() * 25.4 / 72);
             }
 
-            // ----------------------------------------------------------------
             // 3. Render a page to a BufferedImage and save as PNG
-            // ----------------------------------------------------------------
             System.out.println("\n=== 3. Render to PNG ===");
             try (PdfPage page = doc.page(0)) {
                 RenderResult result = page.renderAt(150);  // 150 DPI
@@ -80,9 +74,7 @@ public class GettingStartedExample {
                 System.out.println("Saved → /tmp/page0.png");
             }
 
-            // ----------------------------------------------------------------
             // 4. Extract text as JSON
-            // ----------------------------------------------------------------
             System.out.println("\n=== 4. Text Extraction ===");
             try (PdfPage page = doc.page(0)) {
                 String json = page.extractTextJson();
@@ -90,9 +82,7 @@ public class GettingStartedExample {
                 System.out.println("First 200: " + json.substring(0, Math.min(200, json.length())));
             }
 
-            // ----------------------------------------------------------------
             // 5. Search for text on a page
-            // ----------------------------------------------------------------
             System.out.println("\n=== 5. Text Search ===");
             try (PdfPage page = doc.page(0)) {
                 String searchJson = page.findTextJson("the");
@@ -100,9 +90,7 @@ public class GettingStartedExample {
                 System.out.printf("Found %d matches for 'the'%n", matchCount);
             }
 
-            // ----------------------------------------------------------------
             // 6. Redact a rectangular region
-            // ----------------------------------------------------------------
             System.out.println("\n=== 6. Region Redaction ===");
             try (PdfPage page = doc.page(0)) {
                 // Redacts a 200x20pt region to ensure content is visually and structurally removed.
@@ -111,18 +99,14 @@ public class GettingStartedExample {
                 System.out.printf("Redacted region: %s%n", region);
             }
 
-            // ----------------------------------------------------------------
             // 7. Redact by regex pattern (e.g., Social Security Numbers)
-            // ----------------------------------------------------------------
             System.out.println("\n=== 7. Pattern Redaction ===");
             try (PdfPage page = doc.page(0)) {
                 page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000, true);
                 System.out.println("Redacted SSN patterns");
             }
 
-            // ----------------------------------------------------------------
             // 8. Redact a word list (Stirling-PDF style)
-            // ----------------------------------------------------------------
             System.out.println("\n=== 8. Word-List Redaction ===");
             try (PdfPage page = doc.page(0)) {
                 String[] words = {"Confidential", "SECRET", "password"};
@@ -137,25 +121,19 @@ public class GettingStartedExample {
                 System.out.println("Redacted words: " + String.join(", ", words));
             }
 
-            // ----------------------------------------------------------------
             // 9. Flatten annotations (burn into content stream)
-            // ----------------------------------------------------------------
             System.out.println("\n=== 9. Flatten ===");
             try (PdfPage page = doc.page(0)) {
                 page.flatten();
                 System.out.println("Page 0 flattened");
             }
 
-            // ----------------------------------------------------------------
             // 10. Rasterizes the page to an image to guarantee no vector text data remains.
-            // ----------------------------------------------------------------
             System.out.println("\n=== 10. Convert to Image ===");
             doc.convertPageToImage(0, 150);
             System.out.println("Page 0 converted to image at 150 DPI");
 
-            // ----------------------------------------------------------------
             // 11. Save the modified PDF
-            // ----------------------------------------------------------------
             System.out.println("\n=== 11. Save ===");
             Path output = Path.of("/tmp/output.pdf");
             doc.save(output);
@@ -166,9 +144,7 @@ public class GettingStartedExample {
             System.out.printf("saveBytes(): %d bytes (%d KB)%n", bytes.length, bytes.length / 1024);
         }
 
-        // --------------------------------------------------------------------
         // Bonus: Open from byte array
-        // --------------------------------------------------------------------
         System.out.println("\n=== Bonus: Open from bytes ===");
         byte[] pdfBytes = java.nio.file.Files.readAllBytes(input);
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {

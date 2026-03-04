@@ -44,7 +44,7 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     return result;
 }
 
-// UTF-8 → std::wstring (wchar_t is 32-bit on Linux/macOS — one code unit per codepoint)
+// UTF-8 → std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per codepoint)
 static std::wstring utf8_to_wstring(const char* utf8) {
     std::wstring result;
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
@@ -135,7 +135,7 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 
     if (removeContent) {
         // Phase 1: remove objects that are FULLY or MOSTLY contained in the redact rect.
-        // Objects that only partially overlap are NOT removed — the painted rectangle
+        // Objects that only partially overlap are NOT removed - the painted rectangle
         // will cover them visually, and flatten will bake it in.
         int objCount = FPDFPage_CountObjects(page);
         for (int i = objCount - 1; i >= 0; --i) {
@@ -159,7 +159,7 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
         }
     }
 
-    // Phase 2: paint filled rectangle (always — provides visual cover)
+    // Phase 2: paint filled rectangle (always - provides visual cover)
     FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(x, y, w, h);
     if (!rect) return JPDFIUM_ERR_NATIVE;
     FPDFPageObj_SetFillColor(rect, r, g, b, 255);
@@ -216,7 +216,7 @@ struct FissionPlan {
     float                  fontSize;
     FPDF_TEXT_RENDERMODE    renderMode;
 
-    // Original text colors — copied to every new fragment
+    // Original text colors - copied to every new fragment
     unsigned int fillR, fillG, fillB, fillA;
     unsigned int strokeR, strokeG, strokeB, strokeA;
     bool         hasStroke;
@@ -248,7 +248,7 @@ static int32_t objectFissionRedact(
         return FPDFPage_GenerateContent(page) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
     }
 
-    // ── Analysis phase (read-only — all text-page queries happen here) ────────
+    // ── Analysis phase (read-only - all text-page queries happen here) ────────
 
     int totalChars = FPDFText_CountChars(textPage);
 

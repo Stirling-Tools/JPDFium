@@ -3,19 +3,19 @@
 High-performance Java 25 FFM bindings for Google PDFium.
 
 JPDFium provides a safe, ergonomic Java API for PDF rendering, text extraction,
-and true content-stripping redaction — powered by Google's PDFium engine via
+and true content-stripping redaction - powered by Google's PDFium engine via
 Java 25's Foreign Function & Memory (FFM) API.
 
 ## Features
 
-- **PDF Rendering** — Render pages to RGBA bitmaps at any DPI
-- **Text Extraction** — Structured page → line → word → character extraction with font/position metadata
-- **Text Search** — Literal string search via PDFium's native search engine
-- **True Redaction** — Removes content from the PDF stream (not a cosmetic overlay); region, regex-pattern, and word-list redaction with full Unicode support
-- **Secure PDF-Image** — Convert pages to rasterized images, stripping all selectable text and vector content
-- **Cross-Platform** — Linux x64/arm64, macOS x64/arm64, Windows x64
-- **Zero JNI** — Pure FFM (`java.lang.foreign`), no JNI boilerplate
-- **Apache 2.0** — PDFium is BSD-3-Clause, this project is Apache-2.0
+- **PDF Rendering** - Render pages to RGBA bitmaps at any DPI
+- **Text Extraction** - Structured page → line → word → character extraction with font/position metadata
+- **Text Search** - Literal string search via PDFium's native search engine
+- **True Redaction** - Removes content from the PDF stream (not a cosmetic overlay); region, regex-pattern, and word-list redaction with full Unicode support
+- **Secure PDF-Image** - Convert pages to rasterized images, stripping all selectable text and vector content
+- **Cross-Platform** - Linux x64/arm64, macOS x64/arm64, Windows x64
+- **Zero JNI** - Pure FFM (`java.lang.foreign`), no JNI boilerplate
+- **Apache 2.0** - PDFium is BSD-3-Clause, this project is Apache-2.0
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
         // Render to PNG at 150 DPI
         ImageIO.write(page.renderAt(150).toBufferedImage(), "PNG", new File("page0.png"));
 
-        // Redact SSNs — true content removal
+        // Redact SSNs - true content removal
         page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
         page.flatten();
     }
@@ -65,24 +65,13 @@ JVM flag required: `--enable-native-access=ALL-UNNAMED`
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                  Your Application (Java 25)                  │
-├──────────────────────────────────────────────────────────────┤
-│  jpdfium                                                     │
-│    PdfDocument · PdfPage                                     │
-│    PdfTextExtractor · PdfTextSearcher                        │
-│    PdfRedactor · RedactOptions · PageOps                     │
-│    panama/NativeLoader · panama/JpdfiumLib                   │
-│    panama/JpdfiumH  (jextract-generated FFM bindings)        │
-├──────────────────────────────────────────┬───────────────────┤
-│                                          │ java.lang.foreign │
-├──────────────────────────────────────────┼───────────────────┤
-│  libjpdfium.so   C bridge (~23 fns)      │                   │
-├──────────────────────────────────────────┼───────────────────┤
-│  libpdfium.so    Google PDFium           │                   │
-└──────────────────────────────────────────┴───────────────────┘
-```
+| Layer | Components | Description |
+|---|---|---|
+| **User Application** | Your Application (Java 25) | Consuming application code |
+| **High-level Java API** | `PdfDocument`, `PdfPage`, `PdfTextExtractor`, `PdfRedactor` | Safe, ergonomic abstractions within the `jpdfium` module |
+| **FFM Bindings** | `panama/NativeLoader`, `panama/JpdfiumH` | Auto-generated native interfaces via `java.lang.foreign` |
+| **Native Bridge** | `libjpdfium.so` | C/C++ bridge exposing targeted functions with managed handles |
+| **Core Engine** | `libpdfium.so` | Google's underlying PDFium engine |
 
 JPDFium does not bind directly to PDFium's 400+ function C API. A thin C++ bridge (`libjpdfium`) exposes exactly the operations needed, with clean error codes, handle-based lifetime management, and correct memory ownership.
 
@@ -123,7 +112,7 @@ page.redactRegion(Rect, int argbColor)
 page.redactPattern(String regex, int argbColor)
 page.redactWords(String[] words, int argb, float padding, boolean wholeWord,
                  boolean useRegex, boolean removeContent)
-// Object Fission — true text removal, returns match count:
+// Object Fission - true text removal, returns match count:
 int matches = page.redactWordsEx(String[] words, int argb, float padding,
                                   boolean wholeWord, boolean useRegex,
                                   boolean removeContent, boolean caseSensitive)
@@ -181,11 +170,11 @@ PageOps.renderAll(doc, dpi)                  // → List<BufferedImage>
 
 ### Prerequisites
 
-- Java 25 — [download](https://jdk.java.net/25/)
-- g++ (C++17) — `apt install g++` / Xcode CLT / MSVC
-- jextract 25 (optional, to regenerate FFM bindings) — [download](https://jdk.java.net/jextract/)
+- Java 25 - [download](https://jdk.java.net/25/)
+- g++ (C++17) - `apt install g++` / Xcode CLT / MSVC
+- jextract 25 (optional, to regenerate FFM bindings) - [download](https://jdk.java.net/jextract/)
 
-### Build with Stub (no PDFium — unit tests only)
+### Build with Stub (no PDFium - unit tests only)
 
 ```bash
 g++ -std=c++17 -shared -fPIC -O2 \
@@ -265,22 +254,22 @@ Then right-click any sample → Run. Or launch the visual Swing viewer:
 - Independent `PdfDocument` instances on separate threads are safe.
 - `FPDF_InitLibrary` / `FPDF_DestroyLibrary` are called once globally by `JpdfiumLib`'s static initializer.
 
-## Redaction Design — Object Fission Algorithm
+## Redaction Design - Object Fission Algorithm
 
 True redaction requires more than painting a black rectangle. JPDFium implements the **Object Fission Algorithm** for character-level text removal with zero typographic side-effects.
 
 ### How it works
 
-1. **Spatial correlation** — each text-page character index is mapped to its owning `FPDF_PAGEOBJECT` by comparing character bounding-box centres against page-object bounding boxes.
-2. **Object classification** — for every text object that contains redacted characters:
+1. **Spatial correlation** - each text-page character index is mapped to its owning `FPDF_PAGEOBJECT` by comparing character bounding-box centres against page-object bounding boxes.
+2. **Object classification** - for every text object that contains redacted characters:
    - *Fully contained* → the entire object is destroyed.
    - *Partially overlapping* → **Object Fission**: the object is split into two fragments:
-     - **Prefix** — a new text object with the original font, size, matrix, and render mode.
-     - **Suffix** — a new text object with the same font/size/renderMode but with `(e, f)` translation pinned to the absolute coordinate of the first surviving character via `FPDFText_GetCharOrigin`.
+     - **Prefix** - a new text object with the original font, size, matrix, and render mode.
+     - **Suffix** - a new text object with the same font/size/renderMode but with `(e, f)` translation pinned to the absolute coordinate of the first surviving character via `FPDFText_GetCharOrigin`.
      - The original object is then destroyed.
-3. **Fallback** — text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
-4. **Visual cover** — a filled rectangle is painted over every match region.
-5. **Single commit** — one `FPDFPage_GenerateContent` call bakes all modifications.
+3. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
+4. **Visual cover** - a filled rectangle is painted over every match region.
+5. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
 
 ### Why this is better than bounding-box removal
 
@@ -293,13 +282,13 @@ True redaction requires more than painting a black rectangle. JPDFium implements
 
 ```
 redactWordsEx(..., removeContent=false)   visual overlay only (not secure)
-redactWordsEx(..., removeContent=true)    Object Fission — text removed from stream
-page.flatten()                            bakes everything — prevents annotation recovery
-doc.convertPageToImage(page, dpi)         rasterize — no text, vectors, or metadata survives
+redactWordsEx(..., removeContent=true)    Object Fission - text removed from stream
+page.flatten()                            bakes everything - prevents annotation recovery
+doc.convertPageToImage(page, dpi)         rasterize - no text, vectors, or metadata survives
 ```
 
 Use `convertToImage(true)` in `RedactOptions` for the nuclear option.
 
 ## License
 
-Apache 2.0. PDFium itself is [BSD-3-Clause](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE).
+MIT. PDFium itself is [BSD-3-Clause](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE).

@@ -85,7 +85,7 @@ public class S08_FullPipeline {
 
             // Step 3 and 4: Redact (Object Fission) then Flatten
             SampleBase.section("Step 3+4: Object Fission redact SSN + Flatten");
-            Path redactedPdf = outDir.resolve("redacted.pdf");
+            Path redactedPdf = outDir.resolve(input.getFileName());
             int totalMatches = 0;
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {

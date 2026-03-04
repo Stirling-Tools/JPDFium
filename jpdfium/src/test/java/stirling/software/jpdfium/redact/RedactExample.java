@@ -23,9 +23,7 @@ public class RedactExample {
         Path input  = args.length > 0 ? Path.of(args[0]) : Path.of("/tmp/test.pdf");
         Path output = Path.of("/tmp/redacted.pdf");
 
-        // --------------------------------------------------------------------
         // Example 1: Simple word redaction - black boxes over specific words
-        // --------------------------------------------------------------------
         System.out.println("=== Example 1: Simple word redaction ===");
         {
             RedactOptions opts = RedactOptions.builder()
@@ -44,9 +42,7 @@ public class RedactExample {
             System.out.println("  Saved → " + output);
         }
 
-        // --------------------------------------------------------------------
         // Example 2: Regex-based redaction - SSNs, emails, credit card numbers
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 2: Regex-based redaction ===");
         {
             RedactOptions opts = RedactOptions.builder()
@@ -66,9 +62,7 @@ public class RedactExample {
                     result.pagesProcessed(), result.durationMs());
         }
 
-        // --------------------------------------------------------------------
         // Example 3: Whole-word matching with padding
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 3: Whole-word matching ===");
         {
             RedactOptions opts = RedactOptions.builder()
@@ -87,11 +81,9 @@ public class RedactExample {
                     result.pagesProcessed(), result.durationMs());
         }
 
-        // --------------------------------------------------------------------
         // Example 4: Most secure - redact + convert to PDF-Image
         //   This re-renders every page as a flat image. No extractable text
         //   or object metadata survives. Ideal for leaked-document prevention.
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 4: Redact + Convert to PDF-Image ===");
         {
             RedactOptions opts = RedactOptions.builder()
@@ -110,9 +102,7 @@ public class RedactExample {
                     result.pagesProcessed(), result.durationMs());
         }
 
-        // --------------------------------------------------------------------
         // Example 5: Redact in-place on an already-open document
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 5: In-place redaction on open document ===");
         {
             try (PdfDocument doc = PdfDocument.open(input)) {

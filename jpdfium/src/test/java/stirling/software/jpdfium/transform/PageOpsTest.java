@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import stirling.software.jpdfium.PdfDocument;
+
 /**
  * Unit tests for {@link PageOps}.
  * Compile-verification tests ensuring API surface stability. Actual PDF operations require
@@ -23,16 +25,16 @@ class PageOpsTest {
     @Test
     void hasExpectedMethods() throws NoSuchMethodException {
         assertNotNull(PageOps.class.getMethod("flatten",
-                stirling.software.jpdfium.PdfDocument.class, int.class));
+                PdfDocument.class, int.class));
         assertNotNull(PageOps.class.getMethod("flattenAll",
-                stirling.software.jpdfium.PdfDocument.class));
+                PdfDocument.class));
         assertNotNull(PageOps.class.getMethod("convertToImage",
-                stirling.software.jpdfium.PdfDocument.class, int.class, int.class));
+                PdfDocument.class, int.class, int.class));
         assertNotNull(PageOps.class.getMethod("convertAllToImages",
-                stirling.software.jpdfium.PdfDocument.class, int.class));
+                PdfDocument.class, int.class));
         assertNotNull(PageOps.class.getMethod("renderPage",
-                stirling.software.jpdfium.PdfDocument.class, int.class, int.class));
+                PdfDocument.class, int.class, int.class));
         assertNotNull(PageOps.class.getMethod("renderAll",
-                stirling.software.jpdfium.PdfDocument.class, int.class));
+                PdfDocument.class, int.class));
     }
 }

@@ -32,12 +32,20 @@ final class SampleBase {
 
     /** Root output directory. The absolute path is printed when each sample starts so you can find the output. */
     static final Path OUT_ROOT;
+    static final Path PROJECT_ROOT;
 
     static {
+        // Find the project root by looking for settings.gradle.kts or falling back to user.dir
+        Path current = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null && !Files.exists(current.resolve("settings.gradle.kts"))) {
+            current = current.getParent();
+        }
+        PROJECT_ROOT = (current != null) ? current : Path.of(System.getProperty("user.dir")).toAbsolutePath();
+
         String override = System.getProperty("samples.output");
         OUT_ROOT = (override != null)
-                ? Path.of(override)
-                : Path.of(System.getProperty("user.dir")).resolve("samples-output");
+                ? Path.of(override).toAbsolutePath()
+                : PROJECT_ROOT.resolve("samples-output");
     }
 
     private SampleBase() {}

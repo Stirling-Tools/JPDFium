@@ -41,10 +41,11 @@ public class RunAllSamples {
         passed += run("S06_RedactWords",   () -> S06_RedactWords.main(a));
         passed += run("S07_SecureRedact",  () -> S07_SecureRedact.main(a));
         passed += run("S08_FullPipeline",  () -> S08_FullPipeline.main(a));
+        passed += run("S09_Flatten",       () -> S09_Flatten.main(a));
 
         // Subtract failures from passed count
         System.out.println("\n==================================================");
-        System.out.printf("Results: %d/%d samples passed%n", passed, 8);
+        System.out.printf("Results: %d/%d samples passed%n", passed, 9);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
         System.out.println("==================================================");
     }

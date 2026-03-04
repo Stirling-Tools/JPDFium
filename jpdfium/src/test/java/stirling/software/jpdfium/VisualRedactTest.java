@@ -241,9 +241,7 @@ class VisualRedactTest {
             "Some corpus pages changed after a save round-trip. See test-output/visual-diff/corpus/");
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private static int findSubsequence(List<CharPositionFidelityTest.CharPos> chars, List<Integer> seq) {
         outer:

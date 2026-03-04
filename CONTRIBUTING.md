@@ -21,7 +21,7 @@
    ./gradlew test
    ```
 
-4. **Open in IntelliJ IDEA** — import as a Gradle project. Add
+4. **Open in IntelliJ IDEA** - import as a Gradle project. Add
    `--enable-native-access=ALL-UNNAMED` to Run Configurations → Templates → Application → VM Options.
 
 ## Project Structure
@@ -72,7 +72,7 @@ JPDFium/
 
 Adding a feature follows a consistent pattern across all layers:
 
-**Step 1 — C header** (`native/bridge/include/jpdfium.h`):
+**Step 1 - C header** (`native/bridge/include/jpdfium.h`):
 ```c
 JPDFIUM_EXPORT int32_t jpdfium_page_rotate(int64_t page, int32_t rotation);
 ```
@@ -81,9 +81,9 @@ Rules:
 - Opaque handles use `int64_t`
 - Output params via pointer (`float* width`)
 - Caller-freed buffers via double pointer + length (`uint8_t** data, int64_t* len`)
-- Strings are UTF-8 `const char*` — convert to UTF-16LE internally for PDFium
+- Strings are UTF-8 `const char*` - convert to UTF-16LE internally for PDFium
 
-**Step 2 — Real implementation** (`native/bridge/src/jpdfium_document.cpp`):
+**Step 2 - Real implementation** (`native/bridge/src/jpdfium_document.cpp`):
 ```cpp
 int32_t jpdfium_page_rotate(int64_t page, int32_t rotation) {
     PageWrapper* pw = decodePage(page);
@@ -93,12 +93,12 @@ int32_t jpdfium_page_rotate(int64_t page, int32_t rotation) {
 }
 ```
 
-**Step 3 — Stub** (`native/bridge/src/jpdfium_stub.cpp`):
+**Step 3 - Stub** (`native/bridge/src/jpdfium_stub.cpp`):
 ```cpp
 int32_t jpdfium_page_rotate(int64_t, int32_t) { return JPDFIUM_OK; }
 ```
 
-**Step 4 — jextract function list** (`jpdfium/build.gradle.kts`):
+**Step 4 - jextract function list** (`jpdfium/build.gradle.kts`):
 ```kotlin
 val jpdfiumFunctions = listOf(
     …,
@@ -111,14 +111,14 @@ Regenerate: `./gradlew :jpdfium:generateBindings`
 > internally. New redaction features should be added to `jpdfium_redact_words_ex` (and its stub)
 > rather than creating a third variant.
 
-**Step 5 — Java wrapper** (`panama/JpdfiumLib.java`):
+**Step 5 - Java wrapper** (`panama/JpdfiumLib.java`):
 ```java
 public static void pageRotate(long page, int rotation) {
     check(JpdfiumH.jpdfium_page_rotate(page, rotation), "pageRotate");
 }
 ```
 
-**Step 6 — High-level API** (`PdfPage.java`):
+**Step 6 - High-level API** (`PdfPage.java`):
 ```java
 public void rotate(int rotation) {
     ensureOpen();
@@ -126,10 +126,10 @@ public void rotate(int rotation) {
 }
 ```
 
-**Step 7 — Tests** — a unit test (stub, always runs in `./gradlew test`) and an
+**Step 7 - Tests** - a unit test (stub, always runs in `./gradlew test`) and an
 integration test tagged with `@EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")`.
 
-**Step 8 — Rebuild and verify:**
+**Step 8 - Rebuild and verify:**
 ```bash
 # Rebuild stub
 g++ -std=c++17 -shared -fPIC -O2 -Inative/bridge/include \
@@ -179,15 +179,15 @@ See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 
 ## Key Design Decisions
 
-- **C bridge, not raw jextract** — PDFium's 400+ function API has platform-specific wide
+- **C bridge, not raw jextract** - PDFium's 400+ function API has platform-specific wide
   strings and complex lifetime rules. The bridge owns all of this.
-- **Handles as `int64_t`** — Opaque, no structs across the FFM boundary.
-- **Bridge copies byte buffers** — `jpdfium_doc_open_bytes` copies data because the Java
+- **Handles as `int64_t`** - Opaque, no structs across the FFM boundary.
+- **Bridge copies byte buffers** - `jpdfium_doc_open_bytes` copies data because the Java
   `Arena` frees it before the document is closed.
-- **BGRA → RGBA in C** — PDFium renders BGRA; the bridge swaps channels so Java always
+- **BGRA → RGBA in C** - PDFium renders BGRA; the bridge swaps channels so Java always
   receives consistent RGBA.
-- **No `FPDF_ApplyRedactions`** — Does not exist in the public PDFium API.
-- **Object Fission Algorithm** — True text removal via `jpdfium_redact_words_ex`:
+- **No `FPDF_ApplyRedactions`** - Does not exist in the public PDFium API.
+- **Object Fission Algorithm** - True text removal via `jpdfium_redact_words_ex`:
   1. Map text-page char indices → page objects (spatial correlation, bounding-box centres).
   2. Fully-contained objects → `FPDFPage_RemoveObject` + `FPDFPageObj_Destroy`.
   3. Partially-overlapping objects → split into Prefix + Suffix text objects. Prefix uses
@@ -196,22 +196,22 @@ See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
   4. Fallback: objects unmapped by spatial correlation removed if ≥70% within match bbox.
   5. Paint filled rectangles at all match bboxes, then single `FPDFPage_GenerateContent`.
   The legacy `jpdfium_redact_words` now delegates to `jpdfium_redact_words_ex`.
-- **UTF-16LE for search** — `FPDFText_FindStart` expects 2-byte UTF-16LE, not 4-byte
+- **UTF-16LE for search** - `FPDFText_FindStart` expects 2-byte UTF-16LE, not 4-byte
   `wchar_t`. Use `utf8_to_utf16le()` helper.
-- **Wide regex for pattern redaction** — `std::wregex` on a `std::wstring` built from
+- **Wide regex for pattern redaction** - `std::wregex` on a `std::wstring` built from
   PDFium codepoints handles accented, CJK, and Cyrillic characters correctly.
-- **NativeLoader extracts to a temp directory** — Both `libpdfium.so` and `libjpdfium.so`
+- **NativeLoader extracts to a temp directory** - Both `libpdfium.so` and `libjpdfium.so`
   are extracted to the same temp dir so the `$ORIGIN` rpath resolves at runtime.
-- **Single `jpdfium` module** — All Java API lives in one module. No internal
+- **Single `jpdfium` module** - All Java API lives in one module. No internal
   module split (core/bindings/document) to simplify dependency management for consumers.
 
 ## Coding Standards
 
-- **Java** — Follow existing style. No Lombok. Records for value types. Javadoc on all public API.
-- **C++** — C++17. All exported functions prefixed `jpdfium_`. RAII via
+- **Java** - Follow existing style. No Lombok. Records for value types. Javadoc on all public API.
+- **C++** - C++17. All exported functions prefixed `jpdfium_`. RAII via
   `DocWrapper`/`PageWrapper` destructors. `extern "C"` in `jpdfium.h` is mandatory.
-- **Commits** — Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`.
-- **Tests** — Every Java API method needs a unit test (stub) and an integration test (real PDFium).
+- **Commits** - Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`.
+- **Tests** - Every Java API method needs a unit test (stub) and an integration test (real PDFium).
 
 ## Pull Request Checklist
 
@@ -227,6 +227,6 @@ See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 - 🍎 macOS / Windows native builds and testing
 - 📝 Text editing API (`FPDFText_*` edit functions) → `text/edit/TextEditor`
 - 🔄 Page transforms (rotate, crop, merge, split) → `transform/PageOps`
-- 🧪 PDF corpus — test files for edge cases (encrypted, large, CJK, RTL)
+- 🧪 PDF corpus - test files for edge cases (encrypted, large, CJK, RTL)
 - 📦 Maven Central publishing setup
 - 🤖 CI/CD (GitHub Actions for multi-platform native builds)

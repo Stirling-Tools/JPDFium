@@ -23,9 +23,7 @@ public class TextExample {
     public static void main(String[] args) throws Exception {
         Path input = args.length > 0 ? Path.of(args[0]) : Path.of("/tmp/test.pdf");
 
-        // --------------------------------------------------------------------
         // Example 1: Extract structured text from a single page
-        // --------------------------------------------------------------------
         System.out.println("=== Example 1: Single page text extraction ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageText page0 = PdfTextExtractor.extractPage(doc, 0);
@@ -38,9 +36,7 @@ public class TextExample {
             System.out.println(page0.plainText());
         }
 
-        // --------------------------------------------------------------------
         // Example 2: Extract from all pages with line/word details
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 2: All pages with word-level detail ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             List<PageText> allPages = PdfTextExtractor.extractAll(doc);
@@ -59,9 +55,7 @@ public class TextExample {
             }
         }
 
-        // --------------------------------------------------------------------
         // Example 3: Character-level access (font info, positions)
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 3: Character-level details ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageText page0 = PdfTextExtractor.extractPage(doc, 0);
@@ -76,9 +70,7 @@ public class TextExample {
             }
         }
 
-        // --------------------------------------------------------------------
         // Example 4: Search for text across all pages
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 4: Text search ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             String query = args.length > 1 ? args[1] : "the";
@@ -92,9 +84,7 @@ public class TextExample {
             }
         }
 
-        // --------------------------------------------------------------------
         // Example 5: Quick text extraction from a file path (auto-managed)
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 5: Quick extraction from path ===");
         {
             List<PageText> pages = PdfTextExtractor.extractAll(input);
@@ -105,9 +95,7 @@ public class TextExample {
                     pages.size(), totalWords, totalChars);
         }
 
-        // --------------------------------------------------------------------
         // Example 6: Extract all unique words (simple word frequency)
-        // --------------------------------------------------------------------
         System.out.println("\n=== Example 6: Word frequency ===");
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageText page0 = PdfTextExtractor.extractPage(doc, 0);

@@ -1,4 +1,4 @@
-// Resource-only JAR — ships the platform-specific native library.
+// Resource-only JAR - ships the platform-specific native library.
 plugins {
     `java-library`
 }

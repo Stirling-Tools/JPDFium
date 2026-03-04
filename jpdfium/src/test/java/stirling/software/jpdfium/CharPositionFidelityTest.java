@@ -210,9 +210,7 @@ class CharPositionFidelityTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // JSON parsing
-    // -------------------------------------------------------------------------
 
     /**
      * Parse the char-positions JSON produced by jpdfium_text_get_char_positions.

@@ -33,7 +33,7 @@ public class S05_RedactPattern {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S05_RedactPattern", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("redact-pattern", input).resolve("output.pdf");
+            Path output = SampleBase.out("redact-pattern", input).resolve(input.getFileName());
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {

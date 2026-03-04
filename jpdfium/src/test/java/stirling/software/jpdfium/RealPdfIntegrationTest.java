@@ -22,7 +22,6 @@ class RealPdfIntegrationTest {
         return Path.of(url.toURI());
     }
 
-    // -- Render ----------------------------------------------------------------
 
     @Test
     void renderedPageHasNonWhitePixels() throws Exception {
@@ -46,7 +45,6 @@ class RealPdfIntegrationTest {
         }
     }
 
-    // -- Text extraction -------------------------------------------------------
 
     @Test
     void textExtractionReturnsCharData() throws Exception {
@@ -81,7 +79,6 @@ class RealPdfIntegrationTest {
         }
     }
 
-    // -- Redaction round-trip --------------------------------------------------
 
     @Test
     void patternRedactRemovesContent() throws Exception {
@@ -115,7 +112,6 @@ class RealPdfIntegrationTest {
         }
     }
 
-    // -- Save round-trip -------------------------------------------------------
 
     @Test
     void saveBytesThenReopenPreservesPageCount() throws Exception {

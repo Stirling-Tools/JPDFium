@@ -33,14 +33,12 @@ public final class PdfCorpus {
             "https://raw.githubusercontent.com/mozilla/pdf.js/master/test/pdfs/";
 
     private static final List<Entry> ENTRIES = List.of(
-        // --- Core test files ---
         entry("basicapi.pdf"),
         entry("font_ascent_descent.pdf"),
         entry("annotation-button-widget.pdf"),
         entry("tracemonkey.pdf"),
         entry("calrgb.pdf"),
 
-        // --- Bug regression PDFs ---
         entry("bug1020858.pdf"),
         entry("bug946506.pdf"),
         entry("bug894572.pdf"),
@@ -51,7 +49,6 @@ public final class PdfCorpus {
         entry("bug1851498.pdf"),
         entry("bug1865341.pdf"),
 
-        // --- Issue regression PDFs ---
         entry("issue2840.pdf"),
         entry("issue16221.pdf"),
         entry("issue18117.pdf"),
@@ -72,7 +69,6 @@ public final class PdfCorpus {
         entry("issue6108.pdf"),
         entry("issue6127.pdf"),
 
-        // --- Annotation-heavy PDFs ---
         entry("annotation-text-widget.pdf"),
         entry("annotation-line.pdf"),
         entry("annotation-fileattachment.pdf"),
@@ -85,7 +81,6 @@ public final class PdfCorpus {
         entry("annotation-link-text-popup.pdf"),
         entry("annotation-border-styles.pdf"),
 
-        // --- Specialty PDFs ---
         entry("vertical.pdf"),
         entry("copy_paste_ligatures.pdf")
     );

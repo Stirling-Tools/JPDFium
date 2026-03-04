@@ -44,7 +44,7 @@ public class S07_SecureRedact {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S07_SecureRedact", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("secure-redact", input).resolve("output.pdf");
+            Path output = SampleBase.out("secure-redact", input).resolve(input.getFileName());
 
             RedactResult result = PdfRedactor.redact(input, opts);
             try (var doc = result.document()) {

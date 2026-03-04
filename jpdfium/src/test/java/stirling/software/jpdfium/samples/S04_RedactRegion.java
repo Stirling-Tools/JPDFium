@@ -36,7 +36,7 @@ public class S04_RedactRegion {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S04_RedactRegion", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("redact-region", input).resolve("output.pdf");
+            Path output = SampleBase.out("redact-region", input).resolve(input.getFileName());
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 try (PdfPage page = doc.page(0)) {

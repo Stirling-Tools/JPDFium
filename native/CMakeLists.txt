@@ -41,7 +41,7 @@ else()
     set(JPDFIUM_LIB_EXTENSION "${CMAKE_SHARED_LIBRARY_SUFFIX}")
 endif()
 
-# Off by default — stub is used for Java-layer unit tests.
+# Off by default - stub is used for Java-layer unit tests.
 # To use real PDFium:
 #   cmake -DJPDFIUM_USE_PDFIUM=ON -DPDFIUM_DIR=/path/to/pdfium-linux-x64 ..
 option(JPDFIUM_USE_PDFIUM "Build against real PDFium (requires PDFIUM_DIR)" OFF)
@@ -61,8 +61,8 @@ if(JPDFIUM_USE_PDFIUM)
     endif()
 
     # Typical bblanchon/pdfium-binaries layout:
-    #   $PDFIUM_DIR/include/   — public headers
-    #   $PDFIUM_DIR/lib/       — libpdfium.a (or libpdfium.so)
+    #   $PDFIUM_DIR/include/   - public headers
+    #   $PDFIUM_DIR/lib/       - libpdfium.a (or libpdfium.so)
     set(PDFIUM_INCLUDE_DIR "${PDFIUM_DIR}/include")
     set(PDFIUM_LIB_DIR     "${PDFIUM_DIR}/lib")
 
