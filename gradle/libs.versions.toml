@@ -1,0 +1,9 @@
+[versions]
+junit = "6.0.3"
+pdfbox = "3.0.6"
+
+[libraries]
+junit-bom      = { module = "org.junit:junit-bom",                              version.ref = "junit" }
+junit-jupiter  = { module = "org.junit.jupiter:junit-jupiter",                  version.ref = "junit" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+pdfbox         = { module = "org.apache.pdfbox:pdfbox",                          version.ref = "pdfbox" }
