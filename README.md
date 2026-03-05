@@ -15,7 +15,7 @@ Java 25's Foreign Function & Memory (FFM) API.
 - **Secure PDF-Image** - Convert pages to rasterized images, stripping all selectable text and vector content
 - **Cross-Platform** - Linux x64/arm64, macOS x64/arm64, Windows x64
 - **Zero JNI** - Pure FFM (`java.lang.foreign`), no JNI boilerplate
-- **MIT** - PDFium is BSD-3-Clause, this project is MIT
+- **MIT** - PDFium is Apache 2.0, this project is MIT
 
 ## Quick Start
 
@@ -145,7 +145,7 @@ RedactOptions opts = RedactOptions.builder()
     .caseSensitive(false)   // case-insensitive (default)
     .boxColor(0xFF000000)
     .padding(0.0f)
-    .removeContent(true)    // Object Fission: true text removal (default)
+    .removeContent(true)    // true text removal (default)
     .convertToImage(true)   // most secure: rasterize after redaction
     .imageDpi(150)
     .build();
@@ -254,7 +254,7 @@ Then right-click any sample → Run. Or launch the visual Swing viewer:
 - Independent `PdfDocument` instances on separate threads are safe.
 - `FPDF_InitLibrary` / `FPDF_DestroyLibrary` are called once globally by `JpdfiumLib`'s static initializer.
 
-## Redaction Design - Object Fission Algorithm
+## Redaction Design
 
 True redaction requires more than painting a black rectangle. JPDFium implements the **Object Fission Algorithm** for character-level text removal with zero typographic side-effects.
 
@@ -271,13 +271,6 @@ True redaction requires more than painting a black rectangle. JPDFium implements
 4. **Visual cover** - a filled rectangle is painted over every match region.
 5. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
 
-### Why this is better than bounding-box removal
-
-| Approach | Adjacent text preserved | Match count reported | Case-insensitive |
-|----------|------------------------|----------------------|-----------------|
-| Old (`FPDFPage_RemoveObject` ≥70%) | ✗ over-removal possible | ✗ | ✗ |
-| **Object Fission** (`redactWordsEx`) | ✓ character-level precision | ✓ | ✓ |
-
 ### Security levels (least → most secure)
 
 ```
@@ -291,4 +284,4 @@ Use `convertToImage(true)` in `RedactOptions` for the nuclear option.
 
 ## License
 
-MIT. PDFium itself is [BSD-3-Clause](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE).
+MIT. PDFium itself is [Apache 2.0](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE).
