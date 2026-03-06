@@ -6,7 +6,7 @@ package stirling.software.jpdfium.spring;
  * <p>Placeholder for future Spring Boot integration. When Spring Boot auto-configure
  * is added, this will be {@code @ConfigurationProperties(prefix = "jpdfium")}.
  *
- * <h3>Future application.yml Example</h3>
+ * <p><b>Future application.yml Example</b></p>
  * <pre>{@code
  * jpdfium:
  *   native-path: /opt/jpdfium/lib   # custom native library path

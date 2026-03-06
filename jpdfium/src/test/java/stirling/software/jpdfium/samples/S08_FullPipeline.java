@@ -53,7 +53,6 @@ public class S08_FullPipeline {
             SampleBase.pdfHeader("S08_FullPipeline", input, fi + 1, inputs.size());
             Path outDir = SampleBase.out("full-pipeline", input);
 
-            // Step 1: Inspect
             SampleBase.section("Step 1: Inspect");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {
@@ -66,13 +65,12 @@ public class S08_FullPipeline {
                         if (!pt.plainText().isBlank()) {
                             String preview = pt.plainText().replace("\n", " | ");
                             System.out.printf("    \"%s\"%n",
-                                    preview.length() > 80 ? preview.substring(0, 80) + "…" : preview);
+                                    preview.length() > 80 ? preview.substring(0, 80) + "..." : preview);
                         }
                     }
                 }
             }
 
-            // Step 2: Search
             SampleBase.section("Step 2: Search for SSN (literal)");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 List<SearchMatch> matches = PdfTextSearcher.search(doc, "123-45-6789");
@@ -83,7 +81,6 @@ public class S08_FullPipeline {
                 }
             }
 
-            // Step 3 and 4: Redact (Object Fission) then Flatten
             SampleBase.section("Step 3+4: Object Fission redact SSN + Flatten");
             Path redactedPdf = outDir.resolve(input.getFileName());
             int totalMatches = 0;
@@ -92,12 +89,12 @@ public class S08_FullPipeline {
                     try (PdfPage page = doc.page(i)) {
                         int matches = page.redactWordsEx(
                                 REDACT_WORDS,
-                                0xFF000000, // black
-                                0.0f,       // no padding
-                                false,      // not whole-word
-                                true,       // useRegex
-                                true,       // removeContent (Object Fission)
-                                false);     // case-insensitive
+                                0xFF000000,
+                                0.0f,
+                                false,
+                                true,
+                                true,
+                                false);
                         page.flatten();
                         totalMatches += matches;
                         System.out.printf("  page %d: %d SSN match(es) redacted%n", i, matches);
@@ -105,10 +102,9 @@ public class S08_FullPipeline {
                 }
                 doc.save(redactedPdf);
             }
-            System.out.printf("  total matches: %d  →  %s%n", totalMatches, redactedPdf.getFileName());
+            System.out.printf("  total matches: %d  ->  %s%n", totalMatches, redactedPdf.getFileName());
             produced.add(redactedPdf);
 
-            // Step 5: Render redacted pages to PNG
             SampleBase.section("Step 5: Render");
             try (PdfDocument doc = PdfDocument.open(redactedPdf)) {
                 List<BufferedImage> images = PageOps.renderAll(doc, RENDER_DPI);
@@ -116,7 +112,7 @@ public class S08_FullPipeline {
                     Path png = outDir.resolve(SampleBase.stem(input) + "-page-" + i + ".png");
                     ImageIO.write(images.get(i), "PNG", png.toFile());
                     produced.add(png);
-                    System.out.printf("  page %d  →  %s (%dx%d px)%n",
+                    System.out.printf("  page %d  ->  %s (%dx%d px)%n",
                             i, png.getFileName(), images.get(i).getWidth(), images.get(i).getHeight());
                 }
             }

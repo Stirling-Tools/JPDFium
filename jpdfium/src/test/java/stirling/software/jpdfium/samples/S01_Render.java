@@ -50,7 +50,7 @@ public class S01_Render {
                         ImageIO.write(result.toBufferedImage(), "PNG", png.toFile());
                         produced.add(png);
 
-                        System.out.printf("  page %d: %.0f x %.0f pt  →  %dx%d px%n",
+                        System.out.printf("  page %d: %.0f x %.0f pt  ->  %dx%d px%n",
                                 i, size.width(), size.height(), result.width(), result.height());
                     }
                 }

@@ -5,7 +5,7 @@ import java.util.List;
 
 /**
  * Structured text extraction result for a single PDF page.
- * Provides access at multiple granularity levels: page → lines → words → chars.
+ * Provides access at multiple granularity levels: page -> lines -> words -> chars.
  *
  * @param pageIndex zero-based page index
  * @param lines     text lines in reading order

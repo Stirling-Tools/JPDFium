@@ -22,7 +22,6 @@ import java.util.List;
  */
 public class S04_RedactRegion {
 
-    // Explicit coordinates demonstrating spatial targeting rather than semantic search.
     static final Rect REGION = Rect.of(50, 750, 250, 60);
 
     public static void main(String[] args) throws Exception {

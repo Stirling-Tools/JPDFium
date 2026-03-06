@@ -21,13 +21,13 @@ public class RunAllSamples {
         SampleBase.ensureNative();
         Path input = SampleBase.inputPdf(args);
 
-        System.out.println("╔==================================================╗");
-        System.out.println("║            JPDFium - Run All Samples             ║");
-        System.out.println("╠==================================================╣");
-        System.out.printf( "║  input:  %-39s║%n", input.getFileName());
-        System.out.printf( "║  output: %-39s║%n", "~/" + SampleBase.OUT_ROOT
+        System.out.println("+==================================================+");
+        System.out.println("|            JPDFium - Run All Samples             |");
+        System.out.println("+==================================================+");
+        System.out.printf( "|  input:  %-39s|%n", input.getFileName());
+        System.out.printf( "|  output: %-39s|%n", "~/" + SampleBase.OUT_ROOT
                 .toString().replaceFirst(System.getProperty("user.home") + "/", ""));
-        System.out.println("╚==================================================╝");
+        System.out.println("+==================================================+");
         System.out.println();
 
         String[] a = args.length > 0 ? args : new String[0];
@@ -42,22 +42,22 @@ public class RunAllSamples {
         passed += run("S07_SecureRedact",  () -> S07_SecureRedact.main(a));
         passed += run("S08_FullPipeline",  () -> S08_FullPipeline.main(a));
         passed += run("S09_Flatten",       () -> S09_Flatten.main(a));
+        passed += run("S10_PiiRedact",     () -> S10_PiiRedact.main(a));
 
-        // Subtract failures from passed count
         System.out.println("\n==================================================");
-        System.out.printf("Results: %d/%d samples passed%n", passed, 9);
+        System.out.printf("Results: %d/%d samples passed%n", passed, 10);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
         System.out.println("==================================================");
     }
 
     private static int run(String name, ThrowingRunnable sample) {
-        System.out.println("\n┌- " + name + " --------------------------------------");
+        System.out.println("\n-- " + name + " --------------------------------------");
         try {
             sample.run();
-            System.out.println("└- " + name + " ✓");
+            System.out.println("-- " + name + " OK");
             return 1;
         } catch (Exception e) {
-            System.err.println("└- " + name + " FAILED: " + e.getMessage());
+            System.err.println("-- " + name + " FAILED: " + e.getMessage());
             e.printStackTrace(System.err);
             return 0;
         }

@@ -8,7 +8,7 @@ import java.io.File;
 import java.nio.file.Path;
 
 /**
- * Quick manual smoke-test right-click → Run in IntelliJ.
+ * Quick manual smoke-test right-click -> Run in IntelliJ.
  * Pass a PDF path as the first argument, or drop a file at /tmp/test.pdf.
  *
  * JVM args required: --enable-native-access=ALL-UNNAMED
@@ -33,7 +33,7 @@ public class ManualTest {
 
                 var render = page.renderAt(150);
                 ImageIO.write(render.toBufferedImage(), "PNG", new File(outPng.toString()));
-                System.out.println("Rendered → " + outPng);
+                System.out.println("Rendered -> " + outPng);
 
                 String textJson = page.extractTextJson();
                 System.out.println("Text JSON (first 200 chars): " +
@@ -45,7 +45,7 @@ public class ManualTest {
             }
 
             doc.save(outPdf);
-            System.out.println("Saved  → " + outPdf);
+            System.out.println("Saved  -> " + outPdf);
         }
     }
 }

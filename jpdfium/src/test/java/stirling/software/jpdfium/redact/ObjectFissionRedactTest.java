@@ -90,7 +90,7 @@ class ObjectFissionRedactTest {
     void redactWordsExVisualOnlyDoesNotThrow() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
-            // removeContent=false → rects only, no object removal
+            // removeContent=false -> rects only, no object removal
             assertDoesNotThrow(() -> page.redactWordsEx(
                     new String[]{"Hello"},
                     0xFFFF0000, 1.5f,
@@ -178,7 +178,7 @@ class ObjectFissionRedactTest {
     @Test
     void pdfRedactorCaseSensitiveOption() throws Exception {
         RedactOptions opts = RedactOptions.builder()
-                .addWord("hello")  // lowercase — won't match "Hello" in case-sensitive mode
+                .addWord("hello")  // lowercase - won't match "Hello" in case-sensitive mode
                 .caseSensitive(true)
                 .build();
 

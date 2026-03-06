@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * High-level PDF redaction service that applies {@link RedactOptions} to an entire document.
  *
- * <p>Matches Stirling-PDF's auto-redact workflow:
+ * <p>Workflow:
  * <ol>
  *   <li>Open PDF</li>
  *   <li>For each page, find and redact all matching words/patterns</li>
@@ -19,7 +19,7 @@ import java.util.List;
  *   <li>Save result</li>
  * </ol>
  *
- * <h3>Usage Example</h3>
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * RedactOptions opts = RedactOptions.builder()
  *     .addWord("Confidential")
@@ -34,9 +34,6 @@ import java.util.List;
  * RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), opts);
  * result.document().save(Path.of("output.pdf"));
  * result.document().close();
- *
- * System.out.println("Redacted " + result.totalMatches() + " matches across "
- *     + result.pagesProcessed() + " pages in " + result.durationMs() + " ms");
  * }</pre>
  */
 public final class PdfRedactor {
@@ -46,8 +43,8 @@ public final class PdfRedactor {
     /**
      * Redact a PDF file using the given options.
      *
-     * @param inputPath  path to the input PDF
-     * @param options    redaction configuration
+     * @param inputPath path to the input PDF
+     * @param options   redaction configuration
      * @return result containing the modified document and statistics
      */
     public static RedactResult redact(Path inputPath, RedactOptions options) {
@@ -58,8 +55,8 @@ public final class PdfRedactor {
     /**
      * Redact a PDF from bytes using the given options.
      *
-     * @param pdfBytes   raw PDF bytes
-     * @param options    redaction configuration
+     * @param pdfBytes raw PDF bytes
+     * @param options  redaction configuration
      * @return result containing the modified document and statistics
      */
     public static RedactResult redact(byte[] pdfBytes, RedactOptions options) {
@@ -70,9 +67,6 @@ public final class PdfRedactor {
     /**
      * Redact an already-open document using the given options.
      * The caller is responsible for closing the document.
-     *
-     * <p>Uses the Object Fission Algorithm for true text removal with
-     * character-level precision and perfect typographical preservation.
      *
      * @param doc     open PDF document
      * @param options redaction configuration
@@ -87,16 +81,12 @@ public final class PdfRedactor {
         for (int i = 0; i < totalPages; i++) {
             int matchesOnPage;
             try (PdfPage page = doc.page(i)) {
-                // Apply Object Fission redaction (character-level precision)
                 matchesOnPage = page.redactWordsEx(words, options.boxColor(), options.padding(),
                         options.wholeWord(), options.useRegex(), options.removeContent(),
                         options.caseSensitive());
-
-                // Flatten annotations into the content stream
                 page.flatten();
             }
 
-            // Convert to image if requested (most secure — strips all text)
             if (options.convertToImage()) {
                 doc.convertPageToImage(i, options.imageDpi());
             }

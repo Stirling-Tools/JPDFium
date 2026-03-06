@@ -46,7 +46,7 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * Flatten all pages using the specified mode with default DPI (150).
      *
-     * @param mode what to flatten — see {@link FlattenMode}
+     * @param mode what to flatten - see {@link FlattenMode}
      * @see #flatten(FlattenMode, int)
      */
     public void flatten(FlattenMode mode) {
@@ -57,15 +57,15 @@ public final class PdfDocument implements AutoCloseable {
      * Flatten all pages using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS} — bakes annotations and form fields into
+     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into
      *       the content stream. Text remains selectable. Uses native PDFium
      *       {@code jpdfium_page_flatten}.</li>
-     *   <li>{@link FlattenMode#FULL} — rasterizes each page at the given DPI,
+     *   <li>{@link FlattenMode#FULL} - rasterizes each page at the given DPI,
      *       replacing all content with an image. Nothing is selectable. Uses native
      *       PDFium {@code jpdfium_page_to_image}.</li>
      * </ul>
      *
-     * @param mode what to flatten — see {@link FlattenMode}
+     * @param mode what to flatten - see {@link FlattenMode}
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
     public void flatten(FlattenMode mode, int dpi) {

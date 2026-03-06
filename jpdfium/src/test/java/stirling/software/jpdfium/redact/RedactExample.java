@@ -7,7 +7,7 @@ import java.nio.file.Path;
 /**
  * Example: PDF redaction using jpdfium-redact.
  *
- * <p>Demonstrates the full Stirling-PDF–style auto-redaction workflow:
+ * <p>Demonstrates the full Stirling-PDF-style auto-redaction workflow:
  * word list, regex patterns, color/padding options, and PDF-to-image conversion.
  *
  * <p><b>Run:</b>
@@ -39,7 +39,7 @@ public class RedactExample {
 
             System.out.printf("  Processed %d pages in %d ms%n",
                     result.pagesProcessed(), result.durationMs());
-            System.out.println("  Saved → " + output);
+            System.out.println("  Saved -> " + output);
         }
 
         // Example 2: Regex-based redaction - SSNs, emails, credit card numbers

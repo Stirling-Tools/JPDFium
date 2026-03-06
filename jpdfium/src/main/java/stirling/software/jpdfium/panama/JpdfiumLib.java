@@ -3,7 +3,6 @@ package stirling.software.jpdfium.panama;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
-import stirling.software.jpdfium.panama.NativeLoader;
 import stirling.software.jpdfium.model.RenderResult;
 
 import java.lang.foreign.Arena;
@@ -13,11 +12,15 @@ import static java.lang.foreign.ValueLayout.*;
 
 /**
  * Thin Java-friendly wrapper around the jextract-generated {@link JpdfiumH}.
- * Handles: NativeLoader bootstrap, Arena lifecycle, String <-> MemorySegment conversion,
- * and result-code→exception translation.
+ * Handles NativeLoader bootstrap, Arena lifecycle, String/MemorySegment conversion,
+ * and result-code to exception translation.
  *
  * <p>All public methods are thread-safe with respect to independent documents,
  * but a single document handle must not be accessed concurrently.
+ *
+ * <p>Advanced feature bindings are split into focused companion classes:
+ * {@link Pcre2Lib}, {@link FlashTextLib}, {@link FontLib},
+ * {@link GlyphLib}, {@link XmpLib}, {@link IcuLib}.
  */
 public final class JpdfiumLib {
 
@@ -39,10 +42,10 @@ public final class JpdfiumLib {
     static void check(int rc, String ctx) {
         if (rc == OK) return;
         throw switch (rc) {
-            case ERR_PASSWORD -> new PdfPasswordException("Password required/incorrect — " + ctx);
-            case ERR_IO       -> new JPDFiumException("IO error — " + ctx);
-            case ERR_INVALID  -> new PdfCorruptException("Invalid/corrupt PDF — " + ctx);
-            default           -> new JPDFiumException("Native error " + rc + " — " + ctx);
+            case ERR_PASSWORD -> new PdfPasswordException("Password required/incorrect - " + ctx);
+            case ERR_IO       -> new JPDFiumException("IO error - " + ctx);
+            case ERR_INVALID  -> new PdfCorruptException("Invalid/corrupt PDF - " + ctx);
+            default           -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
 
@@ -57,7 +60,7 @@ public final class JpdfiumLib {
     public static long docOpenBytes(byte[] data) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment hSeg = a.allocate(JAVA_LONG);
-            // The bridge MUST copy the data — the arena (and this MemorySegment) is freed on return.
+            // The bridge copies the data - the arena is freed on return.
             check(JpdfiumH.jpdfium_doc_open_bytes(a.allocateFrom(JAVA_BYTE, data), (long) data.length, hSeg), "docOpenBytes");
             return hSeg.get(JAVA_LONG, 0);
         }
@@ -138,7 +141,6 @@ public final class JpdfiumLib {
             int w = wSeg.get(JAVA_INT, 0);
             int h = hSeg.get(JAVA_INT, 0);
             MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            // Bridge returns RGBA — if real PDFium returns BGRA, the C bridge must swap channels.
             byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
             JpdfiumH.jpdfium_free_buffer(nativePtr);
             return new RenderResult(w, h, rgba);
@@ -177,23 +179,10 @@ public final class JpdfiumLib {
         }
     }
 
-    /**
-     * Redact multiple words/patterns at once with padding and whole-word support.
-     * Matches Stirling-PDF's auto-redact feature set.
-     *
-     * @param page         native page handle
-     * @param words        list of words or regex patterns to redact
-     * @param argb         fill color (0xAARRGGBB)
-     * @param padding      extra padding in PDF points around each match
-     * @param wholeWord    if true, only match whole words (word boundaries)
-     * @param useRegex     if true, treat each word as a regex pattern
-     * @param removeContent if true, remove underlying PDF objects; if false, only paint over
-     */
     public static void redactWords(long page, String[] words, int argb, float padding,
                                     boolean wholeWord, boolean useRegex, boolean removeContent) {
         if (words == null || words.length == 0) return;
         try (Arena a = Arena.ofConfined()) {
-            // Allocate a native pointer array for the word strings
             MemorySegment ptrs = a.allocate(ADDRESS, words.length);
             for (int i = 0; i < words.length; i++) {
                 MemorySegment s = a.allocateFrom(words[i]);
@@ -204,30 +193,6 @@ public final class JpdfiumLib {
         }
     }
 
-    /**
-     * Extended redaction with Object Fission: true text removal that preserves
-     * surrounding text layout by splitting partially-overlapping text objects
-     * into prefix and suffix fragments pinned to their original coordinates.
-     *
-     * <p>Improvements over {@link #redactWords}:
-     * <ul>
-     *   <li>Character-level precision (no more over-removal of adjacent text)</li>
-     *   <li>Font, matrix, and render-mode preservation via Object Fission</li>
-     *   <li>Single content-stream regeneration per page (better performance)</li>
-     *   <li>Case-sensitivity option</li>
-     *   <li>Returns actual match count</li>
-     * </ul>
-     *
-     * @param page          native page handle
-     * @param words         list of words or regex patterns to redact
-     * @param argb          fill color (0xAARRGGBB)
-     * @param padding       extra padding in PDF points around each match
-     * @param wholeWord     if true, only match whole words
-     * @param useRegex      if true, treat each word as a regex pattern
-     * @param removeContent if true, apply Object Fission to truly remove text
-     * @param caseSensitive if true, match case-sensitively (default: false = case-insensitive)
-     * @return the total number of matches found and redacted
-     */
     public static int redactWordsEx(long page, String[] words, int argb, float padding,
                                      boolean wholeWord, boolean useRegex, boolean removeContent,
                                      boolean caseSensitive) {
@@ -250,17 +215,6 @@ public final class JpdfiumLib {
         check(JpdfiumH.jpdfium_page_flatten(page), "pageFlatten");
     }
 
-    /**
-     * Returns JSON array of character positions: [{"i":0,"u":72,"ox":10.0,...}, ...]
-     * Each element includes the character index (i), unicode (u), origin (ox,oy),
-     * and bounding box (l,r,b,t).
-     *
-     * <p>Used by automated tests to verify that text coordinates are preserved
-     * after redaction (structural coordinate tracking).
-     *
-     * @param page native page handle
-     * @return JSON string with position data for every character on the page
-     */
     public static String textGetCharPositions(long page) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment ptrSeg = a.allocate(ADDRESS);
@@ -272,15 +226,6 @@ public final class JpdfiumLib {
         }
     }
 
-    /**
-     * Convert a page to an image-based page, removing all extractable text/vector content.
-     * This is the nuclear option for redaction — visually identical but no searchable text.
-     * Equivalent to Stirling-PDF's "Convert PDF to PDF-Image" feature.
-     *
-     * @param doc       native document handle
-     * @param pageIndex zero-based page index
-     * @param dpi       render quality (150 recommended)
-     */
     public static void pageToImage(long doc, int pageIndex, int dpi) {
         check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
     }

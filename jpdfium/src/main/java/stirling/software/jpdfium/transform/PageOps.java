@@ -12,7 +12,7 @@ import java.util.List;
 /**
  * Page-level operations: flatten, convert to image, render to BufferedImage.
  *
- * <h3>Usage Example</h3>
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
  *     // Flatten all pages

@@ -30,7 +30,7 @@ public class TransformExample {
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageOps.flatten(doc, 0);
             doc.save(Path.of("/tmp/flattened-page0.pdf"));
-            System.out.println("  Page 0 flattened → /tmp/flattened-page0.pdf");
+            System.out.println("  Page 0 flattened -> /tmp/flattened-page0.pdf");
         }
 
         // Example 2: Flatten all pages
@@ -50,7 +50,7 @@ public class TransformExample {
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageOps.convertToImage(doc, 0, 200);  // 200 DPI
             doc.save(Path.of("/tmp/page0-as-image.pdf"));
-            System.out.println("  Page 0 → image at 200 DPI → /tmp/page0-as-image.pdf");
+            System.out.println("  Page 0 -> image at 200 DPI -> /tmp/page0-as-image.pdf");
         }
 
         // Example 4: Convert ALL pages to images (entire document becomes image-only)
@@ -60,7 +60,7 @@ public class TransformExample {
             PageOps.convertAllToImages(doc, 150);
             long ms = (System.nanoTime() - t0) / 1_000_000;
             doc.save(Path.of("/tmp/all-as-images.pdf"));
-            System.out.printf("  %d pages → images at 150 DPI in %d ms%n",
+            System.out.printf("  %d pages -> images at 150 DPI in %d ms%n",
                     doc.pageCount(), ms);
         }
 
@@ -70,7 +70,7 @@ public class TransformExample {
         try (PdfDocument doc = PdfDocument.open(input)) {
             BufferedImage img = PageOps.renderPage(doc, 0, 300);  // 300 DPI
             ImageIO.write(img, "PNG", new File("/tmp/page0-300dpi.png"));
-            System.out.printf("  Page 0 rendered at 300 DPI → %dx%d px → /tmp/page0-300dpi.png%n",
+            System.out.printf("  Page 0 rendered at 300 DPI -> %dx%d px -> /tmp/page0-300dpi.png%n",
                     img.getWidth(), img.getHeight());
         }
 
@@ -81,7 +81,7 @@ public class TransformExample {
             for (int i = 0; i < images.size(); i++) {
                 File out = new File("/tmp/page" + i + ".png");
                 ImageIO.write(images.get(i), "PNG", out);
-                System.out.printf("  Page %d → %s (%dx%d px)%n",
+                System.out.printf("  Page %d -> %s (%dx%d px)%n",
                         i, out.getName(),
                         images.get(i).getWidth(), images.get(i).getHeight());
             }
@@ -95,7 +95,7 @@ public class TransformExample {
                 PageOps.convertToImage(doc, i, 200); // then rasterize completely
             }
             doc.save(Path.of("/tmp/flatten-then-image.pdf"));
-            System.out.printf("  %d pages: flatten → image → /tmp/flatten-then-image.pdf%n",
+            System.out.printf("  %d pages: flatten -> image -> /tmp/flatten-then-image.pdf%n",
                     doc.pageCount());
         }
 

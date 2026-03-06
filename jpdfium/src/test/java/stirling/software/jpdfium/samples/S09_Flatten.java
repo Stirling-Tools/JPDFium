@@ -12,9 +12,9 @@ import java.util.List;
  *
  * <p>Demonstrates both flatten modes:
  * <ul>
- *   <li>{@link FlattenMode#ANNOTATIONS} — bakes annotations and form fields into
+ *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into
  *       static content. Text remains selectable.</li>
- *   <li>{@link FlattenMode#FULL} — rasterizes each page at a specified DPI,
+ *   <li>{@link FlattenMode#FULL} - rasterizes each page at a specified DPI,
  *       replacing all content with an image. Nothing is selectable.</li>
  * </ul>
  *
@@ -34,15 +34,13 @@ public class S09_Flatten {
         List<Path> inputs = SampleBase.inputPdfs(args);
         List<Path> produced = new ArrayList<>();
 
-        Path outDir = SampleBase.out("flatten");
-
         System.out.printf("S09_Flatten  |  %d PDF(s)  |  mode=%s  DPI=%d%n",
                 inputs.size(), MODE, DPI);
 
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S09_Flatten", input, fi + 1, inputs.size());
-            Path output = outDir.resolve(input.getFileName());
+            Path output = SampleBase.out("flatten", input).resolve(input.getFileName());
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 System.out.printf("  flattening %d page(s) [%s]...%n", doc.pageCount(), MODE);

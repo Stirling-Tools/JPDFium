@@ -31,7 +31,7 @@ public class RedactTestPdfGenerator {
                 "jpdfium/src/test/resources"));
         Files.createDirectories(OUT_DIR);
 
-        // 1. Font encoding coverage — Type 1 WinAnsi
+        // 1. Font encoding coverage - Type 1 WinAnsi
         generateType1WinAnsi("redact-test-helvetica.pdf", new PDType1Font(Standard14Fonts.FontName.HELVETICA), "Helvetica");
         generateType1WinAnsi("redact-test-times.pdf", new PDType1Font(Standard14Fonts.FontName.TIMES_ROMAN), "Times-Roman");
         generateType1WinAnsi("redact-test-courier.pdf", new PDType1Font(Standard14Fonts.FontName.COURIER), "Courier");
@@ -96,7 +96,7 @@ public class RedactTestPdfGenerator {
         generateDate();
         generateIpv4();
 
-        // 7. Rendering modes (0–7)
+        // 7. Rendering modes (0-7)
         for (int tr = 0; tr <= 7; tr++) generateRenderingMode(tr);
 
         // 8. Color

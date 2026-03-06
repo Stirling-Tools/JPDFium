@@ -8,7 +8,7 @@ import java.util.List;
 /**
  * Example: PDF text extraction and search using jpdfium-text.
  *
- * <p>Demonstrates structured text extraction (chars → words → lines → pages)
+ * <p>Demonstrates structured text extraction (chars -> words -> lines -> pages)
  * and full-text search with match positions.
  *
  * <p><b>Run:</b>

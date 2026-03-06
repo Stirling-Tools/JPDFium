@@ -13,7 +13,7 @@ package stirling.software.jpdfium.text.edit;
  *   <li>Add page numbers</li>
  * </ul>
  *
- * <h3>Future Usage Example</h3>
+ * <p><b>Future Usage Example</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
  *     TextEditor editor = TextEditor.forPage(doc, 0);

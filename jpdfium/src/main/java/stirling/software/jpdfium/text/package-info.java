@@ -1,10 +1,10 @@
 /**
  * Structured text extraction and search for PDF documents.
  *
- * <p>Provides multi-level text access: page → lines → words → characters,
+ * <p>Provides multi-level text access: page -> lines -> words -> characters,
  * with full positional and typographic metadata for each character.
  *
- * <h3>Quick Start - Text Extraction</h3>
+ * <p><b>Quick Start - Text Extraction</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
  *     PageText text = PdfTextExtractor.extractPage(doc, 0);
@@ -13,7 +13,7 @@
  * }
  * }</pre>
  *
- * <h3>Quick Start - Text Search</h3>
+ * <p><b>Quick Start - Text Search</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
  *     var matches = PdfTextSearcher.search(doc, "important");

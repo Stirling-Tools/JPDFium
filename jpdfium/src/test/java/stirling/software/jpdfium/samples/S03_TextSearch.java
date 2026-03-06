@@ -43,9 +43,9 @@ public class S03_TextSearch {
                 for (String query : QUERIES) {
                     List<SearchMatch> matches = PdfTextSearcher.search(doc, query);
                     if (matches.isEmpty()) {
-                        System.out.printf("  \"%s\"  →  (no matches)%n", query);
+                        System.out.printf("  \"%s\"  ->  (no matches)%n", query);
                     } else {
-                        System.out.printf("  \"%s\"  →  %d match(es):%n", query, matches.size());
+                        System.out.printf("  \"%s\"  ->  %d match(es):%n", query, matches.size());
                         for (SearchMatch m : matches) {
                             System.out.printf("    page %d  start=%d  length=%d%n",
                                     m.pageIndex(), m.startIndex(), m.length());

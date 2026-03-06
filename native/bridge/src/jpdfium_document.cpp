@@ -17,10 +17,24 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <unordered_map>
 
-// ── String helpers ────────────────────────────────────────────────────────────
+// FreeType integration for font-aware charcode mapping.
+// When available, provides a third encoding strategy for Object Fission
+// that uses the font's actual cmap table to produce correct charcodes
+// for CID/Identity-H fonts where PDFium's SetText fails.
+#ifdef JPDFIUM_HAS_FREETYPE
+#include <ft2build.h>
+#include FT_FREETYPE_H
+static FT_Library g_ft_lib = nullptr;
+static void ensureFreeTypeInit() {
+    if (!g_ft_lib) FT_Init_FreeType(&g_ft_lib);
+}
+#endif
 
-// UTF-8 → UTF-16LE for FPDFText_FindStart (PDFium expects UTF-16LE, not wchar_t)
+// String helpers
+
+// UTF-8 -> UTF-16LE for FPDFText_FindStart (PDFium expects UTF-16LE, not wchar_t)
 static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     std::vector<uint16_t> result;
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
@@ -44,7 +58,7 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     return result;
 }
 
-// UTF-8 → std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per codepoint)
+// UTF-8 -> std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per codepoint)
 static std::wstring utf8_to_wstring(const char* utf8) {
     std::wstring result;
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
@@ -61,7 +75,7 @@ static std::wstring utf8_to_wstring(const char* utf8) {
     return result;
 }
 
-// std::wstring → UTF-16LE (for FPDFText_SetText on new text objects)
+// std::wstring -> UTF-16LE (for FPDFText_SetText on new text objects)
 static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
     std::vector<uint16_t> result;
     for (wchar_t wc : ws) {
@@ -78,7 +92,7 @@ static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
     return result;
 }
 
-// ── Shared redaction primitives ───────────────────────────────────────────────
+// Shared redaction primitives
 
 // Check if rectangle A is FULLY contained within rectangle B
 // A = [al, ab, ar, at], B = [bl, bb, br, bt] (PDF coords: y up)
@@ -102,6 +116,67 @@ static float overlapRatio(float al, float ab, float ar, float at,
     float intersectionArea = (ix1 - ix0) * (iy1 - iy0);
     float objArea = (ar - al) * (at - ab);
     return objArea > 0.0f ? intersectionArea / objArea : 0.0f;
+}
+
+// Decomposes standard Unicode ligatures (U+FB00-FB06) into their ASCII
+// component characters. This prevents encoding round-trip failures where
+// FPDFText_GetUnicode returns a ligature codepoint that can't be reverse-
+// mapped back to a charcode by the font's encoding dictionary.
+static std::wstring decomposeLigatures(const std::wstring& input) {
+    std::wstring result;
+    result.reserve(input.size() + 8);
+    for (wchar_t wc : input) {
+        switch (static_cast<uint32_t>(wc)) {
+            case 0xFB00: result += L"ff";  break;  // ff
+            case 0xFB01: result += L"fi";  break;  // fi
+            case 0xFB02: result += L"fl";  break;  // fl
+            case 0xFB03: result += L"ffi"; break;  // ffi
+            case 0xFB04: result += L"ffl"; break;  // ffl
+            case 0xFB05: result += L"st";  break;  // long-s t
+            case 0xFB06: result += L"st";  break;  // st
+            default:     result += wc;     break;
+        }
+    }
+    return result;
+}
+
+// Unicode → WinAnsi charcode mapping
+// WinAnsi bytes 0x80-0x9F map to Unicode codepoints that differ from their
+// byte value (e.g. U+20AC → 0x80 for €). The 0x20-0x7F and 0xA0-0xFF ranges
+// are identity-mapped. Returns 0 for unmappable codepoints.
+static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
+    if (unicode >= 0x20 && unicode <= 0x7F) return unicode;
+    if (unicode >= 0xA0 && unicode <= 0xFF) return unicode;
+    switch (unicode) {
+        case 0x20AC: return 0x80;  // €
+        case 0x201A: return 0x82;  // ‚
+        case 0x0192: return 0x83;  // ƒ
+        case 0x201E: return 0x84;  // „
+        case 0x2026: return 0x85;  // …
+        case 0x2020: return 0x86;  // †
+        case 0x2021: return 0x87;  // ‡
+        case 0x02C6: return 0x88;  // ˆ
+        case 0x2030: return 0x89;  // ‰
+        case 0x0160: return 0x8A;  // Š
+        case 0x2039: return 0x8B;  // ‹
+        case 0x0152: return 0x8C;  // Œ
+        case 0x017D: return 0x8E;  // Ž
+        case 0x2018: return 0x91;  // '
+        case 0x2019: return 0x92;  // '
+        case 0x201C: return 0x93;  // "
+        case 0x201D: return 0x94;  // "
+        case 0x2022: return 0x95;  // •
+        case 0x2013: return 0x96;  // –
+        case 0x2014: return 0x97;  // —
+        case 0x02DC: return 0x98;  // ˜
+        case 0x2122: return 0x99;  // ™
+        case 0x0161: return 0x9A;  // š
+        case 0x203A: return 0x9B;  // ›
+        case 0x0153: return 0x9C;  // œ
+        case 0x017E: return 0x9E;  // ž
+        case 0x0178: return 0x9F;  // Ÿ
+        default:     return 0;
+    }
 }
 
 // Paints a filled rectangle (no object removal). Used for visual-only redaction.
@@ -170,7 +245,7 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
     return FPDFPage_GenerateContent(page) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-// ── Object Fission Algorithm ──────────────────────────────────────────────────
+// Object Fission Algorithm
 // True text redaction that permanently removes targeted characters from the
 // content stream while preserving surrounding text with perfect typographical
 // fidelity.  Implements the "Object Fission" approach:
@@ -178,8 +253,8 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 //   1. Map text-page character indices to their owning FPDF_PAGEOBJECT via
 //      spatial correlation (bounding-box containment of char centres).
 //   2. For each page object that contains redacted characters:
-//        • If ALL characters redacted → destroy the entire object.
-//        • If only SOME characters redacted → "fission" the object:
+//        - If ALL characters redacted -> destroy the entire object.
+//        - If only SOME characters redacted -> "fission" the object:
 //            a) Create a Prefix text object (chars before redaction) pinned
 //               to the original transformation matrix.
 //            b) Create a Suffix text object (chars after redaction) pinned
@@ -235,7 +310,7 @@ static int32_t objectFissionRedact(
     unsigned int grn = (argb >>  8) & 0xFF;
     unsigned int blu =  argb        & 0xFF;
 
-    // ── Visual-only fast path ─────────────────────────────────────────────────
+    // Visual-only fast path
     if (!removeContent) {
         for (auto& m : matches) {
             FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
@@ -248,7 +323,7 @@ static int32_t objectFissionRedact(
         return FPDFPage_GenerateContent(page) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
     }
 
-    // ── Analysis phase (read-only - all text-page queries happen here) ────────
+    // Analysis phase (read-only - all text-page queries happen here)
 
     int totalChars = FPDFText_CountChars(textPage);
 
@@ -258,42 +333,67 @@ static int32_t objectFissionRedact(
         for (int ci : m.charIndices) redactSet.insert(ci);
     }
 
-    // 2. Pre-compute bounding-box centres for every character on the page
+    // 2. Build char -> page-object mapping.
+    //    Use FPDFText_GetTextObject (PDFium experimental API) for direct
+    //    char-to-object mapping instead of the old bounds-based spatial
+    //    correlation.  This is far more reliable: the old approach matched
+    //    char bounding-box centres against object bounds with a 0.5pt
+    //    tolerance, which could mismap characters when text objects overlap
+    //    or when chars have degenerate bboxes (spaces, control chars).
+    //
+    //    FPDFText_GetTextObject returns the actual owning FPDF_PAGEOBJECT
+    //    for each char index, eliminating all spatial correlation errors.
+    //
+    //    For unmapped chars (nulls, generated chars), inherit from neighbors
+    //    as before to keep spaces in the correct text flow.
+    int objCount = FPDFPage_CountObjects(page);
+
+    // Build a reverse map: FPDF_PAGEOBJECT pointer → object index
+    std::unordered_map<uintptr_t, int> objPtrToIndex;
+    for (int oi = 0; oi < objCount; oi++) {
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
+        objPtrToIndex[reinterpret_cast<uintptr_t>(obj)] = oi;
+    }
+
     struct CharInfo {
-        double cx, cy;     // centre of char box in user space
-        bool   valid;      // false if FPDFText_GetCharBox failed
         int    ownerObj;   // index into page-object array (-1 = unmapped)
+        bool   isGenerated; // FPDFText_IsGenerated
     };
     std::vector<CharInfo> charInfo(totalChars);
-    for (int i = 0; i < totalChars; i++) {
-        double left, right, bottom, top;
-        if (FPDFText_GetCharBox(textPage, i, &left, &right, &bottom, &top) &&
-            (right - left) > 0.001 && (top - bottom) > 0.001) {
-            charInfo[i] = {(left + right) / 2.0, (bottom + top) / 2.0, true, -1};
-        } else {
-            charInfo[i] = {0.0, 0.0, false, -1};
+
+    for (int ci = 0; ci < totalChars; ci++) {
+        charInfo[ci] = {-1, false};
+
+        // Skip generated (synthetic) characters — they don't correspond to
+        // real text objects in the content stream and should not participate
+        // in fission decisions.
+        if (FPDFText_IsGenerated(textPage, ci) == 1) {
+            charInfo[ci].isGenerated = true;
+            continue;
+        }
+
+        FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, ci);
+        if (obj) {
+            auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(obj));
+            if (pit != objPtrToIndex.end()) {
+                charInfo[ci].ownerObj = pit->second;
+            }
         }
     }
 
-    // 3. Build char → page-object mapping via spatial correlation
-    int objCount = FPDFPage_CountObjects(page);
-    for (int oi = 0; oi < objCount; oi++) {
-        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
-        if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
-
-        float ol, ob, or_, ot;
-        if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
-
-        // Slight tolerance for rounding
-        float tol = 0.5f;
-        for (int ci = 0; ci < totalChars; ci++) {
-            auto& ci_info = charInfo[ci];
-            if (!ci_info.valid || ci_info.ownerObj >= 0) continue;
-            if (ci_info.cx >= ol - tol && ci_info.cx <= or_ + tol &&
-                ci_info.cy >= ob - tol && ci_info.cy <= ot + tol) {
-                ci_info.ownerObj = oi;
-            }
-        }
+    // 3. Assign unmapped characters (typically spaces with degenerate bboxes)
+    //    to their neighbor's object so they stay in the text flow.
+    //    Forward pass: inherit from left neighbor.
+    for (int ci = 1; ci < totalChars; ci++) {
+        if (charInfo[ci].ownerObj >= 0) continue;
+        if (charInfo[ci - 1].ownerObj >= 0)
+            charInfo[ci].ownerObj = charInfo[ci - 1].ownerObj;
+    }
+    //    Reverse pass: handle leading unmapped chars by inheriting from right.
+    for (int ci = totalChars - 2; ci >= 0; ci--) {
+        if (charInfo[ci].ownerObj >= 0) continue;
+        if (charInfo[ci + 1].ownerObj >= 0)
+            charInfo[ci].ownerObj = charInfo[ci + 1].ownerObj;
     }
 
     // 4. Group characters by their owning object
@@ -332,13 +432,13 @@ static int32_t objectFissionRedact(
 
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
 
-        // Fully contained → simple removal, no fragments needed
+        // Fully contained -> simple removal, no fragments needed
         if (allRedacted) {
             objsToDestroy.insert(obj);
             continue;
         }
 
-        // Partial overlap → Object Fission with multi-fragment support
+        // Partial overlap -> Object Fission with multi-fragment support
         FissionPlan plan;
         plan.originalObj    = obj;
         plan.removeEntirely = false;
@@ -355,43 +455,61 @@ static int32_t objectFissionRedact(
         FS_MATRIX originalMatrix;
         FPDFPageObj_GetMatrix(obj, &originalMatrix);
 
-        // ── Build contiguous fragments of surviving text ──────────────────
+        // Build contiguous fragments of surviving text
         // Walk through the chars in order.  Every time we transition from
-        // redacted→non-redacted, start a new fragment.  Every time we transition
-        // from non-redacted→redacted, close the current fragment.
+        // redacted->non-redacted, start a new fragment.  Every time we transition
+        // from non-redacted->redacted, close the current fragment.
         std::vector<int> currentRun;
         bool inRedacted = false;
 
         auto flushFragment = [&]() {
             if (currentRun.empty()) return;
 
-            TextFragment frag;
+            // Find first printable non-space character for positioning.
+            // Skip: null (0), control chars (0x01-0x1F including newlines
+            // and tabs that step 3b may have inherited from inter-line gaps),
+            // spaces (0x20), and NBSP (0xA0).  Control characters can't be
+            // properly encoded back into a text object and produce ÿ (0xFF)
+            // artifacts when PDFium attempts to render charcode 0.
+            size_t firstNonWS = 0;
+            while (firstNonWS < currentRun.size()) {
+                unsigned int uni = FPDFText_GetUnicode(textPage, currentRun[firstNonWS]);
+                if (uni > 0x20 && uni != 0xA0) break;
+                firstNonWS++;
+            }
+            if (firstNonWS >= currentRun.size()) {
+                currentRun.clear();
+                return;
+            }
 
-            // Gather unicode text for this run
+            // Collect text starting from first printable non-space char,
+            // preserving internal spaces within the contiguous run.
+            // Skip control characters (< 0x20) and null — they can't be
+            // encoded and would produce ÿ artifacts.
             std::wstring ws;
-            for (int ci : currentRun) {
-                unsigned int uni = FPDFText_GetUnicode(textPage, ci);
-                if (uni) ws += static_cast<wchar_t>(uni);
+            for (size_t i = firstNonWS; i < currentRun.size(); i++) {
+                unsigned int uni = FPDFText_GetUnicode(textPage, currentRun[i]);
+                if (uni >= 0x20) ws += static_cast<wchar_t>(uni);
             }
             if (ws.empty()) { currentRun.clear(); return; }
+
+            // Decompose ligatures BEFORE encoding.  Unicode ligature codepoints
+            // (U+FB00-FB06) can't be reverse-mapped to charcodes by most fonts'
+            // encoding dictionaries, which causes FPDFText_SetText to produce
+            // charcode 0 → rendered as ÿ (0xFF) in WinAnsi and other encodings.
+            ws = decomposeLigatures(ws);
+
+            TextFragment frag;
             frag.utf16 = wstring_to_utf16le(ws);
 
-            // Hybrid matrix: copy a,b,c,d from original (preserves size/angle)
+            // Hybrid matrix: copy a,b,c,d from original (preserves size/angle).
+            // Pin e,f to the first non-whitespace char's origin.
             frag.matrix = originalMatrix;
-
-            // Pin translation (e,f) to the absolute page-space origin of this
-            // fragment's first surviving character.  This is the critical fix:
-            // by deriving e,f from FPDFText_GetCharOrigin instead of from the
-            // original matrix or from font advance width calculations, we
-            // completely bypass kerning, character spacing, word spacing, and
-            // TJ-array positioning logic.  The fragment lands exactly where the
-            // original character was painted.
             double fx, fy;
-            if (FPDFText_GetCharOrigin(textPage, currentRun[0], &fx, &fy)) {
+            if (FPDFText_GetCharOrigin(textPage, currentRun[firstNonWS], &fx, &fy)) {
                 frag.matrix.e = static_cast<float>(fx);
                 frag.matrix.f = static_cast<float>(fy);
             }
-
 
             plan.fragments.push_back(std::move(frag));
             currentRun.clear();
@@ -407,7 +525,7 @@ static int32_t objectFissionRedact(
                 inRedacted = true;
             } else {
                 if (inRedacted) {
-                    // Transition from redacted → non-redacted: start new run
+                    // Transition from redacted -> non-redacted: start new run
                     currentRun.clear();
                 }
                 inRedacted = false;
@@ -437,22 +555,163 @@ static int32_t objectFissionRedact(
         }
     }
 
-    // ── Modification phase ────────────────────────────────────────────────────
+    // Modification phase
 
-    // 7. Apply fission: create fragment objects BEFORE removing originals
-    //    (font handles borrowed from originals remain valid through the document)
+    // 7. Apply fission: create fragment objects BEFORE removing originals.
+    //
+    //    Three encoding strategies are tried in order:
+    //
+    //    Strategy A: SetText (Unicode -> font's CharCodeFromUnicode).
+    //      Works for most fonts including CID/Type0 with proper ToUnicode.
+    //
+    //    Strategy B: FreeType GID-based SetCharcodes (when JPDFIUM_HAS_FREETYPE).
+    //      Extracts embedded font data via FPDFFont_GetFontData, loads into
+    //      FreeType, uses FT_Get_Char_Index for each Unicode char to get GIDs.
+    //      For CID Identity-H fonts (charcode=CID=GID), produces correct codes.
+    //
+    //    Strategy C: WinAnsi SetCharcodes (no external libraries needed).
+    //      Maps Unicode -> WinAnsi byte codes for Standard 14 / non-embedded fonts.
+    //
+    //    If all strategies fail, fragment is skipped and original preserved.
+    std::set<FPDF_PAGEOBJECT> fissionAttempted;
+
+    // FreeType font cache: avoid re-loading font data for every fragment.
+#ifdef JPDFIUM_HAS_FREETYPE
+    struct FtFontCache {
+        std::unordered_map<uint32_t, uint32_t> unicodeToGid;
+        bool valid = false;
+    };
+    std::unordered_map<uintptr_t, FtFontCache> ftCache;
+
+    auto getFtMapping = [&](FPDF_FONT font) -> const FtFontCache& {
+        uintptr_t key = reinterpret_cast<uintptr_t>(font);
+        auto it = ftCache.find(key);
+        if (it != ftCache.end()) return it->second;
+
+        FtFontCache& cache = ftCache[key];
+        size_t buflen = 0;
+        if (FPDFFont_GetFontData(font, nullptr, 0, &buflen) && buflen > 0) {
+            std::vector<uint8_t> fontData(buflen);
+            size_t actual = 0;
+            if (FPDFFont_GetFontData(font, fontData.data(), buflen, &actual) && actual > 0) {
+                ensureFreeTypeInit();
+                FT_Face face;
+                if (FT_New_Memory_Face(g_ft_lib, fontData.data(),
+                                       static_cast<FT_Long>(actual), 0, &face) == 0) {
+                    // Select a Unicode cmap if available
+                    for (int cm = 0; cm < face->num_charmaps; cm++) {
+                        if (face->charmaps[cm]->encoding == FT_ENCODING_UNICODE) {
+                            FT_Set_Charmap(face, face->charmaps[cm]);
+                            break;
+                        }
+                    }
+                    FT_UInt gid;
+                    FT_ULong charcode = FT_Get_First_Char(face, &gid);
+                    while (gid != 0) {
+                        cache.unicodeToGid[static_cast<uint32_t>(charcode)] = gid;
+                        charcode = FT_Get_Next_Char(face, charcode, &gid);
+                    }
+                    cache.valid = !cache.unicodeToGid.empty();
+                    FT_Done_Face(face);
+                }
+            }
+        }
+        return cache;
+    };
+#endif
+
     for (auto& plan : plans) {
+        fissionAttempted.insert(plan.originalObj);
+        std::vector<FPDF_PAGEOBJECT> createdObjs;
+        bool allOk = true;
+
         for (auto& frag : plan.fragments) {
             if (frag.utf16.size() <= 1) continue;   // skip null-only
 
             FPDF_PAGEOBJECT fragObj = FPDFPageObj_CreateTextObj(doc, plan.font, plan.fontSize);
-            if (!fragObj) continue;
+            if (!fragObj) { allOk = false; break; }
 
-            FPDFText_SetText(fragObj,
+            auto boundsValid = [](FPDF_PAGEOBJECT obj) -> bool {
+                float fl, fb, fr, ft;
+                if (!FPDFPageObj_GetBounds(obj, &fl, &fb, &fr, &ft)) return false;
+                float w = fr - fl, h = ft - fb;
+                return w >= 0.01f || h >= 0.01f;
+            };
+
+            auto resetFragObj = [&]() -> bool {
+                FPDFPageObj_Destroy(fragObj);
+                fragObj = FPDFPageObj_CreateTextObj(doc, plan.font, plan.fontSize);
+                return fragObj != nullptr;
+            };
+
+            FPDF_BOOL textOk = false;
+            bool boundsOk = false;
+
+            // Strategy A: SetText (Unicode -> font's CharCodeFromUnicode)
+            textOk = FPDFText_SetText(fragObj,
                 reinterpret_cast<FPDF_WIDESTRING>(frag.utf16.data()));
+            if (textOk) boundsOk = boundsValid(fragObj);
+
+#ifdef JPDFIUM_HAS_FREETYPE
+            // Strategy B: FreeType GID-based SetCharcodes
+            if (!textOk || !boundsOk) {
+                if (textOk && !boundsOk) {
+                    if (!resetFragObj()) { allOk = false; break; }
+                }
+                const auto& ftInfo = getFtMapping(plan.font);
+                if (ftInfo.valid) {
+                    std::vector<uint32_t> codes;
+                    bool allMapped = true;
+                    for (size_t i = 0; i + 1 < frag.utf16.size(); i++) {
+                        auto git = ftInfo.unicodeToGid.find(
+                            static_cast<uint32_t>(frag.utf16[i]));
+                        if (git != ftInfo.unicodeToGid.end() && git->second != 0) {
+                            codes.push_back(git->second);
+                        } else {
+                            allMapped = false;
+                            break;
+                        }
+                    }
+                    if (allMapped && !codes.empty()) {
+                        textOk = FPDFText_SetCharcodes(
+                            fragObj, codes.data(), codes.size());
+                        if (textOk) boundsOk = boundsValid(fragObj);
+                    }
+                }
+            }
+#endif
+
+            // Strategy C: WinAnsi SetCharcodes
+            if (!textOk || !boundsOk) {
+                if (textOk && !boundsOk) {
+                    if (!resetFragObj()) { allOk = false; break; }
+                }
+                std::vector<uint32_t> codes;
+                bool allMappable = true;
+                for (size_t i = 0; i + 1 < frag.utf16.size(); i++) {
+                    uint32_t code = unicodeToWinAnsiCharcode(frag.utf16[i]);
+                    if (code != 0) {
+                        codes.push_back(code);
+                    } else {
+                        allMappable = false;
+                        break;
+                    }
+                }
+                if (allMappable && !codes.empty()) {
+                    textOk = FPDFText_SetCharcodes(
+                        fragObj, codes.data(), codes.size());
+                    if (textOk) boundsOk = boundsValid(fragObj);
+                }
+            }
+
+            if (!textOk || !boundsOk) {
+                FPDFPageObj_Destroy(fragObj);
+                allOk = false;
+                break;
+            }
+
             FPDFPageObj_SetMatrix(fragObj, &frag.matrix);
             FPDFTextObj_SetTextRenderMode(fragObj, plan.renderMode);
-
 
             // Restore original text colors
             FPDFPageObj_SetFillColor(fragObj, plan.fillR, plan.fillG, plan.fillB, plan.fillA);
@@ -461,19 +720,36 @@ static int32_t objectFissionRedact(
                                            plan.strokeB, plan.strokeA);
             }
 
-            FPDFPage_InsertObject(page, fragObj);
+            createdObjs.push_back(fragObj);
         }
 
-        // Mark original for removal
-        objsToDestroy.insert(plan.originalObj);
+        if (allOk) {
+            // All fragments created successfully -> commit
+            for (auto* fo : createdObjs) {
+                FPDFPage_InsertObject(page, fo);
+            }
+            objsToDestroy.insert(plan.originalObj);
+        } else {
+            // Fission failed -> destroy created fragments, keep original.
+            // The original is NOT added to objsToDestroy, and step 8 will
+            // also skip it (fissionAttempted set).  The black box painted in
+            // step 10 still provides visual cover.
+            for (auto* fo : createdObjs) {
+                FPDFPageObj_Destroy(fo);
+            }
+        }
     }
 
     // 8. Fallback: remove text objects that are >70% inside a match bbox but
     //    were NOT caught by the char-to-object mapping (e.g. Form XObject text,
     //    chars with degenerate bounding boxes).
+    //    Skip objects that were already handled by fission (even if fission
+    //    failed — in that case the original is intentionally preserved and
+    //    the black box provides visual cover).
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
-        if (objsToDestroy.count(obj)) continue; // already handled
+        if (objsToDestroy.count(obj)) continue;       // already marked
+        if (fissionAttempted.count(obj)) continue;     // fission handled it
         int type = FPDFPageObj_GetType(obj);
         if (type != FPDF_PAGEOBJ_TEXT) continue;
 
@@ -509,7 +785,7 @@ static int32_t objectFissionRedact(
     return FPDFPage_GenerateContent(page) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-// Helper: run regex over extracted text → produce TextMatch vector.
+// Helper: run regex over extracted text -> produce TextMatch vector.
 // wtext + idxMap must already be populated (see callers).
 static void collectRegexMatches(
     FPDF_TEXTPAGE textPage,
@@ -556,7 +832,7 @@ static void collectRegexMatches(
     }
 }
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
+// Lifecycle
 
 int32_t jpdfium_init() {
     FPDF_LIBRARY_CONFIG cfg;
@@ -572,7 +848,7 @@ void jpdfium_destroy() {
     FPDF_DestroyLibrary();
 }
 
-// ── Document open ─────────────────────────────────────────────────────────────
+// Document open
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
@@ -611,7 +887,7 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
     return JPDFIUM_OK;
 }
 
-// ── Document info / save ──────────────────────────────────────────────────────
+// Document info / save
 
 int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
     DocWrapper* w = decodeDoc(doc);
@@ -673,7 +949,7 @@ void jpdfium_doc_close(int64_t doc) {
     delete decodeDoc(doc);
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// Page
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
     DocWrapper* w = decodeDoc(doc);
@@ -704,7 +980,7 @@ void jpdfium_page_close(int64_t page) {
     delete decodePage(page);
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// Render
 
 int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* width, int32_t* height) {
     PageWrapper* pw = decodePage(page);
@@ -733,9 +1009,9 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
         const uint8_t* s = src + row * stride;
         uint8_t*       d = out + row * w_px * 4;
         for (int col = 0; col < w_px; ++col, s += 4, d += 4) {
-            d[0] = s[2];  // R ← B
+            d[0] = s[2];  // R <- B
             d[1] = s[1];  // G
-            d[2] = s[0];  // B ← R
+            d[2] = s[0];  // B <- R
             d[3] = s[3];  // A
         }
     }
@@ -751,7 +1027,59 @@ void jpdfium_free_buffer(uint8_t* buffer) {
     free(buffer);
 }
 
-// ── Text extraction ───────────────────────────────────────────────────────────
+// Text extraction
+
+// Returns JSON array with char-origin (ox,oy) in addition to bounding box:
+// [{"i":0,"u":72,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
+int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+
+    FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+    if (!tp) return JPDFIUM_ERR_NATIVE;
+
+    int count = FPDFText_CountChars(tp);
+    std::ostringstream os;
+    os << '[';
+    bool first = true;
+
+    for (int i = 0; i < count; ++i) {
+        unsigned int uni = FPDFText_GetUnicode(tp, i);
+        if (uni == 0) continue;
+
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(tp, i, &l, &r, &b, &t)) {
+            l = r = b = t = 0.0;
+        }
+
+        double ox, oy;
+        if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) {
+            ox = l;
+            oy = b;
+        }
+
+        if (!first) os << ',';
+        first = false;
+        os << "{\"i\":" << i
+           << ",\"u\":" << uni
+           << ",\"ox\":" << ox
+           << ",\"oy\":" << oy
+           << ",\"l\":" << l
+           << ",\"r\":" << r
+           << ",\"b\":" << b
+           << ",\"t\":" << t << '}';
+    }
+    os << ']';
+
+    FPDFText_ClosePage(tp);
+
+    std::string s = os.str();
+    char* out = static_cast<char*>(malloc(s.size() + 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    memcpy(out, s.c_str(), s.size() + 1);
+    *json = out;
+    return JPDFIUM_OK;
+}
 
 // Returns JSON array: [{"i":0,"u":65,"x":10.1,"y":20.2,"w":8.3,"h":12.4,"font":"Arial","size":12.0}, ...]
 int32_t jpdfium_text_get_chars(int64_t page, char** json) {
@@ -844,7 +1172,7 @@ void jpdfium_free_string(char* str) {
     free(str);
 }
 
-// ── Redaction ─────────────────────────────────────────────────────────────────
+// Redaction
 
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
                               uint32_t argb, int32_t remove_content) {
@@ -899,7 +1227,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
     return rc;
 }
 
-// ── Flatten ───────────────────────────────────────────────────────────────────
+// Flatten
 
 int32_t jpdfium_page_flatten(int64_t page) {
     PageWrapper* pw = decodePage(page);
@@ -908,7 +1236,7 @@ int32_t jpdfium_page_flatten(int64_t page) {
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-// ── Word-list redaction with padding ──────────────────────────────────────────
+// Word-list redaction with padding
 // words: null-terminated array of null-terminated UTF-8 strings
 // padding: extra points added around each match bounding box
 // wholeWord: if non-zero, only match when surrounded by non-alphanumeric characters
@@ -1003,7 +1331,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
     return rc;
 }
 
-// ── Convert page to image-based PDF page (strips ALL underlying content) ──────
+// Convert page to image-based PDF page (strips ALL underlying content)
 // Renders the page at the given DPI, creates a new image-only page.
 // This is the most secure redaction: visually identical but no extractable text.
 
@@ -1058,53 +1386,4 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
     return JPDFIUM_OK;
 }
 
-// ── Character position extraction (for testing) ───────────────────────────────
-// Returns JSON array with character origins + bounding boxes.
-// Used by automated tests to verify that non-redacted text positions are
-// preserved exactly after redaction.
-
-int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-
-    FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
-    if (!tp) return JPDFIUM_ERR_NATIVE;
-
-    int count = FPDFText_CountChars(tp);
-    std::ostringstream os;
-    os << '[';
-    bool first = true;
-
-    for (int i = 0; i < count; ++i) {
-        unsigned int uni = FPDFText_GetUnicode(tp, i);
-        if (uni == 0) continue;
-
-        double ox, oy;
-        if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
-
-        double l, r, b, t;
-        FPDFText_GetCharBox(tp, i, &l, &r, &b, &t);
-
-        if (!first) os << ',';
-        first = false;
-        os << "{\"i\":" << i
-           << ",\"u\":" << uni
-           << ",\"ox\":" << ox
-           << ",\"oy\":" << oy
-           << ",\"l\":" << l
-           << ",\"r\":" << r
-           << ",\"b\":" << b
-           << ",\"t\":" << t
-           << '}';
-    }
-    os << ']';
-
-    FPDFText_ClosePage(tp);
-
-    std::string s = os.str();
-    char* out = static_cast<char*>(malloc(s.size() + 1));
-    if (!out) return JPDFIUM_ERR_NATIVE;
-    memcpy(out, s.c_str(), s.size() + 1);
-    *json = out;
-    return JPDFIUM_OK;
-}
+// Character position extraction (for testing)

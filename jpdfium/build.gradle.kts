@@ -25,7 +25,23 @@ val jpdfiumFunctions = listOf(
     "jpdfium_text_get_char_positions",
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
     "jpdfium_redact_words_ex",
-    "jpdfium_page_flatten", "jpdfium_page_to_image"
+    "jpdfium_page_flatten", "jpdfium_page_to_image",
+    // Advanced Pattern Engine (PCRE2 JIT)
+    "jpdfium_pcre2_compile", "jpdfium_pcre2_match_all", "jpdfium_pcre2_free",
+    "jpdfium_luhn_validate",
+    // FlashText Dictionary NER
+    "jpdfium_flashtext_create", "jpdfium_flashtext_add_keyword",
+    "jpdfium_flashtext_add_keywords_json", "jpdfium_flashtext_find", "jpdfium_flashtext_free",
+    // Font Normalization Pipeline
+    "jpdfium_font_get_data", "jpdfium_font_classify",
+    "jpdfium_font_fix_tounicode", "jpdfium_font_repair_widths",
+    "jpdfium_font_normalize_page", "jpdfium_font_subset",
+    // Glyph-Level Redaction
+    "jpdfium_redact_glyph_aware",
+    // XMP Metadata Redaction
+    "jpdfium_xmp_redact_patterns", "jpdfium_metadata_strip", "jpdfium_metadata_strip_all",
+    // ICU4C Text Processing
+    "jpdfium_icu_normalize_nfc", "jpdfium_icu_break_sentences", "jpdfium_icu_bidi_reorder"
 )
 
 val generateBindings by tasks.registering(Exec::class) {
@@ -51,16 +67,6 @@ val generateBindings by tasks.registering(Exec::class) {
 sourceSets.main.get().java.srcDir(generateBindings.map {
     layout.buildDirectory.dir("generated/jextract/java").get()
 })
-
-// Run: ./gradlew :jpdfium:viewer [-Ppdf=/path/to/file.pdf]
-tasks.register<JavaExec>("viewer") {
-    group       = "verification"
-    description = "Launch the Swing PDF viewer for visual testing"
-    mainClass.set("stirling.software.jpdfium.PdfViewerApp")
-    classpath = sourceSets.test.get().runtimeClasspath
-    jvmArgs("--enable-native-access=ALL-UNNAMED")
-    if (project.hasProperty("pdf")) args(project.property("pdf").toString())
-}
 
 // Run: ./gradlew :jpdfium:run -PmainClass=com.example.Main
 tasks.register<JavaExec>("run") {

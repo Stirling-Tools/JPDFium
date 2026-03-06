@@ -20,16 +20,16 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <h2>Testing strategies</h2>
  * <ol>
- *   <li><strong>Coordinate Tracking</strong> — extracts character positions via
+ *   <li><strong>Coordinate Tracking</strong> - extracts character positions via
  *       {@code FPDFText_GetCharOrigin} before and after redaction, asserts non-redacted
  *       characters keep their absolute position (within 0.5 pt tolerance).</li>
- *   <li><strong>Text Removal</strong> — redacted patterns are completely absent from
+ *   <li><strong>Text Removal</strong> - redacted patterns are completely absent from
  *       extracted text.</li>
- *   <li><strong>Non-redacted Survival</strong> — verifies specific anchor texts remain
+ *   <li><strong>Non-redacted Survival</strong> - verifies specific anchor texts remain
  *       searchable/extractable after redaction.</li>
- *   <li><strong>Visual Regression</strong> — renders pages before/after, asserts &le;5%
+ *   <li><strong>Visual Regression</strong> - renders pages before/after, asserts &le;5%
  *       pixel difference (only the redaction boxes should change).</li>
- *   <li><strong>Structural Assertions</strong> — no crash on edge cases (empty pages,
+ *   <li><strong>Structural Assertions</strong> - no crash on edge cases (empty pages,
  *       single characters, 100-page documents, non-text pages, etc.).</li>
  * </ol>
  *
@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>Transforms: rotation, scaling, skew, mirror, CTM concatenation</li>
  *   <li>Page structure: rotated pages, media-box offset, crop-box, multi-stream</li>
  *   <li>Color/transparency: coloured fill, white-on-black, transparency</li>
- *   <li>Rendering modes: Tr 0–7</li>
+ *   <li>Rendering modes: Tr 0-7</li>
  *   <li>Multi-pattern / multi-PII: several SSNs, emails, phones in same text</li>
  *   <li>Stress: 100-page doc, 50 SSNs on one page, very long line</li>
  *   <li>Edge cases: empty page, image-only, single character</li>
@@ -85,7 +85,7 @@ class ObjectFissionCoordinateTest {
 
     private static Path testPdf(String name) throws Exception {
         var url = ObjectFissionCoordinateTest.class.getResource("/pdfs/redact/" + name);
-        assertNotNull(url, name + " not found on classpath — run RedactTestPdfGenerator first");
+        assertNotNull(url, name + " not found on classpath - run RedactTestPdfGenerator first");
         return Path.of(url.toURI());
     }
 
@@ -206,7 +206,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 1. FONT ENCODING — Coordinate Preservation
+        // 1. FONT ENCODING - Coordinate Preservation
     
     @Order(1)
     @ParameterizedTest(name = "[{0}] suffix text does not shift after SSN redaction")
@@ -236,7 +236,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 2. PATTERN POSITION — start / end / entire / cross-object
+        // 2. PATTERN POSITION - start / end / entire / cross-object
     
     @Order(2)
     @Test
@@ -400,7 +400,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 6. TEXT OPERATORS — char/word spacing, h-scaling, text rise, leading
+        // 6. TEXT OPERATORS - char/word spacing, h-scaling, text rise, leading
     
     @Order(6)
     @ParameterizedTest(name = "[{0}] operator: suffix preserved after SSN redaction")
@@ -473,7 +473,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 7. TEXT TRANSFORMS — rotation, scale, skew, mirror, CTM
+        // 7. TEXT TRANSFORMS - rotation, scale, skew, mirror, CTM
     
     @Order(7)
     @ParameterizedTest(name = "[{0}] transformed text: SSN removed")
@@ -516,7 +516,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 8. PAGE STRUCTURE — rotated pages, mediabox, cropbox, multistream
+        // 8. PAGE STRUCTURE - rotated pages, mediabox, cropbox, multistream
     
     @Order(8)
     @ParameterizedTest(name = "page rotation {0} deg: SSN removed")
@@ -569,7 +569,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 10. RENDERING MODES (Tr 0–7)
+        // 10. RENDERING MODES (Tr 0-7)
     
     @Order(10)
     @ParameterizedTest(name = "rendering mode Tr{0}: SSN removed")
@@ -646,7 +646,7 @@ class ObjectFissionCoordinateTest {
     @Test
     void overlappingMatch_noCorruption() throws Exception {
         Path path = testPdf("redact-test-overlapping-match.pdf");
-        // "111-22-3333-44-5555" — SSN regex could match at the start
+        // "111-22-3333-44-5555" - SSN regex could match at the start
         byte[] redacted = redactSsnAllPages(path);
         try (var doc = PdfDocument.open(redacted); var page = doc.page(0)) {
             // should not crash; page should still be readable
@@ -695,7 +695,7 @@ class ObjectFissionCoordinateTest {
         }
     }
 
-        // 15. EDGE CASES — empty page, image-only, single char
+        // 15. EDGE CASES - empty page, image-only, single char
     
     @Order(15)
     @Test
@@ -907,7 +907,7 @@ class ObjectFissionCoordinateTest {
     @Order(19)
     @Test
     void overlappingTextObjects_noCrash() throws Exception {
-        // Two BT/ET blocks at same Y — should not corrupt
+        // Two BT/ET blocks at same Y - should not corrupt
         byte[] redacted = redactSsnAllPages(testPdf("redact-test-overlapping.pdf"));
         try (var doc = PdfDocument.open(redacted); var page = doc.page(0)) {
             // Just verify no crash and some text survives
@@ -1004,7 +1004,7 @@ class ObjectFissionCoordinateTest {
         Path path = testPdf("redact-test-helvetica.pdf");
         // Redact once
         byte[] first = redactSsn(path, 0, 1);
-        // Redact again on already-redacted doc — should not crash
+        // Redact again on already-redacted doc - should not crash
         try (var doc = PdfDocument.open(first)) {
             try (var page = doc.page(0)) {
                 int count = page.redactWordsEx(

@@ -13,7 +13,7 @@ import java.util.List;
  * <p>Parses the raw character-level JSON from PDFium into structured
  * {@link PageText} objects with lines, words, and characters.
  *
- * <h3>Usage Example</h3>
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
  *     // Extract text from page 0

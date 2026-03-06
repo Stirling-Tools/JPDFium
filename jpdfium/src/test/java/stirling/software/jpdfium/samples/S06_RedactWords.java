@@ -29,6 +29,7 @@ public class S06_RedactWords {
         RedactOptions opts = RedactOptions.builder()
                 .addWord("Hello")
                 .addWord("World")
+                .addWord("Overview")
                 .addWord("Dummy")
                 .addWord("Redaction")
                 .addWord("Introduction")

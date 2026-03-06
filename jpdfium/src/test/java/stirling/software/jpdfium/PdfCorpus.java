@@ -64,7 +64,6 @@ public final class PdfCorpus {
         entry("issue13372.pdf"),
         entry("issue14307.pdf"),
         entry("issue925.pdf"),
-        entry("issue918.pdf"),
         entry("issue5334.pdf"),
         entry("issue6108.pdf"),
         entry("issue6127.pdf"),

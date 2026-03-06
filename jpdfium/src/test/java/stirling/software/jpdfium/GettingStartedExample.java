@@ -71,7 +71,7 @@ public class GettingStartedExample {
                         result.width(), result.height(), result.rgba().length);
 
                 ImageIO.write(result.toBufferedImage(), "PNG", new File("/tmp/page0.png"));
-                System.out.println("Saved → /tmp/page0.png");
+                System.out.println("Saved -> /tmp/page0.png");
             }
 
             // 4. Extract text as JSON
@@ -137,7 +137,7 @@ public class GettingStartedExample {
             System.out.println("\n=== 11. Save ===");
             Path output = Path.of("/tmp/output.pdf");
             doc.save(output);
-            System.out.println("Saved → " + output);
+            System.out.println("Saved -> " + output);
 
             // Also available: save to byte array
             byte[] bytes = doc.saveBytes();

@@ -3,7 +3,7 @@ package stirling.software.jpdfium.model;
 /**
  * Controls what elements are flattened when calling {@link stirling.software.jpdfium.PdfDocument#flatten}.
  *
- * <p>All modes use native PDFium via FFM — no PDFBox involved.
+ * <p>All modes use native PDFium via FFM - no PDFBox involved.
  */
 public enum FlattenMode {
 
@@ -21,7 +21,7 @@ public enum FlattenMode {
     /**
      * Convert each page to an image-based page (full rasterization).
      *
-     * <p>The entire page — text, vector graphics, annotations, form fields — is
+     * <p>The entire page - text, vector graphics, annotations, form fields - is
      * rendered at the specified DPI and replaced with a single raster image.
      * After conversion, no text can be selected or extracted.
      *

@@ -1,10 +1,14 @@
 plugins {
     `java-library`
+    `maven-publish`
+    signing
 }
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
     targetCompatibility = JavaVersion.VERSION_25
+    withJavadocJar()
+    withSourcesJar()
 }
 
 dependencies {
@@ -20,4 +24,62 @@ tasks.withType<Test> {
 
 tasks.withType<JavaExec> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            from(components["java"])
+
+            pom {
+                name.set(project.name)
+                description.set("Java 25 FFM bindings for PDFium with PII redaction")
+                url.set("https://github.com/Stirling-Tools/JPDFium")
+
+                licenses {
+                    license {
+                        name.set("MIT License")
+                        url.set("https://opensource.org/licenses/MIT")
+                    }
+                }
+
+                developers {
+                    developer {
+                        id.set("stirling-tools")
+                        name.set("Stirling Tools")
+                        url.set("https://github.com/Stirling-Tools")
+                    }
+                }
+
+                scm {
+                    connection.set("scm:git:git://github.com/Stirling-Tools/JPDFium.git")
+                    developerConnection.set("scm:git:ssh://github.com/Stirling-Tools/JPDFium.git")
+                    url.set("https://github.com/Stirling-Tools/JPDFium")
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "sonatype"
+            val releasesUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
+            val snapshotsUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+            url = if (version.toString().endsWith("SNAPSHOT")) snapshotsUrl else releasesUrl
+            credentials {
+                username = findProperty("ossrhUsername")?.toString() ?: System.getenv("OSSRH_USERNAME") ?: ""
+                password = findProperty("ossrhPassword")?.toString() ?: System.getenv("OSSRH_PASSWORD") ?: ""
+            }
+        }
+    }
+}
+
+signing {
+    // Use GPG key from gradle.properties or environment
+    val signingKey = findProperty("signing.key")?.toString() ?: System.getenv("GPG_SIGNING_KEY")
+    val signingPassword = findProperty("signing.password")?.toString() ?: System.getenv("GPG_SIGNING_PASSWORD")
+    if (signingKey != null && signingPassword != null) {
+        useInMemoryPgpKeys(signingKey, signingPassword)
+    }
+    sign(publishing.publications["mavenJava"])
 }

@@ -8,7 +8,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests that exercise real PDF behaviour — text extraction, search, redaction round-trip.
+ * Integration tests that exercise real PDF behaviour - text extraction, search, redaction round-trip.
  * Runs only when the {@code jpdfium.integration} system property is set to {@code true}.
  *
  * <p>Run with: {@code ./gradlew :jpdfium-document:integrationTest}

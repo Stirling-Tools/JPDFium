@@ -9,15 +9,15 @@ import java.util.List;
  * Mirrors Stirling-PDF's auto-redact feature set:
  *
  * <ul>
- *   <li>Word list — multiple words/phrases to redact</li>
- *   <li>Box color — fill color for redaction rectangles</li>
- *   <li>Custom padding — extra space around matched text</li>
- *   <li>Regex mode — treat words as regex patterns</li>
- *   <li>Whole word search — only match complete words</li>
- *   <li>Convert to PDF-Image — re-render pages as images (most secure)</li>
+ *   <li>Word list - multiple words/phrases to redact</li>
+ *   <li>Box color - fill color for redaction rectangles</li>
+ *   <li>Custom padding - extra space around matched text</li>
+ *   <li>Regex mode - treat words as regex patterns</li>
+ *   <li>Whole word search - only match complete words</li>
+ *   <li>Convert to PDF-Image - re-render pages as images (most secure)</li>
  * </ul>
  *
- * <h3>Usage Example</h3>
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * RedactOptions opts = RedactOptions.builder()
  *     .addWord("Confidential")
@@ -111,7 +111,7 @@ public final class RedactOptions {
 
         /**
          * If true, convert each processed page to an image-based page after redaction.
-         * This is the most secure option — no text or metadata survives. (Default: false.)
+         * This is the most secure option - no text or metadata survives. (Default: false.)
          */
         public Builder convertToImage(boolean v) { this.convertToImage = v; return this; }
 

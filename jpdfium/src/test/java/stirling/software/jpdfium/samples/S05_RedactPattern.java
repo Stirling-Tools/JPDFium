@@ -38,9 +38,7 @@ public class S05_RedactPattern {
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {
                     try (PdfPage page = doc.page(i)) {
-                        // Standard redaction styling reflecting common compliance standards
                         page.redactPattern(SSN_PATTERN, 0xFF000000);
-                        // Applying distinct styling to visually separate different categories of PII during review
                         page.redactPattern(PHONE_PATTERN, 0xFFFF0000);
                         page.flatten();
                     }

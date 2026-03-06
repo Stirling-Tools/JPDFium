@@ -3,7 +3,7 @@
  *
  * <p>Planned features:
  * <ul>
- *   <li>Page flatten (annotations → content stream)</li>
+ *   <li>Page flatten (annotations -> content stream)</li>
  *   <li>Convert pages to image-based PDF pages</li>
  *   <li>Render pages to BufferedImage/PNG</li>
  *   <li>Split documents (future)</li>

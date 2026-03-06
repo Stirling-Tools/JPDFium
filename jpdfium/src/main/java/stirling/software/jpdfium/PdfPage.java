@@ -86,7 +86,7 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Auto-redact multiple words/patterns — matches Stirling-PDF's redaction feature set.
+     * Auto-redact multiple words/patterns - matches Stirling-PDF's redaction feature set.
      *
      * @param words         list of words or regex patterns to redact
      * @param argbColor     fill color (0xAARRGGBB)
@@ -108,15 +108,15 @@ public final class PdfPage implements AutoCloseable {
      * to surgically remove only the targeted text from the PDF content stream.
      * Partially overlapping text objects are split into prefix and suffix fragments
      * that are repositioned using the original font, transformation matrix, and
-     * render mode — ensuring zero typographical degradation.
+     * render mode - ensuring zero typographical degradation.
      *
      * <p>Key improvements:
      * <ul>
-     *   <li><strong>No over-removal</strong> — only matched characters are destroyed</li>
-     *   <li><strong>Font-safe</strong> — reuses the original font handle (no subsetting issues)</li>
-     *   <li><strong>Reflow-proof</strong> — surviving text is pinned to absolute coordinates
+     *   <li><strong>No over-removal</strong> - only matched characters are destroyed</li>
+     *   <li><strong>Font-safe</strong> - reuses the original font handle (no subsetting issues)</li>
+     *   <li><strong>Reflow-proof</strong> - surviving text is pinned to absolute coordinates
      *       via {@code FPDFText_GetCharOrigin}</li>
-     *   <li><strong>Single pass</strong> — all matches processed in one
+     *   <li><strong>Single pass</strong> - all matches processed in one
      *       {@code FPDFPage_GenerateContent} call</li>
      *   <li><strong>Returns match count</strong> for statistics and validation</li>
      * </ul>
@@ -142,6 +142,15 @@ public final class PdfPage implements AutoCloseable {
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+    }
+
+    /**
+     * Returns the native page handle for use by internal library code.
+     * External callers should not use this; it bypasses the safety checks in this class.
+     */
+    public long nativeHandle() {
+        ensureOpen();
+        return handle;
     }
 
     private void ensureOpen() {

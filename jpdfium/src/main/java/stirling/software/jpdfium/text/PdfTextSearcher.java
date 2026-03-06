@@ -11,7 +11,7 @@ import java.util.List;
  * Structured text search across PDF pages.
  * Provides match results with positional information.
  *
- * <h3>Usage Example</h3>
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
  *     List<SearchMatch> matches = PdfTextSearcher.search(doc, "Hello");

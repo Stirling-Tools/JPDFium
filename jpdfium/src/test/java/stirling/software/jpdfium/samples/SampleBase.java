@@ -16,7 +16,7 @@ import java.util.stream.Stream;
  * Shared utilities for all JPDFium sample classes.
  *
  * <p><strong>IntelliJ setup (one-time):</strong><br>
- * Run → Edit Configurations → Templates → Application → VM Options:<br>
+ * Run -> Edit Configurations -> Templates -> Application -> VM Options:<br>
  * {@code --enable-native-access=ALL-UNNAMED}
  *
  * <p><strong>Output location:</strong><br>
@@ -95,7 +95,7 @@ final class SampleBase {
 
     /**
      * Creates and returns the output directory for a specific PDF within a feature.
-     * e.g. {@code out("render", Path.of("minimal.pdf"))} →
+     * e.g. {@code out("render", Path.of("minimal.pdf"))} ->
      *      {@code {CWD}/samples-output/render/minimal/}
      */
     static Path out(String feature, Path pdf) throws Exception {
@@ -112,7 +112,7 @@ final class SampleBase {
         return dir;
     }
 
-    /** Filename without extension, e.g. {@code "minimal.pdf"} → {@code "minimal"}. */
+    /** Filename without extension, e.g. {@code "minimal.pdf"} -> {@code "minimal"}. */
     static String stem(Path pdf) {
         String name = pdf.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -122,15 +122,15 @@ final class SampleBase {
     /** Prints a completion banner listing all produced output files. */
     static void done(String sampleName, Path... outputs) {
         System.out.println();
-        System.out.println("╔==================================================╗");
-        System.out.printf( "║  %-48s║%n", sampleName + " - DONE");
-        System.out.println("╠==================================================╣");
+        System.out.println("+==================================================+");
+        System.out.printf( "|  %-48s|%n", sampleName + " - DONE");
+        System.out.println("+==================================================+");
         for (Path p : outputs) {
             String rel = p.toAbsolutePath().toString()
                     .replaceFirst(System.getProperty("user.home"), "~");
-            System.out.printf("║  -> %-44s║%n", rel.length() > 44 ? "…" + rel.substring(rel.length() - 43) : rel);
+            System.out.printf("|  -> %-44s|%n", rel.length() > 44 ? "..." + rel.substring(rel.length() - 43) : rel);
         }
-        System.out.println("╚==================================================╝");
+        System.out.println("+==================================================+");
     }
 
     static void section(String title) {
@@ -138,6 +138,6 @@ final class SampleBase {
     }
 
     static void pdfHeader(String sample, Path pdf, int index, int total) {
-        System.out.printf("%n[%d/%d] %s  →  %s%n", index, total, sample, pdf.getFileName());
+        System.out.printf("%n[%d/%d] %s  ->  %s%n", index, total, sample, pdf.getFileName());
     }
 }

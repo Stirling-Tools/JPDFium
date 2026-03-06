@@ -1,7 +1,7 @@
 /**
  * PDF redaction module - auto-redacts words, patterns, and regions from PDFs.
  *
- * <p>This module provides Stirling-PDF–compatible redaction features:
+ * <p>This module provides Stirling-PDF-compatible redaction features:
  * <ul>
  *   <li>Word-list redaction with configurable padding</li>
  *   <li>Regex pattern matching</li>
@@ -11,7 +11,7 @@
  *   <li>"Convert to PDF-Image" for maximum security</li>
  * </ul>
  *
- * <h3>Quick Start</h3>
+ * <p><b>Quick Start</b></p>
  * <pre>{@code
  * RedactOptions opts = RedactOptions.builder()
  *     .addWord("Confidential")
