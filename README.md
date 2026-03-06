@@ -1,0 +1,394 @@
+# JPDFium
+
+High-performance Java 25 FFM bindings for Google PDFium.
+
+JPDFium provides a safe, ergonomic Java API for PDF rendering, text extraction,
+and true content-stripping redaction - powered by Google's PDFium engine via
+Java 25's Foreign Function & Memory (FFM) API.
+
+## Features
+
+- **PDF Rendering** - Render pages to RGBA bitmaps at any DPI
+- **Text Extraction** - Structured page -> line -> word -> character extraction with font/position metadata
+- **Text Search** - Literal string search via PDFium's native search engine
+- **True Redaction** - Removes content from the PDF stream (not a cosmetic overlay); region, regex-pattern, and word-list redaction with full Unicode support
+- **PII Redaction Pipeline** - PCRE2 JIT pattern engine, FlashText NER, HarfBuzz glyph-level redaction, font normalization, XMP metadata stripping, semantic coreference expansion - all native via FFM
+- **Secure PDF-Image** - Convert pages to rasterized images, stripping all selectable text and vector content
+- **Cross-Platform** - Linux x64/arm64, macOS x64/arm64, Windows x64
+- **Zero JNI** - Pure FFM (`java.lang.foreign`), no JNI boilerplate
+- **MIT** - PDFium is Apache 2.0, this project is MIT
+
+## Quick Start
+
+```java
+// Render a page
+try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
+    System.out.println("Pages: " + doc.pageCount());
+
+    try (var page = doc.page(0)) {
+        // Render to PNG at 150 DPI
+        ImageIO.write(page.renderAt(150).toBufferedImage(), "PNG", new File("page0.png"));
+
+        // Redact SSNs - true content removal
+        page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
+        page.flatten();
+    }
+
+    doc.save(Path.of("output.pdf"));
+}
+
+// Structured text extraction
+try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
+    List<PageText> pages = PdfTextExtractor.extractAll(doc);
+    for (PageText pt : pages) {
+        System.out.printf("Page %d: %d lines, %d words%n",
+            pt.pageIndex(), pt.lineCount(), pt.wordCount());
+        System.out.println(pt.plainText());
+    }
+}
+
+// High-level redaction with PdfRedactor
+RedactOptions opts = RedactOptions.builder()
+    .addWord("Confidential")
+    .addWord("\\d{3}-\\d{2}-\\d{4}")   // SSN
+    .useRegex(true)
+    .padding(2.0f)
+    .convertToImage(true)               // most secure: no selectable text survives
+    .build();
+
+RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), opts);
+try (var doc = result.document()) {
+    doc.save(Path.of("output.pdf"));
+}
+```
+
+JVM flag required: `--enable-native-access=ALL-UNNAMED`
+
+## Architecture
+
+| Layer | Components | Description |
+|---|---|---|
+| **User Application** | Your Application (Java 25) | Consuming application code |
+| **High-level Java API** | `PdfDocument`, `PdfPage`, `PdfTextExtractor`, `PdfRedactor`, `PiiRedactor` | Safe, ergonomic abstractions within the `jpdfium` module |
+| **FFM Bindings** | `panama/NativeLoader`, `panama/JpdfiumH` | Auto-generated native interfaces via `java.lang.foreign` |
+| **Native Bridge** | `libjpdfium.so` | C/C++ bridge exposing targeted functions with managed handles |
+| **Core Engine** | `libpdfium.so` | Google's underlying PDFium engine |
+| **Native Libraries** | PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak | Native libraries for the PII redaction pipeline |
+
+JPDFium does not bind directly to PDFium's 400+ function C API. A thin C++ bridge (`libjpdfium`) exposes exactly the operations needed, with clean error codes, handle-based lifetime management, and correct memory ownership.
+
+## Modules
+
+| Module | Purpose |
+|--------|---------|
+| `jpdfium` | All Java API: `PdfDocument`, `PdfPage`, text extraction, text search, redaction, transforms, FFM bindings, `NativeLoader` |
+| `jpdfium-natives-linux-x64` | Native JARs for Linux x86-64 |
+| `jpdfium-natives-linux-arm64` | Native JARs for Linux AArch64 |
+| `jpdfium-natives-darwin-x64` | Native JARs for macOS Intel |
+| `jpdfium-natives-darwin-arm64` | Native JARs for macOS Apple Silicon |
+| `jpdfium-natives-windows-x64` | Native JARs for Windows x86-64 |
+| `jpdfium-spring` | Spring Boot auto-configuration |
+| `jpdfium-bom` | Maven BOM for consistent dependency versions |
+
+## API Overview
+
+### `PdfDocument`
+```java
+PdfDocument.open(Path)                       // open from file
+PdfDocument.open(byte[])                     // open from bytes
+PdfDocument.open(Path, String password)      // open encrypted PDF
+doc.pageCount()
+doc.page(int index)                          // returns PdfPage (AutoCloseable)
+doc.save(Path)
+doc.saveBytes()
+doc.convertPageToImage(int pageIndex, int dpi) // rasterize in-place (most secure)
+```
+
+### `PdfPage`
+```java
+page.size()                                  // PageSize(width, height) in PDF points
+page.renderAt(int dpi)                       // RenderResult -> toBufferedImage()
+page.extractTextJson()                       // raw char-level JSON
+page.findTextJson(String query)              // match positions as JSON
+page.redactRegion(Rect, int argbColor)
+page.redactPattern(String regex, int argbColor)
+page.redactWords(String[] words, int argb, float padding, boolean wholeWord,
+                 boolean useRegex, boolean removeContent)
+// Object Fission - true text removal, returns match count:
+int matches = page.redactWordsEx(String[] words, int argb, float padding,
+                                  boolean wholeWord, boolean useRegex,
+                                  boolean removeContent, boolean caseSensitive)
+page.flatten()                               // commit annotations to content stream
+```
+
+### `PdfTextExtractor`
+```java
+PdfTextExtractor.extractPage(doc, pageIndex) // -> PageText
+PdfTextExtractor.extractAll(doc)             // -> List<PageText>
+PdfTextExtractor.extractAll(Path)            // auto-managed document
+```
+
+`PageText` -> `List<TextLine>` -> `List<TextWord>` -> `List<TextChar>` (with x, y, font, size)
+
+### `PdfTextSearcher`
+```java
+PdfTextSearcher.search(doc, query)           // -> List<SearchMatch> across all pages
+PdfTextSearcher.searchPage(doc, i, query)    // -> List<SearchMatch> on one page
+// SearchMatch: pageIndex, startIndex, length
+```
+
+### `PdfRedactor`
+```java
+RedactOptions opts = RedactOptions.builder()
+    .addWord("secret")
+    .addWord("\\d{3}-\\d{2}-\\d{4}")
+    .useRegex(true)
+    .wholeWord(false)
+    .caseSensitive(false)   // case-insensitive (default)
+    .boxColor(0xFF000000)
+    .padding(0.0f)
+    .removeContent(true)    // true text removal (default)
+    .convertToImage(true)   // most secure: rasterize after redaction
+    .imageDpi(150)
+    .build();
+
+RedactResult result = PdfRedactor.redact(inputPath, opts);
+// result.pagesProcessed(), result.durationMs(), result.totalMatches()
+// result.pageResults() -> List<PageResult(pageIndex, wordsSearched, matchesFound)>
+try (var doc = result.document()) { doc.save(outputPath); }
+```
+
+### `PageOps`
+```java
+PageOps.flatten(doc, pageIndex)
+PageOps.flattenAll(doc)
+PageOps.convertToImage(doc, pageIndex, dpi)
+PageOps.convertAllToImages(doc, dpi)
+PageOps.renderPage(doc, pageIndex, dpi)      // -> BufferedImage
+PageOps.renderAll(doc, dpi)                  // -> List<BufferedImage>
+```
+
+### `PiiRedactor`
+
+The PII redaction pipeline orchestrates 9 stages powered by native libraries via FFM:
+
+1. Font Normalization
+2. Text Extraction
+3. PCRE2 Patterns
+4. FlashText NER
+5. Semantic Analysis
+6. Glyph Redaction
+7. Object Fission
+8. Metadata Redaction
+9. Flatten/Image
+
+```java
+import stirling.software.jpdfium.redact.pii.PiiCategory;
+import stirling.software.jpdfium.redact.pii.PiiPatterns;
+
+PiiRedactOptions opts = PiiRedactOptions.builder()
+    // Basic word list
+    .addWord("Confidential")
+    .addWord("\\d{3}-\\d{2}-\\d{4}")
+    .useRegex(true)
+
+    // PCRE2 JIT patterns for PII categories
+    .enableAllPiiPatterns()           // email, SSN, phone, credit card, IBAN, ...
+    .luhnValidation(true)             // reject false-positive credit card numbers
+
+    // Or select specific categories
+    // .piiPatterns(PiiPatterns.select(PiiCategory.EMAIL, PiiCategory.SSN, PiiCategory.PHONE))
+
+    // FlashText NER: O(n) dictionary entity matching
+    .addEntity("John Smith", "PERSON")
+    .addEntity("Acme Corp", "ORGANIZATION")
+
+    // Font normalization (fix broken PDFs before pattern matching)
+    .normalizeFonts(true)
+    .fixToUnicode(true)
+    .repairWidths(true)
+
+    // HarfBuzz glyph-level redaction
+    .glyphAware(true)
+    .ligatureAware(true)
+    .bidiAware(true)
+    .graphemeSafe(true)
+
+    // XMP metadata + /Info dictionary
+    .redactMetadata(true)
+    .stripAllMetadata(false)
+
+    // Semantic coreference expansion
+    .semanticRedact(true)
+    .coreferenceWindow(2)
+
+    // Security
+    .boxColor(0xFF000000)
+    .removeContent(true)
+    .convertToImage(true)
+    .build();
+
+PiiRedactResult result = PiiRedactor.redact(Path.of("input.pdf"), opts);
+try (var doc = result.document()) {
+    doc.save(Path.of("output.pdf"));
+}
+
+System.out.printf("Redacted %d total: %d words, %d patterns, %d entities, %d glyphs, %d metadata%n",
+    result.totalRedactions(), result.totalWordMatches(), result.patternMatches().size(),
+    result.entityMatches().size(), result.glyphRedactMatches(), result.metadataFieldsRedacted());
+```
+
+#### PII Redaction Components
+
+| Component | Class | Native Library | Purpose |
+|-----------|-------|----------------|----------|
+| **Pattern Engine** | `PatternEngine` | PCRE2 (JIT) | Lookaheads, `\b`, Unicode `\w`, named groups, Luhn post-validation |
+| **PII Patterns** | `PiiPatterns` | - | Pre-built PCRE2 regexes via `PiiCategory` enum: EMAIL, PHONE, SSN, CREDIT_CARD, IBAN, IP, DATE |
+| **NER** | `EntityRedactor` | FlashText (C++ trie) | O(n) dictionary entity matching with coreference expansion |
+| **Glyph Redaction** | `GlyphRedactor` | HarfBuzz + ICU4C | Ligature/BiDi/grapheme-safe redaction with cluster mapping |
+| **Font Normalization** | `FontNormalizer` | FreeType + HarfBuzz + qpdf | /ToUnicode CMap repair, /W table fix, re-subsetting, Type1->OTF |
+| **Metadata Redaction** | `XmpRedactor` | pugixml + qpdf | XMP metadata + /Info dictionary pattern matching and stripping |
+
+#### Native Library Dependencies
+
+All libraries are MIT or Apache-2.0 compatible:
+
+| Library | License | Purpose |
+|---------|---------|---------|
+| [PCRE2](https://www.pcre.org/) | BSD-3 | JIT-compiled regex engine |
+| [FreeType](https://freetype.org/) | FTL/MIT | Font parsing, classification, glyph width calculation |
+| [HarfBuzz](https://harfbuzz.github.io/) | MIT | Text shaping, `hb-subset` font subsetting |
+| [ICU4C](https://icu.unicode.org/) | Unicode License | NFC normalization, BiDi reordering, sentence segmentation |
+| [qpdf](https://qpdf.sourceforge.io/) | Apache-2.0 | PDF structure manipulation, stream replacement |
+| [pugixml](https://pugixml.org/) | MIT | XMP metadata XML parsing |
+| [libunibreak](https://github.com/nicowilliams/libunibreak) | zlib | Grapheme cluster boundaries |
+
+## Building
+
+### Prerequisites
+
+- **Java 25** - [download](https://jdk.java.net/25/)
+- **g++ (C++17)** - `dnf install gcc-c++` / `apt install g++` / Xcode CLT / MSVC
+- **CMake 3.16+** - `dnf install cmake` / `apt install cmake`
+- **jextract 25** (optional, to regenerate FFM bindings) - [download](https://jdk.java.net/jextract/)
+
+#### Native Library Dependencies
+
+For full PII redaction pipeline support, install these development packages:
+
+**Fedora / RHEL:**
+```bash
+sudo dnf install -y pcre2-devel freetype-devel harfbuzz-devel \
+    libicu-devel qpdf-devel pugixml-devel libunibreak-devel
+```
+
+**Ubuntu / Debian:**
+```bash
+sudo apt install -y libpcre2-dev libfreetype-dev libharfbuzz-dev \
+    libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev
+```
+
+### Build with Real PDFium (recommended)
+
+```bash
+# 1. Download PDFium (~25 MB, gitignored)
+bash native/setup-pdfium.sh
+
+# 2. Build with CMake (auto-detects all native libraries via pkg-config)
+bash native/build-real.sh
+
+# 3. Run unit tests
+./gradlew test
+
+# 4. Run integration tests (real PDFium required)
+./gradlew :jpdfium:integrationTest
+```
+
+`build-real.sh` uses CMake to compile `jpdfium_document.cpp` + `jpdfium_advanced.cpp` against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
+
+### Regenerate FFM Bindings (after changing `jpdfium.h`)
+
+```bash
+# Configure jextract location in ~/.gradle/gradle.properties:
+#   jpdfium.jextractHome=/path/to/jextract-25
+# OR set JEXTRACT_HOME env var. Defaults to ~/Downloads/jextract-25.
+
+./gradlew :jpdfium:generateBindings
+```
+
+### Build with Stub (no PDFium - unit tests only)
+
+For development without native libraries (e.g. testing Java-layer changes):
+
+```bash
+bash native/build-stub.sh
+./gradlew test
+```
+
+The stub library provides pass-through behavior: file operations save unmodified copies, text extraction returns synthetic results, and pattern matching returns empty results. This enables all Java-layer unit tests to pass without installing PDFium or native dependencies.
+
+## Manual Testing in IntelliJ
+
+The `samples` package contains numbered runnable classes for quick manual verification:
+
+```
+jpdfium/src/test/java/stirling/software/jpdfium/samples/
+├── S01_Render.java          -> samples-output/render/page-N.png
+├── S02_TextExtract.java     -> samples-output/text-extract/report.txt
+├── S03_TextSearch.java      -> stdout
+├── S04_RedactRegion.java    -> samples-output/redact-region/output.pdf
+├── S05_RedactPattern.java   -> samples-output/redact-pattern/output.pdf
+├── S06_RedactWords.java     -> samples-output/redact-words/output.pdf
+├── S07_SecureRedact.java    -> samples-output/secure-redact/output.pdf
+├── S08_FullPipeline.java    -> samples-output/full-pipeline/
+├── S09_Flatten.java         -> samples-output/flatten/
+├── S10_PiiRedact.java       -> samples-output/pii-redact/
+└── RunAllSamples.java       -> all of the above (smoke test)
+```
+
+**One-time IntelliJ setup:** Run -> Edit Configurations -> Templates -> Application -> VM Options:
+```
+--enable-native-access=ALL-UNNAMED
+```
+
+Then right-click any sample -> Run.
+
+## Thread Safety
+
+- `PdfDocument` and all `PdfPage` handles from it must be confined to one thread.
+- Independent `PdfDocument` instances on separate threads are safe.
+- `FPDF_InitLibrary` / `FPDF_DestroyLibrary` are called once globally by `JpdfiumLib`'s static initializer.
+
+## Redaction Design
+
+True redaction requires more than painting a black rectangle. JPDFium implements the **Object Fission Algorithm** for character-level text removal with zero typographic side-effects.
+
+### How it works
+
+1. **Spatial correlation** - each text-page character index is mapped to its owning `FPDF_PAGEOBJECT` by comparing character bounding-box centres against page-object bounding boxes. Characters with degenerate bounding boxes (synthetic spaces) are assigned to their nearest neighbor's object.
+2. **Object classification** - for every text object that contains redacted characters:
+   - *Fully contained* -> the entire object is destroyed.
+   - *Partially overlapping* -> **Object Fission**: the surviving (non-redacted) characters are split into per-word fragments. Each word becomes an independent text object with:
+     - The original font, size, and render mode.
+     - `(a, b, c, d)` from the original transformation matrix (preserving size/rotation).
+     - `(e, f)` pinned to the first character's absolute page-space origin via `FPDFText_GetCharOrigin`, bypassing font advance widths entirely.
+   - This per-word positioning preserves inter-word spacing exactly, regardless of mismatches between the font's advance widths and the original TJ-array positioning.
+3. **Fission validation** - after creating fragment objects, their bounds are checked. If any fragment has degenerate bounds (e.g. Type 3 custom-drawn fonts that can't be recreated via `FPDFText_SetText`), the entire fission plan is aborted and the original object is left for fallback removal.
+4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
+5. **Visual cover** - a filled rectangle is painted over every match region.
+6. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
+
+### Security levels (least -> most secure)
+
+```
+redactWordsEx(..., removeContent=false)   visual overlay only (not secure)
+redactWordsEx(..., removeContent=true)    Object Fission - text removed from stream
+page.flatten()                            bakes everything - prevents annotation recovery
+doc.convertPageToImage(page, dpi)         rasterize - no text, vectors, or metadata survives
+```
+
+Use `convertToImage(true)` in `RedactOptions` for the nuclear option.
+
+## License
+
+MIT. PDFium itself is [Apache 2.0](https://pdfium.googlesource.com/pdfium/+/refs/heads/main/LICENSE).
