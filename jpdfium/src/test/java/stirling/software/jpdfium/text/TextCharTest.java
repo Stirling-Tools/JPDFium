@@ -13,8 +13,6 @@ class TextCharTest {
         return new TextChar(0, unicode, 0, 0, 5, 10, "Helvetica", 12);
     }
 
-    // -- toChar ---------------------------------------------------------
-
     @Test
     void toCharBasicAscii() {
         assertEquals('A', of('A').toChar());
@@ -24,8 +22,6 @@ class TextCharTest {
     void toCharZero() {
         assertEquals('\0', of(0).toChar());
     }
-
-    // -- toText ---------------------------------------------------------
 
     @Test
     void toTextBasicAscii() {
@@ -40,8 +36,6 @@ class TextCharTest {
         assertEquals(2, s.length()); // surrogate pair
         assertEquals(0x1F600, s.codePointAt(0));
     }
-
-    // -- isWhitespace ---------------------------------------------------
 
     @Test
     void isWhitespaceForSpace() {
@@ -62,8 +56,6 @@ class TextCharTest {
     void isWhitespaceForNewline() {
         assertTrue(of('\n').isWhitespace());
     }
-
-    // -- isNewline ------------------------------------------------------
 
     @Test
     void isNewlineForLF() {
@@ -94,8 +86,6 @@ class TextCharTest {
     void isNewlineForLetterFalse() {
         assertFalse(of('a').isNewline());
     }
-
-    // -- record accessors -----------------------------------------------
 
     @Test
     void recordAccessors() {

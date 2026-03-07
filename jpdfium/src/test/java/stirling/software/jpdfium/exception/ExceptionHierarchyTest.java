@@ -27,8 +27,6 @@ class ExceptionHierarchyTest {
         assertInstanceOf(RuntimeException.class, new JPDFiumException("x"));
     }
 
-    // -- PdfCorruptException --------------------------------------------
-
     @Test
     void pdfCorruptException() {
         var ex = new PdfCorruptException("bad format");
@@ -36,16 +34,12 @@ class ExceptionHierarchyTest {
         assertEquals("bad format", ex.getMessage());
     }
 
-    // -- PdfPasswordException -------------------------------------------
-
     @Test
     void pdfPasswordException() {
         var ex = new PdfPasswordException("needs password");
         assertInstanceOf(JPDFiumException.class, ex);
         assertEquals("needs password", ex.getMessage());
     }
-
-    // -- NativeLoadException --------------------------------------------
 
     @Test
     void nativeLoadExceptionMessage() {
@@ -61,8 +55,6 @@ class ExceptionHierarchyTest {
         assertEquals("load failed", ex.getMessage());
         assertSame(cause, ex.getCause());
     }
-
-    // -- NativeNotFoundException ----------------------------------------
 
     @Test
     void nativeNotFoundExceptionBuildsPlatformMessage() {

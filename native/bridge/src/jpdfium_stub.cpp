@@ -540,3 +540,158 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
     // Delegate to full save for stub
     return jpdfium_doc_save_bytes(handle, data, len);
 }
+
+// Raw handle extraction stubs
+
+int64_t jpdfium_doc_raw_handle(int64_t doc) { return doc; }
+int64_t jpdfium_page_raw_handle(int64_t page) { return page; }
+int64_t jpdfium_page_doc_raw_handle(int64_t) { return 12345LL; }
+
+//  Unicode Utilities stubs (simdutf + utf8proc + xxHash)
+
+char* jpdfium_unicode_nfc(const char* utf8) {
+    return strdup(utf8 ? utf8 : "");
+}
+
+char* jpdfium_unicode_casefold(const char* utf8) {
+    if (!utf8) return strdup("");
+    std::string s(utf8);
+    std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+    return strdup(s.c_str());
+}
+
+uint64_t jpdfium_xxh3_64(const uint8_t* data, uint64_t len) {
+    if (!data || len == 0) return 0;
+    // Simple FNV-1a stand-in for stub
+    uint64_t hash = 14695981039346656037ULL;
+    for (uint64_t i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+uint64_t jpdfium_page_content_hash(int64_t) {
+    return 0xDEADBEEFCAFE1234ULL;
+}
+
+int32_t jpdfium_page_font_hashes(int64_t, char** json) {
+    *json = strdup("[{\"index\":0,\"name\":\"Helvetica\","
+                   "\"hash\":\"0x0000000000000000\",\"bytes\":0}]");
+    return JPDFIUM_OK;
+}
+
+//  PDF Repair Pipeline stubs
+
+int32_t jpdfium_repair_pdf(
+    const uint8_t* input, int64_t inputLen,
+    uint8_t** output, int64_t* outputLen,
+    int32_t) {
+    if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
+    // Stub: just copy the input bytes (pretend repair was a no-op — file is clean)
+    *outputLen = inputLen;
+    *output = (uint8_t*)malloc(inputLen);
+    memcpy(*output, input, inputLen);
+    return JPDFIUM_REPAIR_CLEAN;
+}
+
+int32_t jpdfium_repair_inspect(
+    const uint8_t* input, int64_t inputLen,
+    char** diagnosticJson) {
+    if (!input || inputLen <= 0 || !diagnosticJson) return JPDFIUM_ERR_INVALID;
+    *diagnosticJson = strdup("{\"issues\":[],\"xref_valid\":true,"
+                             "\"trailer_valid\":true,\"page_count\":3}");
+    return 0;
+}
+
+//  Brotli Codec stubs
+
+int32_t jpdfium_brotli_decode(
+    const uint8_t* compressed, int64_t compressedLen,
+    uint8_t** output, int64_t* outputLen) {
+    if (!compressed || compressedLen <= 0 || !output || !outputLen)
+        return JPDFIUM_ERR_INVALID;
+    // Stub: copy input (pretend decompression is identity)
+    *outputLen = compressedLen;
+    *output = (uint8_t*)malloc(compressedLen);
+    memcpy(*output, compressed, compressedLen);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_brotli_to_flate(
+    const uint8_t* compressed, int64_t compressedLen,
+    uint8_t** flateOutput, int64_t* flateLen) {
+    if (!compressed || compressedLen <= 0 || !flateOutput || !flateLen)
+        return JPDFIUM_ERR_INVALID;
+    // Stub: copy input (pretend transcoding is identity)
+    *flateLen = compressedLen;
+    *flateOutput = (uint8_t*)malloc(compressedLen);
+    memcpy(*flateOutput, compressed, compressedLen);
+    return JPDFIUM_OK;
+}
+
+//  PDFio Repair stubs
+
+int32_t jpdfium_pdfio_try_repair(
+    const uint8_t* input, int64_t inputLen,
+    uint8_t** output, int64_t* outputLen,
+    int32_t* pagesRecovered) {
+    if (!input || inputLen <= 0 || !output || !outputLen || !pagesRecovered)
+        return JPDFIUM_REPAIR_FAILED;
+    // Stub: pass through (pretend file was clean)
+    *outputLen = inputLen;
+    *output = (uint8_t*)malloc(inputLen);
+    memcpy(*output, input, inputLen);
+    *pagesRecovered = 3;
+    return JPDFIUM_REPAIR_CLEAN;
+}
+
+//  lcms2 ICC Profile stubs
+
+int32_t jpdfium_validate_icc_profile(
+    const uint8_t*, int64_t, int32_t expectedComponents,
+    char** resultJson) {
+    if (!resultJson) return JPDFIUM_ERR_INVALID;
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             "{\"status\":\"valid\",\"colorspace\":\"RGB\","
+             "\"components\":%d,\"expected_components\":%d,"
+             "\"description\":\"Stub sRGB profile\"}",
+             expectedComponents, expectedComponents);
+    *resultJson = strdup(buf);
+    return 0;
+}
+
+int32_t jpdfium_generate_replacement_icc(
+    int32_t, uint8_t** profileOutput, int64_t* profileLen) {
+    if (!profileOutput || !profileLen) return JPDFIUM_ERR_INVALID;
+    // Stub: return a tiny placeholder
+    const char* stub = "STUB_ICC";
+    *profileLen = (int64_t)strlen(stub);
+    *profileOutput = (uint8_t*)strdup(stub);
+    return JPDFIUM_OK;
+}
+
+//  OpenJPEG JPEG2000 stubs
+
+int32_t jpdfium_validate_jpx_stream(
+    const uint8_t*, int64_t, char** resultJson) {
+    if (!resultJson) return JPDFIUM_ERR_INVALID;
+    *resultJson = strdup("{\"status\":\"valid\",\"width\":100,"
+                         "\"height\":100,\"components\":3,\"error\":\"\"}");
+    return 0;
+}
+
+int32_t jpdfium_jpx_to_raw(
+    const uint8_t*, int64_t,
+    uint8_t** rawPixels, int64_t* rawLen,
+    int32_t* width, int32_t* height, int32_t* components) {
+    if (!rawPixels || !rawLen || !width || !height || !components)
+        return JPDFIUM_ERR_INVALID;
+    // Stub: 1x1 white pixel
+    *width = 1; *height = 1; *components = 3;
+    *rawLen = 3;
+    *rawPixels = (uint8_t*)malloc(3);
+    (*rawPixels)[0] = 255; (*rawPixels)[1] = 255; (*rawPixels)[2] = 255;
+    return JPDFIUM_OK;
+}

@@ -79,7 +79,7 @@ JPDFium/
 │           ├── PdfDocumentTest.java   # Unit tests (stub native)
 │           ├── RealPdfIntegrationTest.java  # Integration tests (real PDFium)
 │           ├── ManualTest.java         # Quick smoke-test (right-click -> Run)
-│           ├── samples/               # Numbered manual-test classes (S01-S10)
+│           ├── samples/               # Numbered manual-test classes (S01-S18)
 │           └── ...
 │
 ├── jpdfium-natives/                   # Platform-specific native JARs
@@ -230,8 +230,8 @@ bash native/build-real.sh
 
 The `samples` package provides quick 1-click runnable classes for each feature:
 
-Right-click any `S01_Render` ... `S10_PiiRedact` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 10 in sequence. Output lands in `jpdfium/samples-output/`.
+Right-click any `S01_Render` ... `S18_Repair` class in IntelliJ and hit Run.
+`RunAllSamples` runs all 18 samples in sequence. Output lands in `jpdfium/samples-output/`.
 
 See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 

@@ -48,7 +48,20 @@ val jpdfiumFunctions = listOf(
     "jpdfium_annot_remove_redact", "jpdfium_annot_clear_redacts",
     "jpdfium_redact_commit", "jpdfium_doc_save_incremental",
     // Raw handle extraction (for direct PDFium FFM bindings)
-    "jpdfium_doc_raw_handle", "jpdfium_page_raw_handle", "jpdfium_page_doc_raw_handle"
+    "jpdfium_doc_raw_handle", "jpdfium_page_raw_handle", "jpdfium_page_doc_raw_handle",
+    // Unicode Utilities (simdutf + utf8proc + xxHash)
+    "jpdfium_unicode_nfc", "jpdfium_unicode_casefold",
+    "jpdfium_xxh3_64", "jpdfium_page_content_hash", "jpdfium_page_font_hashes",
+    // PDF Repair Pipeline (qpdf + PDFium)
+    "jpdfium_repair_pdf", "jpdfium_repair_inspect",
+    // Brotli Codec (MIT) — /BrotliDecode transcoding
+    "jpdfium_brotli_decode", "jpdfium_brotli_to_flate",
+    // PDFio (Apache 2.0) — 3rd-opinion structural repair
+    "jpdfium_pdfio_try_repair",
+    // lcms2 (MIT) — ICC profile validation
+    "jpdfium_validate_icc_profile", "jpdfium_generate_replacement_icc",
+    // OpenJPEG (BSD 2-Clause) — JPEG2000 stream validation
+    "jpdfium_validate_jpx_stream", "jpdfium_jpx_to_raw"
 )
 
 val generateBindings by tasks.registering(Exec::class) {

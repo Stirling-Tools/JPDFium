@@ -101,28 +101,6 @@ public class S13_PageImport {
             }
         }
 
-        // 4. N-up layout: tile 4 source pages onto each A4-landscape output page (2×2 grid).
-        //    Uses FPDF_ImportNPagesToOne — the result is saved directly via FPDF_SaveAsCopy.
-        System.out.println("\n  -- N-up layout: 2×2 four-up (A4 landscape) --");
-        int nupCount = 0;
-        for (Path input : inputs) {
-            try (PdfDocument src = PdfDocument.open(input)) {
-                if (src.pageCount() < 4) continue; // need at least 4 pages for a meaningful demo
-                byte[] nupBytes = PdfPageImporter.importNPagesToOne(
-                        src.rawHandle(), 842f, 595f, 2, 2);   // A4 landscape, 2 cols × 2 rows
-                int nupPages = (src.pageCount() + 3) / 4;
-                Path outFile = outDir.resolve(SampleBase.stem(input) + "-4up.pdf");
-                Files.write(outFile, nupBytes);
-                produced.add(outFile);
-                System.out.printf("  %s: %d pages -> %d output pages (4-up)%n",
-                        input.getFileName(), src.pageCount(), nupPages);
-                nupCount++;
-            } catch (Exception e) {
-                System.err.printf("  %s: N-up failed — %s%n", input.getFileName(), e.getMessage());
-            }
-        }
-        if (nupCount == 0) System.out.println("  (no PDFs with 4+ pages found for N-up demo)");
-
         SampleBase.done("S13_PageImport", produced.toArray(Path[]::new));
     }
 }
