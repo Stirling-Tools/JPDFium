@@ -90,13 +90,11 @@ public final class PdfRedactor {
         long t0 = System.nanoTime();
         int totalPages = doc.pageCount();
 
-        // 1. Font normalization
         FontNormalizer.Result fontResult = null;
         if (options.normalizeFonts()) {
             fontResult = runFontNormalization(doc, options);
         }
 
-        // 2. PII pattern detection + NER — collect extra words per page
         List<PatternEngine.Match> allPatternMatches = new ArrayList<>();
         List<EntityRedactor.EntityMatch> allEntityMatches = new ArrayList<>();
         List<EntityRedactor.RedactionTarget> allSemanticTargets = new ArrayList<>();
@@ -139,7 +137,6 @@ public final class PdfRedactor {
             runNerOnly(doc, options, totalPages, allEntityMatches, pageRedactionWords);
         }
 
-        // 3. Per-page redaction (glyph-level + word-level + flatten + image)
         int totalWordMatches = 0;
         int totalGlyphMatches = 0;
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
@@ -182,7 +179,6 @@ public final class PdfRedactor {
             pageResults.add(new RedactResult.PageResult(i, words.size(), matchesOnPage));
         }
 
-        // 4. Metadata redaction
         int metadataRedacted = 0;
         if (options.stripAllMetadata()) {
             XmpRedactor.stripAll(doc);
@@ -196,8 +192,6 @@ public final class PdfRedactor {
                 fontResult, allPatternMatches, allEntityMatches,
                 totalGlyphMatches, metadataRedacted, allSemanticTargets);
     }
-
-    // --- Internal helpers (absorbed from PiiRedactor) ---
 
     private static FontNormalizer.Result runFontNormalization(
             PdfDocument doc, RedactOptions options) {

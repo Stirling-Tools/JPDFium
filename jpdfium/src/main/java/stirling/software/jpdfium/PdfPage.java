@@ -1,9 +1,15 @@
 package stirling.software.jpdfium;
 
+import stirling.software.jpdfium.doc.*;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
+
+import java.awt.image.BufferedImage;
+import java.lang.foreign.MemorySegment;
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Represents an open page within a {@link PdfDocument}.
@@ -226,6 +232,63 @@ public final class PdfPage implements AutoCloseable {
     public int commitRedactions(int argbColor, boolean removeContent) {
         ensureOpen();
         return JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+    }
+
+    /**
+     * Returns the raw FPDF_PAGE MemorySegment for direct PDFium FFM calls.
+     */
+    public MemorySegment rawHandle() {
+        ensureOpen();
+        return JpdfiumLib.pageRawHandle(handle);
+    }
+
+    /**
+     * Returns the raw FPDF_DOCUMENT MemorySegment from this page's parent document.
+     */
+    public MemorySegment rawDocHandle() {
+        ensureOpen();
+        return JpdfiumLib.pageDocRawHandle(handle);
+    }
+
+    /**
+     * List all annotations on this page.
+     */
+    public List<Annotation> annotations() {
+        return PdfAnnotations.list(rawHandle());
+    }
+
+    /**
+     * List all hyperlinks on this page.
+     */
+    public List<PdfLink> links() {
+        return PdfLinks.list(rawDocHandle(), rawHandle());
+    }
+
+    /**
+     * Get the structure tree (tagged structure) for this page.
+     */
+    public List<StructElement> structureTree() {
+        return PdfStructureTree.get(rawHandle());
+    }
+
+    /**
+     * Get the decoded thumbnail image data for this page.
+     */
+    public Optional<byte[]> thumbnail() {
+        return PdfThumbnails.getDecoded(rawHandle());
+    }
+
+    /**
+     * Get the embedded thumbnail for this page as a {@link BufferedImage}.
+     *
+     * <p>Preferred over {@link #thumbnail()} when you need a viewable image —
+     * dimensions are resolved via {@code FPDFPage_GetThumbnailAsBitmap} so the
+     * result can be written directly to a PNG/JPEG file.
+     *
+     * @return the thumbnail image, or empty if the page has no embedded thumbnail
+     */
+    public Optional<BufferedImage> thumbnailImage() {
+        return PdfThumbnails.getAsImage(rawHandle());
     }
 
     /** Flatten all annotations (including applied redactions) into page content. */

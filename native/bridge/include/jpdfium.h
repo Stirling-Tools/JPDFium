@@ -22,6 +22,12 @@ extern "C" {
 JPDFIUM_EXPORT int32_t jpdfium_init(void);
 JPDFIUM_EXPORT void    jpdfium_destroy(void);
 
+// Raw handle extraction — allows direct FFM calls to PDFium functions.
+// These return the raw FPDF_DOCUMENT / FPDF_PAGE pointers as int64_t values.
+JPDFIUM_EXPORT int64_t jpdfium_doc_raw_handle(int64_t doc);
+JPDFIUM_EXPORT int64_t jpdfium_page_raw_handle(int64_t page);
+JPDFIUM_EXPORT int64_t jpdfium_page_doc_raw_handle(int64_t page);
+
 JPDFIUM_EXPORT int32_t jpdfium_doc_open(const char* path, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64_t* handle);

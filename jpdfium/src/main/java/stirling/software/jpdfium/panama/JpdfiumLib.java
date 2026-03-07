@@ -230,8 +230,6 @@ public final class JpdfiumLib {
         check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
     }
 
-    // Annotation-Based Redaction (Mark → Commit)
-
     /**
      * Mark phase: create a REDACT annotation at the given rectangle.
      * No content is modified — only an annotation is stored.
@@ -329,5 +327,33 @@ public final class JpdfiumLib {
             JpdfiumH.jpdfium_free_buffer(nativePtr);
             return result;
         }
+    }
+
+    /**
+     * Returns the raw FPDF_DOCUMENT pointer (as a MemorySegment) from a bridge handle.
+     * This enables direct FFM calls to PDFium functions not covered by the bridge.
+     */
+    public static MemorySegment docRawHandle(long doc) {
+        long raw = JpdfiumH.jpdfium_doc_raw_handle(doc);
+        if (raw == 0) throw new JPDFiumException("Invalid document handle");
+        return FfmHelper.ptrToSegment(raw);
+    }
+
+    /**
+     * Returns the raw FPDF_PAGE pointer (as a MemorySegment) from a bridge handle.
+     */
+    public static MemorySegment pageRawHandle(long page) {
+        long raw = JpdfiumH.jpdfium_page_raw_handle(page);
+        if (raw == 0) throw new JPDFiumException("Invalid page handle");
+        return FfmHelper.ptrToSegment(raw);
+    }
+
+    /**
+     * Returns the raw FPDF_DOCUMENT pointer for the document that owns a page.
+     */
+    public static MemorySegment pageDocRawHandle(long page) {
+        long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
+        if (raw == 0) throw new JPDFiumException("Invalid page handle");
+        return FfmHelper.ptrToSegment(raw);
     }
 }

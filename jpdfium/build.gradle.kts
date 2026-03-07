@@ -46,7 +46,9 @@ val jpdfiumFunctions = listOf(
     "jpdfium_annot_create_redact", "jpdfium_redact_mark_words",
     "jpdfium_annot_count_redacts", "jpdfium_annot_get_redacts_json",
     "jpdfium_annot_remove_redact", "jpdfium_annot_clear_redacts",
-    "jpdfium_redact_commit", "jpdfium_doc_save_incremental"
+    "jpdfium_redact_commit", "jpdfium_doc_save_incremental",
+    // Raw handle extraction (for direct PDFium FFM bindings)
+    "jpdfium_doc_raw_handle", "jpdfium_page_raw_handle", "jpdfium_page_doc_raw_handle"
 )
 
 val generateBindings by tasks.registering(Exec::class) {

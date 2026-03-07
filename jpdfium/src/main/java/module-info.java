@@ -19,8 +19,9 @@ module stirling.software.jpdfium {
     exports stirling.software.jpdfium.text.edit;
     exports stirling.software.jpdfium.transform;
 
-    // Internal: FFM bindings - exported for Spring Boot and advanced consumers
+    // Internal: FFM bindings and advanced PDF API - exported for Spring Boot and advanced consumers
     exports stirling.software.jpdfium.panama;
+    exports stirling.software.jpdfium.doc;
 
     // Standard library requirements
     requires java.desktop;      // java.awt.image.BufferedImage

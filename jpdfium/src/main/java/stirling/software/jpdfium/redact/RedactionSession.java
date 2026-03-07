@@ -115,8 +115,6 @@ public final class RedactionSession implements AutoCloseable {
         return document;
     }
 
-    // Font Normalization
-
     /**
      * Run the full font normalization pipeline on all pages.
      *
@@ -141,8 +139,6 @@ public final class RedactionSession implements AutoCloseable {
         ensureOpen();
         return FontNormalizer.normalizePage(document, pageIndex);
     }
-
-    // Mark Phase
 
     /**
      * Mark words/patterns for redaction across ALL pages.
@@ -177,7 +173,6 @@ public final class RedactionSession implements AutoCloseable {
     public int markWordsOnPage(int pageIndex, String[] words, int argbColor, float padding,
                                 boolean wholeWord, boolean useRegex, boolean caseSensitive) {
         ensureOpen();
-        // Count matches via a preview pass (text search only, no content modification)
         int count;
         try (PdfPage page = document.page(pageIndex)) {
             count = page.markRedactWords(words, argbColor, padding,
@@ -202,8 +197,6 @@ public final class RedactionSession implements AutoCloseable {
         marks.add(new RegionMark(rect, argbColor));
         return marks.size() - 1;
     }
-
-    // Query Phase
 
     /** Total pending match count across all pages. */
     public int totalPendingRedactions() {
@@ -237,8 +230,6 @@ public final class RedactionSession implements AutoCloseable {
         return Collections.unmodifiableList(result);
     }
 
-    // Undo Phase
-
     /** Remove a specific pending mark on a page by its index. */
     public void unmark(int pageIndex, int markIndex) {
         ensureOpen();
@@ -261,8 +252,6 @@ public final class RedactionSession implements AutoCloseable {
         ensureOpen();
         pendingMarks.clear();
     }
-
-    // Commit Phase
 
     /**
      * Commit all pending marks across all pages.
@@ -340,8 +329,6 @@ public final class RedactionSession implements AutoCloseable {
         return totalCommitted;
     }
 
-    // Save
-
     /** Full save to file. Document remains valid. */
     public void save(Path path) {
         ensureOpen();
@@ -362,8 +349,6 @@ public final class RedactionSession implements AutoCloseable {
         ensureOpen();
         return document.saveBytesIncremental();
     }
-
-    // Lifecycle
 
     private void ensureOpen() {
         if (closed) throw new IllegalStateException("RedactionSession is already closed");

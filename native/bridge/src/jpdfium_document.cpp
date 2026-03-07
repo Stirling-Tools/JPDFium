@@ -150,3 +150,18 @@ int32_t jpdfium_page_height(int64_t page, float* height) {
 void jpdfium_page_close(int64_t page) {
     delete decodePage(page);
 }
+
+int64_t jpdfium_doc_raw_handle(int64_t doc) {
+    DocWrapper* w = decodeDoc(doc);
+    return w && w->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->doc)) : 0;
+}
+
+int64_t jpdfium_page_raw_handle(int64_t page) {
+    PageWrapper* pw = decodePage(page);
+    return pw && pw->page ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->page)) : 0;
+}
+
+int64_t jpdfium_page_doc_raw_handle(int64_t page) {
+    PageWrapper* pw = decodePage(page);
+    return pw && pw->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->doc)) : 0;
+}

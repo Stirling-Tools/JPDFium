@@ -1,9 +1,14 @@
 package stirling.software.jpdfium;
 
+import stirling.software.jpdfium.doc.*;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.model.FlattenMode;
 
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Represents an open PDF document backed by native PDFium.
@@ -120,6 +125,84 @@ public final class PdfDocument implements AutoCloseable {
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+    }
+
+    /**
+     * Returns the raw FPDF_DOCUMENT MemorySegment for direct PDFium FFM calls.
+     */
+    public MemorySegment rawHandle() {
+        ensureOpen();
+        return JpdfiumLib.docRawHandle(handle);
+    }
+
+    /**
+     * Get all document metadata as key→value map.
+     */
+    public Map<String, String> metadata() {
+        return PdfMetadata.of(rawHandle()).all();
+    }
+
+    /**
+     * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
+     */
+    public Optional<String> metadata(String tag) {
+        return PdfMetadata.of(rawHandle()).get(tag);
+    }
+
+    /**
+     * Get the document's permission flags.
+     */
+    public long permissions() {
+        return PdfMetadata.of(rawHandle()).permissions();
+    }
+
+    /**
+     * Get the document's complete bookmark tree.
+     */
+    public List<Bookmark> bookmarks() {
+        return PdfBookmarks.list(rawHandle());
+    }
+
+    /**
+     * Find a bookmark by title.
+     */
+    public Optional<Bookmark> findBookmark(String title) {
+        return PdfBookmarks.find(rawHandle(), title);
+    }
+
+    /**
+     * Get all digital signatures in the document.
+     */
+    public List<Signature> signatures() {
+        return PdfSignatures.list(rawHandle());
+    }
+
+    /**
+     * Get all embedded file attachments.
+     */
+    public List<Attachment> attachments() {
+        return PdfAttachments.list(rawHandle());
+    }
+
+    /**
+     * Add an embedded file attachment.
+     *
+     * @param name     filename for the attachment
+     * @param contents the file data
+     * @return true if successful
+     */
+    public boolean addAttachment(String name, byte[] contents) {
+        return PdfAttachments.add(rawHandle(), name, contents);
+    }
+
+    /**
+     * Delete an embedded file attachment by index.
+     *
+     * @param index 0-based attachment index
+     * @return true if successful
+     */
+    public boolean deleteAttachment(int index) {
+        return PdfAttachments.delete(rawHandle(), index);
     }
 
     /**
