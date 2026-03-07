@@ -99,7 +99,7 @@ public final class PdfDocument implements AutoCloseable {
 
     /**
      * Incremental save: writes only changed objects to a new byte buffer.
-     * The document handle remains valid after this call — no reload needed.
+     * The document handle remains valid after this call - no reload needed.
      *
      * <p>This is the recommended save mode during annotation-based redaction
      * workflows where the document stays open between mark/commit cycles.
@@ -136,7 +136,7 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Get all document metadata as key→value map.
+     * Get all document metadata as key-value map.
      */
     public Map<String, String> metadata() {
         return PdfMetadata.of(rawHandle()).all();

@@ -26,7 +26,7 @@ import java.util.Set;
  * <ol>
  *   <li>Font normalization (FreeType + HarfBuzz + ICU + qpdf)</li>
  *   <li>Text extraction (PDFium FPDFText_*)</li>
- *   <li>PII pattern matching (PCRE2 JIT — SSN, email, phone, credit card, …)</li>
+ *   <li>PII pattern matching (PCRE2 JIT - SSN, email, phone, credit card, etc.)</li>
  *   <li>Named-entity recognition (FlashText NER)</li>
  *   <li>Semantic coreference expansion</li>
  *   <li>Glyph-level redaction (HarfBuzz ligature / BiDi / grapheme aware)</li>

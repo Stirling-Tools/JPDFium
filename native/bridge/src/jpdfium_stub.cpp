@@ -478,7 +478,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-//  Annotation-Based Redaction stubs (Mark → Commit pattern)
+//  Annotation-Based Redaction stubs (Mark - Commit pattern)
 
 int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float,
                                      uint32_t, int32_t* annot_index) {
@@ -588,7 +588,7 @@ int32_t jpdfium_repair_pdf(
     uint8_t** output, int64_t* outputLen,
     int32_t) {
     if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
-    // Stub: just copy the input bytes (pretend repair was a no-op — file is clean)
+    // Stub: just copy the input bytes (pretend repair was a no-op - file is clean)
     *outputLen = inputLen;
     *output = (uint8_t*)malloc(inputLen);
     memcpy(*output, input, inputLen);

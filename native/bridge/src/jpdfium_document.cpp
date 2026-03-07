@@ -1,4 +1,4 @@
-// jpdfium_document.cpp — Library lifecycle, document and page management.
+// jpdfium_document.cpp - Library lifecycle, document and page management.
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"

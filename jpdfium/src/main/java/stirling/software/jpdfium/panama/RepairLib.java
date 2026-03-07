@@ -141,7 +141,7 @@ public final class RepairLib {
     }
 
     /**
-     * Transcode Brotli → FlateDecode (decompress + zlib recompress).
+     * Transcode Brotli - FlateDecode (decompress + zlib recompress).
      *
      * @param compressed Brotli-compressed bytes
      * @return FlateDecode-compressed bytes, or null if unavailable

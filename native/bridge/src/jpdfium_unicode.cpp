@@ -1,9 +1,9 @@
-// jpdfium_unicode.cpp — Unicode utilities and content hashing.
+// jpdfium_unicode.cpp - Unicode utilities and content hashing.
 //
 // Libraries used:
-//   simdutf   (MIT)  — SIMD-accelerated UTF-8/16/32 transcoding
-//   utf8proc  (MIT)  — NFC normalisation, case folding, grapheme clusters
-//   xxHash    (BSD)  — XXH3 non-cryptographic hashing (~80 GB/s)
+//   simdutf   (MIT)  - SIMD-accelerated UTF-8/16/32 transcoding
+//   utf8proc  (MIT)  - NFC normalisation, case folding, grapheme clusters
+//   xxHash    (BSD)  - XXH3 non-cryptographic hashing (approximately 80 GB/s)
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
@@ -20,21 +20,21 @@
 #include <vector>
 
 // ---------------------------------------------------------------------------
-// simdutf — SIMD-accelerated UTF-8/16/32 transcoding (header-only).
-// The actual UTF-8→UTF-16 conversion uses ICU4C's u_strFromUTF8 because
+// simdutf - SIMD-accelerated UTF-8/16/32 transcoding (header-only).
+// The actual UTF-8-UTF-16 conversion uses ICU4C's u_strFromUTF8 because
 // simdutf's runtime dispatch doesn't export linkable symbols in shared libs.
 // ---------------------------------------------------------------------------
 #include "simdutf.h"
 
 // ---------------------------------------------------------------------------
-// utf8proc — single-file C library; no special defines needed.
+// utf8proc - single-file C library; no special defines needed.
 // ---------------------------------------------------------------------------
 extern "C" {
 #include "utf8proc.h"
 }
 
 // ---------------------------------------------------------------------------
-// xxHash — fully inline when XXH_INLINE_ALL is defined.
+// xxHash - fully inline when XXH_INLINE_ALL is defined.
 // ---------------------------------------------------------------------------
 #define XXH_INLINE_ALL
 #include "xxhash.h"
@@ -45,7 +45,7 @@ extern "C" {
 // Internal helpers
 // ============================================================================
 
-// UTF-8 → UTF-16LE (replaces the manual loop in text/redact TUs).
+// UTF-8 - UTF-16LE (replaces the manual loop in text/redact TUs).
 std::vector<uint16_t> simdutf_utf8_to_utf16le(const char* utf8, size_t len) {
     if (!utf8 || len == 0) return {0};
     UErrorCode status = U_ZERO_ERROR;
@@ -62,7 +62,7 @@ std::vector<uint16_t> simdutf_utf8_to_utf16le(const char* utf8, size_t len) {
 // ============================================================================
 
 // Normalise a UTF-8 string to NFC (canonical decomposition + composition).
-// Essential before pattern matching — catches composed vs. decomposed forms of
+// Essential before pattern matching - catches composed vs. decomposed forms of
 // the same character that would otherwise silently escape redaction patterns.
 // Returns a malloc'd string; caller must free with jpdfium_free_string.
 extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_nfc(const char* utf8) {
@@ -76,7 +76,7 @@ extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_nfc(const char* utf8) {
 }
 
 // Case-fold a UTF-8 string (locale-insensitive, Unicode-aware).
-// Combines CASEFOLD + NFC normalisation in one pass — ready for
+// Combines CASEFOLD + NFC normalisation in one pass - ready for
 // case-insensitive search or redaction matching.
 // Returns a malloc'd string; caller must free with jpdfium_free_string.
 extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_casefold(const char* utf8) {
@@ -108,7 +108,7 @@ extern "C" JPDFIUM_EXPORT uint64_t jpdfium_page_content_hash(int64_t page) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return 0;
 
-    // Render at low DPI — just enough for reliable change detection, very fast.
+    // Render at low DPI - just enough for reliable change detection, very fast.
     const int dpi    = 36;
     const double w72 = FPDF_GetPageWidth(pw->page);
     const double h72 = FPDF_GetPageHeight(pw->page);

@@ -1,4 +1,4 @@
-// jpdfium_openjpeg.cpp — JPEG2000 stream validation and partial recovery.
+// jpdfium_openjpeg.cpp - JPEG2000 stream validation and partial recovery.
 //
 // Opt-in: requires JPDFIUM_HAS_OPENJPEG at build time.
 // Validates /JPXDecode streams with non-strict mode for partial bitstream
@@ -111,7 +111,7 @@ static opj_image_t* try_decode(
     }
 
     if (!opj_decode(codec, stream, image)) {
-        // Partial — image may have partial data
+        // Partial - image may have partial data
         // Still return the image for inspection
     }
 

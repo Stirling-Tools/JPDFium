@@ -1,4 +1,4 @@
-// jpdfium_pdfio.cpp — PDFio-based third-opinion structural repair.
+// jpdfium_pdfio.cpp - PDFio-based third-opinion structural repair.
 //
 // Opt-in: requires JPDFIUM_HAS_PDFIO at build time.
 // PDFio has its own independent XRef repair implementation (repair_xref),
@@ -13,7 +13,7 @@
 
 #include <pdfio.h>
 
-// Error callback — captures error message without aborting
+// Error callback - captures error message without aborting
 static bool pdfio_error_cb(pdfio_file_t*, const char* message, void* data) {
     char* errBuf = static_cast<char*>(data);
     if (errBuf && message) {
@@ -35,7 +35,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(
 
     *pagesRecovered = 0;
 
-    // PDFio requires file paths — write to temp files
+    // PDFio requires file paths - write to temp files
     char tmpIn[]  = "/tmp/jpdfium_pdfio_in_XXXXXX";
     char tmpOut[] = "/tmp/jpdfium_pdfio_out_XXXXXX";
 
@@ -94,7 +94,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(
         if (page && pdfioPageCopy(outPdf, page)) {
             (*pagesRecovered)++;
         }
-        // Skip unrecoverable pages — partial salvage
+        // Skip unrecoverable pages - partial salvage
     }
 
     pdfioFileClose(outPdf);

@@ -48,7 +48,7 @@ public final class DocBindings {
     public static final MethodHandle FPDF_GetPageCount = downcallCritical("FPDF_GetPageCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Save a raw FPDF_DOCUMENT to a caller-supplied FPDF_FILEWRITE sink (flags=0 → full save). */
+    /** Save a raw FPDF_DOCUMENT to a caller-supplied FPDF_FILEWRITE sink (flags=0 - full save). */
     public static final MethodHandle FPDF_SaveAsCopy = downcall("FPDF_SaveAsCopy",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
 

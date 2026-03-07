@@ -1,5 +1,5 @@
 /**
- * PII detection engines — PCRE2 JIT patterns, glyph-level precision,
+ * PII detection engines - PCRE2 JIT patterns, glyph-level precision,
  * XMP metadata redaction, and entity recognition.
  *
  * <p>These classes are used internally by

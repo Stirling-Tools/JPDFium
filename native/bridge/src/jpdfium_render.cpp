@@ -1,4 +1,4 @@
-// jpdfium_render.cpp — Page rendering and page-to-image conversion.
+// jpdfium_render.cpp - Page rendering and page-to-image conversion.
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"

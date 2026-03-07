@@ -19,10 +19,10 @@ import java.util.Map;
  * session lifetime.  Redactions follow a strict two-phase workflow:
  *
  * <ol>
- *   <li><b>Mark phase</b> — Preview redactions via {@link #markWords} or
+ *   <li><b>Mark phase</b> - Preview redactions via {@link #markWords} or
  *       {@link #markRegion}.  Matches are counted and stored in memory
  *       but the content stream is NOT modified.</li>
- *   <li><b>Commit phase</b> — Call {@link #commitAll()} or
+ *   <li><b>Commit phase</b> - Call {@link #commitAll()} or
  *       {@link #commitPage(int)} to apply all pending marks using the
  *       Object Fission Algorithm.  Text and images under each mark
  *       are permanently destroyed.</li>
@@ -39,14 +39,14 @@ import java.util.Map;
  * <h3>Usage Example</h3>
  * <pre>{@code
  * try (RedactionSession session = RedactionSession.open(Path.of("input.pdf"))) {
- *     // Mark phase — zero content mutation
+ *     // Mark phase - zero content mutation
  *     session.markWords(new String[]{"Confidential", "\\d{3}-\\d{2}-\\d{4}"},
  *             0xFF000000, 1.5f, false, true, false);
  *
  *     // Inspect pending marks
  *     System.out.println("Pending: " + session.totalPendingRedactions());
  *
- *     // Commit phase — destructive burn via Object Fission
+ *     // Commit phase - destructive burn via Object Fission
  *     RedactionSession.CommitResult result = session.commitAll();
  *     System.out.println("Committed: " + result.totalCommitted());
  *
@@ -256,7 +256,7 @@ public final class RedactionSession implements AutoCloseable {
     /**
      * Commit all pending marks across all pages.
      * This permanently destroys content under each marked area.
-     * The document remains live — no reload required.
+     * The document remains live - no reload required.
      *
      * @return commit statistics per page
      */

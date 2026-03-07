@@ -232,7 +232,7 @@ public final class JpdfiumLib {
 
     /**
      * Mark phase: create a REDACT annotation at the given rectangle.
-     * No content is modified — only an annotation is stored.
+     * No content is modified - only an annotation is stored.
      *
      * @return the annotation index within the page's annotation array
      */
@@ -246,7 +246,7 @@ public final class JpdfiumLib {
 
     /**
      * Mark phase: find word matches and create REDACT annotations for each.
-     * No content is modified — only annotations are stored.
+     * No content is modified - only annotations are stored.
      *
      * @return the number of REDACT annotations created
      */
@@ -301,7 +301,7 @@ public final class JpdfiumLib {
     /**
      * Commit phase: burn all REDACT annotations on the page via Object Fission.
      * Permanently removes content, paints fill rects, removes the annotations.
-     * The document handle remains valid — no reload required.
+     * The document handle remains valid - no reload required.
      *
      * @return the number of REDACT annotations that were committed
      */

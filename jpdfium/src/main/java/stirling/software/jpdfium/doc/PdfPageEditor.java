@@ -454,7 +454,7 @@ public final class PdfPageEditor {
      *
      * <p>
      * The returned raw {@code FPDF_DOCUMENT} is <strong>not</strong> managed by
-     * the jpdfium bridge — the caller is responsible for closing it via
+     * the jpdfium bridge - the caller is responsible for closing it via
      * {@link #closeDocument(MemorySegment)} and for saving it via
      * {@link stirling.software.jpdfium.panama.FfmHelper#saveRawDocument(MemorySegment)}.
      *

@@ -1,7 +1,7 @@
-// jpdfium_brotli.cpp — Brotli codec for PDF 2.0+ /BrotliDecode streams.
+// jpdfium_brotli.cpp - Brotli codec for PDF 2.0+ /BrotliDecode streams.
 //
 // Opt-in: requires JPDFIUM_HAS_BROTLI at build time.
-// Transcodes /BrotliDecode → /FlateDecode for backward compatibility.
+// Transcodes /BrotliDecode - /FlateDecode for backward compatibility.
 
 #include "jpdfium.h"
 #include <cstdlib>

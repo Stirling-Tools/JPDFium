@@ -15,7 +15,7 @@ import java.util.Map;
  * Covers every redaction capability in a single builder:
  * <ul>
  * <li>Word / regex list redaction (Object Fission)</li>
- * <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, …)</li>
+ * <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, etc.)</li>
  * <li>Named-entity recognition (FlashText NER)</li>
  * <li>Glyph-level redaction (HarfBuzz ligature / BiDi / grapheme aware)</li>
  * <li>Font normalization (/ToUnicode + /W repair)</li>

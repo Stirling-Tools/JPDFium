@@ -255,7 +255,7 @@ See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
      character, preserving exact inter-word positioning regardless of font advance widths.
   4. Fission validation: if any fragment has degenerate bounds (Type 3 fonts), the plan is
      aborted and the original object is left for fallback removal.
-  5. Fallback: objects unmapped by spatial correlation removed if ≥70% within match bbox.
+  5. Fallback: objects unmapped by spatial correlation removed if 70% or more within match bbox.
   6. Paint filled rectangles at all match bboxes, then single `FPDFPage_GenerateContent`.
 - **UTF-16LE for search** - `FPDFText_FindStart` expects 2-byte UTF-16LE, not 4-byte
   `wchar_t`. Use `utf8_to_utf16le()` helper.

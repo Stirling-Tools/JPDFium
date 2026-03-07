@@ -1,4 +1,4 @@
-// jpdfium_lcms.cpp — ICC color profile validation and replacement via lcms2.
+// jpdfium_lcms.cpp - ICC color profile validation and replacement via lcms2.
 //
 // Opt-in: requires JPDFIUM_HAS_LCMS2 at build time.
 // Validates /ICCBased profile streams and generates standard replacements.
@@ -131,7 +131,7 @@ JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(
             hProfile = cmsCreate_sRGBProfile();
             break;
         case 4:
-            // Minimal synthetic Lab→CMYK profile as placeholder
+            // Minimal synthetic synthetic Lab-CMYK profile as placeholder
             hProfile = cmsCreateLab4Profile(nullptr);
             break;
         default:

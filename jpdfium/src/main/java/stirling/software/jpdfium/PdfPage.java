@@ -144,11 +144,11 @@ public final class PdfPage implements AutoCloseable {
                 wholeWord, useRegex, removeContent, caseSensitive);
     }
 
-    // Annotation-Based Redaction (Mark → Commit)
+    // Annotation-Based Redaction (Mark - Commit)
 
     /**
      * Mark phase: create a REDACT annotation at the given rectangle.
-     * No content is modified — the annotation is stored in the page's
+     * No content is modified - the annotation is stored in the page's
      * annotation dictionary.  Call {@link #commitRedactions} to burn.
      *
      * @param rect      the area to mark for redaction (PDF coordinates)
@@ -222,7 +222,7 @@ public final class PdfPage implements AutoCloseable {
      * <p>This permanently removes text/images under each marked rectangle
      * using the Object Fission Algorithm, paints filled rectangles, and
      * removes the consumed annotations.  The document handle remains
-     * valid — no reload required.
+     * The document handle remains valid - no reload required.
      *
      * @param argbColor     fill color for the redaction rectangles
      * @param removeContent if true, apply Object Fission to strip content;
@@ -281,7 +281,7 @@ public final class PdfPage implements AutoCloseable {
     /**
      * Get the embedded thumbnail for this page as a {@link BufferedImage}.
      *
-     * <p>Preferred over {@link #thumbnail()} when you need a viewable image —
+     * <p>Preferred over {@link #thumbnail()} when you need a viewable image -
      * dimensions are resolved via {@code FPDFPage_GetThumbnailAsBitmap} so the
      * result can be written directly to a PNG/JPEG file.
      *

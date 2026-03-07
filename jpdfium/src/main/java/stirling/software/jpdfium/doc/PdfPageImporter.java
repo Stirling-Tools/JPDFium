@@ -103,11 +103,11 @@ public final class PdfPageImporter {
      * Create an N-up layout PDF: tiles pages from {@code src} onto larger output pages.
      *
      * <p>Calls {@code FPDF_ImportNPagesToOne} to produce a new document where
-     * {@code pagesPerRow × pagesPerCol} source pages are tiled on each output page.
+     * {@code pagesPerRow} x {@code pagesPerCol} source pages are tiled on each output page.
      * The result is saved to bytes via {@code FPDF_SaveAsCopy} and the internal
      * document handle is closed before returning.
      *
-     * <p>Example — 2×2 four-up on A4 landscape (842 × 595 pt):
+     * <p>Example - 2x2 four-up on A4 landscape (842 x 595 pt):
      * <pre>{@code
      * byte[] nup = PdfPageImporter.importNPagesToOne(doc.rawHandle(), 842f, 595f, 2, 2);
      * Files.write(Path.of("4up.pdf"), nup);

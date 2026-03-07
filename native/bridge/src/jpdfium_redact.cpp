@@ -1,4 +1,4 @@
-// jpdfium_redact.cpp — Redaction engine: Object Fission algorithm,
+// jpdfium_redact.cpp - Redaction engine: Object Fission algorithm,
 // pattern/word/region redaction, annotation-based mark-commit redaction,
 // and incremental save.
 
@@ -140,9 +140,9 @@ static std::wstring decomposeLigatures(const std::wstring& input) {
     return result;
 }
 
-// Unicode → WinAnsi charcode mapping
+// Unicode - WinAnsi charcode mapping
 // WinAnsi bytes 0x80-0x9F map to Unicode codepoints that differ from their
-// byte value (e.g. U+20AC → 0x80 for €). The 0x20-0x7F and 0xA0-0xFF ranges
+// byte value (e.g. U+20AC - 0x80 for EUR). The 0x20-0x7F and 0xA0-0xFF ranges
 // are identity-mapped. Returns 0 for unmappable codepoints.
 static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
     if (unicode >= 0x20 && unicode <= 0x7F) return unicode;
@@ -152,7 +152,7 @@ static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
         case 0x201A: return 0x82;  // ‚
         case 0x0192: return 0x83;  // ƒ
         case 0x201E: return 0x84;  // „
-        case 0x2026: return 0x85;  // …
+        case 0x2026: return 0x85;  // Horizontal ellipsis
         case 0x2020: return 0x86;  // †
         case 0x2021: return 0x87;  // ‡
         case 0x02C6: return 0x88;  // ˆ
@@ -165,9 +165,9 @@ static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
         case 0x2019: return 0x92;  // '
         case 0x201C: return 0x93;  // "
         case 0x201D: return 0x94;  // "
-        case 0x2022: return 0x95;  // •
-        case 0x2013: return 0x96;  // –
-        case 0x2014: return 0x97;  // —
+        case 0x2022: return 0x95;  // Bullet
+        case 0x2013: return 0x96;  // En dash
+        case 0x2014: return 0x97;  // Em dash
         case 0x02DC: return 0x98;  // ˜
         case 0x2122: return 0x99;  // ™
         case 0x0161: return 0x9A;  // š
@@ -348,7 +348,7 @@ static int32_t objectFissionRedact(
     //    as before to keep spaces in the correct text flow.
     int objCount = FPDFPage_CountObjects(page);
 
-    // Build a reverse map: FPDF_PAGEOBJECT pointer → object index
+    // Build a reverse map: FPDF_PAGEOBJECT pointer - object index
     std::unordered_map<uintptr_t, int> objPtrToIndex;
     for (int oi = 0; oi < objCount; oi++) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
@@ -364,7 +364,7 @@ static int32_t objectFissionRedact(
     for (int ci = 0; ci < totalChars; ci++) {
         charInfo[ci] = {-1, false};
 
-        // Skip generated (synthetic) characters — they don't correspond to
+        // Skip generated (synthetic) characters - they don't correspond to
         // real text objects in the content stream and should not participate
         // in fission decisions.
         if (FPDFText_IsGenerated(textPage, ci) == 1) {
@@ -497,7 +497,7 @@ static int32_t objectFissionRedact(
         }
         hasMultipleWords = (wordCount > 1);
 
-        // Skip single-word objects that have no redacted chars — they don't
+        // Skip single-word objects that have no redacted chars - they don't
         // need splitting and their single Tj is fine.
         if (!anyRedacted && !hasMultipleWords) continue;
 
@@ -762,7 +762,7 @@ static int32_t objectFissionRedact(
     //    were NOT caught by the char-to-object mapping (e.g. Form XObject text,
     //    chars with degenerate bounding boxes).
     //    Skip objects that were already handled by fission (even if fission
-    //    failed — in that case the original is intentionally preserved and
+    //    failed - in that case the original is intentionally preserved and
     //    the black box provides visual cover).
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
@@ -1320,5 +1320,3 @@ int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) 
     *len  = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
-
-// Character position extraction (for testing)

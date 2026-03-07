@@ -14,7 +14,7 @@ import java.util.Optional;
 /**
  * Inspect digital signatures in a PDF document.
  *
- * <p>PDFium provides read-only access to signatures — it cannot create or verify them.
+ * <p>PDFium provides read-only access to signatures - it cannot create or verify them.
  * For verification, extract the contents bytes and use a cryptographic library
  * (e.g., BouncyCastle) to validate the PKCS#7 data.
  *

@@ -11,23 +11,23 @@ import java.nio.file.Path;
  *
  * <p>Tiles multiple source pages onto each output page using PDFium's
  * {@code FPDF_ImportNPagesToOne} API. The resulting document is saved via
- * {@code FPDF_SaveAsCopy} — entirely through the Panama FFM layer, with
+ * {@code FPDF_SaveAsCopy} - entirely through the Panama FFM layer, with
  * no round-trip through the jpdfium C bridge.
  *
  * <h2>Quick start</h2>
  * <pre>{@code
- * // Four-up on A4 landscape — one line
+ * // Four-up on A4 landscape - one line
  * NUpLayout.from(doc).grid(2, 2).a4Landscape().build().save(outputPath);
  *
  * // Six-up on US Letter landscape, returned as bytes
  * byte[] pdf = NUpLayout.from(doc).grid(3, 2).letterLandscape().build().toBytes();
  *
- * // Custom page size (A3 landscape: 1190 × 842 pt)
+ * // Custom page size (A3 landscape: 1190 x 842 pt)
  * NUpLayout.from(doc).grid(4, 2).pageSize(1190, 842).build().save(outputPath);
  * }</pre>
  *
  * <p>The source {@link PdfDocument} must remain open until {@link #toBytes()} or
- * {@link #save(Path)} is called — the raw document handle is resolved lazily.
+ * {@link #save(Path)} is called - the raw document handle is resolved lazily.
  */
 public final class NUpLayout {
 
@@ -110,7 +110,7 @@ public final class NUpLayout {
     /** Number of source-page rows per output page. */
     public int rows() { return rows; }
 
-    /** Source pages tiled per output page ({@code cols × rows}). */
+    /** Source pages tiled per output page ({@code cols} x {@code rows}). */
     public int pagesPerSheet() { return cols * rows; }
 
     /** Output page width in PDF points. */
@@ -126,7 +126,7 @@ public final class NUpLayout {
     /**
      * Fluent builder for {@link NUpLayout}.
      *
-     * <p>Default configuration: 2 × 2 grid on A4 landscape.
+     * <p>Default configuration: 2 x 2 grid on A4 landscape.
      */
     public static final class Builder {
 
@@ -142,10 +142,10 @@ public final class NUpLayout {
         }
 
         /**
-         * Grid of {@code cols} columns × {@code rows} rows per output page.
+         * Grid of {@code cols} columns x {@code rows} rows per output page.
          *
-         * @param cols source-page columns (≥ 1)
-         * @param rows source-page rows    (≥ 1)
+         * @param cols source-page columns (>= 1)
+         * @param rows source-page rows    (>= 1)
          */
         public Builder grid(int cols, int rows) {
             if (cols < 1 || rows < 1)
@@ -169,22 +169,22 @@ public final class NUpLayout {
             return this;
         }
 
-        /** A4 portrait output page (595 × 842 pt). */
+        /** A4 portrait output page (595 x 842 pt). */
         public Builder a4Portrait()      { return pageSize(A4_WIDTH,      A4_HEIGHT);     }
 
-        /** A4 landscape output page (842 × 595 pt). */
+        /** A4 landscape output page (842 x 595 pt). */
         public Builder a4Landscape()     { return pageSize(A4_HEIGHT,     A4_WIDTH);      }
 
-        /** A3 portrait output page (842 × 1190 pt). */
+        /** A3 portrait output page (842 x 1190 pt). */
         public Builder a3Portrait()      { return pageSize(A3_WIDTH,      A3_HEIGHT);     }
 
-        /** A3 landscape output page (1190 × 842 pt). */
+        /** A3 landscape output page (1190 x 842 pt). */
         public Builder a3Landscape()     { return pageSize(A3_HEIGHT,     A3_WIDTH);      }
 
-        /** US Letter portrait output page (612 × 792 pt). */
+        /** US Letter portrait output page (612 x 792 pt). */
         public Builder letterPortrait()  { return pageSize(LETTER_WIDTH,  LETTER_HEIGHT); }
 
-        /** US Letter landscape output page (792 × 612 pt). */
+        /** US Letter landscape output page (792 x 612 pt). */
         public Builder letterLandscape() { return pageSize(LETTER_HEIGHT, LETTER_WIDTH);  }
 
         /** Build the configured {@link NUpLayout}. */

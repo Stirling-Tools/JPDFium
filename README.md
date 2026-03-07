@@ -313,7 +313,7 @@ PageOps.renderAll(doc, dpi)                  // -> List<BufferedImage>
 ### `PdfRepair`
 
 Builder-pattern API for repairing damaged PDFs. Uses a multi-stage cascade:
-PDFium tolerant parse → qpdf XRef reconstruction → startxref offset correction → xref type normalization.
+PDFium tolerant parse - qpdf XRef reconstruction - startxref offset correction - xref type normalization.
 
 ```java
 // Repair from bytes
@@ -353,7 +353,7 @@ NUpLayout.from(doc).grid(2, 2).a4Landscape().build().save(outputPath);
 // 6-up on US Letter landscape as bytes
 byte[] pdf = NUpLayout.from(doc).grid(3, 2).letterLandscape().build().toBytes();
 
-// Custom page size (A3 landscape: 1190 × 842 pt)
+// Custom page size (A3 landscape: 1190 x 842 pt)
 NUpLayout.from(doc).grid(4, 2).pageSize(1190, 842).build().save(outputPath);
 ```
 
@@ -440,7 +440,7 @@ System.out.printf("Redacted %d total matches across %d pages%n",
 
 #### Native Library Dependencies
 
-JPDFium links against several native libraries at build time. All are MIT, BSD, Apache, or equivalent permissive licenses — **no GPL/LGPL dependencies**.
+JPDFium links against several native libraries at build time. All are MIT, BSD, Apache, or equivalent permissive licenses - **no GPL/LGPL dependencies**.
 
 ##### System Libraries (required, installed via package manager)
 
@@ -454,9 +454,10 @@ JPDFium links against several native libraries at build time. All are MIT, BSD, 
 | [pugixml](https://pugixml.org/) | MIT | PII Redaction | XMP metadata XML parsing |
 | [libunibreak](https://github.com/adah1972/libunibreak) | zlib | PII Redaction | Grapheme cluster boundaries |
 | [zlib](https://www.zlib.net/) | zlib | Core | FlateDecode compression (used by Brotli transcoding, qpdf) |
-| [Brotli](https://github.com/google/brotli) | MIT | Repair | PDF 2.0+ `/BrotliDecode` stream transcoding → `/FlateDecode` |
+| [Brotli](https://github.com/google/brotli) | MIT | Repair | PDF 2.0+ `/BrotliDecode` stream transcoding to `/FlateDecode` |
 | [lcms2](https://www.littlecms.com/) | MIT | Repair | ICC color profile validation, `/N` mismatch fix, profile replacement |
 | [OpenJPEG](https://www.openjpeg.org/) | BSD-2 | Repair | JPEG2000 (`/JPXDecode`) partial bitstream recovery |
+| [PDFio](https://www.msweet.org/pdfio/) | Apache-2.0 | Repair | Third-opinion XRef repair via independent `repair_xref()` |
 
 ##### Vendored Libraries (bundled in `native/vendor/`, no install needed)
 
@@ -464,15 +465,7 @@ JPDFium links against several native libraries at build time. All are MIT, BSD, 
 |---------|---------|---------|
 | [simdutf](https://github.com/simdutf/simdutf) | MIT/Apache-2.0 | SIMD-accelerated UTF-8/16/32 transcoding |
 | [utf8proc](https://github.com/JuliaStrings/utf8proc) | MIT | NFC normalization, case folding, grapheme clusters |
-| [xxHash](https://github.com/Cyan4973/xxHash) | BSD-2 | XXH3 non-cryptographic hashing (~80 GB/s) for content deduplication |
-
-##### Opt-In Libraries (auto-detected if installed)
-
-| Library | License | Purpose |
-|---------|---------|---------|
-| [PDFio](https://www.msweet.org/pdfio/) | Apache-2.0 | Third-opinion XRef repair via independent `repair_xref()` |
-
-PDFio is auto-detected via `pkg-config`. If absent, the repair cascade simply skips the PDFio step. No distro packages exist yet — build from source if desired.
+| [xxHash](https://github.com/Cyan4973/xxHash) | BSD-2 | XXH3 non-cryptographic hashing for content deduplication |
 
 ## Building
 
@@ -607,7 +600,7 @@ True redaction requires more than painting a black rectangle. JPDFium implements
      - `(e, f)` pinned to the first character's absolute page-space origin via `FPDFText_GetCharOrigin`, bypassing font advance widths entirely.
    - This per-word positioning preserves inter-word spacing exactly, regardless of mismatches between the font's advance widths and the original TJ-array positioning.
 3. **Fission validation** - after creating fragment objects, their bounds are checked. If any fragment has degenerate bounds (e.g. Type 3 custom-drawn fonts that can't be recreated via `FPDFText_SetText`), the entire fission plan is aborted and the original object is left for fallback removal.
-4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
+4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if 70% or more of their area overlaps a match bbox.
 5. **Visual cover** - a filled rectangle is painted over every match region.
 6. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
 

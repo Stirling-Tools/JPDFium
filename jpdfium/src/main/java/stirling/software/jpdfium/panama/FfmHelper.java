@@ -20,10 +20,10 @@ import static java.lang.foreign.ValueLayout.*;
  * <p>
  * Handles the three string types PDFium uses:
  * <ul>
- * <li>{@code char*} (FPDF_BYTESTRING) — Latin-1 / UTF-8 byte strings</li>
- * <li>{@code FPDF_WIDESTRING} (UTF-16LE) — used by bookmarks, metadata values,
+ * <li>{@code char*} (FPDF_BYTESTRING) - Latin-1 / UTF-8 byte strings</li>
+ * <li>{@code FPDF_WIDESTRING} (UTF-16LE) - used by bookmarks, metadata values,
  * search</li>
- * <li>{@code FPDF_WCHAR*} — same as FPDF_WIDESTRING but for output buffers</li>
+ * <li>{@code FPDF_WCHAR*} - same as FPDF_WIDESTRING but for output buffers</li>
  * </ul>
  *
  * <p>
@@ -94,8 +94,8 @@ public final class FfmHelper {
      *
      * <p>
      * Useful for saving documents obtained from PDFium APIs that return a raw
-     * {@code FPDF_DOCUMENT} directly — such as {@code FPDF_ImportNPagesToOne} or
-     * {@code FPDF_CreateNewDocument} — without going through the jpdfium C bridge.
+     * {@code FPDF_DOCUMENT} directly - such as {@code FPDF_ImportNPagesToOne} or
+     * {@code FPDF_CreateNewDocument} - without going through the jpdfium C bridge.
      *
      * @param rawDoc a non-null raw {@code FPDF_DOCUMENT} segment
      * @return the PDF bytes

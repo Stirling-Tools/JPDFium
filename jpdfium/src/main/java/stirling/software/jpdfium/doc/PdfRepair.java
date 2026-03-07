@@ -12,8 +12,8 @@ import java.nio.file.Path;
  * <p>
  * Multi-stage cascade pipeline:
  * <ol>
- * <li><b>Pre-repair</b>: Brotli→Flate transcoding (PDF 2.0+ compat)</li>
- * <li><b>Core</b>: PDFium tolerant open → qpdf recovery → startxref fix</li>
+ * <li><b>Pre-repair</b>: Brotli-Flate transcoding (PDF 2.0+ compat)</li>
+ * <li><b>Core</b>: PDFium tolerant open - qpdf recovery - startxref fix</li>
  * <li><b>Fallback</b>: PDFio third-opinion XRef repair</li>
  * <li><b>Post-repair</b>: ICC profile validation (lcms2), JPEG2000 validation
  * (OpenJPEG)</li>
@@ -43,7 +43,7 @@ import java.nio.file.Path;
  */
 public final class PdfRepair {
 
-    // Core repair flags — must match jpdfium.h
+    // Core repair flags - must match jpdfium.h
     private static final int FLAG_FORCE_V14 = 0x0001;
     private static final int FLAG_NORMALIZE_XREF = 0x0002;
     private static final int FLAG_FIX_STARTXREF = 0x0004;
@@ -89,7 +89,7 @@ public final class PdfRepair {
     public RepairResult execute() {
         byte[] current = inputBytes;
 
-        // Pre-repair: Brotli→Flate transcoding
+        // Pre-repair: Brotli-Flate transcoding
         if (transcodeBrotli) {
             byte[] transcoded = RepairLib.brotliToFlate(current);
             if (transcoded != null) {
@@ -167,7 +167,7 @@ public final class PdfRepair {
             return this;
         }
 
-        /** Enable Brotli→Flate pre-repair transcoding (opt-in, requires libbrotli). */
+        /** Enable Brotli-Flate pre-repair transcoding (opt-in, requires libbrotli). */
         public Builder transcodeBrotli(boolean enable) {
             this.transcodeBrotli = enable;
             return this;

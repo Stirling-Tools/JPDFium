@@ -13,11 +13,11 @@ public record RepairResult(
         String diagnosticJson) {
     /** Repair outcome. */
     public enum Status {
-        /** The input PDF was already valid — no changes made. */
+        /** The input PDF was already valid - no changes made. */
         CLEAN,
         /** The PDF was repaired successfully (with warnings). */
         FIXED,
-        /** Partial repair — some content may be lost. */
+        /** Partial repair - some content may be lost. */
         PARTIAL,
         /** All repair strategies failed. */
         FAILED
