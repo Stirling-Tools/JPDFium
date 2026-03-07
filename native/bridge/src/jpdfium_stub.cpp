@@ -33,6 +33,7 @@ static std::unordered_map<int64_t, StubDoc> g_docs;
 static int64_t g_next_doc = 12345LL;
 
 static std::unordered_map<int64_t, std::string> g_page_text;
+static std::unordered_map<int64_t, int> g_page_annots;  // page handle -> pending REDACT count
 static int64_t g_next_page = 99000LL;
 
 struct StubPattern { std::string regex; };
@@ -192,6 +193,7 @@ int32_t jpdfium_page_height(int64_t, float* h) { *h = 842.0f; return JPDFIUM_OK;
 
 void jpdfium_page_close(int64_t handle) {
     g_page_text.erase(handle);
+    g_page_annots.erase(handle);
 }
 
 int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
@@ -474,4 +476,67 @@ int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
 int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     *result = strdup(text ? text : "");
     return JPDFIUM_OK;
+}
+
+//  Annotation-Based Redaction stubs (Mark → Commit pattern)
+
+int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float,
+                                     uint32_t, int32_t* annot_index) {
+    int idx = g_page_annots[page]++;
+    if (annot_index) *annot_index = idx;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word_count,
+                                   float, int32_t, int32_t, int32_t case_sensitive,
+                                   uint32_t, int32_t* matchCount) {
+    int matches = 0;
+    auto it = g_page_text.find(page);
+    std::string text = (it != g_page_text.end()) ? it->second : std::string(STUB_TEXT);
+    if (words) {
+        for (int i = 0; i < word_count; ++i) {
+            if (!words[i]) continue;
+            matches += count_occurrences(text, words[i], case_sensitive != 0);
+        }
+    }
+    g_page_annots[page] += matches;
+    if (matchCount) *matchCount = matches;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) {
+    if (count) {
+        auto it = g_page_annots.find(page);
+        *count = (it != g_page_annots.end()) ? it->second : 0;
+    }
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_get_redacts_json(int64_t, char** json) {
+    *json = strdup("[]");
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) {
+    auto it = g_page_annots.find(page);
+    if (it != g_page_annots.end() && it->second > 0) it->second--;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_clear_redacts(int64_t page) {
+    g_page_annots.erase(page);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commitCount) {
+    auto it = g_page_annots.find(page);
+    int pending = (it != g_page_annots.end()) ? it->second : 0;
+    if (commitCount) *commitCount = pending;
+    g_page_annots.erase(page);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) {
+    // Delegate to full save for stub
+    return jpdfium_doc_save_bytes(handle, data, len);
 }

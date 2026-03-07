@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
 import java.io.IOException;
@@ -166,6 +167,144 @@ class PdfDocumentTest {
             assertEquals(0x50, bytes[1] & 0xFF);  // P
             assertEquals(0x44, bytes[2] & 0xFF);  // D
             assertEquals(0x46, bytes[3] & 0xFF);  // F
+        }
+    }
+
+    // Annotation-Based Redaction (Mark → Commit)
+
+    @Test
+    void markRedactRegion() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            int idx = page.markRedactRegion(Rect.of(10, 10, 100, 20), 0xFF000000);
+            assertTrue(idx >= 0, "Annotation index must be non-negative");
+        }
+    }
+
+    @Test
+    void markRedactWords() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            int marked = page.markRedactWords(
+                    new String[]{"Hello", "World"}, 0xFF000000,
+                    1.0f, false, false, false);
+            assertTrue(marked >= 0, "Marked count must be non-negative");
+        }
+    }
+
+    @Test
+    void pendingRedactionCountStartsAtZero() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            assertEquals(0, page.pendingRedactionCount());
+        }
+    }
+
+    @Test
+    void pendingRedactionsJsonEmpty() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            String json = page.pendingRedactionsJson();
+            assertEquals("[]", json);
+        }
+    }
+
+    @Test
+    void clearPendingRedactionsDoesNotThrow() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            assertDoesNotThrow(() -> page.clearPendingRedactions());
+        }
+    }
+
+    @Test
+    void commitRedactionsOnCleanPage() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            int committed = page.commitRedactions(0xFF000000, true);
+            assertEquals(0, committed, "Clean page should have 0 commits");
+        }
+    }
+
+    @Test
+    void markThenCommitWorkflow() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            // Mark phase
+            page.markRedactWords(new String[]{"Hello"}, 0xFF000000,
+                    0f, false, false, false);
+
+            // Commit phase
+            int committed = page.commitRedactions(0xFF000000, true);
+            assertTrue(committed >= 0);
+        }
+    }
+
+    @Test
+    void saveIncrementalReturnsPdf() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            byte[] bytes = doc.saveBytesIncremental();
+            assertTrue(bytes.length > 0);
+        }
+    }
+
+    // Font Normalization
+
+    @Test
+    void fontNormalizePageDoesNotThrow() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            FontNormalizer.Result result = FontNormalizer.normalizePage(doc, 0);
+            assertNotNull(result);
+            assertTrue(result.fontsProcessed() >= 0);
+            assertTrue(result.toUnicodeFixed() >= 0);
+            assertTrue(result.widthsRepaired() >= 0);
+        }
+    }
+
+    @Test
+    void fontNormalizeAllPages() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            FontNormalizer.Result result = FontNormalizer.normalizeAll(doc);
+            assertNotNull(result);
+            assertTrue(result.fontsProcessed() >= 0);
+        }
+    }
+
+    @Test
+    void fontNormalizeThenRedact() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            // Normalize first
+            FontNormalizer.normalizeAll(doc);
+
+            // Then redact
+            try (var page = doc.page(0)) {
+                int matches = page.redactWordsEx(
+                        new String[]{"Hello"}, 0xFF000000, 0f,
+                        false, false, true, false);
+                assertTrue(matches >= 0);
+            }
+
+            // Save incremental
+            byte[] bytes = doc.saveBytesIncremental();
+            assertTrue(bytes.length > 0);
+        }
+    }
+
+    @Test
+    void fontNormalizeThenMarkCommit() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            // Normalize -> Mark -> Commit -> Incremental save
+            FontNormalizer.normalizeAll(doc);
+
+            try (var page = doc.page(0)) {
+                page.markRedactWords(new String[]{"Hello"}, 0xFF000000,
+                        0f, false, false, false);
+                int committed = page.commitRedactions(0xFF000000, true);
+                assertTrue(committed >= 0);
+            }
+
+            byte[] bytes = doc.saveBytesIncremental();
+            assertTrue(bytes.length > 0);
         }
     }
 }

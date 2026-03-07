@@ -43,9 +43,11 @@ public class RunAllSamples {
         passed += run("S08_FullPipeline",  () -> S08_FullPipeline.main(a));
         passed += run("S09_Flatten",       () -> S09_Flatten.main(a));
         passed += run("S10_PiiRedact",     () -> S10_PiiRedact.main(a));
+        passed += run("S11_FontNormRedact",() -> S11_FontNormRedact.main(a));
+        passed += run("S12_TwoPhaseRedact",() -> S12_TwoPhaseRedact.main(a));
 
         System.out.println("\n==================================================");
-        System.out.printf("Results: %d/%d samples passed%n", passed, 10);
+        System.out.printf("Results: %d/%d samples passed%n", passed, 12);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
         System.out.println("==================================================");
     }

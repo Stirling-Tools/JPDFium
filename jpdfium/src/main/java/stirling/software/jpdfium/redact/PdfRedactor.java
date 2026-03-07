@@ -2,6 +2,7 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.fonts.FontNormalizer;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -78,6 +79,10 @@ public final class PdfRedactor {
         String[] words = options.words().toArray(new String[0]);
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
 
+        if (options.normalizeFonts()) {
+            FontNormalizer.normalizeAll(doc);
+        }
+
         for (int i = 0; i < totalPages; i++) {
             int matchesOnPage;
             try (PdfPage page = doc.page(i)) {
@@ -95,6 +100,6 @@ public final class PdfRedactor {
         }
 
         long durationMs = (System.nanoTime() - t0) / 1_000_000;
-        return new RedactResult(doc, pageResults, durationMs);
+        return new RedactResult(doc, pageResults, durationMs, options.incrementalSave());
     }
 }

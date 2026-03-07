@@ -6,6 +6,7 @@
 #include <fpdf_text.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
+#include <fpdf_annot.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -404,20 +405,64 @@ static int32_t objectFissionRedact(
         if (oi >= 0) objChars[oi].push_back(ci);
     }
 
-    // 5. Plan fission operations for every affected text object.
+    // 5. Plan fission operations for ALL text objects on the page.
     //
-    // KEY FIX: Instead of the old prefix/suffix split (which fails when there are
-    // multiple non-adjacent redacted regions in the same text object), we now
-    // identify ALL contiguous runs of surviving characters.  Each run becomes an
-    // independent TextFragment, pinned to the absolute page-space coordinates
-    // returned by FPDFText_GetCharOrigin for its first character.  This avoids
-    // ALL internal kerning/spacing issues because we never rely on the font's
-    // advance widths to bridge a gap left by removed characters.
+    // KEY: FPDFPage_GenerateContent serialises text objects using flat Tj
+    // strings, which drops all TJ-array kerning/positioning data.  When ANY
+    // object on a content stream is modified (add/remove), GenerateContent
+    // regenerates the ENTIRE stream, destroying TJ kerning even for untouched
+    // text objects.
+    //
+    // FIX: Pre-split every multi-word text object into per-word fragments.
+    // Each word gets its own absolute Tm position (from FPDFText_GetCharOrigin),
+    // so inter-word spacing survives GenerateContent's flat Tj serialisation.
+    // Redacted words are simply omitted; partially-redacted words are fissioned
+    // at the character level as before.
+
+    // Helper: build a TextFragment from a contiguous run of char indices.
+    // Returns true if a valid fragment was produced.
+    auto buildFragment = [&](const std::vector<int>& run,
+                             const FS_MATRIX& origMatrix,
+                             TextFragment& outFrag) -> bool {
+        if (run.empty()) return false;
+
+        // Find first printable non-space character for positioning.
+        size_t firstNonWS = 0;
+        while (firstNonWS < run.size()) {
+            unsigned int uni = FPDFText_GetUnicode(textPage, run[firstNonWS]);
+            if (uni > 0x20 && uni != 0xA0) break;
+            firstNonWS++;
+        }
+        if (firstNonWS >= run.size()) return false;
+
+        // Collect text starting from first printable char.
+        std::wstring ws;
+        for (size_t i = firstNonWS; i < run.size(); i++) {
+            unsigned int uni = FPDFText_GetUnicode(textPage, run[i]);
+            if (uni >= 0x20) ws += static_cast<wchar_t>(uni);
+        }
+        if (ws.empty()) return false;
+
+        ws = decomposeLigatures(ws);
+
+        outFrag.utf16 = wstring_to_utf16le(ws);
+        outFrag.matrix = origMatrix;
+        double fx, fy;
+        if (FPDFText_GetCharOrigin(textPage, run[firstNonWS], &fx, &fy)) {
+            outFrag.matrix.e = static_cast<float>(fx);
+            outFrag.matrix.f = static_cast<float>(fy);
+        }
+        return true;
+    };
+
     std::vector<FissionPlan> plans;
     std::set<FPDF_PAGEOBJECT> objsToDestroy;
 
     for (auto& [oi, chars] : objChars) {
-        // Check if any characters in this object are redacted
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
+        if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
+
+        // Check redaction status for this object
         bool anyRedacted = false;
         bool allRedacted = true;
         for (int ci : chars) {
@@ -428,17 +473,37 @@ static int32_t objectFissionRedact(
             }
         }
 
-        if (!anyRedacted) continue;
-
-        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
-
-        // Fully contained -> simple removal, no fragments needed
+        // Fully contained in redaction -> simple removal
         if (allRedacted) {
             objsToDestroy.insert(obj);
             continue;
         }
 
-        // Partial overlap -> Object Fission with multi-fragment support
+        // Check if this object has multiple "words" (generated-space boundaries).
+        // If it does, we must split it so GenerateContent preserves word spacing.
+        bool hasMultipleWords = false;
+        bool inWord = false;
+        int wordCount = 0;
+        for (int ci : chars) {
+            bool isGenSpace = false;
+            if (charInfo[ci].isGenerated) {
+                unsigned int uni = FPDFText_GetUnicode(textPage, ci);
+                if (uni == 0x20 || uni == 0xA0 || uni == 0) isGenSpace = true;
+            }
+            if (isGenSpace) {
+                inWord = false;
+            } else {
+                if (!inWord) { wordCount++; inWord = true; }
+            }
+        }
+        hasMultipleWords = (wordCount > 1);
+
+        // Skip single-word objects that have no redacted chars — they don't
+        // need splitting and their single Tj is fine.
+        if (!anyRedacted && !hasMultipleWords) continue;
+
+        // Build per-word fragments, respecting both word boundaries AND
+        // redaction boundaries.
         FissionPlan plan;
         plan.originalObj    = obj;
         plan.removeEntirely = false;
@@ -446,96 +511,50 @@ static int32_t objectFissionRedact(
         FPDFTextObj_GetFontSize(obj, &plan.fontSize);
         plan.renderMode     = FPDFTextObj_GetTextRenderMode(obj);
 
-        // Preserve the original object's fill and stroke colors
         FPDFPageObj_GetFillColor(obj, &plan.fillR, &plan.fillG, &plan.fillB, &plan.fillA);
         plan.hasStroke = FPDFPageObj_GetStrokeColor(obj, &plan.strokeR, &plan.strokeG,
                                                      &plan.strokeB, &plan.strokeA);
 
-        // Get original matrix (a,b,c,d for scaling/rotation/shear)
         FS_MATRIX originalMatrix;
         FPDFPageObj_GetMatrix(obj, &originalMatrix);
 
-        // Build contiguous fragments of surviving text
-        // Walk through the chars in order.  Every time we transition from
-        // redacted->non-redacted, start a new fragment.  Every time we transition
-        // from non-redacted->redacted, close the current fragment.
+        // Walk chars, splitting at word boundaries and redaction boundaries.
+        // Each contiguous run of non-redacted, non-space chars becomes a
+        // fragment (typically one word).
         std::vector<int> currentRun;
-        bool inRedacted = false;
 
-        auto flushFragment = [&]() {
+        auto flushRun = [&]() {
             if (currentRun.empty()) return;
-
-            // Find first printable non-space character for positioning.
-            // Skip: null (0), control chars (0x01-0x1F including newlines
-            // and tabs that step 3b may have inherited from inter-line gaps),
-            // spaces (0x20), and NBSP (0xA0).  Control characters can't be
-            // properly encoded back into a text object and produce ÿ (0xFF)
-            // artifacts when PDFium attempts to render charcode 0.
-            size_t firstNonWS = 0;
-            while (firstNonWS < currentRun.size()) {
-                unsigned int uni = FPDFText_GetUnicode(textPage, currentRun[firstNonWS]);
-                if (uni > 0x20 && uni != 0xA0) break;
-                firstNonWS++;
-            }
-            if (firstNonWS >= currentRun.size()) {
-                currentRun.clear();
-                return;
-            }
-
-            // Collect text starting from first printable non-space char,
-            // preserving internal spaces within the contiguous run.
-            // Skip control characters (< 0x20) and null — they can't be
-            // encoded and would produce ÿ artifacts.
-            std::wstring ws;
-            for (size_t i = firstNonWS; i < currentRun.size(); i++) {
-                unsigned int uni = FPDFText_GetUnicode(textPage, currentRun[i]);
-                if (uni >= 0x20) ws += static_cast<wchar_t>(uni);
-            }
-            if (ws.empty()) { currentRun.clear(); return; }
-
-            // Decompose ligatures BEFORE encoding.  Unicode ligature codepoints
-            // (U+FB00-FB06) can't be reverse-mapped to charcodes by most fonts'
-            // encoding dictionaries, which causes FPDFText_SetText to produce
-            // charcode 0 → rendered as ÿ (0xFF) in WinAnsi and other encodings.
-            ws = decomposeLigatures(ws);
-
             TextFragment frag;
-            frag.utf16 = wstring_to_utf16le(ws);
-
-            // Hybrid matrix: copy a,b,c,d from original (preserves size/angle).
-            // Pin e,f to the first non-whitespace char's origin.
-            frag.matrix = originalMatrix;
-            double fx, fy;
-            if (FPDFText_GetCharOrigin(textPage, currentRun[firstNonWS], &fx, &fy)) {
-                frag.matrix.e = static_cast<float>(fx);
-                frag.matrix.f = static_cast<float>(fy);
+            if (buildFragment(currentRun, originalMatrix, frag)) {
+                plan.fragments.push_back(std::move(frag));
             }
-
-            plan.fragments.push_back(std::move(frag));
             currentRun.clear();
         };
 
         for (int ci : chars) {
             bool isRedacted = redactSet.count(ci) > 0;
-            if (isRedacted) {
-                // Close any open non-redacted run
-                if (!inRedacted && !currentRun.empty()) {
-                    flushFragment();
-                }
-                inRedacted = true;
+
+            // Generated spaces/nulls -> word boundary -> flush
+            bool isGenSpace = false;
+            if (charInfo[ci].isGenerated) {
+                unsigned int uni = FPDFText_GetUnicode(textPage, ci);
+                if (uni == 0x20 || uni == 0xA0 || uni == 0) isGenSpace = true;
+            }
+
+            if (isRedacted || isGenSpace) {
+                flushRun();
             } else {
-                if (inRedacted) {
-                    // Transition from redacted -> non-redacted: start new run
-                    currentRun.clear();
-                }
-                inRedacted = false;
                 currentRun.push_back(ci);
             }
         }
-        // Flush the final run if the object ends with non-redacted chars
-        flushFragment();
+        flushRun();
 
-        plans.push_back(std::move(plan));
+        // Only plan replacement if we actually produced fragments
+        // (and the object needs it: redacted chars or multiple words)
+        if (!plan.fragments.empty()) {
+            plans.push_back(std::move(plan));
+        }
     }
 
     // 6. Also remove image objects that are mostly inside any match bbox
@@ -1383,6 +1402,314 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
     }
 
     FPDF_ClosePage(newPage);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_create_redact(int64_t page,
+                                     float x, float y, float w, float h,
+                                     uint32_t argb, int32_t* annot_index) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+
+    FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+    if (!annot) return JPDFIUM_ERR_NATIVE;
+
+    FS_RECTF rect;
+    rect.left   = x;
+    rect.bottom = y;
+    rect.right  = x + w;
+    rect.top    = y + h;
+    if (!FPDFAnnot_SetRect(annot, &rect)) {
+        FPDFPage_CloseAnnot(annot);
+        return JPDFIUM_ERR_NATIVE;
+    }
+
+    unsigned int r = (argb >> 16) & 0xFF;
+    unsigned int g = (argb >>  8) & 0xFF;
+    unsigned int b =  argb        & 0xFF;
+    FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_InteriorColor, r, g, b, 255);
+
+    // Return the annotation index (it's appended at the end)
+    int idx = FPDFPage_GetAnnotCount(pw->page) - 1;
+    if (annot_index) *annot_index = idx;
+
+    FPDFPage_CloseAnnot(annot);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page || !count) return JPDFIUM_ERR_INVALID;
+
+    int total = FPDFPage_GetAnnotCount(pw->page);
+    int redacts = 0;
+    for (int i = 0; i < total; ++i) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
+        if (a) {
+            if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) ++redacts;
+            FPDFPage_CloseAnnot(a);
+        }
+    }
+    *count = redacts;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page || !json) return JPDFIUM_ERR_INVALID;
+
+    int total = FPDFPage_GetAnnotCount(pw->page);
+    std::ostringstream os;
+    os << '[';
+    bool first = true;
+
+    for (int i = 0; i < total; ++i) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
+        if (!a) continue;
+
+        if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
+            FS_RECTF rect;
+            if (FPDFAnnot_GetRect(a, &rect)) {
+                if (!first) os << ',';
+                first = false;
+                os << "{\"idx\":" << i
+                   << ",\"x\":" << rect.left
+                   << ",\"y\":" << rect.bottom
+                   << ",\"w\":" << (rect.right - rect.left)
+                   << ",\"h\":" << (rect.top - rect.bottom) << '}';
+            }
+        }
+        FPDFPage_CloseAnnot(a);
+    }
+    os << ']';
+
+    std::string s = os.str();
+    char* out = static_cast<char*>(malloc(s.size() + 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    memcpy(out, s.c_str(), s.size() + 1);
+    *json = out;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+
+    int total = FPDFPage_GetAnnotCount(pw->page);
+    if (annot_index < 0 || annot_index >= total) return JPDFIUM_ERR_NOT_FOUND;
+
+    FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, annot_index);
+    if (!a) return JPDFIUM_ERR_NOT_FOUND;
+
+    bool isRedact = FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT;
+    FPDFPage_CloseAnnot(a);
+
+    if (!isRedact) return JPDFIUM_ERR_INVALID;
+
+    return FPDFPage_RemoveAnnot(pw->page, annot_index) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_annot_clear_redacts(int64_t page) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+
+    // Remove in reverse order to avoid index shifting
+    for (int i = FPDFPage_GetAnnotCount(pw->page) - 1; i >= 0; --i) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
+        if (!a) continue;
+        bool isRedact = FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT;
+        FPDFPage_CloseAnnot(a);
+        if (isRedact) FPDFPage_RemoveAnnot(pw->page, i);
+    }
+    return JPDFIUM_OK;
+}
+
+// Mark phase: find text matches and create REDACT annotations (no content mutation)
+int32_t jpdfium_redact_mark_words(int64_t page,
+                                   const char** words, int32_t wordCount,
+                                   float padding, int32_t wholeWord,
+                                   int32_t useRegex, int32_t caseSensitive,
+                                   uint32_t argb, int32_t* matchCount) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    if (!words || wordCount <= 0) {
+        if (matchCount) *matchCount = 0;
+        return JPDFIUM_OK;
+    }
+
+    FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+    if (!tp) return JPDFIUM_ERR_NATIVE;
+
+    int count = FPDFText_CountChars(tp);
+
+    // Build wide text + index-map
+    std::wstring wtext;
+    std::vector<int> idxMap;
+    for (int i = 0; i < count; ++i) {
+        unsigned int uni = FPDFText_GetUnicode(tp, i);
+        if (uni == 0) continue;
+        wtext += static_cast<wchar_t>(uni);
+        idxMap.push_back(i);
+    }
+
+    std::vector<TextMatch> matches;
+    auto rxFlags = std::regex_constants::ECMAScript;
+    if (!caseSensitive) rxFlags |= std::regex_constants::icase;
+
+    for (int wi = 0; wi < wordCount; ++wi) {
+        if (!words[wi]) continue;
+        std::wstring wpattern;
+        if (useRegex) {
+            wpattern = utf8_to_wstring(words[wi]);
+        } else {
+            std::wstring raw = utf8_to_wstring(words[wi]);
+            for (wchar_t ch : raw) {
+                if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' ||
+                    ch == L'|' || ch == L'?' || ch == L'*' || ch == L'+' ||
+                    ch == L'(' || ch == L')' || ch == L'[' || ch == L']' ||
+                    ch == L'{' || ch == L'}') {
+                    wpattern += L'\\';
+                }
+                wpattern += ch;
+            }
+        }
+        if (wholeWord) wpattern = L"\\b" + wpattern + L"\\b";
+
+        std::wregex wre;
+        try { wre.assign(wpattern, rxFlags); } catch (...) { continue; }
+
+        collectRegexMatches(tp, wtext, idxMap, wre, padding, matches);
+    }
+
+    FPDFText_ClosePage(tp);
+
+    // Create REDACT annotations from matches (zero content mutation)
+    unsigned int r = (argb >> 16) & 0xFF;
+    unsigned int g = (argb >>  8) & 0xFF;
+    unsigned int b =  argb        & 0xFF;
+
+    for (auto& m : matches) {
+        FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+        if (!annot) continue;
+
+        FS_RECTF rect;
+        rect.left   = m.bboxL;
+        rect.bottom = m.bboxB;
+        rect.right  = m.bboxR;
+        rect.top    = m.bboxT;
+        FPDFAnnot_SetRect(annot, &rect);
+        FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_InteriorColor, r, g, b, 255);
+        FPDFPage_CloseAnnot(annot);
+    }
+
+    if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
+    return JPDFIUM_OK;
+}
+
+// Commit phase: burn all REDACT annotations using Object Fission
+int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
+                               int32_t remove_content, int32_t* commitCount) {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+
+    // Collect all REDACT annotation rects
+    int total = FPDFPage_GetAnnotCount(pw->page);
+    std::vector<FS_RECTF> redactRects;
+    std::vector<int> redactIndices;
+
+    for (int i = 0; i < total; ++i) {
+        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
+        if (!a) continue;
+        if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
+            FS_RECTF rect;
+            if (FPDFAnnot_GetRect(a, &rect)) {
+                redactRects.push_back(rect);
+                redactIndices.push_back(i);
+            }
+        }
+        FPDFPage_CloseAnnot(a);
+    }
+
+    if (commitCount) *commitCount = static_cast<int32_t>(redactRects.size());
+
+    if (redactRects.empty()) return JPDFIUM_OK;
+
+    // Remove the REDACT annotations in reverse order (before modifying content)
+    for (int i = static_cast<int>(redactIndices.size()) - 1; i >= 0; --i) {
+        FPDFPage_RemoveAnnot(pw->page, redactIndices[i]);
+    }
+
+    // Build TextMatch objects from annotation rects and run Object Fission.
+    // Load text page for char-level hit testing.
+    FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
+    if (!tp) {
+        // Fallback to rect-based redaction if text page fails
+        for (auto& r : redactRects) {
+            applyRedactRect(pw->page, r.left, r.bottom, r.right - r.left,
+                            r.top - r.bottom, argb, remove_content != 0);
+        }
+        return JPDFIUM_OK;
+    }
+
+    int charCount = FPDFText_CountChars(tp);
+
+    // Build TextMatch for each annotation rect by finding intersecting characters
+    std::vector<TextMatch> matches;
+    for (auto& ar : redactRects) {
+        TextMatch tm;
+        tm.bboxL = ar.left;
+        tm.bboxB = ar.bottom;
+        tm.bboxR = ar.right;
+        tm.bboxT = ar.top;
+
+        // Find all characters whose center falls within this rect
+        for (int ci = 0; ci < charCount; ++ci) {
+            double l, r, b, t;
+            if (!FPDFText_GetCharBox(tp, ci, &l, &r, &b, &t)) continue;
+
+            double cx = (l + r) / 2.0;
+            double cy = (b + t) / 2.0;
+
+            if (cx >= ar.left && cx <= ar.right && cy >= ar.bottom && cy <= ar.top) {
+                tm.charIndices.push_back(ci);
+            }
+        }
+
+        matches.push_back(std::move(tm));
+    }
+
+    int32_t rc = objectFissionRedact(
+        pw->doc, pw->page, tp, matches, argb, remove_content != 0);
+
+    FPDFText_ClosePage(tp);
+    return rc;
+}
+
+// Incremental save: writes only changed objects, document stays live
+int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+
+    struct BufWriter : FPDF_FILEWRITE {
+        std::vector<uint8_t> buf;
+        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+            auto* bw  = static_cast<BufWriter*>(self);
+            auto* src = static_cast<const uint8_t*>(data);
+            bw->buf.insert(bw->buf.end(), src, src + size);
+            return 1;
+        }
+    } bw;
+    bw.version    = 1;
+    bw.WriteBlock = BufWriter::Write;
+
+    if (!FPDF_SaveAsCopy(w->doc, &bw, FPDF_INCREMENTAL)) return JPDFIUM_ERR_IO;
+
+    size_t   sz  = bw.buf.size();
+    uint8_t* out = static_cast<uint8_t*>(malloc(sz));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    memcpy(out, bw.buf.data(), sz);
+    *data = out;
+    *len  = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 

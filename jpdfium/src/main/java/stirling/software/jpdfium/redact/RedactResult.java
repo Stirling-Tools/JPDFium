@@ -2,6 +2,7 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 
@@ -15,11 +16,18 @@ public final class RedactResult {
     private final PdfDocument document;
     private final List<PageResult> pageResults;
     private final long durationMs;
+    private final boolean incrementalSave;
 
-    RedactResult(PdfDocument document, List<PageResult> pageResults, long durationMs) {
+    RedactResult(PdfDocument document, List<PageResult> pageResults, long durationMs,
+                 boolean incrementalSave) {
         this.document = document;
         this.pageResults = Collections.unmodifiableList(pageResults);
         this.durationMs = durationMs;
+        this.incrementalSave = incrementalSave;
+    }
+
+    RedactResult(PdfDocument document, List<PageResult> pageResults, long durationMs) {
+        this(document, pageResults, durationMs, false);
     }
 
     /** The modified document. Caller must close when done. */
@@ -38,6 +46,25 @@ public final class RedactResult {
 
     /** Total wall-clock time in milliseconds. */
     public long durationMs() { return durationMs; }
+
+    /** Whether incremental save mode was requested. */
+    public boolean incrementalSave() { return incrementalSave; }
+
+    /**
+     * Save the document to a file, respecting the incremental save option.
+     * Uses incremental save if the option was set, otherwise does a full save.
+     */
+    public void save(Path path) {
+        document.save(path);
+    }
+
+    /**
+     * Save the document to bytes, respecting the incremental save option.
+     * Uses incremental save if the option was set, otherwise does a full save.
+     */
+    public byte[] saveBytes() {
+        return incrementalSave ? document.saveBytesIncremental() : document.saveBytes();
+    }
 
     /**
      * Per-page result record.

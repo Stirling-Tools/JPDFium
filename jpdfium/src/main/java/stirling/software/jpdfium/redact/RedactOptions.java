@@ -41,6 +41,8 @@ public final class RedactOptions {
     private final boolean caseSensitive;
     private final boolean convertToImage;
     private final int imageDpi;
+    private final boolean incrementalSave;
+    private final boolean normalizeFonts;
 
     private RedactOptions(Builder b) {
         this.words = Collections.unmodifiableList(new ArrayList<>(b.words));
@@ -52,6 +54,8 @@ public final class RedactOptions {
         this.caseSensitive = b.caseSensitive;
         this.convertToImage = b.convertToImage;
         this.imageDpi = b.imageDpi;
+        this.incrementalSave = b.incrementalSave;
+        this.normalizeFonts = b.normalizeFonts;
     }
 
     public List<String> words() { return words; }
@@ -63,6 +67,8 @@ public final class RedactOptions {
     public boolean caseSensitive() { return caseSensitive; }
     public boolean convertToImage() { return convertToImage; }
     public int imageDpi() { return imageDpi; }
+    public boolean incrementalSave() { return incrementalSave; }
+    public boolean normalizeFonts() { return normalizeFonts; }
 
     public static Builder builder() { return new Builder(); }
 
@@ -76,6 +82,8 @@ public final class RedactOptions {
         private boolean caseSensitive = false;
         private boolean convertToImage = false;
         private int imageDpi = 150;
+        private boolean incrementalSave = false;
+        private boolean normalizeFonts = false;
 
         private Builder() {}
 
@@ -117,6 +125,19 @@ public final class RedactOptions {
 
         /** DPI for image conversion (default: 150). Only used if convertToImage is true. */
         public Builder imageDpi(int dpi) { this.imageDpi = dpi; return this; }
+
+        /**
+         * If true, use incremental save (writes only changed objects).
+         * The document remains valid after save. (Default: false.)
+         */
+        public Builder incrementalSave(boolean v) { this.incrementalSave = v; return this; }
+
+        /**
+         * If true, run the font normalization pipeline before redaction.
+         * Fixes broken /ToUnicode maps and /W glyph widths that cause
+         * text extraction failures and missed redactions. (Default: false.)
+         */
+        public Builder normalizeFonts(boolean v) { this.normalizeFonts = v; return this; }
 
         public RedactOptions build() {
             if (words.isEmpty()) throw new IllegalStateException("At least one word is required");

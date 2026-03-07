@@ -41,7 +41,12 @@ val jpdfiumFunctions = listOf(
     // XMP Metadata Redaction
     "jpdfium_xmp_redact_patterns", "jpdfium_metadata_strip", "jpdfium_metadata_strip_all",
     // ICU4C Text Processing
-    "jpdfium_icu_normalize_nfc", "jpdfium_icu_break_sentences", "jpdfium_icu_bidi_reorder"
+    "jpdfium_icu_normalize_nfc", "jpdfium_icu_break_sentences", "jpdfium_icu_bidi_reorder",
+    // Annotation-Based Redaction (Mark → Commit pattern)
+    "jpdfium_annot_create_redact", "jpdfium_redact_mark_words",
+    "jpdfium_annot_count_redacts", "jpdfium_annot_get_redacts_json",
+    "jpdfium_annot_remove_redact", "jpdfium_annot_clear_redacts",
+    "jpdfium_redact_commit", "jpdfium_doc_save_incremental"
 )
 
 val generateBindings by tasks.registering(Exec::class) {

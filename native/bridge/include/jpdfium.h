@@ -56,6 +56,56 @@ JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int
 // Used by tests to verify that text positions are preserved after redaction.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json);
 
+// ─── Annotation-Based Redaction (Mark → Commit pattern) ───
+//
+// Two-phase redaction modeled after EmbedPDF's architecture:
+//   Mark phase:  Create FPDF_ANNOT_REDACT annotations (zero content mutation).
+//   Commit phase: Burn all REDACT annotations via Object Fission (destructive).
+//
+// The document stays alive between phases - no close/reload required.
+
+// Mark phase: create a single REDACT annotation at the given rectangle.
+// The annotation is stored in the page's annotation dictionary; the content
+// stream is NOT modified.  Returns the annotation index on success.
+JPDFIUM_EXPORT int32_t jpdfium_annot_create_redact(int64_t page,
+                                                    float x, float y, float w, float h,
+                                                    uint32_t argb, int32_t* annot_index);
+
+// Mark phase: find all word matches and create REDACT annotations for each.
+// Equivalent to jpdfium_redact_words_ex but ONLY creates annotations,
+// without modifying the content stream.  Returns the number of annotations
+// created in *matchCount.
+JPDFIUM_EXPORT int32_t jpdfium_redact_mark_words(int64_t page,
+                                                  const char** words, int32_t wordCount,
+                                                  float padding, int32_t wholeWord,
+                                                  int32_t useRegex, int32_t caseSensitive,
+                                                  uint32_t argb, int32_t* matchCount);
+
+// Query: return the number of REDACT annotations on the page.
+JPDFIUM_EXPORT int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count);
+
+// Query: return all REDACT annotation rects as JSON.
+// [{"idx":0,"x":10.0,"y":20.0,"w":50.0,"h":12.0}, ...]
+JPDFIUM_EXPORT int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json);
+
+// Remove a specific REDACT annotation by its annotation index.
+JPDFIUM_EXPORT int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index);
+
+// Remove all REDACT annotations from the page (undo all marks).
+JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page);
+
+// Commit phase: burn all REDACT annotations on the page using Object Fission.
+// This permanently removes text/images under each REDACT rect, paints filled
+// rectangles, removes the consumed annotations, and regenerates the content
+// stream.  The document handle remains valid - no reload required.
+// Returns the number of REDACT annotations that were committed in *commitCount.
+JPDFIUM_EXPORT int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
+                                              int32_t remove_content,
+                                              int32_t* commitCount);
+
+// Incremental save: writes only changed objects, document stays live.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len);
+
 // Advanced Pattern Engine (PCRE2 JIT)
 //
 // Compiles redact patterns once to native machine code. Supports lookaheads,

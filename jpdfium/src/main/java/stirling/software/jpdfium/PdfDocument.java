@@ -93,6 +93,20 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Incremental save: writes only changed objects to a new byte buffer.
+     * The document handle remains valid after this call — no reload needed.
+     *
+     * <p>This is the recommended save mode during annotation-based redaction
+     * workflows where the document stays open between mark/commit cycles.
+     *
+     * @return byte array containing the incrementally-saved PDF
+     */
+    public byte[] saveBytesIncremental() {
+        ensureOpen();
+        return JpdfiumLib.docSaveIncremental(handle);
+    }
+
+    /**
      * Convert a page to an image-based page, removing all extractable text and vector content.
      * This is the most secure form of redaction: after conversion, no text can be extracted
      * or searched. Equivalent to Stirling-PDF's "Convert PDF to PDF-Image" feature.

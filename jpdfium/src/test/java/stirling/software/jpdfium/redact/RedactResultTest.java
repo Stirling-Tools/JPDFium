@@ -43,4 +43,16 @@ class RedactResultTest {
         assertEquals(10, pr.wordsSearched());
         assertEquals(4, pr.matchesFound());
     }
+
+    @Test
+    void incrementalSaveDefaultIsFalse() {
+        var result = new RedactResult(null, List.of(), 50L);
+        assertFalse(result.incrementalSave());
+    }
+
+    @Test
+    void incrementalSaveWhenEnabled() {
+        var result = new RedactResult(null, List.of(), 50L, true);
+        assertTrue(result.incrementalSave());
+    }
 }

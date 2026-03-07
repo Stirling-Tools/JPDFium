@@ -35,6 +35,8 @@ class RedactOptionsTest {
         assertTrue(opts.caseSensitive());
         assertFalse(opts.convertToImage());
         assertEquals(300, opts.imageDpi());
+        assertFalse(opts.incrementalSave());
+        assertFalse(opts.normalizeFonts());
     }
 
     @Test
@@ -51,6 +53,8 @@ class RedactOptionsTest {
         assertFalse(opts.caseSensitive());
         assertFalse(opts.convertToImage());
         assertEquals(150, opts.imageDpi());
+        assertFalse(opts.incrementalSave());
+        assertFalse(opts.normalizeFonts());
     }
 
     @Test
@@ -80,5 +84,47 @@ class RedactOptionsTest {
 
         assertThrows(UnsupportedOperationException.class, () ->
                 opts.words().add("another"));
+    }
+
+    @Test
+    void incrementalSaveOption() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("test")
+                .incrementalSave(true)
+                .build();
+
+        assertTrue(opts.incrementalSave());
+    }
+
+    @Test
+    void normalizeFontsOption() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("test")
+                .normalizeFonts(true)
+                .build();
+
+        assertTrue(opts.normalizeFonts());
+    }
+
+    @Test
+    void allOptionsSetExplicitly() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("word")
+                .boxColor(0xFFAA0000)
+                .padding(3.0f)
+                .useRegex(true)
+                .wholeWord(true)
+                .removeContent(false)
+                .caseSensitive(true)
+                .convertToImage(true)
+                .imageDpi(300)
+                .incrementalSave(true)
+                .normalizeFonts(true)
+                .build();
+
+        assertTrue(opts.incrementalSave());
+        assertTrue(opts.normalizeFonts());
+        assertTrue(opts.convertToImage());
+        assertTrue(opts.useRegex());
     }
 }

@@ -229,4 +229,105 @@ public final class JpdfiumLib {
     public static void pageToImage(long doc, int pageIndex, int dpi) {
         check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
     }
+
+    // Annotation-Based Redaction (Mark → Commit)
+
+    /**
+     * Mark phase: create a REDACT annotation at the given rectangle.
+     * No content is modified — only an annotation is stored.
+     *
+     * @return the annotation index within the page's annotation array
+     */
+    public static int annotCreateRedact(long page, float x, float y, float w, float h, int argb) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment idxSeg = a.allocate(JAVA_INT);
+            check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, idxSeg), "annotCreateRedact");
+            return idxSeg.get(JAVA_INT, 0);
+        }
+    }
+
+    /**
+     * Mark phase: find word matches and create REDACT annotations for each.
+     * No content is modified — only annotations are stored.
+     *
+     * @return the number of REDACT annotations created
+     */
+    public static int redactMarkWords(long page, String[] words, float padding,
+                                       boolean wholeWord, boolean useRegex,
+                                       boolean caseSensitive, int argb) {
+        if (words == null || words.length == 0) return 0;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
+            for (int i = 0; i < words.length; i++) {
+                ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
+            }
+            MemorySegment countSeg = a.allocate(JAVA_INT);
+            check(JpdfiumH.jpdfium_redact_mark_words(page, ptrs, words.length, padding,
+                    wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
+                    argb, countSeg), "redactMarkWords");
+            return countSeg.get(JAVA_INT, 0);
+        }
+    }
+
+    /** Returns the number of pending REDACT annotations on the page. */
+    public static int annotCountRedacts(long page) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cSeg = a.allocate(JAVA_INT);
+            check(JpdfiumH.jpdfium_annot_count_redacts(page, cSeg), "annotCountRedacts");
+            return cSeg.get(JAVA_INT, 0);
+        }
+    }
+
+    /** Returns JSON array of all REDACT annotation rects. */
+    public static String annotGetRedactsJson(long page) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment ptrSeg = a.allocate(ADDRESS);
+            check(JpdfiumH.jpdfium_annot_get_redacts_json(page, ptrSeg), "annotGetRedactsJson");
+            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+            JpdfiumH.jpdfium_free_string(strPtr);
+            return result;
+        }
+    }
+
+    /** Remove a specific REDACT annotation by its index. */
+    public static void annotRemoveRedact(long page, int annotIndex) {
+        check(JpdfiumH.jpdfium_annot_remove_redact(page, annotIndex), "annotRemoveRedact");
+    }
+
+    /** Remove all REDACT annotations from the page (undo all marks). */
+    public static void annotClearRedacts(long page) {
+        check(JpdfiumH.jpdfium_annot_clear_redacts(page), "annotClearRedacts");
+    }
+
+    /**
+     * Commit phase: burn all REDACT annotations on the page via Object Fission.
+     * Permanently removes content, paints fill rects, removes the annotations.
+     * The document handle remains valid — no reload required.
+     *
+     * @return the number of REDACT annotations that were committed
+     */
+    public static int redactCommit(long page, int argb, boolean removeContent) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment countSeg = a.allocate(JAVA_INT);
+            check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, countSeg), "redactCommit");
+            return countSeg.get(JAVA_INT, 0);
+        }
+    }
+
+    /**
+     * Incremental save: writes only changed objects.
+     * The document handle remains valid after this call.
+     */
+    public static byte[] docSaveIncremental(long doc) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment ptrSeg = a.allocate(ADDRESS);
+            MemorySegment lenSeg = a.allocate(JAVA_LONG);
+            check(JpdfiumH.jpdfium_doc_save_incremental(doc, ptrSeg, lenSeg), "docSaveIncremental");
+            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+            byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
+            JpdfiumH.jpdfium_free_buffer(nativePtr);
+            return result;
+        }
+    }
 }
