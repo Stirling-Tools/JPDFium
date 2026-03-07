@@ -2,15 +2,17 @@ package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.redact.PdfRedactor;
+import stirling.software.jpdfium.redact.RedactOptions;
+import stirling.software.jpdfium.redact.RedactResult;
 
 import java.net.URL;
 import java.nio.file.Path;
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Integration tests for the full advanced redaction pipeline.
+ * Integration tests for the unified redaction pipeline with PII features.
  *
  * <p>Runs against the native stub library, which provides pass-through behavior
  * for most operations. Verifies the pipeline orchestration and result aggregation.
@@ -25,13 +27,13 @@ class PiiRedactorTest {
 
     @Test
     void basicWordRedaction() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .normalizeFonts(false)
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
         assertNotNull(result.document());
         assertTrue(result.pagesProcessed() > 0);
@@ -42,7 +44,7 @@ class PiiRedactorTest {
 
     @Test
     void fullPipelineWithAllFeatures() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("Confidential")
                 .enableAllPiiPatterns()
                 .addEntity("John Smith", "PERSON")
@@ -54,7 +56,7 @@ class PiiRedactorTest {
                 .coreferenceWindow(2)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
         assertTrue(result.pagesProcessed() > 0);
         assertNotNull(result.patternMatches());
@@ -69,13 +71,13 @@ class PiiRedactorTest {
         byte[] bytes = PiiRedactorTest.class
                 .getResourceAsStream("/pdfs/general/minimal.pdf").readAllBytes();
 
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .normalizeFonts(false)
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(bytes, opts);
+        RedactResult result = PdfRedactor.redact(bytes, opts);
         assertNotNull(result);
         assertTrue(result.pagesProcessed() > 0);
 
@@ -84,15 +86,15 @@ class PiiRedactorTest {
 
     @Test
     void nerOnlyWithoutSemanticRedact() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .addEntity("Hello", "GREETING")
-                .semanticRedact(false) // NER only, no coreference
+                .semanticRedact(false)
                 .normalizeFonts(false)
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
         assertNotNull(result.entityMatches());
 
@@ -101,28 +103,28 @@ class PiiRedactorTest {
 
     @Test
     void stripAllMetadata() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .normalizeFonts(false)
                 .stripAllMetadata(true)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
-        assertEquals(-1, result.metadataFieldsRedacted()); // sentinel for strip-all
+        assertEquals(-1, result.metadataFieldsRedacted());
 
         result.document().close();
     }
 
     @Test
     void resultToStringIncludesStats() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .normalizeFonts(false)
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         String str = result.toString();
         assertNotNull(str);
         assertTrue(str.contains("pages="), "Should include page count");
@@ -133,7 +135,7 @@ class PiiRedactorTest {
 
     @Test
     void fontNormalizationOnlyToUnicode() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .normalizeFonts(true)
                 .fixToUnicode(true)
@@ -141,29 +143,25 @@ class PiiRedactorTest {
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
-        // Font normalization should run but only fixToUnicode pass
-        // (stub returns 0 for both, but the pipeline should not crash)
 
         result.document().close();
     }
 
     @Test
     void piiPatternsWithLuhn() throws Exception {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
-                .enablePiiPatterns(PiiPatterns.select(PiiCategory.CREDIT_CARD, PiiCategory.EMAIL))
+                .enablePiiPatterns(PiiCategory.select(PiiCategory.CREDIT_CARD, PiiCategory.EMAIL))
                 .luhnValidation(true)
                 .normalizeFonts(false)
                 .redactMetadata(false)
                 .build();
 
-        PiiRedactResult result = PiiRedactor.redact(pdfPath(), opts);
+        RedactResult result = PdfRedactor.redact(pdfPath(), opts);
         assertNotNull(result);
         assertNotNull(result.patternMatches());
-        // With real PDFium the test PDF text may not contain PII patterns;
-        // with the stub, STUB_TEXT has email/credit card. Either way, no crash.
 
         result.document().close();
     }
@@ -171,15 +169,15 @@ class PiiRedactorTest {
     @Test
     void openDocumentCanBeRedacted() throws Exception {
         try (PdfDocument doc = PdfDocument.open(pdfPath())) {
-            PiiRedactOptions opts = PiiRedactOptions.builder()
+            RedactOptions opts = RedactOptions.builder()
                     .addWord("test")
                     .normalizeFonts(false)
                     .redactMetadata(false)
                     .build();
 
-            PiiRedactResult result = PiiRedactor.redact(doc, opts);
+            RedactResult result = PdfRedactor.redact(doc, opts);
             assertNotNull(result);
-            assertSame(doc, result.document()); // Same document reference
+            assertSame(doc, result.document());
         }
     }
 }

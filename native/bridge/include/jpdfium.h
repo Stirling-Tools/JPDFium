@@ -56,7 +56,7 @@ JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int
 // Used by tests to verify that text positions are preserved after redaction.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json);
 
-// ─── Annotation-Based Redaction (Mark → Commit pattern) ───
+// Annotation-Based Redaction (Mark / Commit pattern)
 //
 // Two-phase redaction modeled after EmbedPDF's architecture:
 //   Mark phase:  Create FPDF_ANNOT_REDACT annotations (zero content mutation).

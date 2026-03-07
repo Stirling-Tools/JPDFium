@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact.pii;
 
 import stirling.software.jpdfium.panama.Pcre2Lib;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,7 +23,7 @@ import java.util.Map;
  *
  * <p><b>Usage</b></p>
  * <pre>{@code
- * try (PatternEngine engine = PatternEngine.create(PiiPatterns.all())) {
+ * try (PatternEngine engine = PatternEngine.create(PiiCategory.all())) {
  *     List<Match> matches = engine.findAll("Call John at john@example.com or 555-123-4567");
  *     for (Match m : matches) {
  *         System.out.printf("[%s] %s at %d-%d%n", m.category(), m.text(), m.start(), m.end());
@@ -72,7 +73,7 @@ public final class PatternEngine implements AutoCloseable {
      *
      * @param categoryPatterns map of category to PCRE2 regex
      * @return pattern engine instance
-     * @see PiiPatterns#all()
+     * @see PiiCategory#all()
      */
     public static PatternEngine create(Map<PiiCategory, String> categoryPatterns) {
         int flags = Pcre2Lib.PCRE2_UTF | Pcre2Lib.PCRE2_UCP;
@@ -159,32 +160,10 @@ public final class PatternEngine implements AutoCloseable {
 
     static List<Match> parseMatchesJson(String json, PiiCategory category) {
         List<Match> matches = new ArrayList<>();
-        if (json == null || json.equals("[]")) return matches;
-
-        int pos = 0;
-        while (pos < json.length()) {
-            int objStart = json.indexOf('{', pos);
-            if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
-            if (objEnd < 0) break;
-
-            String obj = json.substring(objStart + 1, objEnd);
-            pos = objEnd + 1;
-
-            int start = 0, end = 0;
-            String matchText = "";
-
-            for (String pair : obj.split(",(?=\")")) {
-                int colon = pair.indexOf(':');
-                if (colon < 0) continue;
-                String key = pair.substring(0, colon).replace("\"", "").trim();
-                String val = pair.substring(colon + 1).trim();
-                switch (key) {
-                    case "start" -> start = Integer.parseInt(val);
-                    case "end" -> end = Integer.parseInt(val);
-                    case "match" -> matchText = val.replace("\"", "");
-                }
-            }
+        for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
+            int start = Integer.parseInt(fields.getOrDefault("start", "0"));
+            int end = Integer.parseInt(fields.getOrDefault("end", "0"));
+            String matchText = fields.getOrDefault("match", "");
             matches.add(new Match(start, end, matchText, category));
         }
         return matches;

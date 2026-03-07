@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.redact.RedactOptions;
 
 import java.util.List;
 import java.util.Map;
@@ -8,7 +9,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for the advanced redaction API classes.
+ * Unit tests for the unified {@link RedactOptions} builder — PII-related fields.
  *
  * <p>Tests run against the stub native library, which provides working
  * implementations for Luhn validation and pass-through behavior for
@@ -18,7 +19,7 @@ class PiiRedactOptionsTest {
 
     @Test
     void builderCreatesValidOptions() {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("Confidential")
                 .addWord("Secret")
                 .boxColor(0xFFFF0000)
@@ -29,7 +30,7 @@ class PiiRedactOptionsTest {
                 .caseSensitive(true)
                 .convertToImage(false)
                 .imageDpi(300)
-                .enablePiiPatterns(PiiPatterns.select(PiiCategory.EMAIL, PiiCategory.PHONE))
+                .enablePiiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.PHONE))
                 .luhnValidation(true)
                 .addEntity("John Smith", "PERSON")
                 .addEntity("Acme Corp", "ORGANIZATION")
@@ -73,7 +74,7 @@ class PiiRedactOptionsTest {
 
     @Test
     void builderDefaultValues() {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .build();
 
@@ -88,14 +89,14 @@ class PiiRedactOptionsTest {
         assertTrue(opts.piiPatterns().isEmpty());
         assertTrue(opts.luhnValidation());
         assertTrue(opts.entities().isEmpty());
-        assertTrue(opts.normalizeFonts());
+        assertFalse(opts.normalizeFonts());
         assertTrue(opts.fixToUnicode());
         assertTrue(opts.repairWidths());
         assertFalse(opts.glyphAware()); // off by default (requires extras)
         assertTrue(opts.ligatureAware());
         assertTrue(opts.bidiAware());
         assertTrue(opts.graphemeSafe());
-        assertTrue(opts.redactMetadata());
+        assertFalse(opts.redactMetadata());
         assertFalse(opts.stripAllMetadata());
         assertFalse(opts.semanticRedact()); // off by default
         assertEquals(2, opts.coreferenceWindow());
@@ -103,7 +104,7 @@ class PiiRedactOptionsTest {
 
     @Test
     void listsAreImmutable() {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .addEntity("John", "PERSON")
                 .build();
@@ -111,19 +112,19 @@ class PiiRedactOptionsTest {
         assertThrows(UnsupportedOperationException.class, () ->
                 opts.words().add("another"));
         assertThrows(UnsupportedOperationException.class, () ->
-                opts.entities().add(new PiiRedactOptions.EntityEntry("x", "y")));
+                opts.entities().add(new RedactOptions.EntityEntry("x", "y")));
         assertThrows(UnsupportedOperationException.class, () ->
                 opts.metadataKeysToStrip().add("Author"));
     }
 
     @Test
     void enableAllPiiPatterns() {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .enableAllPiiPatterns()
                 .build();
 
-        Map<PiiCategory, String> all = PiiPatterns.all();
+        Map<PiiCategory, String> all = PiiCategory.all();
         assertEquals(all.size(), opts.piiPatterns().size());
         for (PiiCategory key : all.keySet()) {
             assertTrue(opts.piiPatterns().containsKey(key),
@@ -133,13 +134,13 @@ class PiiRedactOptionsTest {
 
     @Test
     void addMultipleEntitiesSameLabel() {
-        PiiRedactOptions opts = PiiRedactOptions.builder()
+        RedactOptions opts = RedactOptions.builder()
                 .addWord("test")
                 .addEntities(List.of("John Smith", "Jane Doe", "Dr. Wilson"), "PERSON")
                 .build();
 
         assertEquals(3, opts.entities().size());
-        for (PiiRedactOptions.EntityEntry e : opts.entities()) {
+        for (RedactOptions.EntityEntry e : opts.entities()) {
             assertEquals("PERSON", e.label());
         }
     }

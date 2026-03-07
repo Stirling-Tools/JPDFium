@@ -5,6 +5,7 @@ import stirling.software.jpdfium.panama.FlashTextLib;
 import stirling.software.jpdfium.panama.IcuLib;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -265,35 +266,13 @@ public final class EntityRedactor implements AutoCloseable {
 
     private record Sentence(int start, int end) {}
 
-    static List<EntityMatch> parseEntityJson(String json, int pageIndex) {
+    public static List<EntityMatch> parseEntityJson(String json, int pageIndex) {
         List<EntityMatch> matches = new ArrayList<>();
-        if (json == null || json.equals("[]")) return matches;
-
-        int pos = 0;
-        while (pos < json.length()) {
-            int objStart = json.indexOf('{', pos);
-            if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
-            if (objEnd < 0) break;
-
-            String obj = json.substring(objStart + 1, objEnd);
-            pos = objEnd + 1;
-
-            int start = 0, end = 0;
-            String keyword = "", label = "";
-
-            for (String pair : obj.split(",(?=\")")) {
-                int colon = pair.indexOf(':');
-                if (colon < 0) continue;
-                String key = pair.substring(0, colon).replace("\"", "").trim();
-                String val = pair.substring(colon + 1).trim().replace("\"", "");
-                switch (key) {
-                    case "start" -> start = Integer.parseInt(val);
-                    case "end" -> end = Integer.parseInt(val);
-                    case "keyword" -> keyword = val;
-                    case "label" -> label = val;
-                }
-            }
+        for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
+            int start = Integer.parseInt(fields.getOrDefault("start", "0"));
+            int end = Integer.parseInt(fields.getOrDefault("end", "0"));
+            String keyword = fields.getOrDefault("keyword", "");
+            String label = fields.getOrDefault("label", "");
             matches.add(new EntityMatch(pageIndex, start, end, keyword, label));
         }
         return matches;
@@ -301,29 +280,9 @@ public final class EntityRedactor implements AutoCloseable {
 
     private static List<Sentence> parseSentenceJson(String json) {
         List<Sentence> sentences = new ArrayList<>();
-        if (json == null || json.equals("[]")) return sentences;
-
-        int pos = 0;
-        while (pos < json.length()) {
-            int objStart = json.indexOf('{', pos);
-            if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
-            if (objEnd < 0) break;
-
-            String obj = json.substring(objStart + 1, objEnd);
-            pos = objEnd + 1;
-
-            int start = 0, end = 0;
-            for (String pair : obj.split(",(?=\")")) {
-                int colon = pair.indexOf(':');
-                if (colon < 0) continue;
-                String key = pair.substring(0, colon).replace("\"", "").trim();
-                String val = pair.substring(colon + 1).trim().replace("\"", "");
-                switch (key) {
-                    case "start" -> start = Integer.parseInt(val);
-                    case "end" -> end = Integer.parseInt(val);
-                }
-            }
+        for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
+            int start = Integer.parseInt(fields.getOrDefault("start", "0"));
+            int end = Integer.parseInt(fields.getOrDefault("end", "0"));
             sentences.add(new Sentence(start, end));
         }
         return sentences;

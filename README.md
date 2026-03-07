@@ -69,7 +69,7 @@ JVM flag required: `--enable-native-access=ALL-UNNAMED`
 | Layer | Components | Description |
 |---|---|---|
 | **User Application** | Your Application (Java 25) | Consuming application code |
-| **High-level Java API** | `PdfDocument`, `PdfPage`, `PdfTextExtractor`, `PdfRedactor`, `PiiRedactor` | Safe, ergonomic abstractions within the `jpdfium` module |
+| **High-level Java API** | `PdfDocument`, `PdfPage`, `PdfTextExtractor`, `PdfRedactor` | Safe, ergonomic abstractions within the `jpdfium` module |
 | **FFM Bindings** | `panama/NativeLoader`, `panama/JpdfiumH` | Auto-generated native interfaces via `java.lang.foreign` |
 | **Native Bridge** | `libjpdfium.so` | C/C++ bridge exposing targeted functions with managed handles |
 | **Core Engine** | `libpdfium.so` | Google's underlying PDFium engine |
@@ -168,7 +168,7 @@ PageOps.renderPage(doc, pageIndex, dpi)      // -> BufferedImage
 PageOps.renderAll(doc, dpi)                  // -> List<BufferedImage>
 ```
 
-### `PiiRedactor`
+### Advanced PII Redaction
 
 The PII redaction pipeline orchestrates 9 stages powered by native libraries via FFM:
 
@@ -182,11 +182,12 @@ The PII redaction pipeline orchestrates 9 stages powered by native libraries via
 8. Metadata Redaction
 9. Flatten/Image
 
+All PII features are accessed through the unified `RedactOptions` builder:
+
 ```java
 import stirling.software.jpdfium.redact.pii.PiiCategory;
-import stirling.software.jpdfium.redact.pii.PiiPatterns;
 
-PiiRedactOptions opts = PiiRedactOptions.builder()
+RedactOptions opts = RedactOptions.builder()
     // Basic word list
     .addWord("Confidential")
     .addWord("\\d{3}-\\d{2}-\\d{4}")
@@ -197,7 +198,7 @@ PiiRedactOptions opts = PiiRedactOptions.builder()
     .luhnValidation(true)             // reject false-positive credit card numbers
 
     // Or select specific categories
-    // .piiPatterns(PiiPatterns.select(PiiCategory.EMAIL, PiiCategory.SSN, PiiCategory.PHONE))
+    // .piiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN, PiiCategory.PHONE))
 
     // FlashText NER: O(n) dictionary entity matching
     .addEntity("John Smith", "PERSON")
@@ -228,14 +229,13 @@ PiiRedactOptions opts = PiiRedactOptions.builder()
     .convertToImage(true)
     .build();
 
-PiiRedactResult result = PiiRedactor.redact(Path.of("input.pdf"), opts);
+RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), opts);
 try (var doc = result.document()) {
     doc.save(Path.of("output.pdf"));
 }
 
-System.out.printf("Redacted %d total: %d words, %d patterns, %d entities, %d glyphs, %d metadata%n",
-    result.totalRedactions(), result.totalWordMatches(), result.patternMatches().size(),
-    result.entityMatches().size(), result.glyphRedactMatches(), result.metadataFieldsRedacted());
+System.out.printf("Redacted %d total matches across %d pages%n",
+    result.totalMatches(), result.pagesProcessed());
 ```
 
 #### PII Redaction Components
@@ -243,7 +243,7 @@ System.out.printf("Redacted %d total: %d words, %d patterns, %d entities, %d gly
 | Component | Class | Native Library | Purpose |
 |-----------|-------|----------------|----------|
 | **Pattern Engine** | `PatternEngine` | PCRE2 (JIT) | Lookaheads, `\b`, Unicode `\w`, named groups, Luhn post-validation |
-| **PII Patterns** | `PiiPatterns` | - | Pre-built PCRE2 regexes via `PiiCategory` enum: EMAIL, PHONE, SSN, CREDIT_CARD, IBAN, IP, DATE |
+| **PII Categories** | `PiiCategory` | - | Enum with built-in PCRE2 regexes: EMAIL, PHONE, SSN, CREDIT_CARD, IBAN, IP, DATE |
 | **NER** | `EntityRedactor` | FlashText (C++ trie) | O(n) dictionary entity matching with coreference expansion |
 | **Glyph Redaction** | `GlyphRedactor` | HarfBuzz + ICU4C | Ligature/BiDi/grapheme-safe redaction with cluster mapping |
 | **Font Normalization** | `FontNormalizer` | FreeType + HarfBuzz + qpdf | /ToUnicode CMap repair, /W table fix, re-subsetting, Type1->OTF |
@@ -304,7 +304,7 @@ bash native/build-real.sh
 ./gradlew :jpdfium:integrationTest
 ```
 
-`build-real.sh` uses CMake to compile `jpdfium_document.cpp` + `jpdfium_advanced.cpp` against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
+`build-real.sh` uses CMake to compile the native bridge (`jpdfium_document.cpp`, `jpdfium_render.cpp`, `jpdfium_text.cpp`, `jpdfium_redact.cpp`, `jpdfium_advanced.cpp`) against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
 
 ### Regenerate FFM Bindings (after changing `jpdfium.h`)
 
@@ -336,13 +336,9 @@ jpdfium/src/test/java/stirling/software/jpdfium/samples/
 ├── S01_Render.java          -> samples-output/render/page-N.png
 ├── S02_TextExtract.java     -> samples-output/text-extract/report.txt
 ├── S03_TextSearch.java      -> stdout
-├── S04_RedactRegion.java    -> samples-output/redact-region/output.pdf
-├── S05_RedactPattern.java   -> samples-output/redact-pattern/output.pdf
 ├── S06_RedactWords.java     -> samples-output/redact-words/output.pdf
-├── S07_SecureRedact.java    -> samples-output/secure-redact/output.pdf
 ├── S08_FullPipeline.java    -> samples-output/full-pipeline/
 ├── S09_Flatten.java         -> samples-output/flatten/
-├── S10_PiiRedact.java       -> samples-output/pii-redact/
 └── RunAllSamples.java       -> all of the above (smoke test)
 ```
 
@@ -365,7 +361,7 @@ True redaction requires more than painting a black rectangle. JPDFium implements
 
 ### How it works
 
-1. **Spatial correlation** - each text-page character index is mapped to its owning `FPDF_PAGEOBJECT` by comparing character bounding-box centres against page-object bounding boxes. Characters with degenerate bounding boxes (synthetic spaces) are assigned to their nearest neighbor's object.
+1. **Direct char-to-object mapping** - each text-page character index is mapped to its owning `FPDF_PAGEOBJECT` via `FPDFText_GetTextObject` (PDFium's direct API). Characters with no direct mapping (synthetic spaces) are assigned to their nearest neighbor's object.
 2. **Object classification** - for every text object that contains redacted characters:
    - *Fully contained* -> the entire object is destroyed.
    - *Partially overlapping* -> **Object Fission**: the surviving (non-redacted) characters are split into per-word fragments. Each word becomes an independent text object with:

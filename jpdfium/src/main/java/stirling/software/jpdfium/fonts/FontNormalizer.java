@@ -2,6 +2,7 @@ package stirling.software.jpdfium.fonts;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.FontLib;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
@@ -184,15 +185,14 @@ public final class FontNormalizer {
                                       boolean isSubset, String family) {}
 
     private static Result parseResultJson(String json) {
-        int fp = 0, tf = 0, wr = 0, tc = 0, rs = 0;
-        if (json != null && !json.isEmpty()) {
-            fp = parseIntField(json, "fonts_processed");
-            tf = parseIntField(json, "tounicode_fixed");
-            wr = parseIntField(json, "widths_repaired");
-            tc = parseIntField(json, "type1_converted");
-            rs = parseIntField(json, "resubset");
-        }
-        return new Result(fp, tf, wr, tc, rs);
+        if (json == null || json.isEmpty()) return new Result(0, 0, 0, 0, 0);
+        return new Result(
+                NativeJsonParser.intField(json, "fonts_processed"),
+                NativeJsonParser.intField(json, "tounicode_fixed"),
+                NativeJsonParser.intField(json, "widths_repaired"),
+                NativeJsonParser.intField(json, "type1_converted"),
+                NativeJsonParser.intField(json, "resubset")
+        );
     }
 
     private static FontClassification parseClassificationJson(String json) {
@@ -200,41 +200,14 @@ public final class FontNormalizer {
             return new FontClassification("unknown", false, false, 0, 0, false, false, "");
         }
         return new FontClassification(
-                parseStringField(json, "type"),
-                parseBoolField(json, "sfnt"),
-                parseBoolField(json, "has_cmap"),
-                parseIntField(json, "num_glyphs"),
-                parseIntField(json, "units_per_em"),
-                parseBoolField(json, "has_kerning"),
-                parseBoolField(json, "is_subset"),
-                parseStringField(json, "family")
+                NativeJsonParser.stringField(json, "type"),
+                NativeJsonParser.boolField(json, "sfnt"),
+                NativeJsonParser.boolField(json, "has_cmap"),
+                NativeJsonParser.intField(json, "num_glyphs"),
+                NativeJsonParser.intField(json, "units_per_em"),
+                NativeJsonParser.boolField(json, "has_kerning"),
+                NativeJsonParser.boolField(json, "is_subset"),
+                NativeJsonParser.stringField(json, "family")
         );
-    }
-
-    private static int parseIntField(String json, String key) {
-        String needle = "\"" + key + "\":";
-        int idx = json.indexOf(needle);
-        if (idx < 0) return 0;
-        idx += needle.length();
-        int end = idx;
-        while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
-        if (end == idx) return 0;
-        return Integer.parseInt(json.substring(idx, end));
-    }
-
-    private static boolean parseBoolField(String json, String key) {
-        String needle = "\"" + key + "\":";
-        int idx = json.indexOf(needle);
-        if (idx < 0) return false;
-        return json.indexOf("true", idx + needle.length()) == idx + needle.length();
-    }
-
-    private static String parseStringField(String json, String key) {
-        String needle = "\"" + key + "\":\"";
-        int idx = json.indexOf(needle);
-        if (idx < 0) return "";
-        idx += needle.length();
-        int end = json.indexOf('"', idx);
-        return end > idx ? json.substring(idx, end) : "";
     }
 }

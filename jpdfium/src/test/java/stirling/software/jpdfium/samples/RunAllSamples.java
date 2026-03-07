@@ -36,18 +36,13 @@ public class RunAllSamples {
         passed += run("S01_Render",        () -> S01_Render.main(a));
         passed += run("S02_TextExtract",   () -> S02_TextExtract.main(a));
         passed += run("S03_TextSearch",    () -> S03_TextSearch.main(a));
-        passed += run("S04_RedactRegion",  () -> S04_RedactRegion.main(a));
-        passed += run("S05_RedactPattern", () -> S05_RedactPattern.main(a));
-        passed += run("S06_RedactWords",   () -> S06_RedactWords.main(a));
-        passed += run("S07_SecureRedact",  () -> S07_SecureRedact.main(a));
+        passed += run("S06_Redact",        () -> S06_RedactWords.main(a));
         passed += run("S08_FullPipeline",  () -> S08_FullPipeline.main(a));
         passed += run("S09_Flatten",       () -> S09_Flatten.main(a));
-        passed += run("S10_PiiRedact",     () -> S10_PiiRedact.main(a));
-        passed += run("S11_FontNormRedact",() -> S11_FontNormRedact.main(a));
-        passed += run("S12_TwoPhaseRedact",() -> S12_TwoPhaseRedact.main(a));
 
+        int total = 6;
         System.out.println("\n==================================================");
-        System.out.printf("Results: %d/%d samples passed%n", passed, 12);
+        System.out.printf("Results: %d/%d samples passed%n", passed, total);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
         System.out.println("==================================================");
     }

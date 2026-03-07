@@ -1,11 +1,13 @@
 package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.redact.pii.PiiCategory;
+
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for {@link RedactOptions}.
+ * Unit tests for the unified {@link RedactOptions}.
  */
 class RedactOptionsTest {
 
@@ -55,12 +57,39 @@ class RedactOptionsTest {
         assertEquals(150, opts.imageDpi());
         assertFalse(opts.incrementalSave());
         assertFalse(opts.normalizeFonts());
+        assertTrue(opts.piiPatterns().isEmpty());
+        assertTrue(opts.entities().isEmpty());
+        assertFalse(opts.glyphAware());
+        assertFalse(opts.redactMetadata());
+        assertFalse(opts.stripAllMetadata());
+        assertFalse(opts.semanticRedact());
     }
 
     @Test
-    void builderRejectsEmptyWordList() {
+    void builderRejectsEmptyEverything() {
         assertThrows(IllegalStateException.class, () ->
                 RedactOptions.builder().build());
+    }
+
+    @Test
+    void builderAcceptsPiiPatternsOnly() {
+        RedactOptions opts = RedactOptions.builder()
+                .enableAllPiiPatterns()
+                .build();
+
+        assertTrue(opts.words().isEmpty());
+        assertFalse(opts.piiPatterns().isEmpty());
+    }
+
+    @Test
+    void builderAcceptsEntitiesOnly() {
+        RedactOptions opts = RedactOptions.builder()
+                .addEntity("John Smith", "PERSON")
+                .build();
+
+        assertTrue(opts.words().isEmpty());
+        assertEquals(1, opts.entities().size());
+        assertEquals("John Smith", opts.entities().get(0).keyword());
     }
 
     @Test
@@ -107,6 +136,52 @@ class RedactOptionsTest {
     }
 
     @Test
+    void piiPatternOptions() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("test")
+                .enablePiiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN))
+                .luhnValidation(false)
+                .build();
+
+        assertEquals(2, opts.piiPatterns().size());
+        assertFalse(opts.luhnValidation());
+    }
+
+    @Test
+    void glyphAndMetadataOptions() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("test")
+                .glyphAware(true)
+                .ligatureAware(false)
+                .bidiAware(false)
+                .graphemeSafe(false)
+                .redactMetadata(true)
+                .stripMetadataKeys("Author", "Title")
+                .build();
+
+        assertTrue(opts.glyphAware());
+        assertFalse(opts.ligatureAware());
+        assertFalse(opts.bidiAware());
+        assertFalse(opts.graphemeSafe());
+        assertTrue(opts.redactMetadata());
+        assertEquals(2, opts.metadataKeysToStrip().size());
+    }
+
+    @Test
+    void semanticOptions() {
+        RedactOptions opts = RedactOptions.builder()
+                .addWord("test")
+                .semanticRedact(true)
+                .coreferenceWindow(3)
+                .addCoreferencePronouns("he", "she")
+                .build();
+
+        assertTrue(opts.semanticRedact());
+        assertEquals(3, opts.coreferenceWindow());
+        assertEquals(2, opts.coreferencePronouns().size());
+    }
+
+    @Test
     void allOptionsSetExplicitly() {
         RedactOptions opts = RedactOptions.builder()
                 .addWord("word")
@@ -120,11 +195,21 @@ class RedactOptionsTest {
                 .imageDpi(300)
                 .incrementalSave(true)
                 .normalizeFonts(true)
+                .fixToUnicode(true)
+                .repairWidths(true)
+                .enableAllPiiPatterns()
+                .glyphAware(true)
+                .redactMetadata(true)
+                .semanticRedact(true)
                 .build();
 
         assertTrue(opts.incrementalSave());
         assertTrue(opts.normalizeFonts());
         assertTrue(opts.convertToImage());
         assertTrue(opts.useRegex());
+        assertTrue(opts.glyphAware());
+        assertTrue(opts.redactMetadata());
+        assertTrue(opts.semanticRedact());
+        assertFalse(opts.piiPatterns().isEmpty());
     }
 }

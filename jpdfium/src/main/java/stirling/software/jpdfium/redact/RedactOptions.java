@@ -1,20 +1,26 @@
 package stirling.software.jpdfium.redact;
 
+import stirling.software.jpdfium.redact.pii.PiiCategory;
+
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Configuration for PDF redaction operations.
- * Mirrors Stirling-PDF's auto-redact feature set:
+ * Unified configuration for all PDF redaction operations.
  *
+ * <p>Covers every redaction capability in a single builder:
  * <ul>
- *   <li>Word list - multiple words/phrases to redact</li>
- *   <li>Box color - fill color for redaction rectangles</li>
- *   <li>Custom padding - extra space around matched text</li>
- *   <li>Regex mode - treat words as regex patterns</li>
- *   <li>Whole word search - only match complete words</li>
- *   <li>Convert to PDF-Image - re-render pages as images (most secure)</li>
+ *   <li>Word / regex list redaction (Object Fission)</li>
+ *   <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, …)</li>
+ *   <li>Named-entity recognition (FlashText NER)</li>
+ *   <li>Glyph-level redaction (HarfBuzz ligature / BiDi / grapheme aware)</li>
+ *   <li>Font normalization (/ToUnicode + /W repair)</li>
+ *   <li>XMP / /Info metadata redaction</li>
+ *   <li>Semantic coreference expansion</li>
+ *   <li>Convert-to-image (maximum security)</li>
  * </ul>
  *
  * <p><b>Usage Example</b></p>
@@ -22,16 +28,21 @@ import java.util.List;
  * RedactOptions opts = RedactOptions.builder()
  *     .addWord("Confidential")
  *     .addWord("Top-Secret")
- *     .boxColor(0xFF000000)   // black
- *     .padding(2.0f)          // 2pt padding around each match
- *     .wholeWord(true)
- *     .convertToImage(true)   // most secure
- *     .imageDpi(150)
+ *     .enablePiiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN))
+ *     .normalizeFonts(true)
+ *     .redactMetadata(true)
+ *     .boxColor(0xFF000000)
+ *     .padding(1.5f)
  *     .build();
+ *
+ * RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), opts);
+ * result.document().save(Path.of("redacted.pdf"));
+ * result.document().close();
  * }</pre>
  */
 public final class RedactOptions {
 
+    // --- Core ---
     private final List<String> words;
     private final int boxColor;
     private final float padding;
@@ -39,10 +50,41 @@ public final class RedactOptions {
     private final boolean wholeWord;
     private final boolean removeContent;
     private final boolean caseSensitive;
+
+    // --- Image conversion ---
     private final boolean convertToImage;
     private final int imageDpi;
+
+    // --- Save ---
     private final boolean incrementalSave;
+
+    // --- Font normalization ---
     private final boolean normalizeFonts;
+    private final boolean fixToUnicode;
+    private final boolean repairWidths;
+
+    // --- PII patterns ---
+    private final Map<PiiCategory, String> piiPatterns;
+    private final boolean luhnValidation;
+
+    // --- NER ---
+    private final List<EntityEntry> entities;
+
+    // --- Glyph-level ---
+    private final boolean glyphAware;
+    private final boolean ligatureAware;
+    private final boolean bidiAware;
+    private final boolean graphemeSafe;
+
+    // --- Metadata ---
+    private final boolean redactMetadata;
+    private final boolean stripAllMetadata;
+    private final List<String> metadataKeysToStrip;
+
+    // --- Semantic ---
+    private final boolean semanticRedact;
+    private final int coreferenceWindow;
+    private final List<String> coreferencePronouns;
 
     private RedactOptions(Builder b) {
         this.words = Collections.unmodifiableList(new ArrayList<>(b.words));
@@ -56,7 +98,24 @@ public final class RedactOptions {
         this.imageDpi = b.imageDpi;
         this.incrementalSave = b.incrementalSave;
         this.normalizeFonts = b.normalizeFonts;
+        this.fixToUnicode = b.fixToUnicode;
+        this.repairWidths = b.repairWidths;
+        this.piiPatterns = Collections.unmodifiableMap(new EnumMap<>(b.piiPatterns));
+        this.luhnValidation = b.luhnValidation;
+        this.entities = Collections.unmodifiableList(new ArrayList<>(b.entities));
+        this.glyphAware = b.glyphAware;
+        this.ligatureAware = b.ligatureAware;
+        this.bidiAware = b.bidiAware;
+        this.graphemeSafe = b.graphemeSafe;
+        this.redactMetadata = b.redactMetadata;
+        this.stripAllMetadata = b.stripAllMetadata;
+        this.metadataKeysToStrip = Collections.unmodifiableList(new ArrayList<>(b.metadataKeysToStrip));
+        this.semanticRedact = b.semanticRedact;
+        this.coreferenceWindow = b.coreferenceWindow;
+        this.coreferencePronouns = Collections.unmodifiableList(new ArrayList<>(b.coreferencePronouns));
     }
+
+    // --- Accessors ---
 
     public List<String> words() { return words; }
     public int boxColor() { return boxColor; }
@@ -69,23 +128,75 @@ public final class RedactOptions {
     public int imageDpi() { return imageDpi; }
     public boolean incrementalSave() { return incrementalSave; }
     public boolean normalizeFonts() { return normalizeFonts; }
+    public boolean fixToUnicode() { return fixToUnicode; }
+    public boolean repairWidths() { return repairWidths; }
+    public Map<PiiCategory, String> piiPatterns() { return piiPatterns; }
+    public boolean luhnValidation() { return luhnValidation; }
+    public List<EntityEntry> entities() { return entities; }
+    public boolean glyphAware() { return glyphAware; }
+    public boolean ligatureAware() { return ligatureAware; }
+    public boolean bidiAware() { return bidiAware; }
+    public boolean graphemeSafe() { return graphemeSafe; }
+    public boolean redactMetadata() { return redactMetadata; }
+    public boolean stripAllMetadata() { return stripAllMetadata; }
+    public List<String> metadataKeysToStrip() { return metadataKeysToStrip; }
+    public boolean semanticRedact() { return semanticRedact; }
+    public int coreferenceWindow() { return coreferenceWindow; }
+    public List<String> coreferencePronouns() { return coreferencePronouns; }
+
+    /** Entity entry for NER dictionary. */
+    public record EntityEntry(String keyword, String label) {}
 
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
+        // Core
         private final List<String> words = new ArrayList<>();
-        private int boxColor = 0xFF000000;  // black, fully opaque
+        private int boxColor = 0xFF000000;
         private float padding = 0.0f;
         private boolean useRegex = false;
         private boolean wholeWord = false;
         private boolean removeContent = true;
         private boolean caseSensitive = false;
+
+        // Image
         private boolean convertToImage = false;
         private int imageDpi = 150;
+
+        // Save
         private boolean incrementalSave = false;
+
+        // Font normalization
         private boolean normalizeFonts = false;
+        private boolean fixToUnicode = true;
+        private boolean repairWidths = true;
+
+        // PII
+        private final Map<PiiCategory, String> piiPatterns = new EnumMap<>(PiiCategory.class);
+        private boolean luhnValidation = true;
+
+        // NER
+        private final List<EntityEntry> entities = new ArrayList<>();
+
+        // Glyph
+        private boolean glyphAware = false;
+        private boolean ligatureAware = true;
+        private boolean bidiAware = true;
+        private boolean graphemeSafe = true;
+
+        // Metadata
+        private boolean redactMetadata = false;
+        private boolean stripAllMetadata = false;
+        private final List<String> metadataKeysToStrip = new ArrayList<>();
+
+        // Semantic
+        private boolean semanticRedact = false;
+        private int coreferenceWindow = 2;
+        private final List<String> coreferencePronouns = new ArrayList<>();
 
         private Builder() {}
+
+        // --- Core ---
 
         /** Add a word or pattern to the redaction list. */
         public Builder addWord(String word) {
@@ -117,30 +228,107 @@ public final class RedactOptions {
         /** If true, match case-sensitively; if false, ignore case (default: false). */
         public Builder caseSensitive(boolean v) { this.caseSensitive = v; return this; }
 
-        /**
-         * If true, convert each processed page to an image-based page after redaction.
-         * This is the most secure option - no text or metadata survives. (Default: false.)
-         */
+        // --- Image ---
+
+        /** Convert each page to an image after redaction (most secure, default: false). */
         public Builder convertToImage(boolean v) { this.convertToImage = v; return this; }
 
         /** DPI for image conversion (default: 150). Only used if convertToImage is true. */
         public Builder imageDpi(int dpi) { this.imageDpi = dpi; return this; }
 
-        /**
-         * If true, use incremental save (writes only changed objects).
-         * The document remains valid after save. (Default: false.)
-         */
+        // --- Save ---
+
+        /** If true, use incremental save (default: false). */
         public Builder incrementalSave(boolean v) { this.incrementalSave = v; return this; }
 
-        /**
-         * If true, run the font normalization pipeline before redaction.
-         * Fixes broken /ToUnicode maps and /W glyph widths that cause
-         * text extraction failures and missed redactions. (Default: false.)
-         */
+        // --- Font normalization ---
+
+        /** Run the font normalization pipeline before redaction (default: false). */
         public Builder normalizeFonts(boolean v) { this.normalizeFonts = v; return this; }
 
+        /** Fix broken /ToUnicode maps (default: true, only used if normalizeFonts is true). */
+        public Builder fixToUnicode(boolean v) { this.fixToUnicode = v; return this; }
+
+        /** Repair /W glyph widths (default: true, only used if normalizeFonts is true). */
+        public Builder repairWidths(boolean v) { this.repairWidths = v; return this; }
+
+        // --- PII patterns ---
+
+        /** Enable a set of PCRE2 JIT PII patterns. */
+        public Builder enablePiiPatterns(Map<PiiCategory, String> patterns) {
+            this.piiPatterns.putAll(patterns);
+            return this;
+        }
+
+        /** Enable all built-in PII patterns. */
+        public Builder enableAllPiiPatterns() {
+            return enablePiiPatterns(PiiCategory.all());
+        }
+
+        /** Enable Luhn checksum validation for credit card patterns (default: true). */
+        public Builder luhnValidation(boolean v) { this.luhnValidation = v; return this; }
+
+        // --- NER ---
+
+        /** Add a named entity for FlashText NER dictionary matching. */
+        public Builder addEntity(String keyword, String label) {
+            entities.add(new EntityEntry(keyword, label));
+            return this;
+        }
+
+        /** Add multiple entities with the same label. */
+        public Builder addEntities(List<String> keywords, String label) {
+            keywords.forEach(k -> addEntity(k, label));
+            return this;
+        }
+
+        // --- Glyph-level ---
+
+        /** Enable HarfBuzz-aware glyph-level redaction (default: false). */
+        public Builder glyphAware(boolean v) { this.glyphAware = v; return this; }
+
+        /** Ligature-aware shaping (default: true, only used if glyphAware is true). */
+        public Builder ligatureAware(boolean v) { this.ligatureAware = v; return this; }
+
+        /** BiDi-aware layout (default: true, only used if glyphAware is true). */
+        public Builder bidiAware(boolean v) { this.bidiAware = v; return this; }
+
+        /** Grapheme-safe cluster boundaries (default: true, only used if glyphAware is true). */
+        public Builder graphemeSafe(boolean v) { this.graphemeSafe = v; return this; }
+
+        // --- Metadata ---
+
+        /** Redact matching words/patterns from XMP and /Info metadata (default: false). */
+        public Builder redactMetadata(boolean v) { this.redactMetadata = v; return this; }
+
+        /** Strip ALL metadata (overrides redactMetadata, default: false). */
+        public Builder stripAllMetadata(boolean v) { this.stripAllMetadata = v; return this; }
+
+        /** Strip specific metadata keys from XMP and /Info. */
+        public Builder stripMetadataKeys(String... keys) {
+            metadataKeysToStrip.addAll(List.of(keys));
+            return this;
+        }
+
+        // --- Semantic ---
+
+        /** Enable semantic coreference expansion (default: false). */
+        public Builder semanticRedact(boolean v) { this.semanticRedact = v; return this; }
+
+        /** Coreference window size in sentences (default: 2). */
+        public Builder coreferenceWindow(int n) { this.coreferenceWindow = n; return this; }
+
+        /** Add pronouns for coreference resolution. */
+        public Builder addCoreferencePronouns(String... pronouns) {
+            coreferencePronouns.addAll(List.of(pronouns));
+            return this;
+        }
+
         public RedactOptions build() {
-            if (words.isEmpty()) throw new IllegalStateException("At least one word is required");
+            if (words.isEmpty() && piiPatterns.isEmpty() && entities.isEmpty()) {
+                throw new IllegalStateException(
+                        "At least one word, PII pattern, or NER entity is required");
+            }
             return new RedactOptions(this);
         }
     }

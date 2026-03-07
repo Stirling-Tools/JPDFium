@@ -2,12 +2,13 @@ package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.fonts.FontNormalizer;
+import stirling.software.jpdfium.redact.RedactResult;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Tests for {@link PiiRedactResult} (pure Java, no native dependency). */
+/** Tests for unified {@link RedactResult} advanced fields (pure Java, no native dependency). */
 class PiiRedactResultTest {
 
     @Test
@@ -25,8 +26,10 @@ class PiiRedactResultTest {
 
     @Test
     void nullListsBecomeSafeEmptyLists() {
-        var result = new PiiRedactResult(
-                null, 100L, 5, 10,
+        var result = new RedactResult(
+                null,
+                List.of(new RedactResult.PageResult(0, 5, 10)),
+                100L, false,
                 new FontNormalizer.Result(0, 0, 0, 0, 0),
                 null, null, 0, 0, null);
         assertNotNull(result.patternMatches());
@@ -41,8 +44,8 @@ class PiiRedactResultTest {
     void accessorMethods() {
         var result = createResult(10, 0, 0, 0, 0);
         assertTrue(result.durationMs() >= 0);
-        assertEquals(5, result.pagesProcessed());
-        assertEquals(10, result.totalWordMatches());
+        assertEquals(1, result.pagesProcessed());
+        assertEquals(10, result.totalMatches());
         assertNotNull(result.fontNormalization());
     }
 
@@ -54,8 +57,8 @@ class PiiRedactResultTest {
         assertFalse(s.isEmpty());
     }
 
-    private PiiRedactResult createResult(int words, int patterns, int entities,
-                                          int glyphs, int metadata) {
+    private RedactResult createResult(int words, int patterns, int entities,
+                                       int glyphs, int metadata) {
         List<PatternEngine.Match> patternList = new java.util.ArrayList<>();
         for (int i = 0; i < patterns; i++) {
             patternList.add(new PatternEngine.Match(i, i + 5, "test" + i, null));
@@ -64,8 +67,10 @@ class PiiRedactResultTest {
         for (int i = 0; i < entities; i++) {
             entityList.add(new EntityRedactor.EntityMatch(0, i, i + 5, "entity" + i, "PERSON"));
         }
-        return new PiiRedactResult(
-                null, 100L, 5, words,
+        // Use a single PageResult carrying the word-match count
+        var pageResults = List.of(new RedactResult.PageResult(0, words, words));
+        return new RedactResult(
+                null, pageResults, 100L, false,
                 new FontNormalizer.Result(1, 0, 0, 0, 0),
                 patternList, entityList, glyphs, metadata,
                 List.of());

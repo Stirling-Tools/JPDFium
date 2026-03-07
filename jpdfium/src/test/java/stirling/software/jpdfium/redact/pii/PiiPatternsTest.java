@@ -10,7 +10,7 @@ class PiiPatternsTest {
 
     @Test
     void allPatternsAreNonEmpty() {
-        Map<PiiCategory, String> all = PiiPatterns.all();
+        Map<PiiCategory, String> all = PiiCategory.all();
         assertFalse(all.isEmpty());
 
         for (Map.Entry<PiiCategory, String> entry : all.entrySet()) {
@@ -22,7 +22,7 @@ class PiiPatternsTest {
 
     @Test
     void selectSubsetOfPatterns() {
-        Map<PiiCategory, String> subset = PiiPatterns.select(PiiCategory.EMAIL, PiiCategory.SSN, PiiCategory.PHONE);
+        Map<PiiCategory, String> subset = PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN, PiiCategory.PHONE);
         assertEquals(3, subset.size());
         assertTrue(subset.containsKey(PiiCategory.EMAIL));
         assertTrue(subset.containsKey(PiiCategory.SSN));
@@ -31,13 +31,13 @@ class PiiPatternsTest {
 
     @Test
     void selectEmptyCategoriesReturnsEmpty() {
-        Map<PiiCategory, String> empty = PiiPatterns.select();
+        Map<PiiCategory, String> empty = PiiCategory.select();
         assertTrue(empty.isEmpty());
     }
 
     @Test
     void combinedProducesNonEmptyPattern() {
-        String combined = PiiPatterns.combined();
+        String combined = PiiCategory.combined();
         assertNotNull(combined);
         assertFalse(combined.isBlank());
         assertTrue(combined.contains("?P<"), "Should contain named capture groups");
@@ -45,7 +45,7 @@ class PiiPatternsTest {
 
     @Test
     void allPatternsContainExpectedCategories() {
-        Map<PiiCategory, String> all = PiiPatterns.all();
+        Map<PiiCategory, String> all = PiiCategory.all();
         assertTrue(all.containsKey(PiiCategory.EMAIL));
         assertTrue(all.containsKey(PiiCategory.PHONE));
         assertTrue(all.containsKey(PiiCategory.SSN));
@@ -56,22 +56,22 @@ class PiiPatternsTest {
     }
 
     @Test
-    void emailPatternHasBasicRegexStructure() {
-        String email = PiiPatterns.EMAIL;
+    void enumCarriesPatternDirectly() {
+        String email = PiiCategory.EMAIL.pattern();
         assertNotNull(email);
         assertTrue(email.contains("@"), "Email pattern should reference @ sign");
     }
 
     @Test
     void ssnPatternHasExpectedFormat() {
-        String ssn = PiiPatterns.SSN;
+        String ssn = PiiCategory.SSN.pattern();
         assertNotNull(ssn);
         assertTrue(ssn.contains("\\d"), "SSN pattern should match digits");
     }
 
     @Test
     void allMapIsImmutable() {
-        Map<PiiCategory, String> all = PiiPatterns.all();
+        Map<PiiCategory, String> all = PiiCategory.all();
         assertThrows(UnsupportedOperationException.class, () ->
                 all.put(PiiCategory.EMAIL, "pattern"));
     }
