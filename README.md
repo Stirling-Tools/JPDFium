@@ -23,6 +23,10 @@ Java 25's Foreign Function & Memory (FFM) API.
 - **Structure Tree** - Accessibility tagged structure (headings, paragraphs, tables) traversal
 - **Page Import/Export** - Import pages between documents, copy viewer preferences, delete pages
 - **Page Editing** - Create/modify page objects (text, rectangles, paths), set colors/transforms
+- **PDF to Images** - Convert pages to PNG, JPEG, TIFF, WEBP, BMP with configurable DPI and quality
+- **Images to PDF** - Combine images into PDFs (scanner workflow, photo albums) with page size and positioning options
+- **N-up Layout** - Tile multiple pages onto one sheet (2-up, 4-up, 6-up, 9-up) for booklet printing
+- **PDF Repair** - Multi-stage cascade repair: Brotli transcoding, qpdf recovery, PDFio fallback, ICC/JPX validation
 - **Secure PDF-Image** - Convert pages to rasterized images, stripping all selectable text and vector content
 - **Cross-Platform** - Linux x64/arm64, macOS x64/arm64, Windows x64
 - **Zero JNI** - Pure FFM (`java.lang.foreign`), no JNI boilerplate
@@ -308,6 +312,71 @@ PageOps.renderPage(doc, pageIndex, dpi)      // -> BufferedImage
 PageOps.renderAll(doc, dpi)                  // -> List<BufferedImage>
 ```
 
+### `PdfImageConverter`
+```java
+// PDF to images (PNG, JPEG, TIFF, WEBP, BMP)
+PdfToImageOptions opts = PdfToImageOptions.builder()
+    .format(ImageFormat.PNG)
+    .dpi(300)
+    .quality(90)
+    .transparent(false)
+    .pages(Set.of(0, 1, 2))   // specific pages
+    .build();
+List<Path> files = PdfImageConverter.pdfToImages(doc, opts, outputDir);
+
+// Single page to bytes (for web APIs)
+byte[] jpeg = PdfImageConverter.pageToBytes(doc, 0, 150, ImageFormat.JPEG, 85, false);
+
+// Thumbnail generation
+byte[] thumb = PdfImageConverter.thumbnail(doc, 0, 200, ImageFormat.JPEG);
+
+// Images to PDF (scanner workflow, photo albums)
+ImageToPdfOptions imgOpts = ImageToPdfOptions.builder()
+    .pageSize(PageSize.A4)
+    .position(Position.CENTER)
+    .margin(36)
+    .compress(true)
+    .imageQuality(85)
+    .autoRotate(true)
+    .build();
+PdfDocument doc = PdfImageConverter.imagesToPdfFromImages(images, imgOpts);
+```
+
+### `PdfRepair`
+```java
+// Inspect PDF for damage (non-destructive)
+String diagnostics = PdfRepair.inspect(pdfBytes);
+
+// Full repair cascade: Brotli -> qpdf -> PDFio fallback -> ICC/JPX validation
+RepairResult result = PdfRepair.builder()
+    .input(pdfBytes)
+    .all()                          // enable all repair stages
+    .writeDiagnostics(true)         // include JSON diagnostics
+    .build()
+    .execute();
+
+if (result.isUsable()) {
+    byte[] repaired = result.repairedPdf();
+    System.out.println("Status: " + result.status());
+    System.out.println("Diagnostics: " + result.diagnosticJson());
+}
+```
+
+### `NUpLayout`
+```java
+// Four-up on A4 landscape
+NUpLayout.from(doc).grid(2, 2).a4Landscape().build().save(outputPath);
+
+// Six-up on US Letter landscape
+NUpLayout.from(doc).grid(3, 2).letterLandscape().build().save(outputPath);
+
+// Custom page size (A3 landscape: 1190 x 842 pt)
+NUpLayout.from(doc).grid(4, 2).pageSize(1190, 842).build().save(outputPath);
+
+// Get as bytes instead of saving
+byte[] pdf = NUpLayout.from(doc).grid(2, 2).a4Landscape().build().toBytes();
+```
+
 ### Advanced PII Redaction
 
 The PII redaction pipeline orchestrates 9 stages powered by native libraries via FFM:
@@ -401,7 +470,7 @@ All libraries are MIT or Apache-2.0 compatible:
 | [ICU4C](https://icu.unicode.org/) | Unicode License | NFC normalization, BiDi reordering, sentence segmentation |
 | [qpdf](https://qpdf.sourceforge.io/) | Apache-2.0 | PDF structure manipulation, stream replacement |
 | [pugixml](https://pugixml.org/) | MIT | XMP metadata XML parsing |
-| [libunibreak](https://github.com/nicowilliams/libunibreak) | zlib | Grapheme cluster boundaries |
+| [libunibreak](https://github.com/adah1972/libunibreak) | zlib | Grapheme cluster boundaries |
 
 ## Building
 
@@ -444,7 +513,7 @@ bash native/build-real.sh
 ./gradlew :jpdfium:integrationTest
 ```
 
-`build-real.sh` uses CMake to compile the native bridge (`jpdfium_document.cpp`, `jpdfium_render.cpp`, `jpdfium_text.cpp`, `jpdfium_redact.cpp`, `jpdfium_advanced.cpp`) against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
+`build-real.sh` uses CMake to compile the native bridge against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. The bridge consists of multiple source files: `jpdfium_document.cpp` (core document operations), `jpdfium_render.cpp` (rendering), `jpdfium_text.cpp` (text extraction), `jpdfium_redact.cpp` (redaction), `jpdfium_advanced.cpp` (PII pipeline), `jpdfium_repair.cpp` (PDF repair), `jpdfium_image.cpp` (image conversion), plus supporting modules for Brotli, ICC, OpenJPEG, PDFio, and Unicode handling. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
 
 ### Regenerate FFM Bindings (after changing `jpdfium.h`)
 
@@ -476,9 +545,24 @@ jpdfium/src/test/java/stirling/software/jpdfium/samples/
 ├── S01_Render.java          -> samples-output/render/page-N.png
 ├── S02_TextExtract.java     -> samples-output/text-extract/report.txt
 ├── S03_TextSearch.java      -> stdout
+├── S04_Metadata.java        -> stdout (document metadata)
+├── S05_Bookmarks.java       -> stdout (outline tree)
 ├── S06_RedactWords.java     -> samples-output/redact-words/output.pdf
+├── S07_Annotations.java     -> stdout (annotation list)
 ├── S08_FullPipeline.java    -> samples-output/full-pipeline/
 ├── S09_Flatten.java         -> samples-output/flatten/
+├── S10_Signatures.java      -> stdout (signature metadata)
+├── S11_Attachments.java     -> samples-output/attachments/
+├── S12_Links.java           -> stdout (hyperlinks)
+├── S13_PageImport.java      -> samples-output/page-import/
+├── S14_StructureTree.java   -> stdout (accessibility tree)
+├── S15_Thumbnails.java      -> samples-output/thumbnails/ (embedded)
+├── S16_PageEditing.java     -> samples-output/page-editing/
+├── S17_NUpLayout.java       -> samples-output/nup-layout/
+├── S18_Repair.java          -> samples-output/repair/
+├── S19_PdfToImages.java     -> samples-output/pdf-to-images/
+├── S20_ImagesToPdf.java     -> samples-output/images-to-pdf/
+├── S21_Thumbnails.java      -> samples-output/thumbnails/ (generated)
 └── RunAllSamples.java       -> all of the above (smoke test)
 ```
 
@@ -510,7 +594,7 @@ True redaction requires more than painting a black rectangle. JPDFium implements
      - `(e, f)` pinned to the first character's absolute page-space origin via `FPDFText_GetCharOrigin`, bypassing font advance widths entirely.
    - This per-word positioning preserves inter-word spacing exactly, regardless of mismatches between the font's advance widths and the original TJ-array positioning.
 3. **Fission validation** - after creating fragment objects, their bounds are checked. If any fragment has degenerate bounds (e.g. Type 3 custom-drawn fonts that can't be recreated via `FPDFText_SetText`), the entire fission plan is aborted and the original object is left for fallback removal.
-4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
+4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if >= 70% of their area overlaps a match bbox.
 5. **Visual cover** - a filled rectangle is painted over every match region.
 6. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
 

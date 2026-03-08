@@ -54,8 +54,18 @@ JPDFium/
 │   │   │   ├── jpdfium.h              # Public C API (consumed by jextract)
 │   │   │   └── jpdfium_internal.h     # DocWrapper, PageWrapper, helpers
 │   │   └── src/
-│   │       ├── jpdfium_document.cpp   # Real PDFium implementation
-│   │       ├── jpdfium_advanced.cpp   # Native libs: PCRE2, FreeType, HarfBuzz, ICU, qpdf, pugixml
+│   │       ├── jpdfium_document.cpp   # Core document operations
+│   │       ├── jpdfium_render.cpp     # Page rendering
+│   │       ├── jpdfium_text.cpp       # Text extraction and search
+│   │       ├── jpdfium_redact.cpp     # Redaction (Object Fission)
+│   │       ├── jpdfium_advanced.cpp   # PII pipeline: PCRE2, FreeType, HarfBuzz, ICU, qpdf, pugixml
+│   │       ├── jpdfium_repair.cpp     # PDF repair cascade
+│   │       ├── jpdfium_image.cpp      # PDF to image conversion
+│   │       ├── jpdfium_brotli.cpp     # Brotli transcoding
+│   │       ├── jpdfium_lcms.cpp       # ICC color profile validation
+│   │       ├── jpdfium_openjpeg.cpp   # JPEG2000 validation
+│   │       ├── jpdfium_pdfio.cpp      # PDFio fallback repair
+│   │       ├── jpdfium_unicode.cpp    # Unicode text processing
 │   │       └── jpdfium_stub.cpp       # Stub for testing without PDFium
 │   ├── setup-pdfium.sh                # Download bblanchon/pdfium-binaries
 │   ├── build-real.sh                  # Build bridge against real PDFium
@@ -64,22 +74,36 @@ JPDFium/
 ├── jpdfium/                           # All Java source (main module)
 │   └── src/
 │       ├── main/java/stirling/software/jpdfium/
-│       │   ├── PdfDocument.java
-│       │   ├── PdfPage.java
+│       │   ├── PdfDocument.java       # Main document API
+│       │   ├── PdfPage.java           # Page API
+│       │   ├── PdfImageConverter.java # PDF <-> Image conversion
+│       │   ├── doc/                   # Document inspection APIs
+│       │   │   ├── PdfMetadata.java
+│       │   │   ├── PdfBookmarks.java
+│       │   │   ├── PdfAnnotations.java
+│       │   │   ├── PdfLinks.java
+│       │   │   ├── PdfSignatures.java
+│       │   │   ├── PdfAttachments.java
+│       │   │   ├── PdfThumbnails.java
+│       │   │   ├── PdfStructureTree.java
+│       │   │   ├── PdfPageImporter.java
+│       │   │   ├── PdfPageEditor.java
+│       │   │   ├── PdfRepair.java
+│       │   │   ├── NUpLayout.java
+│       │   │   └── ...
 │       │   ├── exception/             # JPDFiumException hierarchy
 │       │   ├── fonts/                 # FontInfo, FontNormalizer
-│       │   ├── model/                 # Rect, PageSize, RenderResult
+│       │   ├── model/                 # Rect, PageSize, RenderResult, ImageFormat
 │       │   ├── panama/                # NativeLoader, JpdfiumLib, JpdfiumH (generated)
 │       │   ├── redact/                # PdfRedactor, RedactOptions, RedactResult
-│       │   ├── redact/pii/            # PiiRedactor, PatternEngine, GlyphRedactor, ...
+│       │   │   └── pii/               # PiiRedactor, PatternEngine, GlyphRedactor, ...
 │       │   ├── text/                  # PdfTextExtractor, PdfTextSearcher, PageText, ...
-│       │   ├── text/edit/             # TextEditor (stub)
 │       │   └── transform/             # PageOps
 │       └── test/java/stirling/software/jpdfium/
 │           ├── PdfDocumentTest.java   # Unit tests (stub native)
 │           ├── RealPdfIntegrationTest.java  # Integration tests (real PDFium)
 │           ├── ManualTest.java         # Quick smoke-test (right-click -> Run)
-│           ├── samples/               # Numbered manual-test classes (S01-S10)
+│           ├── samples/               # Numbered manual-test classes (S01-S21)
 │           └── ...
 │
 ├── jpdfium-natives/                   # Platform-specific native JARs
@@ -230,8 +254,8 @@ bash native/build-real.sh
 
 The `samples` package provides quick 1-click runnable classes for each feature:
 
-Right-click any `S01_Render` ... `S10_PiiRedact` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 10 in sequence. Output lands in `jpdfium/samples-output/`.
+Right-click any `S01_Render` ... `S21_Thumbnails` class in IntelliJ and hit Run.
+`RunAllSamples` runs all 21 in sequence. Output lands in `jpdfium/samples-output/`.
 
 See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 
@@ -255,7 +279,7 @@ See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
      character, preserving exact inter-word positioning regardless of font advance widths.
   4. Fission validation: if any fragment has degenerate bounds (Type 3 fonts), the plan is
      aborted and the original object is left for fallback removal.
-  5. Fallback: objects unmapped by spatial correlation removed if ≥70% within match bbox.
+  5. Fallback: objects unmapped by spatial correlation removed if >= 70% within match bbox.
   6. Paint filled rectangles at all match bboxes, then single `FPDFPage_GenerateContent`.
 - **UTF-16LE for search** - `FPDFText_FindStart` expects 2-byte UTF-16LE, not 4-byte
   `wchar_t`. Use `utf8_to_utf16le()` helper.
