@@ -33,10 +33,10 @@ tasks.register<Exec>("buildStubBridge") {
     commandLine("bash", scriptPath.absolutePath)
 }
 
-// Task to download PDFium binaries
-tasks.register<Exec>("downloadPdfium") {
+// Task to build PDFium from EmbedPDF fork source
+tasks.register<Exec>("buildPdfium") {
     group = "build"
-    description = "Download PDFium binaries (required before building real bridge)"
+    description = "Build PDFium from EmbedPDF fork source (required before building real bridge)"
     
     val scriptPath = rootProject.file("native/setup-pdfium.sh")
     if (!scriptPath.exists()) {
@@ -57,7 +57,8 @@ tasks.register<JavaExec>("runAllSamples") {
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
     classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") + 
-                files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files)
+                files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
+                files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     workingDir = rootProject.projectDir
 }
@@ -132,7 +133,8 @@ tasks.register<JavaExec>("runSample") {
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
     classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") + 
-                files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files)
+                files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
+                files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     workingDir = rootProject.projectDir
 
@@ -144,10 +146,10 @@ tasks.register<JavaExec>("runSample") {
 // Full end-to-end build and test task
 tasks.register("fullBuildAndTest") {
     group = "build"
-    description = "Full end-to-end: download PDFium, build real bridge, run unit tests, integration tests, and all samples"
+    description = "Full end-to-end: build PDFium, build real bridge, run unit tests, integration tests, and all samples"
     
     dependsOn(
-        "downloadPdfium",
+        "buildPdfium",
         "buildRealBridge",
         ":jpdfium:test",
         ":jpdfium:integrationTest",

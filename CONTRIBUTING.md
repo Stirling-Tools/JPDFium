@@ -30,18 +30,23 @@
 
 4. **Full Build with Real PDFium** (recommended for production testing)
    ```bash
-   # One command: download PDFium, build real bridge, run all tests and samples
+   # One command: build PDFium from source, build real bridge, run all tests and samples
    ./gradlew fullBuildAndTest
    ```
    
    Or step by step:
    ```bash
-   ./gradlew downloadPdfium      # Download PDFium (~25 MB, one-time)
+   ./gradlew buildPdfium         # Build PDFium from EmbedPDF fork (~15 GB, first time takes 15-60 min)
    ./gradlew buildRealBridge     # Build native bridge against real PDFium
    ./gradlew test                # Unit tests (stub mode)
    ./gradlew :jpdfium:integrationTest  # Integration tests (real PDFium)
    ./gradlew runAllSamples       # Run all 50 samples
    ```
+
+   > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
+   > On Fedora, also install: `sudo dnf install clang lld pkg-config`.
+   > The build script installs `depot_tools` (gclient/gn/ninja) automatically.
+   > Subsequent builds with `--rebuild` are much faster (incremental).
 
 5. **Open in IntelliJ IDEA** - import as a Gradle project. Add
    `--enable-native-access=ALL-UNNAMED` to Run Configurations -> Templates -> Application -> VM Options.
@@ -51,7 +56,7 @@
 | Task | Description |
 |------|-------------|
 | `./gradlew quickTry` | Quick try-out: stub bridge + unit tests + all samples (no PDFium) |
-| `./gradlew downloadPdfium` | Download PDFium binaries (~25 MB) |
+| `./gradlew buildPdfium` | Build PDFium from EmbedPDF fork source (~15 GB, first build 15-60 min) |
 | `./gradlew buildRealBridge` | Build real native bridge with PDFium |
 | `./gradlew buildStubBridge` | Build stub native bridge (no PDFium) |
 | `./gradlew fullBuildAndTest` | Full end-to-end: PDFium + real bridge + all tests + samples |
@@ -121,7 +126,7 @@ JPDFium/
         - jpdfium_pdfio.cpp      # PDFio fallback repair
         - jpdfium_unicode.cpp    # Unicode text processing
         - jpdfium_stub.cpp       # Stub for testing without PDFium
-    - setup-pdfium.sh            # Download EmbedPDF fork binaries
+    - setup-pdfium.sh            # Build PDFium from EmbedPDF fork source
     - build-real.sh              # Build bridge against real PDFium
     - build-stub.sh              # Build stub only
 
@@ -328,9 +333,19 @@ not throw) so Java-layer tests pass without installing native dependencies.
 
 ## Build with Real PDFium
 
+JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) of PDFium, which adds
+native encryption, annotation, and redaction APIs (the `EPDF_*` / `EPDFAnnot_*` symbols).
+No pre-built binaries are available — the library must be built from source.
+
 ```bash
-# 1. Download (~25 MB, gitignored)
+# 1. Build PDFium from EmbedPDF fork source (first run: ~15 GB download + 15-60 min build)
 bash native/setup-pdfium.sh
+
+# Subsequent builds (incremental, much faster):
+bash native/setup-pdfium.sh --rebuild
+
+# Full clean rebuild:
+bash native/setup-pdfium.sh --clean
 
 # 2. Build real bridge with CMake (auto-detects native libraries)
 bash native/build-real.sh
@@ -338,6 +353,19 @@ bash native/build-real.sh
 # 3. Integration tests
 ./gradlew :jpdfium:integrationTest
 ```
+
+### PDFium Build Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| `git`, `python3` | Used by depot_tools (gclient/gn/ninja) |
+| `clang`, `lld` | C++ compiler and linker (Fedora: `dnf install clang lld`) |
+| ~15 GB disk space | Source checkout + build artifacts |
+| Network access | First build downloads Chromium build toolchain |
+
+The script installs `depot_tools` automatically. After a successful build, the
+resulting `libpdfium.so` is placed in `native/pdfium/lib/` with headers in
+`native/pdfium/include/`. The build verifies that `EPDF_*` symbols are exported.
 
 ## Manual Testing
 

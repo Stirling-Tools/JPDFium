@@ -148,12 +148,12 @@ if(JPDFIUM_USE_PDFIUM)
         COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:jpdfium> ${NATIVES_RESOURCES}/$<TARGET_FILE_NAME:jpdfium>
         COMMENT "Copied lib${JPDFIUM_LIB_NAME}${JPDFIUM_LIB_EXTENSION} → jpdfium-natives-${JPDFIUM_PLATFORM} resources")
 
-    # Also copy libpdfium shared lib if it exists (needed at runtime)
-    if(EXISTS "${PDFIUM_LIB_DIR}/libpdfium${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    # Also copy libpdfium shared lib(s) if they exist (needed at runtime).
+    # With EmbedPDF component build, there may be multiple .so files.
+    file(GLOB PDFIUM_SHARED_LIBS "${PDFIUM_LIB_DIR}/lib*${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    if(PDFIUM_SHARED_LIBS)
         add_custom_command(TARGET jpdfium POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${PDFIUM_LIB_DIR}/libpdfium${CMAKE_SHARED_LIBRARY_SUFFIX}"
-                ${NATIVES_RESOURCES}/
+            COMMAND ${CMAKE_COMMAND} -E copy ${PDFIUM_SHARED_LIBS} ${NATIVES_RESOURCES}/
             COMMENT "Copied libpdfium → natives resources")
     endif()
 

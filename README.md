@@ -862,8 +862,8 @@ This downloads PDFium, builds the real native bridge, runs all tests, and execut
 #### Build with Real PDFium (recommended for production)
 
 ```bash
-# 1. Download PDFium (~25 MB, gitignored)
-./gradlew downloadPdfium
+# 1. Build PDFium from EmbedPDF fork source (~15 GB, first build takes 15-60 min)
+./gradlew buildPdfium
 
 # 2. Build with CMake (auto-detects all native libraries via pkg-config)
 ./gradlew buildRealBridge
