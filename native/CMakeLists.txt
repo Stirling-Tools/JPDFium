@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(jpdfium-native C CXX)
+project(jpdfium-native CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,28 +81,19 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_text.cpp
         bridge/src/jpdfium_redact.cpp
         bridge/src/jpdfium_advanced.cpp
-        bridge/src/jpdfium_unicode.cpp
+        bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
-        bridge/src/jpdfium_openjpeg.cpp
-        vendor/utf8proc/utf8proc.c)
-    # utf8proc is a C file — mark it so CMake uses the C compiler for it
-    set_source_files_properties(vendor/utf8proc/utf8proc.c PROPERTIES LANGUAGE C)
-    target_compile_definitions(jpdfium PRIVATE UTF8PROC_STATIC)
+        bridge/src/jpdfium_openjpeg.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
-        PRIVATE "${PDFIUM_INCLUDE_DIR}"
-        PRIVATE vendor/simdutf
-        PRIVATE vendor/utf8proc
-        PRIVATE vendor/xxhash)
+        PRIVATE "${PDFIUM_INCLUDE_DIR}")
     target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
 
     # Native library dependencies (all required for full functionality)
     find_package(PkgConfig REQUIRED)
-    find_package(ZLIB REQUIRED)
-    target_link_libraries(jpdfium PRIVATE ZLIB::ZLIB)
 
     # PCRE2 - JIT-compiled regex for pattern matching
     pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
@@ -124,7 +115,7 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
 
-    # qpdf - PDF structure manipulation, stream replacement, cascade repair
+    # qpdf - PDF structure manipulation, stream replacement
     pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
     target_link_libraries(jpdfium PRIVATE PkgConfig::QPDF)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
@@ -139,30 +130,7 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::UNIBREAK)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_UNIBREAK)
 
-    # Brotli (MIT) — /BrotliDecode stream transcoding for PDF 2.0+
-    pkg_check_modules(BROTLI REQUIRED IMPORTED_TARGET libbrotlidec libbrotlienc)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::BROTLI)
-    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_BROTLI)
-
-    # lcms2 (MIT) — ICC color profile validation & replacement
-    pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::LCMS2)
-    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_LCMS2)
-
-    # OpenJPEG (BSD 2-Clause) — JPEG2000 stream validation & partial recovery
-    pkg_check_modules(OPENJPEG REQUIRED IMPORTED_TARGET libopenjp2)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::OPENJPEG)
-    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_OPENJPEG)
-
-    # PDFio (Apache 2.0) — opt-in, only if manually installed (no Fedora/Ubuntu package yet)
-    pkg_check_modules(PDFIO QUIET IMPORTED_TARGET libpdfio)
-    if(PDFIO_FOUND)
-        target_link_libraries(jpdfium PRIVATE PkgConfig::PDFIO)
-        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PDFIO)
-        message(STATUS "  + PDFio (Apache 2.0) — 3rd-opinion structural repair")
-    endif()
-
-    message(STATUS "JPDFium native libraries: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak, Brotli, lcms2, OpenJPEG")
+    message(STATUS "JPDFium native libraries: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak")
 
     set_target_properties(jpdfium PROPERTIES
         OUTPUT_NAME "jpdfium"

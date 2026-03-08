@@ -1,13 +1,16 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.panama.DocBindings;
-import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.PageImportBindings;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
+
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Import pages between PDF documents and create N-up layouts.
@@ -100,39 +103,31 @@ public final class PdfPageImporter {
     }
 
     /**
-     * Create an N-up layout PDF: tiles pages from {@code src} onto larger output pages.
+     * Create an N-up layout from the source document.
      *
-     * <p>Calls {@code FPDF_ImportNPagesToOne} to produce a new document where
-     * {@code pagesPerRow} x {@code pagesPerCol} source pages are tiled on each output page.
-     * The result is saved to bytes via {@code FPDF_SaveAsCopy} and the internal
-     * document handle is closed before returning.
+     * <p>Tiles multiple source pages onto each output page using
+     * {@code FPDF_ImportNPagesToOne} and returns the result as PDF bytes.
      *
-     * <p>Example - 2x2 four-up on A4 landscape (842 x 595 pt):
-     * <pre>{@code
-     * byte[] nup = PdfPageImporter.importNPagesToOne(doc.rawHandle(), 842f, 595f, 2, 2);
-     * Files.write(Path.of("4up.pdf"), nup);
-     * }</pre>
-     *
-     * @param src          raw FPDF_DOCUMENT source
-     * @param outputWidth  output page width in points (1 pt = 1/72 inch)
-     * @param outputHeight output page height in points
-     * @param pagesPerRow  source pages per row on each output page
-     * @param pagesPerCol  source pages per column on each output page
+     * @param srcDoc       raw FPDF_DOCUMENT of the source (from {@code JpdfiumLib.docRawHandle})
+     * @param outputWidth  output page width in PDF points
+     * @param outputHeight output page height in PDF points
+     * @param cols         number of source-page columns per output page
+     * @param rows         number of source-page rows per output page
      * @return PDF bytes of the N-up document
      */
-    public static byte[] importNPagesToOne(MemorySegment src, float outputWidth, float outputHeight,
-                                            int pagesPerRow, int pagesPerCol) {
-        MemorySegment nupDoc;
-        try {
-            nupDoc = (MemorySegment) PageImportBindings.FPDF_ImportNPagesToOne.invokeExact(
-                    src, outputWidth, outputHeight, (long) pagesPerRow, (long) pagesPerCol);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_ImportNPagesToOne failed", t); }
-        if (nupDoc.equals(MemorySegment.NULL)) throw new RuntimeException("FPDF_ImportNPagesToOne returned null");
-        try {
-            return FfmHelper.saveRawDocument(nupDoc);
-        } finally {
-            try { DocBindings.FPDF_CloseDocument.invokeExact(nupDoc); }
-            catch (Throwable ignored) {}
+    public static byte[] importNPagesToOne(MemorySegment srcDoc,
+                                            float outputWidth, float outputHeight,
+                                            int cols, int rows) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment ptrSeg = arena.allocate(ADDRESS);
+            MemorySegment lenSeg = arena.allocate(JAVA_LONG);
+            int rc = JpdfiumH.jpdfium_import_n_pages_to_one(
+                    srcDoc, outputWidth, outputHeight, cols, rows, ptrSeg, lenSeg);
+            if (rc != 0) throw new RuntimeException("jpdfium_import_n_pages_to_one failed: " + rc);
+            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+            byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
+            JpdfiumH.jpdfium_free_buffer(nativePtr);
+            return result;
         }
     }
 

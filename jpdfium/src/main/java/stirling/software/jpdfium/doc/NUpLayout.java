@@ -31,18 +31,12 @@ import java.nio.file.Path;
  */
 public final class NUpLayout {
 
-    // -------------------------------------------------------------------------
-    // Standard page sizes (PDF points: 1 pt = 1/72 inch)
-    // -------------------------------------------------------------------------
-
     public static final float A4_WIDTH      = 595f;
     public static final float A4_HEIGHT     = 842f;
     public static final float LETTER_WIDTH  = 612f;
     public static final float LETTER_HEIGHT = 792f;
     public static final float A3_WIDTH      = 842f;
     public static final float A3_HEIGHT     = 1190f;
-
-    // -------------------------------------------------------------------------
 
     private final PdfDocument doc;
     private final float       outputWidth;
@@ -59,10 +53,6 @@ public final class NUpLayout {
         this.rows         = rows;
     }
 
-    // -------------------------------------------------------------------------
-    // Entry point
-    // -------------------------------------------------------------------------
-
     /**
      * Begin building an N-up layout for the given source document.
      *
@@ -72,10 +62,6 @@ public final class NUpLayout {
     public static Builder from(PdfDocument doc) {
         return new Builder(doc);
     }
-
-    // -------------------------------------------------------------------------
-    // Rendering
-    // -------------------------------------------------------------------------
 
     /**
      * Render the N-up layout to a byte array.
@@ -100,10 +86,6 @@ public final class NUpLayout {
         Files.write(path, toBytes());
     }
 
-    // -------------------------------------------------------------------------
-    // Getters
-    // -------------------------------------------------------------------------
-
     /** Number of source-page columns per output page. */
     public int cols() { return cols; }
 
@@ -118,10 +100,6 @@ public final class NUpLayout {
 
     /** Output page height in PDF points. */
     public float outputHeight() { return outputHeight; }
-
-    // -------------------------------------------------------------------------
-    // Builder
-    // -------------------------------------------------------------------------
 
     /**
      * Fluent builder for {@link NUpLayout}.

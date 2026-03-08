@@ -1,16 +1,12 @@
 package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
-import stirling.software.jpdfium.panama.FfmHelper;
 
 import java.lang.foreign.MemorySegment;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.IntStream;
 
 /**
  * SAMPLE 13 - Import pages between PDF documents.
@@ -49,55 +45,23 @@ public class S13_PageImport {
             }
         }
 
-        // 2. Cross-document merge: import first page of second PDF into first PDF,
-        //    then copy viewer preferences from the source document.
-        // Note: limited to 2 simple PDFs — full merges of complex forms can crash PDFium
+        // 2. Cross-document merge: import first page of second PDF into first PDF
         if (inputs.size() >= 2) {
-            System.out.println("\n  -- Cross-document import + copyViewerPreferences --");
+            System.out.println("\n  -- Cross-document import (page 1 of second into first) --");
             Path a = inputs.get(0);
             Path b = inputs.get(1);
             try (PdfDocument src  = PdfDocument.open(b);
                  PdfDocument dest = PdfDocument.open(a)) {
                 boolean ok = PdfPageImporter.importPages(
                         dest.rawHandle(), src.rawHandle(), "1", dest.pageCount());
-                boolean prefsCopied = PdfPageImporter.copyViewerPreferences(
-                        dest.rawHandle(), src.rawHandle());
                 Path outFile = outDir.resolve(
                         SampleBase.stem(a) + "+" + SampleBase.stem(b) + ".pdf");
                 dest.save(outFile);
                 produced.add(outFile);
-                System.out.printf("  %s + p1 of %s -> %s (%d pages, import=%s, prefs=%s)%n",
+                System.out.printf("  %s + p1 of %s -> %s (%d pages, %s)%n",
                         a.getFileName(), b.getFileName(),
                         outFile.getFileName(), dest.pageCount(),
-                        ok ? "OK" : "FAILED",
-                        prefsCopied ? "copied" : "none");
-            }
-        }
-
-        // 3. Import by index: extract only even-indexed pages from each multi-page PDF.
-        //    Uses FPDF_ImportPagesByIndex into a freshly-created empty document.
-        System.out.println("\n  -- Import by index (even pages of multi-page PDFs) --");
-        for (Path input : inputs) {
-            try (PdfDocument src = PdfDocument.open(input)) {
-                int n = src.pageCount();
-                if (n < 2) continue;
-                int[] evenIdx = IntStream.range(0, n).filter(i -> i % 2 == 0).toArray();
-                MemorySegment rawDest = PdfPageEditor.createDocument();
-                try {
-                    boolean ok = PdfPageImporter.importPagesByIndex(
-                            rawDest, src.rawHandle(), evenIdx, 0);
-                    byte[] pdfBytes = FfmHelper.saveRawDocument(rawDest);
-                    Path outFile = outDir.resolve(SampleBase.stem(input) + "-even-pages.pdf");
-                    Files.write(outFile, pdfBytes);
-                    produced.add(outFile);
-                    System.out.printf("  %s: pages[0,2,4,...] -> %d/%d pages (%s)%n",
-                            input.getFileName(), evenIdx.length, n, ok ? "OK" : "FAILED");
-                } finally {
-                    PdfPageEditor.closeDocument(rawDest);
-                }
-            } catch (Exception e) {
-                System.err.printf("  %s: import-by-index skipped — %s%n",
-                        input.getFileName(), e.getMessage());
+                        ok ? "OK" : "FAILED");
             }
         }
 

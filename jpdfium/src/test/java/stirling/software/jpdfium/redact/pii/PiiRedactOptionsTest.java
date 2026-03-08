@@ -9,7 +9,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for the unified {@link RedactOptions} builder — PII-related fields.
+ * Unit tests for the unified {@link RedactOptions} builder - PII-related fields.
  *
  * <p>Tests run against the stub native library, which provides working
  * implementations for Luhn validation and pass-through behavior for

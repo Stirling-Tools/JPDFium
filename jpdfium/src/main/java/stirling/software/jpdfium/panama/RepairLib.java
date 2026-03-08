@@ -280,8 +280,6 @@ public final class RepairLib {
         }
     }
 
-    // OpenJPEG (BSD 2-Clause)
-
     /**
      * Validate a /JPXDecode (JPEG2000) stream.
      *

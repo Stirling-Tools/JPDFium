@@ -50,3 +50,16 @@ inline DocWrapper*  decodeDoc (int64_t h) { return reinterpret_cast<DocWrapper*>
 inline PageWrapper* decodePage(int64_t h) { return reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(h)); }
 
 inline int64_t encodeHandle(void* p) { return static_cast<int64_t>(reinterpret_cast<uintptr_t>(p)); }
+
+// Image placement position (matches JPDFIUM_POSITION_* constants in jpdfium.h)
+enum Position {
+    POSITION_TOP_LEFT      = 0,
+    POSITION_TOP_CENTER    = 1,
+    POSITION_TOP_RIGHT     = 2,
+    POSITION_MIDDLE_LEFT   = 3,
+    POSITION_CENTER        = 4,
+    POSITION_MIDDLE_RIGHT  = 5,
+    POSITION_BOTTOM_LEFT   = 6,
+    POSITION_BOTTOM_CENTER = 7,
+    POSITION_BOTTOM_RIGHT  = 8
+};

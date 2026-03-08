@@ -5,7 +5,7 @@
  * <p>This module provides a single entry point for all redaction needs:
  * <ul>
  *   <li>Word-list and regex redaction</li>
- *   <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, etc.)</li>
+ *   <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, ...)</li>
  *   <li>FlashText NER entity matching</li>
  *   <li>Glyph-level redaction (HarfBuzz + ICU)</li>
  *   <li>Font normalization (/ToUnicode + /W repair)</li>

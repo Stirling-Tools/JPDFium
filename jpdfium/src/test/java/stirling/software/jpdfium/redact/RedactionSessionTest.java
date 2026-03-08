@@ -158,7 +158,7 @@ class RedactionSessionTest {
             // Commit
             session.commitAll();
 
-            // Save — document is still alive
+            // Save - document is still alive
             byte[] output = session.saveBytes();
             assertNotNull(output);
             assertTrue(output.length > 0);
@@ -173,7 +173,7 @@ class RedactionSessionTest {
                     0f, false, false, false);
             session.commitAll();
 
-            // Second cycle — document is still alive, no reload
+            // Second cycle - document is still alive, no reload
             session.markWords(new String[]{"Secret"}, 0xFF000000,
                     0f, false, false, false);
             session.commitAll();

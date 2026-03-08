@@ -60,8 +60,8 @@ final class SampleBase {
      * <ul>
      *   <li>If {@code args} is non-empty, uses those paths verbatim.</li>
      *   <li>Otherwise, scans the test-resource classpath root for every {@code *.pdf},
-     *       sorted by filename. Adding a PDF to {@code src/test/resources/} is enough
-     *       - no code change needed.</li>
+     *       sorted by filename, <b>excluding {@code pdfs/repair/}</b> (those are only
+     *       for the repair sample - see {@link #inputRepairPdfs}).</li>
      * </ul>
      */
     static List<Path> inputPdfs(String[] args) throws Exception {
@@ -71,18 +71,43 @@ final class SampleBase {
         // Enumerate ALL classpath roots (classes dir + resources dir are separate entries)
         Enumeration<URL> roots = SampleBase.class.getClassLoader().getResources("");
         List<Path> pdfs = new ArrayList<>();
+        String repairSep = java.io.File.separator + "repair" + java.io.File.separator;
         while (roots.hasMoreElements()) {
             URL root = roots.nextElement();
             if (!"file".equals(root.getProtocol())) continue;
             Path rootPath = Path.of(root.toURI());
             try (Stream<Path> walk = Files.walk(rootPath)) {
-                walk.filter(p -> p.toString().endsWith(".pdf")).forEach(pdfs::add);
+                walk.filter(p -> p.toString().endsWith(".pdf")
+                             && !p.toString().contains(repairSep))
+                    .forEach(pdfs::add);
             }
         }
         assert !pdfs.isEmpty() :
                 "No *.pdf files found on classpath - add PDFs to src/test/resources/";
         Collections.sort(pdfs);
         return pdfs;
+    }
+
+    /**
+     * Returns PDFs from {@code pdfs/repair/} on the classpath - intended exclusively
+     * for the repair sample (S18). Other samples use {@link #inputPdfs} which
+     * excludes this directory.
+     *
+     * <p>If {@code args} is non-empty, those paths are used verbatim instead.
+     */
+    static List<Path> inputRepairPdfs(String[] args) throws Exception {
+        if (args != null && args.length > 0) {
+            return Arrays.stream(args).map(Path::of).toList();
+        }
+        URL dir = SampleBase.class.getClassLoader().getResource("pdfs/repair");
+        if (dir == null || !"file".equals(dir.getProtocol())) {
+            return List.of();
+        }
+        try (Stream<Path> stream = Files.list(Path.of(dir.toURI()))) {
+            return stream.filter(p -> p.toString().endsWith(".pdf"))
+                         .sorted()
+                         .toList();
+        }
     }
 
     /**

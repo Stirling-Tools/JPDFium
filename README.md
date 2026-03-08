@@ -25,7 +25,6 @@ Java 25's Foreign Function & Memory (FFM) API.
 - **Page Editing** - Create/modify page objects (text, rectangles, paths), set colors/transforms
 - **Secure PDF-Image** - Convert pages to rasterized images, stripping all selectable text and vector content
 - **Cross-Platform** - Linux x64/arm64, macOS x64/arm64, Windows x64
-- **PDF Repair** - Multi-stage cascade pipeline: qpdf XRef reconstruction, startxref offset correction, xref type normalization, all via builder-pattern API
 - **Zero JNI** - Pure FFM (`java.lang.foreign`), no JNI boilerplate
 - **MIT** - PDFium is Apache 2.0, this project is MIT
 
@@ -142,8 +141,7 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"));
 | **Bridge FFM Bindings** | `panama/NativeLoader`, `panama/JpdfiumH` | Auto-generated jextract interfaces to the C++ bridge |
 | **Native Bridge** | `libjpdfium.so` | C/C++ bridge for complex operations (redaction, font normalization) |
 | **Core Engine** | `libpdfium.so` | Google's underlying PDFium engine |
-| **Native Libraries** | PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak, Brotli, lcms2, OpenJPEG | PII redaction pipeline + PDF repair cascade |
-| **Vendored Libraries** | simdutf, utf8proc, xxHash | SIMD UTF transcoding, Unicode normalization, content hashing |
+| **Native Libraries** | PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak | Native libraries for the PII redaction pipeline |
 
 JPDFium uses a hybrid architecture: a C++ bridge (`libjpdfium`) for complex operations (redaction, font normalization) and direct FFM bindings (`PdfiumBindings`) to PDFium's C API for document inspection features (metadata, bookmarks, annotations, signatures, etc.).
 
@@ -310,53 +308,6 @@ PageOps.renderPage(doc, pageIndex, dpi)      // -> BufferedImage
 PageOps.renderAll(doc, dpi)                  // -> List<BufferedImage>
 ```
 
-### `PdfRepair`
-
-Builder-pattern API for repairing damaged PDFs. Uses a multi-stage cascade:
-PDFium tolerant parse - qpdf XRef reconstruction - startxref offset correction - xref type normalization.
-
-```java
-// Repair from bytes
-RepairResult result = PdfRepair.builder()
-    .input(pdfBytes)                    // or .input(Path)
-    .normalizeXref(true)                // fix mixed xref types
-    .fixStartxref(true)                 // brute-force startxref offset
-    .build()
-    .execute();
-
-if (result.isUsable()) {
-    byte[] fixed = result.repairedPdf();
-    System.out.println("Status: " + result.status());  // CLEAN, FIXED, PARTIAL, FAILED
-}
-
-// Inspect only (non-destructive diagnostic scan)
-String diagnostics = PdfRepair.inspect(pdfBytes);
-// -> {"status":"loaded","warning_count":2,"page_count":5,...}
-
-// All strategies at once
-RepairResult r = PdfRepair.builder()
-    .input(Path.of("damaged.pdf"))
-    .all()                              // enable everything
-    .forceVersion14(true)               // downgrade to PDF 1.4
-    .build()
-    .execute();
-```
-
-### `NUpLayout`
-
-Fluent builder for creating N-up layouts (multiple pages tiled onto one).
-
-```java
-// 4-up on A4 landscape
-NUpLayout.from(doc).grid(2, 2).a4Landscape().build().save(outputPath);
-
-// 6-up on US Letter landscape as bytes
-byte[] pdf = NUpLayout.from(doc).grid(3, 2).letterLandscape().build().toBytes();
-
-// Custom page size (A3 landscape: 1190 x 842 pt)
-NUpLayout.from(doc).grid(4, 2).pageSize(1190, 842).build().save(outputPath);
-```
-
 ### Advanced PII Redaction
 
 The PII redaction pipeline orchestrates 9 stages powered by native libraries via FFM:
@@ -440,32 +391,17 @@ System.out.printf("Redacted %d total matches across %d pages%n",
 
 #### Native Library Dependencies
 
-JPDFium links against several native libraries at build time. All are MIT, BSD, Apache, or equivalent permissive licenses - **no GPL/LGPL dependencies**.
-
-##### System Libraries (required, installed via package manager)
-
-| Library | License | Category | Purpose |
-|---------|---------|----------|---------|
-| [PCRE2](https://www.pcre.org/) | BSD-3 | PII Redaction | JIT-compiled regex engine for pattern matching |
-| [FreeType](https://freetype.org/) | FTL/MIT | PII Redaction | Font parsing, classification, glyph width calculation |
-| [HarfBuzz](https://harfbuzz.github.io/) | MIT | PII Redaction | Text shaping, `hb-subset` font subsetting |
-| [ICU4C](https://icu.unicode.org/) | Unicode License | PII Redaction | NFC normalization, BiDi reordering, sentence segmentation |
-| [qpdf](https://qpdf.sourceforge.io/) | Apache-2.0 | Repair + Redaction | PDF structure manipulation, XRef repair cascade, stream replacement |
-| [pugixml](https://pugixml.org/) | MIT | PII Redaction | XMP metadata XML parsing |
-| [libunibreak](https://github.com/adah1972/libunibreak) | zlib | PII Redaction | Grapheme cluster boundaries |
-| [zlib](https://www.zlib.net/) | zlib | Core | FlateDecode compression (used by Brotli transcoding, qpdf) |
-| [Brotli](https://github.com/google/brotli) | MIT | Repair | PDF 2.0+ `/BrotliDecode` stream transcoding to `/FlateDecode` |
-| [lcms2](https://www.littlecms.com/) | MIT | Repair | ICC color profile validation, `/N` mismatch fix, profile replacement |
-| [OpenJPEG](https://www.openjpeg.org/) | BSD-2 | Repair | JPEG2000 (`/JPXDecode`) partial bitstream recovery |
-| [PDFio](https://www.msweet.org/pdfio/) | Apache-2.0 | Repair | Third-opinion XRef repair via independent `repair_xref()` |
-
-##### Vendored Libraries (bundled in `native/vendor/`, no install needed)
+All libraries are MIT or Apache-2.0 compatible:
 
 | Library | License | Purpose |
 |---------|---------|---------|
-| [simdutf](https://github.com/simdutf/simdutf) | MIT/Apache-2.0 | SIMD-accelerated UTF-8/16/32 transcoding |
-| [utf8proc](https://github.com/JuliaStrings/utf8proc) | MIT | NFC normalization, case folding, grapheme clusters |
-| [xxHash](https://github.com/Cyan4973/xxHash) | BSD-2 | XXH3 non-cryptographic hashing for content deduplication |
+| [PCRE2](https://www.pcre.org/) | BSD-3 | JIT-compiled regex engine |
+| [FreeType](https://freetype.org/) | FTL/MIT | Font parsing, classification, glyph width calculation |
+| [HarfBuzz](https://harfbuzz.github.io/) | MIT | Text shaping, `hb-subset` font subsetting |
+| [ICU4C](https://icu.unicode.org/) | Unicode License | NFC normalization, BiDi reordering, sentence segmentation |
+| [qpdf](https://qpdf.sourceforge.io/) | Apache-2.0 | PDF structure manipulation, stream replacement |
+| [pugixml](https://pugixml.org/) | MIT | XMP metadata XML parsing |
+| [libunibreak](https://github.com/nicowilliams/libunibreak) | zlib | Grapheme cluster boundaries |
 
 ## Building
 
@@ -473,30 +409,23 @@ JPDFium links against several native libraries at build time. All are MIT, BSD, 
 
 - **Java 25** - [download](https://jdk.java.net/25/)
 - **g++ (C++17)** - `dnf install gcc-c++` / `apt install g++` / Xcode CLT / MSVC
-- **CMake 3.20+** - `dnf install cmake` / `apt install cmake`
-- **pkg-config** - `dnf install pkgconf` / `apt install pkg-config`
+- **CMake 3.16+** - `dnf install cmake` / `apt install cmake`
 - **jextract 25** (optional, to regenerate FFM bindings) - [download](https://jdk.java.net/jextract/)
 
-#### Install All Required Native Libraries
+#### Native Library Dependencies
+
+For full PII redaction pipeline support, install these development packages:
 
 **Fedora / RHEL:**
 ```bash
 sudo dnf install -y pcre2-devel freetype-devel harfbuzz-devel \
-    libicu-devel qpdf-devel pugixml-devel libunibreak-devel \
-    zlib-devel brotli-devel lcms2-devel openjpeg2-devel
+    libicu-devel qpdf-devel pugixml-devel libunibreak-devel
 ```
 
 **Ubuntu / Debian:**
 ```bash
 sudo apt install -y libpcre2-dev libfreetype-dev libharfbuzz-dev \
-    libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev \
-    zlib1g-dev libbrotli-dev liblcms2-dev libopenjp2-7-dev
-```
-
-**macOS (Homebrew):**
-```bash
-brew install pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
-    brotli little-cms2 openjpeg
+    libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev
 ```
 
 ### Build with Real PDFium (recommended)
@@ -515,14 +444,7 @@ bash native/build-real.sh
 ./gradlew :jpdfium:integrationTest
 ```
 
-`build-real.sh` uses CMake to compile the native bridge against real PDFium and all native libraries:
-
-- **Bridge sources**: `jpdfium_document.cpp`, `jpdfium_render.cpp`, `jpdfium_text.cpp`, `jpdfium_redact.cpp`, `jpdfium_advanced.cpp`, `jpdfium_unicode.cpp`, `jpdfium_repair.cpp`, `jpdfium_brotli.cpp`, `jpdfium_pdfio.cpp`, `jpdfium_lcms.cpp`, `jpdfium_openjpeg.cpp`
-- **Vendored sources**: `simdutf.cpp`, `utf8proc.c` (compiled in-tree)
-- **Required libs**: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak, zlib, Brotli, lcms2, OpenJPEG (auto-detected via `pkg-config`)
-- **Opt-in**: PDFio (silently skipped if absent)
-
-The output `libjpdfium.so` and `libpdfium.so` are copied to the platform-specific natives JAR.
+`build-real.sh` uses CMake to compile the native bridge (`jpdfium_document.cpp`, `jpdfium_render.cpp`, `jpdfium_text.cpp`, `jpdfium_redact.cpp`, `jpdfium_advanced.cpp`) against real PDFium and all available native libraries, then copies `libjpdfium.so` and `libpdfium.so` to the platform-specific natives JAR. Native libraries are auto-detected via `pkg-config`; any missing libraries are silently skipped (the corresponding features return empty results at runtime).
 
 ### Regenerate FFM Bindings (after changing `jpdfium.h`)
 
@@ -554,21 +476,9 @@ jpdfium/src/test/java/stirling/software/jpdfium/samples/
 ├── S01_Render.java          -> samples-output/render/page-N.png
 ├── S02_TextExtract.java     -> samples-output/text-extract/report.txt
 ├── S03_TextSearch.java      -> stdout
-├── S04_Metadata.java        -> stdout (document metadata)
-├── S05_Bookmarks.java       -> stdout (bookmark tree)
 ├── S06_RedactWords.java     -> samples-output/redact-words/output.pdf
-├── S07_Annotations.java     -> stdout (annotation listing)
 ├── S08_FullPipeline.java    -> samples-output/full-pipeline/
 ├── S09_Flatten.java         -> samples-output/flatten/
-├── S10_Signatures.java      -> stdout (digital signatures)
-├── S11_Attachments.java     -> stdout (embedded files)
-├── S12_Links.java           -> stdout (hyperlinks)
-├── S13_PageImport.java      -> samples-output/import/merged.pdf
-├── S14_StructureTree.java   -> stdout (accessibility tags)
-├── S15_Thumbnails.java      -> samples-output/thumbnails/
-├── S16_PageEditing.java     -> samples-output/editing/edited.pdf
-├── S17_NUpLayout.java       -> samples-output/nup/nup.pdf
-├── S18_Repair.java          -> samples-output/repair/repaired.pdf
 └── RunAllSamples.java       -> all of the above (smoke test)
 ```
 
@@ -600,7 +510,7 @@ True redaction requires more than painting a black rectangle. JPDFium implements
      - `(e, f)` pinned to the first character's absolute page-space origin via `FPDFText_GetCharOrigin`, bypassing font advance widths entirely.
    - This per-word positioning preserves inter-word spacing exactly, regardless of mismatches between the font's advance widths and the original TJ-array positioning.
 3. **Fission validation** - after creating fragment objects, their bounds are checked. If any fragment has degenerate bounds (e.g. Type 3 custom-drawn fonts that can't be recreated via `FPDFText_SetText`), the entire fission plan is aborted and the original object is left for fallback removal.
-4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if 70% or more of their area overlaps a match bbox.
+4. **Fallback** - text objects not caught by spatial correlation (Form XObjects, degenerate bboxes) are removed if ≥70% of their area overlaps a match bbox.
 5. **Visual cover** - a filled rectangle is painted over every match region.
 6. **Single commit** - one `FPDFPage_GenerateContent` call bakes all modifications.
 

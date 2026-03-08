@@ -144,7 +144,7 @@ public final class PdfPage implements AutoCloseable {
                 wholeWord, useRegex, removeContent, caseSensitive);
     }
 
-    // Annotation-Based Redaction (Mark - Commit)
+    // Annotation-Based Redaction (Mark → Commit)
 
     /**
      * Mark phase: create a REDACT annotation at the given rectangle.
@@ -222,7 +222,7 @@ public final class PdfPage implements AutoCloseable {
      * <p>This permanently removes text/images under each marked rectangle
      * using the Object Fission Algorithm, paints filled rectangles, and
      * removes the consumed annotations.  The document handle remains
-     * The document handle remains valid - no reload required.
+     * valid - no reload required.
      *
      * @param argbColor     fill color for the redaction rectangles
      * @param removeContent if true, apply Object Fission to strip content;

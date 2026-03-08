@@ -22,7 +22,7 @@ public final class PdfDocument implements AutoCloseable {
     private final long handle;
     private volatile boolean closed = false;
 
-    private PdfDocument(long handle) {
+    PdfDocument(long handle) {
         this.handle = handle;
     }
 
@@ -136,7 +136,7 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Get all document metadata as key-value map.
+     * Get all document metadata as key→value map.
      */
     public Map<String, String> metadata() {
         return PdfMetadata.of(rawHandle()).all();

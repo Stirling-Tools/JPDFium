@@ -94,7 +94,7 @@ class CorpusRedactTest {
 
     /**
      * PDFs to skip (known-flaky). issue918.pdf uses Type3 fonts that PDFium
-     * cannot fission — all text is lost during GenerateContent.
+     * cannot fission - all text is lost during GenerateContent.
      */
     private static final Set<String> SKIP_PDFS = Set.of(
             "issue918.pdf"

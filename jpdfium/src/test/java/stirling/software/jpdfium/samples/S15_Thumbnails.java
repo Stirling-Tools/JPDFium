@@ -14,7 +14,7 @@ import java.util.Optional;
  * SAMPLE 15 - Extract embedded page thumbnails.
  *
  * <p>Demonstrates extracting pre-rendered thumbnail images embedded in PDF
- * pages. Not all PDFs contain thumbnails — many modern producers omit them
+ * pages. Not all PDFs contain thumbnails - many modern producers omit them
  * since viewers can render them on-the-fly.
  *
  * <p><strong>VM Options required:</strong>

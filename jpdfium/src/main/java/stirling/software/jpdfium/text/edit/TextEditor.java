@@ -12,20 +12,8 @@ package stirling.software.jpdfium.text.edit;
  *   <li>Add headers/footers</li>
  *   <li>Add page numbers</li>
  * </ul>
- *
- * <p><b>Future Usage Example</b></p>
- * <pre>{@code
- * try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
- *     TextEditor editor = TextEditor.forPage(doc, 0);
- *     editor.addText("CONFIDENTIAL", 100, 700, "Helvetica-Bold", 24, 0xFFFF0000);
- *     editor.commit();
- *     doc.save(Path.of("output.pdf"));
- * }
- * }</pre>
  */
 public final class TextEditor {
 
     private TextEditor() {}
-
-    // TODO: Implement text editing operations.
 }

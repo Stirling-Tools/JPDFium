@@ -30,6 +30,17 @@ public final class JpdfiumLib {
     public static final int ERR_PASSWORD  =  -3;
     public static final int ERR_NOT_FOUND =  -4;
 
+    // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
+    public static final int POSITION_TOP_LEFT      = 0;
+    public static final int POSITION_TOP_CENTER    = 1;
+    public static final int POSITION_TOP_RIGHT     = 2;
+    public static final int POSITION_MIDDLE_LEFT   = 3;
+    public static final int POSITION_CENTER        = 4;
+    public static final int POSITION_MIDDLE_RIGHT  = 5;
+    public static final int POSITION_BOTTOM_LEFT   = 6;
+    public static final int POSITION_BOTTOM_CENTER = 7;
+    public static final int POSITION_BOTTOM_RIGHT  = 8;
+
     static {
         NativeLoader.ensureLoaded();
         int rc = JpdfiumH.jpdfium_init();
@@ -355,5 +366,49 @@ public final class JpdfiumLib {
         long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
         if (raw == 0) throw new JPDFiumException("Invalid page handle");
         return FfmHelper.ptrToSegment(raw);
+    }
+
+    /**
+     * Create a new PDF document containing a single image page.
+     *
+     * @param imageData   raw RGBA bytes with 8-byte [width][height] header (imageFormat=3)
+     * @param pageWidth   output page width in PDF points
+     * @param pageHeight  output page height in PDF points
+     * @param margin      margin in PDF points
+     * @param position    placement position (POSITION_* constant)
+     * @param imageFormat 0=auto, 1=PNG, 2=JPEG, 3=raw RGBA with header
+     * @return bridge document handle (must be closed via {@link #docClose(long)})
+     */
+    public static long imageToPdf(byte[] imageData, float pageWidth, float pageHeight,
+                                   float margin, int position, int imageFormat) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment hSeg = a.allocate(JAVA_LONG);
+            check(JpdfiumH.jpdfium_image_to_pdf(
+                    a.allocateFrom(JAVA_BYTE, imageData), (long) imageData.length,
+                    pageWidth, pageHeight, margin, position, imageFormat, hSeg), "imageToPdf");
+            return hSeg.get(JAVA_LONG, 0);
+        }
+    }
+
+    /**
+     * Append an image page to an existing document.
+     *
+     * @param doc            bridge document handle
+     * @param imageData      raw RGBA bytes with 8-byte [width][height] header
+     * @param pageWidth      output page width in PDF points
+     * @param pageHeight     output page height in PDF points
+     * @param margin         margin in PDF points
+     * @param position       placement position (POSITION_* constant)
+     * @param imageFormat    0=auto, 1=PNG, 2=JPEG, 3=raw RGBA with header
+     * @param insertAtIndex  0-based page index to insert at, or -1 to append
+     */
+    public static void docAddImagePage(long doc, byte[] imageData, float pageWidth, float pageHeight,
+                                        float margin, int position, int imageFormat, int insertAtIndex) {
+        try (Arena a = Arena.ofConfined()) {
+            check(JpdfiumH.jpdfium_doc_add_image_page(
+                    doc, a.allocateFrom(JAVA_BYTE, imageData), (long) imageData.length,
+                    pageWidth, pageHeight, margin, position, imageFormat, insertAtIndex),
+                    "docAddImagePage");
+        }
     }
 }

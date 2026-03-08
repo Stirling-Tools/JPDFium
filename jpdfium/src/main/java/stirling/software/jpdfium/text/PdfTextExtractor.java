@@ -78,17 +78,11 @@ public final class PdfTextExtractor {
     /**
      * Parses the compact JSON character array returned by the C bridge.
      * Format: [{"i":0,"u":65,"x":10.1,"y":20.2,"w":8.3,"h":12.4,"font":"Arial","size":12.0}, ...]
-     *
-     * A hand-written state-machine parser is used instead of a JSON library to avoid
-     * adding an external dependency just for this one well-known, fixed-schema format.
      */
     static List<TextChar> parseCharsJson(String json) {
         List<TextChar> chars = new ArrayList<>();
         if (json == null || json.equals("[]")) return chars;
 
-        // Walk the JSON string scanning for '{' and '}' delimiters. Each object is
-        // parsed by splitting on commas that are followed by a quote, which avoids
-        // breaking on commas inside string values (e.g., font names).
         int pos = 0;
         while (pos < json.length()) {
             int objStart = json.indexOf('{', pos);
@@ -103,8 +97,6 @@ public final class PdfTextExtractor {
             float x = 0, y = 0, w = 0, h = 0, fontSize = 0;
             String fontName = "";
 
-            // Split on commas that precede a quoted key to avoid splitting on commas
-            // that appear inside string values such as "font":"Times New Roman, Bold".
             String[] pairs = obj.split(",(?=\")");
             for (String pair : pairs) {
                 int colon = pair.indexOf(':');

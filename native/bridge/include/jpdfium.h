@@ -19,6 +19,28 @@ extern "C" {
 #define JPDFIUM_ERR_NOT_FOUND  -4
 #define JPDFIUM_ERR_NATIVE     -99
 
+// PDF Repair pipeline status codes
+#define JPDFIUM_REPAIR_CLEAN    0   // No repairs needed; document was valid
+#define JPDFIUM_REPAIR_FIXED    1   // Document was repaired successfully
+#define JPDFIUM_REPAIR_PARTIAL  2   // Partially repaired; some issues remain
+#define JPDFIUM_REPAIR_FAILED  -1   // Repair failed; document unrecoverable
+
+// PDF Repair operation flags (combinable via bitwise OR)
+#define JPDFIUM_REPAIR_NORMALIZE_XREF  0x01  // Normalize cross-reference table
+#define JPDFIUM_REPAIR_FIX_STARTXREF   0x02  // Brute-force startxref offset
+#define JPDFIUM_REPAIR_FORCE_V14       0x04  // Force PDF 1.4 output
+
+// Image placement position constants (match Java Position enum ordinals)
+#define JPDFIUM_POSITION_TOP_LEFT      0
+#define JPDFIUM_POSITION_TOP_CENTER    1
+#define JPDFIUM_POSITION_TOP_RIGHT     2
+#define JPDFIUM_POSITION_MIDDLE_LEFT   3
+#define JPDFIUM_POSITION_CENTER        4
+#define JPDFIUM_POSITION_MIDDLE_RIGHT  5
+#define JPDFIUM_POSITION_BOTTOM_LEFT   6
+#define JPDFIUM_POSITION_BOTTOM_CENTER 7
+#define JPDFIUM_POSITION_BOTTOM_RIGHT  8
+
 JPDFIUM_EXPORT int32_t jpdfium_init(void);
 JPDFIUM_EXPORT void    jpdfium_destroy(void);
 
@@ -281,145 +303,114 @@ JPDFIUM_EXPORT int32_t jpdfium_icu_break_sentences(const char* text, char** json
 // Caller must free *result with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_icu_bidi_reorder(const char* text, char** result);
 
-// Unicode Utilities (simdutf + utf8proc + xxHash)
+// PDF Repair Pipeline
 //
-// SIMD-accelerated UTF transcoding, NFC normalization, case folding,
-// and high-speed non-cryptographic hashing for content deduplication.
-
-// NFC-normalize a UTF-8 string. Caller must free *result with jpdfium_free_string.
-JPDFIUM_EXPORT char* jpdfium_unicode_nfc(const char* utf8);
-
-// Case-fold a UTF-8 string (Unicode-aware, locale-insensitive).
-// Caller must free *result with jpdfium_free_string.
-JPDFIUM_EXPORT char* jpdfium_unicode_casefold(const char* utf8);
-
-// XXH3-64 hash of an arbitrary byte buffer (~80 GB/s throughput).
-JPDFIUM_EXPORT uint64_t jpdfium_xxh3_64(const uint8_t* data, uint64_t len);
-
-// Hash the visual content of a page at 36 DPI for change detection.
-// Returns 0 on failure.
-JPDFIUM_EXPORT uint64_t jpdfium_page_content_hash(int64_t page);
-
-// Hash every distinct font stream on a page. Returns JSON:
-// [{"index":0,"name":"F1","hash":"0x...","bytes":12345}, ...]
-// Caller must free *json with jpdfium_free_string.
-JPDFIUM_EXPORT int32_t jpdfium_page_font_hashes(int64_t page, char** json);
-
-// PDF Repair Pipeline (qpdf + PDFium)
-//
-// Multi-stage cascade that attempts progressively deeper repair strategies.
-// Uses qpdf (Apache 2.0) for structural repair and PDFium (BSD) as a
-// tolerant parser fallback. All libraries are MIT-compatible.
-
-// Repair status codes
-#define JPDFIUM_REPAIR_CLEAN      0   // file was already valid
-#define JPDFIUM_REPAIR_FIXED      1   // repaired successfully with warnings
-#define JPDFIUM_REPAIR_PARTIAL    2   // partially repaired (some content lost)
-#define JPDFIUM_REPAIR_FAILED    -1   // all repair strategies exhausted
-
-// Repair flags (combinable via bitwise OR)
-#define JPDFIUM_REPAIR_FORCE_V14      0x0001  // downgrade to PDF 1.4
-#define JPDFIUM_REPAIR_NORMALIZE_XREF 0x0002  // force unified xref format
-#define JPDFIUM_REPAIR_FIX_STARTXREF  0x0004  // brute-force startxref offset
-#define JPDFIUM_REPAIR_ALL            0x0007  // all strategies enabled
-
-// Attempt to repair a damaged PDF byte stream.
-// On success, allocates *output (caller must free with jpdfium_free_buffer).
-// Returns JPDFIUM_REPAIR_CLEAN/FIXED/PARTIAL on success, JPDFIUM_REPAIR_FAILED on failure.
-JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
-    const uint8_t* input, int64_t inputLen,
-    uint8_t** output, int64_t* outputLen,
-    int32_t flags);
-
-// Inspect a PDF for damage without modifying it.
-// Returns a JSON diagnostic report via *diagnosticJson.
-// Caller must free *diagnosticJson with jpdfium_free_string.
-// Returns the number of issues found (0 = clean), or negative on error.
-JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
-    const uint8_t* input, int64_t inputLen,
-    char** diagnosticJson);
-
-// Brotli Codec (MIT) — Pre-repair normalization for PDF 2.0+
-//
-// Transcodes /BrotliDecode streams → /FlateDecode for backward
-// compatibility. Opt-in: requires JPDFIUM_HAS_BROTLI at build time;
-// returns JPDFIUM_ERR_NATIVE when unavailable.
-
-// Decompress a /BrotliDecode stream.
+// Multi-stage structural repair: qpdf XRef rebuild -> startxref brute-force ->
+// PDFio third-opinion fallback. Returns repaired bytes via *output.
 // Caller must free *output with jpdfium_free_buffer.
-// Returns 0 on success, negative on error.
-JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(
-    const uint8_t* compressed, int64_t compressedLen,
-    uint8_t** output, int64_t* outputLen);
+JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen,
+                                           uint8_t** output, int64_t* outputLen,
+                                           int32_t flags);
 
-// Transcode Brotli → FlateDecode (Brotli decompress + zlib recompress).
-// Caller must free *flateOutput with jpdfium_free_buffer.
-// Returns 0 on success, negative on error.
-JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(
-    const uint8_t* compressed, int64_t compressedLen,
-    uint8_t** flateOutput, int64_t* flateLen);
+// Inspect a PDF for structural damage without modifying it.
+// Returns JSON diagnostic report via *diagnosticJson.
+// Caller must free *diagnosticJson with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inputLen,
+                                               char** diagnosticJson);
 
-// PDFio (Apache 2.0) — Third-opinion structural repair
+// Brotli Codec (PDF 2.0+ /BrotliDecode streams)
 //
-// Independent XRef repair via PDFio's internal repair_xref().
-// Opt-in: requires JPDFIUM_HAS_PDFIO; no-ops when absent.
+// Decompress /BrotliDecode streams and optionally transcode to /FlateDecode
+// for backward compatibility with pre-PDF-2.0 viewers.
 
-// Attempt repair via PDFio: parse, page-by-page extraction to clean PDF.
-// Writes *output bytes (caller must free with jpdfium_free_buffer).
-// Returns JPDFIUM_REPAIR_* status code, and *pagesRecovered count.
-JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(
-    const uint8_t* input, int64_t inputLen,
-    uint8_t** output, int64_t* outputLen,
-    int32_t* pagesRecovered);
+// Decompress a Brotli-compressed stream.
+// Returns decompressed bytes via *output. Caller must free with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t compressedLen,
+                                              uint8_t** output, int64_t* outputLen);
 
-// lcms2 (MIT) — ICC Color Profile Validation
+// Transcode Brotli -> FlateDecode (decompress + zlib recompress).
+// Returns flate-compressed bytes via *flateOutput. Caller must free with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(const uint8_t* compressed, int64_t compressedLen,
+                                                uint8_t** flateOutput, int64_t* flateLen);
+
+// PDFio Structural Repair
 //
-// Validates /ICCBased profile streams and generates standard replacements.
-// Opt-in: requires JPDFIUM_HAS_LCMS2; no-ops when absent.
+// Third-opinion XRef repair using PDFio's independent parser.
 
-// Validate an ICC profile byte stream.
-// *resultJson contains: {"status":"valid"|"fixable"|"corrupt",
-//   "colorspace":"RGB"|"CMYK"|"Gray"|..., "components":N,
-//   "expected_components":M, "description":"..."}
-// Caller must free *resultJson with jpdfium_free_string.
-// Returns: 0=valid, 1=fixable (/N mismatch), -1=corrupt, -5=unavailable.
-JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
-    const uint8_t* profileData, int64_t profileLen,
-    int32_t expectedComponents,
-    char** resultJson);
+// Attempt to repair a PDF using PDFio's XRef recovery.
+// Returns repaired bytes via *output and recovered page count via *pagesRecovered.
+// Caller must free *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(const uint8_t* input, int64_t inputLen,
+                                                 uint8_t** output, int64_t* outputLen,
+                                                 int32_t* pagesRecovered);
 
-// Generate a standard replacement ICC profile for N components.
-// 1→D50 Gray, 3→sRGB, 4→generic CMYK.
-// Caller must free *profileOutput with jpdfium_free_buffer.
-// Returns 0 on success, negative on error.
-JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(
-    int32_t numComponents,
-    uint8_t** profileOutput, int64_t* profileLen);
-
-// OpenJPEG (BSD 2-Clause) — JPEG2000 Stream Validation
+// lcms2 ICC Color Profile Validation
 //
-// Validates /JPXDecode streams with partial bitstream recovery.
-// Opt-in: requires JPDFIUM_HAS_OPENJPEG; no-ops when absent.
+// Validates /ICCBased profile streams and generates standard replacements
+// for corrupted profiles.
 
-// Validate a /JPXDecode (JPEG2000) stream.
-// *resultJson: {"status":"valid"|"partial"|"unreadable",
-//   "width":W, "height":H, "components":N, "error":"..."}
-// Caller must free *resultJson with jpdfium_free_string.
-// Returns: 0=valid, 1=partial (recoverable), -1=unreadable, -5=unavailable.
-JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(
-    const uint8_t* jpxData, int64_t jpxLen,
-    char** resultJson);
+// Validate an ICC color profile byte stream.
+// Returns JSON validation result via *json. Caller must free with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(const uint8_t* data, int64_t len,
+                                                     int32_t expectedComponents, char** json);
 
-// Re-encode a partially decoded JPEG2000 as raw pixels.
-// Outputs interleaved RGB/Gray/CMYK pixel buffer.
-// Caller must free *rawPixels with jpdfium_free_buffer.
-// Returns 0 on success, negative on error.
-JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(
-    const uint8_t* jpxData, int64_t jpxLen,
-    uint8_t** rawPixels, int64_t* rawLen,
-    int32_t* width, int32_t* height, int32_t* components);
+// Generate a standard replacement ICC profile for the given component count.
+// numComponents: 1=Gray, 3=sRGB, 4=CMYK.
+// Returns profile bytes via *output. Caller must free with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(int32_t numComponents,
+                                                         uint8_t** output, int64_t* outputLen);
+
+// OpenJPEG JPEG2000 Stream Validation
+//
+// Validates /JPXDecode (JPEG2000) streams with non-strict parsing for
+// partial bitstream recovery.
+
+// Validate a JPEG2000 stream.
+// Returns JSON validation result via *json. Caller must free with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(const uint8_t* data, int64_t len,
+                                                    char** json);
+
+// Decode a JPEG2000 stream to raw interleaved pixels.
+// Returns raw pixel bytes via *output, plus dimensions and component count.
+// Caller must free *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t* data, int64_t len,
+                                           uint8_t** output, int64_t* outputLen,
+                                           int32_t* width, int32_t* height,
+                                           int32_t* components);
+
+// Image to PDF Conversion
+//
+// Create PDF documents from image data. Supports raw RGBA (format=3, with
+// 8-byte [width][height] header), auto-detect (format=0), PNG (format=1),
+// and JPEG (format=2).
+
+// Create a new PDF document with a single image page.
+// Returns bridge document handle via *doc_handle.
+JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t image_len,
+                                             float page_width, float page_height,
+                                             float margin, int32_t position,
+                                             int32_t image_format, int64_t* doc_handle);
+
+// Append an image page to an existing document at insert_at_index (-1 = append).
+JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle,
+                                                   const uint8_t* image_data, int64_t image_len,
+                                                   float page_width, float page_height,
+                                                   float margin, int32_t position,
+                                                   int32_t image_format, int32_t insert_at_index);
+
+// N-Up Layout
+//
+// Tile multiple source pages onto a single output page using FPDF_ImportNPagesToOne.
+
+// Create an N-up layout from a source document.
+// srcDoc: raw FPDF_DOCUMENT pointer (obtained via jpdfium_doc_raw_handle).
+// Returns PDF bytes of the N-up document via *output.
+// Caller must free *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc,
+                                                      float outputWidth, float outputHeight,
+                                                      int32_t cols, int32_t rows,
+                                                      uint8_t** output, int64_t* outputLen);
 
 #ifdef __cplusplus
 }
 #endif
-

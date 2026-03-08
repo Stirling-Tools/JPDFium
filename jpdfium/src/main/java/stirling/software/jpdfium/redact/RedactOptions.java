@@ -11,33 +11,29 @@ import java.util.Map;
 /**
  * Unified configuration for all PDF redaction operations.
  *
- * <p>
- * Covers every redaction capability in a single builder:
+ * <p>Covers every redaction capability in a single builder:
  * <ul>
- * <li>Word / regex list redaction (Object Fission)</li>
- * <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, etc.)</li>
- * <li>Named-entity recognition (FlashText NER)</li>
- * <li>Glyph-level redaction (HarfBuzz ligature / BiDi / grapheme aware)</li>
- * <li>Font normalization (/ToUnicode + /W repair)</li>
- * <li>XMP / /Info metadata redaction</li>
- * <li>Semantic coreference expansion</li>
- * <li>Convert-to-image (maximum security)</li>
+ *   <li>Word / regex list redaction (Object Fission)</li>
+ *   <li>PCRE2 JIT PII pattern matching (SSN, email, phone, credit card, ...)</li>
+ *   <li>Named-entity recognition (FlashText NER)</li>
+ *   <li>Glyph-level redaction (HarfBuzz ligature / BiDi / grapheme aware)</li>
+ *   <li>Font normalization (/ToUnicode + /W repair)</li>
+ *   <li>XMP / /Info metadata redaction</li>
+ *   <li>Semantic coreference expansion</li>
+ *   <li>Convert-to-image (maximum security)</li>
  * </ul>
  *
- * <p>
- * <b>Usage Example</b>
- * </p>
- * 
+ * <p><b>Usage Example</b></p>
  * <pre>{@code
  * RedactOptions opts = RedactOptions.builder()
- *         .addWord("Confidential")
- *         .addWord("Top-Secret")
- *         .enablePiiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN))
- *         .normalizeFonts(true)
- *         .redactMetadata(true)
- *         .boxColor(0xFF000000)
- *         .padding(1.5f)
- *         .build();
+ *     .addWord("Confidential")
+ *     .addWord("Top-Secret")
+ *     .enablePiiPatterns(PiiCategory.select(PiiCategory.EMAIL, PiiCategory.SSN))
+ *     .normalizeFonts(true)
+ *     .redactMetadata(true)
+ *     .boxColor(0xFF000000)
+ *     .padding(1.5f)
+ *     .build();
  *
  * RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), opts);
  * result.document().save(Path.of("redacted.pdf"));
@@ -77,6 +73,7 @@ public final class RedactOptions {
     private final boolean stripAllMetadata;
     private final List<String> metadataKeysToStrip;
 
+    
     private final boolean semanticRedact;
     private final int coreferenceWindow;
     private final List<String> coreferencePronouns;
@@ -110,120 +107,41 @@ public final class RedactOptions {
         this.coreferencePronouns = Collections.unmodifiableList(new ArrayList<>(b.coreferencePronouns));
     }
 
-    public List<String> words() {
-        return words;
-    }
+    
 
-    public int boxColor() {
-        return boxColor;
-    }
-
-    public float padding() {
-        return padding;
-    }
-
-    public boolean useRegex() {
-        return useRegex;
-    }
-
-    public boolean wholeWord() {
-        return wholeWord;
-    }
-
-    public boolean removeContent() {
-        return removeContent;
-    }
-
-    public boolean caseSensitive() {
-        return caseSensitive;
-    }
-
-    public boolean convertToImage() {
-        return convertToImage;
-    }
-
-    public int imageDpi() {
-        return imageDpi;
-    }
-
-    public boolean incrementalSave() {
-        return incrementalSave;
-    }
-
-    public boolean normalizeFonts() {
-        return normalizeFonts;
-    }
-
-    public boolean fixToUnicode() {
-        return fixToUnicode;
-    }
-
-    public boolean repairWidths() {
-        return repairWidths;
-    }
-
-    public Map<PiiCategory, String> piiPatterns() {
-        return piiPatterns;
-    }
-
-    public boolean luhnValidation() {
-        return luhnValidation;
-    }
-
-    public List<EntityEntry> entities() {
-        return entities;
-    }
-
-    public boolean glyphAware() {
-        return glyphAware;
-    }
-
-    public boolean ligatureAware() {
-        return ligatureAware;
-    }
-
-    public boolean bidiAware() {
-        return bidiAware;
-    }
-
-    public boolean graphemeSafe() {
-        return graphemeSafe;
-    }
-
-    public boolean redactMetadata() {
-        return redactMetadata;
-    }
-
-    public boolean stripAllMetadata() {
-        return stripAllMetadata;
-    }
-
-    public List<String> metadataKeysToStrip() {
-        return metadataKeysToStrip;
-    }
-
-    public boolean semanticRedact() {
-        return semanticRedact;
-    }
-
-    public int coreferenceWindow() {
-        return coreferenceWindow;
-    }
-
-    public List<String> coreferencePronouns() {
-        return coreferencePronouns;
-    }
+    public List<String> words() { return words; }
+    public int boxColor() { return boxColor; }
+    public float padding() { return padding; }
+    public boolean useRegex() { return useRegex; }
+    public boolean wholeWord() { return wholeWord; }
+    public boolean removeContent() { return removeContent; }
+    public boolean caseSensitive() { return caseSensitive; }
+    public boolean convertToImage() { return convertToImage; }
+    public int imageDpi() { return imageDpi; }
+    public boolean incrementalSave() { return incrementalSave; }
+    public boolean normalizeFonts() { return normalizeFonts; }
+    public boolean fixToUnicode() { return fixToUnicode; }
+    public boolean repairWidths() { return repairWidths; }
+    public Map<PiiCategory, String> piiPatterns() { return piiPatterns; }
+    public boolean luhnValidation() { return luhnValidation; }
+    public List<EntityEntry> entities() { return entities; }
+    public boolean glyphAware() { return glyphAware; }
+    public boolean ligatureAware() { return ligatureAware; }
+    public boolean bidiAware() { return bidiAware; }
+    public boolean graphemeSafe() { return graphemeSafe; }
+    public boolean redactMetadata() { return redactMetadata; }
+    public boolean stripAllMetadata() { return stripAllMetadata; }
+    public List<String> metadataKeysToStrip() { return metadataKeysToStrip; }
+    public boolean semanticRedact() { return semanticRedact; }
+    public int coreferenceWindow() { return coreferenceWindow; }
+    public List<String> coreferencePronouns() { return coreferencePronouns; }
 
     /** Entity entry for NER dictionary. */
-    public record EntityEntry(String keyword, String label) {
-    }
+    public record EntityEntry(String keyword, String label) {}
 
-    public static Builder builder() {
-        return new Builder();
-    }
+    public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
-        // Core
         private final List<String> words = new ArrayList<>();
         private int boxColor = 0xFF000000;
         private float padding = 0.0f;
@@ -232,48 +150,40 @@ public final class RedactOptions {
         private boolean removeContent = true;
         private boolean caseSensitive = false;
 
-        // Image
         private boolean convertToImage = false;
         private int imageDpi = 150;
 
-        // Save
         private boolean incrementalSave = false;
 
-        // Font normalization
         private boolean normalizeFonts = false;
         private boolean fixToUnicode = true;
         private boolean repairWidths = true;
 
-        // PII
         private final Map<PiiCategory, String> piiPatterns = new EnumMap<>(PiiCategory.class);
         private boolean luhnValidation = true;
 
-        // NER
         private final List<EntityEntry> entities = new ArrayList<>();
 
-        // Glyph
         private boolean glyphAware = false;
         private boolean ligatureAware = true;
         private boolean bidiAware = true;
         private boolean graphemeSafe = true;
 
-        // Metadata
         private boolean redactMetadata = false;
         private boolean stripAllMetadata = false;
         private final List<String> metadataKeysToStrip = new ArrayList<>();
 
-        // Semantic
         private boolean semanticRedact = false;
         private int coreferenceWindow = 2;
         private final List<String> coreferencePronouns = new ArrayList<>();
 
-        private Builder() {
-        }
+        private Builder() {}
+
+        
 
         /** Add a word or pattern to the redaction list. */
         public Builder addWord(String word) {
-            if (word != null && !word.isBlank())
-                words.add(word);
+            if (word != null && !word.isBlank()) words.add(word);
             return this;
         }
 
@@ -284,88 +194,48 @@ public final class RedactOptions {
         }
 
         /** Set the fill color as 0xAARRGGBB (default: black). */
-        public Builder boxColor(int argb) {
-            this.boxColor = argb;
-            return this;
-        }
+        public Builder boxColor(int argb) { this.boxColor = argb; return this; }
 
         /** Extra padding in PDF points around each match (default: 0). */
-        public Builder padding(float pts) {
-            this.padding = pts;
-            return this;
-        }
+        public Builder padding(float pts) { this.padding = pts; return this; }
 
         /** If true, treat each word as a regex pattern (default: false). */
-        public Builder useRegex(boolean v) {
-            this.useRegex = v;
-            return this;
-        }
+        public Builder useRegex(boolean v) { this.useRegex = v; return this; }
 
         /** If true, only match whole words at word boundaries (default: false). */
-        public Builder wholeWord(boolean v) {
-            this.wholeWord = v;
-            return this;
-        }
+        public Builder wholeWord(boolean v) { this.wholeWord = v; return this; }
 
-        /**
-         * If true, remove underlying PDF objects; if false, only paint over (default:
-         * true).
-         */
-        public Builder removeContent(boolean v) {
-            this.removeContent = v;
-            return this;
-        }
+        /** If true, remove underlying PDF objects; if false, only paint over (default: true). */
+        public Builder removeContent(boolean v) { this.removeContent = v; return this; }
 
         /** If true, match case-sensitively; if false, ignore case (default: false). */
-        public Builder caseSensitive(boolean v) {
-            this.caseSensitive = v;
-            return this;
-        }
+        public Builder caseSensitive(boolean v) { this.caseSensitive = v; return this; }
 
-        /**
-         * Convert each page to an image after redaction (most secure, default: false).
-         */
-        public Builder convertToImage(boolean v) {
-            this.convertToImage = v;
-            return this;
-        }
+        
 
-        /**
-         * DPI for image conversion (default: 150). Only used if convertToImage is true.
-         */
-        public Builder imageDpi(int dpi) {
-            this.imageDpi = dpi;
-            return this;
-        }
+        /** Convert each page to an image after redaction (most secure, default: false). */
+        public Builder convertToImage(boolean v) { this.convertToImage = v; return this; }
+
+        /** DPI for image conversion (default: 150). Only used if convertToImage is true. */
+        public Builder imageDpi(int dpi) { this.imageDpi = dpi; return this; }
+
+        
 
         /** If true, use incremental save (default: false). */
-        public Builder incrementalSave(boolean v) {
-            this.incrementalSave = v;
-            return this;
-        }
+        public Builder incrementalSave(boolean v) { this.incrementalSave = v; return this; }
+
+        
 
         /** Run the font normalization pipeline before redaction (default: false). */
-        public Builder normalizeFonts(boolean v) {
-            this.normalizeFonts = v;
-            return this;
-        }
+        public Builder normalizeFonts(boolean v) { this.normalizeFonts = v; return this; }
 
-        /**
-         * Fix broken /ToUnicode maps (default: true, only used if normalizeFonts is
-         * true).
-         */
-        public Builder fixToUnicode(boolean v) {
-            this.fixToUnicode = v;
-            return this;
-        }
+        /** Fix broken /ToUnicode maps (default: true, only used if normalizeFonts is true). */
+        public Builder fixToUnicode(boolean v) { this.fixToUnicode = v; return this; }
 
-        /**
-         * Repair /W glyph widths (default: true, only used if normalizeFonts is true).
-         */
-        public Builder repairWidths(boolean v) {
-            this.repairWidths = v;
-            return this;
-        }
+        /** Repair /W glyph widths (default: true, only used if normalizeFonts is true). */
+        public Builder repairWidths(boolean v) { this.repairWidths = v; return this; }
+
+        
 
         /** Enable a set of PCRE2 JIT PII patterns. */
         public Builder enablePiiPatterns(Map<PiiCategory, String> patterns) {
@@ -379,10 +249,9 @@ public final class RedactOptions {
         }
 
         /** Enable Luhn checksum validation for credit card patterns (default: true). */
-        public Builder luhnValidation(boolean v) {
-            this.luhnValidation = v;
-            return this;
-        }
+        public Builder luhnValidation(boolean v) { this.luhnValidation = v; return this; }
+
+        
 
         /** Add a named entity for FlashText NER dictionary matching. */
         public Builder addEntity(String keyword, String label) {
@@ -396,46 +265,27 @@ public final class RedactOptions {
             return this;
         }
 
+        
+
         /** Enable HarfBuzz-aware glyph-level redaction (default: false). */
-        public Builder glyphAware(boolean v) {
-            this.glyphAware = v;
-            return this;
-        }
+        public Builder glyphAware(boolean v) { this.glyphAware = v; return this; }
 
         /** Ligature-aware shaping (default: true, only used if glyphAware is true). */
-        public Builder ligatureAware(boolean v) {
-            this.ligatureAware = v;
-            return this;
-        }
+        public Builder ligatureAware(boolean v) { this.ligatureAware = v; return this; }
 
         /** BiDi-aware layout (default: true, only used if glyphAware is true). */
-        public Builder bidiAware(boolean v) {
-            this.bidiAware = v;
-            return this;
-        }
+        public Builder bidiAware(boolean v) { this.bidiAware = v; return this; }
 
-        /**
-         * Grapheme-safe cluster boundaries (default: true, only used if glyphAware is
-         * true).
-         */
-        public Builder graphemeSafe(boolean v) {
-            this.graphemeSafe = v;
-            return this;
-        }
+        /** Grapheme-safe cluster boundaries (default: true, only used if glyphAware is true). */
+        public Builder graphemeSafe(boolean v) { this.graphemeSafe = v; return this; }
 
-        /**
-         * Redact matching words/patterns from XMP and /Info metadata (default: false).
-         */
-        public Builder redactMetadata(boolean v) {
-            this.redactMetadata = v;
-            return this;
-        }
+        
+
+        /** Redact matching words/patterns from XMP and /Info metadata (default: false). */
+        public Builder redactMetadata(boolean v) { this.redactMetadata = v; return this; }
 
         /** Strip ALL metadata (overrides redactMetadata, default: false). */
-        public Builder stripAllMetadata(boolean v) {
-            this.stripAllMetadata = v;
-            return this;
-        }
+        public Builder stripAllMetadata(boolean v) { this.stripAllMetadata = v; return this; }
 
         /** Strip specific metadata keys from XMP and /Info. */
         public Builder stripMetadataKeys(String... keys) {
@@ -443,17 +293,13 @@ public final class RedactOptions {
             return this;
         }
 
+        
+
         /** Enable semantic coreference expansion (default: false). */
-        public Builder semanticRedact(boolean v) {
-            this.semanticRedact = v;
-            return this;
-        }
+        public Builder semanticRedact(boolean v) { this.semanticRedact = v; return this; }
 
         /** Coreference window size in sentences (default: 2). */
-        public Builder coreferenceWindow(int n) {
-            this.coreferenceWindow = n;
-            return this;
-        }
+        public Builder coreferenceWindow(int n) { this.coreferenceWindow = n; return this; }
 
         /** Add pronouns for coreference resolution. */
         public Builder addCoreferencePronouns(String... pronouns) {

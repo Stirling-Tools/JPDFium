@@ -19,31 +19,23 @@
 #include <sstream>
 #include <vector>
 
-// ---------------------------------------------------------------------------
 // simdutf - SIMD-accelerated UTF-8/16/32 transcoding (header-only).
 // The actual UTF-8-UTF-16 conversion uses ICU4C's u_strFromUTF8 because
 // simdutf's runtime dispatch doesn't export linkable symbols in shared libs.
-// ---------------------------------------------------------------------------
 #include "simdutf.h"
 
-// ---------------------------------------------------------------------------
 // utf8proc - single-file C library; no special defines needed.
-// ---------------------------------------------------------------------------
 extern "C" {
 #include "utf8proc.h"
 }
 
-// ---------------------------------------------------------------------------
 // xxHash - fully inline when XXH_INLINE_ALL is defined.
-// ---------------------------------------------------------------------------
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 
 #include <unicode/ustring.h>
 
-// ============================================================================
 // Internal helpers
-// ============================================================================
 
 // UTF-8 - UTF-16LE (replaces the manual loop in text/redact TUs).
 std::vector<uint16_t> simdutf_utf8_to_utf16le(const char* utf8, size_t len) {
@@ -57,9 +49,7 @@ std::vector<uint16_t> simdutf_utf8_to_utf16le(const char* utf8, size_t len) {
     return {buf.begin(), buf.begin() + destLen + 1};
 }
 
-// ============================================================================
 // Exported: Unicode utilities (utf8proc)
-// ============================================================================
 
 // Normalise a UTF-8 string to NFC (canonical decomposition + composition).
 // Essential before pattern matching - catches composed vs. decomposed forms of
@@ -90,9 +80,7 @@ extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_casefold(const char* utf8) {
     return reinterpret_cast<char*>(result);
 }
 
-// ============================================================================
 // Exported: Content hashing (xxHash XXH3)
-// ============================================================================
 
 // Hash an arbitrary byte buffer with XXH3-64 (~80 GB/s on modern hardware).
 // Typical uses: font deduplication, image deduplication, cache-key generation.

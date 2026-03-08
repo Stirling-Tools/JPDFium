@@ -54,16 +54,19 @@ public final class PdfRepair {
     private final boolean transcodeBrotli;
     private final boolean validateIcc;
     private final boolean validateJpx;
+    private final boolean writeDiagnostics;
 
     private PdfRepair(byte[] inputBytes, int flags,
             boolean usePdfioFallback, boolean transcodeBrotli,
-            boolean validateIcc, boolean validateJpx) {
+            boolean validateIcc, boolean validateJpx,
+            boolean writeDiagnostics) {
         this.inputBytes = inputBytes;
         this.flags = flags;
         this.usePdfioFallback = usePdfioFallback;
         this.transcodeBrotli = transcodeBrotli;
         this.validateIcc = validateIcc;
         this.validateJpx = validateJpx;
+        this.writeDiagnostics = writeDiagnostics;
     }
 
     /** Create a new repair builder. */
@@ -112,6 +115,10 @@ public final class PdfRepair {
         // ICC and JPX diagnostics are folded into the result diagnostics
         // by the native layer when the corresponding libraries are linked.
 
+        if (!writeDiagnostics) {
+            return new RepairResult(coreResult.status(), coreResult.repairedPdf(), null);
+        }
+
         return coreResult;
     }
 
@@ -127,6 +134,7 @@ public final class PdfRepair {
         private boolean transcodeBrotli;
         private boolean validateIcc;
         private boolean validateJpx;
+        private boolean writeDiagnostics = true;
 
         private Builder() {
         }
@@ -187,6 +195,12 @@ public final class PdfRepair {
             return this;
         }
 
+        /** Include diagnostic JSON in the result (default: true). Set to false to skip diagnostics. */
+        public Builder writeDiagnostics(boolean enable) {
+            this.writeDiagnostics = enable;
+            return this;
+        }
+
         /** Enable all core + Phase 2 repair strategies. */
         public Builder all() {
             this.forceVersion14 = true;
@@ -218,7 +232,8 @@ public final class PdfRepair {
                 flags |= FLAG_FIX_STARTXREF;
 
             return new PdfRepair(inputBytes, flags,
-                    usePdfioFallback, transcodeBrotli, validateIcc, validateJpx);
+                    usePdfioFallback, transcodeBrotli, validateIcc, validateJpx,
+                    writeDiagnostics);
         }
     }
 }

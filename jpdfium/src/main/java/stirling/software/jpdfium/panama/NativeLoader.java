@@ -25,8 +25,6 @@ public final class NativeLoader {
             tryLoadFromClasspath();
             loaded = true;
         } catch (NativeNotFoundException classpathMiss) {
-            // Fall back to a system-installed library (e.g., installed via apt/dnf or in a Docker image).
-            // This allows deployment without bundling platform-specific JARs.
             try {
                 System.loadLibrary("jpdfium");
                 loaded = true;
@@ -51,18 +49,11 @@ public final class NativeLoader {
             throw new NativeNotFoundException(platform);
 
         try {
-            // Extract to a temp directory rather than a temp file so that $ORIGIN rpath works.
-            // The OS resolves $ORIGIN to the directory containing the loaded library, so
-            // libpdfium.so must be in the same directory as libjpdfium.so.
             Path tmpDir = Files.createTempDirectory("jpdfium-");
             tmpDir.toFile().deleteOnExit();
 
-            // Extract the dependency (libpdfium.so) before the bridge (libjpdfium.so).
-            // The OS dynamic linker resolves the bridge's dependencies at load time,
-            // so the dependency file must already exist in the temp directory.
             extractIfPresent(resourceBase + nativeFilename("pdfium"), tmpDir);
 
-            // Extract the bridge library last so all its dependencies are already on disk.
             Path bridge = extractLib(resourceBase + bridgeName, tmpDir, bridgeName);
             System.load(bridge.toAbsolutePath().toString());
         } catch (IOException e) {

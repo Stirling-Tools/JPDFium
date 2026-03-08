@@ -1,10 +1,11 @@
-// jpdfium_document.cpp - Library lifecycle, document and page management.
+// jpdfium_document.cpp — Library lifecycle, document and page management.
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 
 #include <fpdfview.h>
 #include <fpdf_save.h>
+#include <fpdf_ppo.h>
 
 #include <cstdlib>
 #include <cstring>
@@ -164,4 +165,45 @@ int64_t jpdfium_page_raw_handle(int64_t page) {
 int64_t jpdfium_page_doc_raw_handle(int64_t page) {
     PageWrapper* pw = decodePage(page);
     return pw && pw->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->doc)) : 0;
+}
+
+int32_t jpdfium_import_n_pages_to_one(void* srcDoc,
+                                       float outputWidth, float outputHeight,
+                                       int32_t cols, int32_t rows,
+                                       uint8_t** output, int64_t* outputLen) {
+    if (!srcDoc || !output || !outputLen || cols < 1 || rows < 1)
+        return JPDFIUM_ERR_INVALID;
+
+    FPDF_DOCUMENT nupDoc = FPDF_ImportNPagesToOne(
+        static_cast<FPDF_DOCUMENT>(srcDoc),
+        outputWidth, outputHeight,
+        static_cast<size_t>(cols),
+        static_cast<size_t>(rows));
+
+    if (!nupDoc) return JPDFIUM_ERR_NATIVE;
+
+    struct BufWriter : FPDF_FILEWRITE {
+        std::vector<uint8_t> buf;
+        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+            auto* bw  = static_cast<BufWriter*>(self);
+            auto* src = static_cast<const uint8_t*>(data);
+            bw->buf.insert(bw->buf.end(), src, src + size);
+            return 1;
+        }
+    } bw;
+    bw.version    = 1;
+    bw.WriteBlock = BufWriter::Write;
+
+    int ok = FPDF_SaveAsCopy(nupDoc, &bw, FPDF_NO_INCREMENTAL);
+    FPDF_CloseDocument(nupDoc);
+
+    if (!ok) return JPDFIUM_ERR_IO;
+
+    size_t   sz  = bw.buf.size();
+    uint8_t* out = static_cast<uint8_t*>(malloc(sz));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    memcpy(out, bw.buf.data(), sz);
+    *output    = out;
+    *outputLen = static_cast<int64_t>(sz);
+    return JPDFIUM_OK;
 }

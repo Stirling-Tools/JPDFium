@@ -55,11 +55,9 @@ public class S17_NUpLayout {
                 SampleBase.pdfHeader("S17_NUpLayout", input, fi, inputs.size());
 
                 for (Grid g : GRIDS) {
-                    if (pages < g.pagesPerSheet()) continue;   // skip if not enough pages
+                    if (pages < g.pagesPerSheet()) continue;
 
-                    // -------------------------------------------------------
-                    // One-line API call — this is the whole point of NUpLayout
-                    // -------------------------------------------------------
+                    // One-line API call - this is the whole point of NUpLayout
                     NUpLayout layout = NUpLayout.from(doc)
                             .grid(g.cols(), g.rows())
                             .a4Landscape()
@@ -74,7 +72,7 @@ public class S17_NUpLayout {
                             g.label(), pages, outPages, g.cols(), g.rows(), outFile.getFileName());
                 }
             } catch (Exception e) {
-                System.err.printf("  [%d/%d] %s FAILED — %s%n",
+                System.err.printf("  [%d/%d] %s FAILED - %s%n",
                         fi, inputs.size(), input.getFileName(), e.getMessage());
             }
         }

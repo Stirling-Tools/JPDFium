@@ -56,6 +56,7 @@ static int try_qpdf_repair(
     std::string& errorMsg) {
     try {
         QPDF pdf;
+        pdf.setSuppressWarnings(true);
         pdf.processMemoryFile(
             "repair",
             reinterpret_cast<const char*>(input),
@@ -185,6 +186,7 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
 
     try {
         QPDF pdf;
+        pdf.setSuppressWarnings(true);
         pdf.processMemoryFile(
             "inspect",
             reinterpret_cast<const char*>(input),
