@@ -1,7 +1,11 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -11,6 +15,12 @@ import static java.lang.foreign.ValueLayout.*;
 public final class FontLib {
 
     static { NativeLoader.ensureLoaded(); }
+
+    private static final MethodHandle jpdfium_strip_fonts = Linker.nativeLinker().downcallHandle(
+            SymbolLookup.loaderLookup()
+                    .find("jpdfium_strip_fonts")
+                    .orElseThrow(() -> new UnsatisfiedLinkError("jpdfium_strip_fonts not found")),
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
 
     private FontLib() {}
 
@@ -63,6 +73,24 @@ public final class FontLib {
             String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
+        }
+    }
+
+    /**
+     * Strip embedded font resources from all pages using qpdf /Resources dict manipulation.
+     *
+     * @param doc bridge document handle
+     * @return number of font entries removed
+     */
+    public static int stripFonts(long doc) {
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cSeg = a.allocate(JAVA_INT);
+            int rc;
+            try {
+                rc = (int) jpdfium_strip_fonts.invokeExact(doc, cSeg);
+            } catch (Throwable t) { throw new RuntimeException("jpdfium_strip_fonts failed", t); }
+            JpdfiumLib.check(rc, "stripFonts");
+            return cSeg.get(JAVA_INT, 0);
         }
     }
 

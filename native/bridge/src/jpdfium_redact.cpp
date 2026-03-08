@@ -1,4 +1,4 @@
-// jpdfium_redact.cpp — Redaction engine: Object Fission algorithm,
+// jpdfium_redact.cpp - Redaction engine: Object Fission algorithm,
 // pattern/word/region redaction, annotation-based mark-commit redaction,
 // and incremental save.
 
@@ -364,7 +364,7 @@ static int32_t objectFissionRedact(
     for (int ci = 0; ci < totalChars; ci++) {
         charInfo[ci] = {-1, false};
 
-        // Skip generated (synthetic) characters — they don't correspond to
+        // Skip generated (synthetic) characters - they don't correspond to
         // real text objects in the content stream and should not participate
         // in fission decisions.
         if (FPDFText_IsGenerated(textPage, ci) == 1) {
@@ -497,7 +497,7 @@ static int32_t objectFissionRedact(
         }
         hasMultipleWords = (wordCount > 1);
 
-        // Skip single-word objects that have no redacted chars — they don't
+        // Skip single-word objects that have no redacted chars - they don't
         // need splitting and their single Tj is fine.
         if (!anyRedacted && !hasMultipleWords) continue;
 
@@ -762,7 +762,7 @@ static int32_t objectFissionRedact(
     //    were NOT caught by the char-to-object mapping (e.g. Form XObject text,
     //    chars with degenerate bounding boxes).
     //    Skip objects that were already handled by fission (even if fission
-    //    failed — in that case the original is intentionally preserved and
+    //    failed - in that case the original is intentionally preserved and
     //    the black box provides visual cover).
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);

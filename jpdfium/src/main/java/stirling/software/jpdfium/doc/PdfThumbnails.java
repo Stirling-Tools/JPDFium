@@ -7,6 +7,7 @@ import java.awt.image.BufferedImage;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.util.Optional;
 
 /**
@@ -122,7 +123,7 @@ public final class PdfThumbnails {
     }
 
     private static Optional<byte[]> getThumbnailData(MemorySegment page,
-                                                      java.lang.invoke.MethodHandle getter) {
+                                                      MethodHandle getter) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {

@@ -29,7 +29,7 @@ public class S16_PageEditing {
 
         System.out.printf("S16_PageEditing  |  %d PDF(s)%n", inputs.size());
 
-        Path outDir = SampleBase.out("page-editing");
+        Path outDir = SampleBase.out("S16_page-editing");
 
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);

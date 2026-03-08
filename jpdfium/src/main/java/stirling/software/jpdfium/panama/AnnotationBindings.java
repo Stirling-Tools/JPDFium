@@ -88,4 +88,46 @@ public final class AnnotationBindings {
 
     public static final MethodHandle FPDFAnnot_SetStringValue = downcall("FPDFAnnot_SetStringValue",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    // Form field inspection (requires FPDF_FORMHANDLE)
+    public static final MethodHandle FPDFAnnot_GetFormFieldType = downcallCritical("FPDFAnnot_GetFormFieldType",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_GetFormFieldName = downcall("FPDFAnnot_GetFormFieldName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_GetFormFieldValue = downcall("FPDFAnnot_GetFormFieldValue",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_IsChecked = downcallCritical("FPDFAnnot_IsChecked",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_GetOptionCount = downcallCritical("FPDFAnnot_GetOptionCount",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_GetOptionLabel = downcall("FPDFAnnot_GetOptionLabel",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_IsOptionSelected = downcallCritical("FPDFAnnot_IsOptionSelected",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
+    public static final MethodHandle FPDFAnnot_GetFormFieldAlternateName = downcall("FPDFAnnot_GetFormFieldAlternateName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_GetFormFieldFlags = downcallCritical("FPDFAnnot_GetFormFieldFlags",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_GetFormFieldExportValue = downcall("FPDFAnnot_GetFormFieldExportValue",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_GetFormAdditionalActionJavaScript = downcall("FPDFAnnot_GetFormAdditionalActionJavaScript",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    // Annotation creation helpers
+    public static final MethodHandle FPDFAnnot_AppendAttachmentPoints = downcall("FPDFAnnot_AppendAttachmentPoints",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_AddInkStroke = downcall("FPDFAnnot_AddInkStroke",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+    public static final MethodHandle FPDFAnnot_SetURI = downcall("FPDFAnnot_SetURI",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFAnnot_SetBorder = downcall("FPDFAnnot_SetBorder",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    /** Layout of FS_QUADPOINTSF: { float x1,y1,x2,y2,x3,y3,x4,y4 }. */
+    public static final StructLayout FS_QUADPOINTSF_LAYOUT = MemoryLayout.structLayout(
+            JAVA_FLOAT.withName("x1"), JAVA_FLOAT.withName("y1"),
+            JAVA_FLOAT.withName("x2"), JAVA_FLOAT.withName("y2"),
+            JAVA_FLOAT.withName("x3"), JAVA_FLOAT.withName("y3"),
+            JAVA_FLOAT.withName("x4"), JAVA_FLOAT.withName("y4")
+    );
 }

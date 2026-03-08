@@ -26,7 +26,7 @@ public class S13_PageImport {
 
         System.out.printf("S13_PageImport  |  %d PDF(s)%n", inputs.size());
 
-        Path outDir = SampleBase.out("page-import");
+        Path outDir = SampleBase.out("S13_page-import");
 
         // 1. Self-double every PDF: append all its own pages to itself
         System.out.println("\n  -- Self-double (importPages from self) --");

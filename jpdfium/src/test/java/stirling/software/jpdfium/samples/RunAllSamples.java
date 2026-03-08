@@ -51,8 +51,37 @@ public class RunAllSamples {
         passed += run("S19_PdfToImages",   () -> S19_PdfToImages.main(a));
         passed += run("S20_ImagesToPdf",   () -> S20_ImagesToPdf.main(a));
         passed += run("S21_Thumbnails",    () -> S21_Thumbnails.main(a));
+        passed += run("S22_MergeSplit",    () -> S22_MergeSplit.main(a));
+        passed += run("S23_Watermark",     () -> S23_Watermark.main(a));
+        passed += run("S24_TableExtract",  () -> S24_TableExtract.main(a));
+        passed += run("S25_PageGeometry",  () -> S25_PageGeometry.main(a));
+        passed += run("S26_HeaderFooter",  () -> S26_HeaderFooter.main(a));
+        passed += run("S27_Security",      () -> S27_Security.main(a));
+        passed += run("S28_DocInfo",       () -> S28_DocInfo.main(a));
+        passed += run("S29_RenderOptions", () -> S29_RenderOptions.main(a));
+        passed += run("S30_FormReader",    () -> S30_FormReader.main(a));
+        passed += run("S31_ImageExtract",  () -> S31_ImageExtract.main(a));
+        passed += run("S32_PageObjects",   () -> S32_PageObjects.main(a));
+        passed += run("S33_Encryption",    () -> S33_Encryption.main(a));
+        passed += run("S34_Linearizer",    () -> S34_Linearizer.main(a));
+        passed += run("S35_Overlay",       () -> S35_Overlay.main(a));
+        passed += run("S36_AnnotationBuilder", () -> S36_AnnotationBuilder.main(a));
+        passed += run("S37_PathDrawer",    () -> S37_PathDrawer.main(a));
+        passed += run("S38_JavaScriptInspector", () -> S38_JavaScriptInspector.main(a));
+        passed += run("S39_WebLinks",      () -> S39_WebLinks.main(a));
+        passed += run("S40_PageBoxes",     () -> S40_PageBoxes.main(a));
+        passed += run("S41_VersionConverter", () -> S41_VersionConverter.main(a));
+        passed += run("S42_BoundedText",   () -> S42_BoundedText.main(a));
+        passed += run("S43_StreamOptimizer", () -> S43_StreamOptimizer.main(a));
+        passed += run("S44_FlattenRotation", () -> S44_FlattenRotation.main(a));
+        passed += run("S45_PageInterleaver", () -> S45_PageInterleaver.main(a));
+        passed += run("S46_NamedDestinations", () -> S46_NamedDestinations.main(a));
+        passed += run("S47_BlankPageDetector", () -> S47_BlankPageDetector.main(a));
+        passed += run("S48_EmbedPdfAnnotations", () -> S48_EmbedPdfAnnotations.main(a));
+        passed += run("S49_NativeEncryption", () -> S49_NativeEncryption.main(a));
+        passed += run("S50_NativeRedaction", () -> S50_NativeRedaction.main(a));
 
-        int total = 21;
+        int total = 50;
         System.out.printf("Results: %d/%d samples passed%n", passed, total);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
     }

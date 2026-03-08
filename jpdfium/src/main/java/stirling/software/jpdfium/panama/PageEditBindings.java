@@ -2,7 +2,9 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.StructLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
@@ -137,4 +139,81 @@ public final class PageEditBindings {
     /** Close a page handle obtained via FPDFPage_New or FPDF_LoadPage. */
     public static final MethodHandle FPDF_ClosePage = downcall("FPDF_ClosePage",
             FunctionDescriptor.ofVoid(ADDRESS));
+
+    // Page box getters: FPDFPage_Get{MediaBox,CropBox}(page, *left, *bottom, *right, *top) -> int
+    public static final MethodHandle FPDFPage_GetMediaBox = downcall("FPDFPage_GetMediaBox",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
+    public static final MethodHandle FPDFPage_GetCropBox = downcall("FPDFPage_GetCropBox",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
+    // Page box setters: FPDFPage_Set{MediaBox,CropBox}(page, left, bottom, right, top) -> void
+    public static final MethodHandle FPDFPage_SetMediaBox = downcall("FPDFPage_SetMediaBox",
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    public static final MethodHandle FPDFPage_SetCropBox = downcall("FPDFPage_SetCropBox",
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    // BleedBox
+    public static final MethodHandle FPDFPage_GetBleedBox = downcall("FPDFPage_GetBleedBox",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPage_SetBleedBox = downcall("FPDFPage_SetBleedBox",
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    // TrimBox
+    public static final MethodHandle FPDFPage_GetTrimBox = downcall("FPDFPage_GetTrimBox",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPage_SetTrimBox = downcall("FPDFPage_SetTrimBox",
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    // ArtBox
+    public static final MethodHandle FPDFPage_GetArtBox = downcall("FPDFPage_GetArtBox",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPage_SetArtBox = downcall("FPDFPage_SetArtBox",
+            FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
+
+    /** Check if page has transparency. */
+    public static final MethodHandle FPDFPage_HasTransparency = downcallCritical("FPDFPage_HasTransparency",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    // Page object property getters
+    public static final MethodHandle FPDFPageObj_GetFillColor = downcall("FPDFPageObj_GetFillColor",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPageObj_GetStrokeColor = downcall("FPDFPageObj_GetStrokeColor",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPageObj_GetStrokeWidth = downcall("FPDFPageObj_GetStrokeWidth",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    public static final MethodHandle FPDFPageObj_HasTransparency = downcallCritical("FPDFPageObj_HasTransparency",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get transform matrix [a,b,c,d,e,f]. */
+    public static final MethodHandle FPDFPageObj_GetMatrix = downcall("FPDFPageObj_GetMatrix",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    // Marked content
+    public static final MethodHandle FPDFPageObj_CountMarks = downcallCritical("FPDFPageObj_CountMarks",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+    public static final MethodHandle FPDFPageObj_GetMark = downcallCritical("FPDFPageObj_GetMark",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+    public static final MethodHandle FPDFPageObjMark_GetName = downcall("FPDFPageObjMark_GetName",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
+
+    // Line style
+    public static final MethodHandle FPDFPageObj_SetLineCap = downcall("FPDFPageObj_SetLineCap",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+    public static final MethodHandle FPDFPageObj_SetLineJoin = downcall("FPDFPageObj_SetLineJoin",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+    public static final MethodHandle FPDFPageObj_SetStrokeWidth = downcall("FPDFPageObj_SetStrokeWidth",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT));
+    public static final MethodHandle FPDFPageObj_SetDashPhase = downcall("FPDFPageObj_SetDashPhase",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT));
+    public static final MethodHandle FPDFPageObj_SetDashArray = downcall("FPDFPageObj_SetDashArray",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_FLOAT));
+
+    /** Layout of FS_MATRIX: { float a, b, c, d, e, f }. */
+    public static final StructLayout FS_MATRIX_LAYOUT = MemoryLayout.structLayout(
+            JAVA_FLOAT.withName("a"), JAVA_FLOAT.withName("b"),
+            JAVA_FLOAT.withName("c"), JAVA_FLOAT.withName("d"),
+            JAVA_FLOAT.withName("e"), JAVA_FLOAT.withName("f")
+    );
 }

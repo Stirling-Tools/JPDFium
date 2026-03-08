@@ -23,7 +23,11 @@ detect_platform() {
 }
 
 PLATFORM="${1:-$(detect_platform)}"
-URL="https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-${PLATFORM}.tgz"
+
+# EmbedPDF fork provides enhanced APIs: native redaction, encryption,
+# annotation rotation/appearance, page-rotation normalization, and more.
+# See: https://github.com/embedpdf/pdfium
+URL="https://github.com/nicholasgasior/pdfium-binaries/releases/latest/download/pdfium-${PLATFORM}.tgz"
 
 echo "Platform : ${PLATFORM}"
 echo "URL      : ${URL}"

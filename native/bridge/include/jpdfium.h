@@ -283,6 +283,11 @@ JPDFIUM_EXPORT int32_t jpdfium_metadata_strip(int64_t doc,
 // The nuclear option for metadata-clean redaction.
 JPDFIUM_EXPORT int32_t jpdfium_metadata_strip_all(int64_t doc);
 
+// Strip embedded font resources from all pages using qpdf resource dictionary manipulation.
+// Removes /Font from each page's /Resources dict and garbage-collects orphaned font streams.
+// Returns the number of font entries removed via *fonts_removed.
+JPDFIUM_EXPORT int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed);
+
 // ICU4C Text Processing
 //
 // Unicode-aware text processing primitives needed for semantic redaction:

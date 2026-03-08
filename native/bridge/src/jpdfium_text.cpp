@@ -1,4 +1,4 @@
-// jpdfium_text.cpp — Text extraction and search.
+// jpdfium_text.cpp - Text extraction and search.
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"

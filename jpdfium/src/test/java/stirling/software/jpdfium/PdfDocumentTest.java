@@ -230,11 +230,9 @@ class PdfDocumentTest {
     void markThenCommitWorkflow() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
-            // Mark phase
             page.markRedactWords(new String[]{"Hello"}, 0xFF000000,
                     0f, false, false, false);
 
-            // Commit phase
             int committed = page.commitRedactions(0xFF000000, true);
             assertTrue(committed >= 0);
         }
@@ -247,8 +245,6 @@ class PdfDocumentTest {
             assertTrue(bytes.length > 0);
         }
     }
-
-    // Font Normalization
 
     @Test
     void fontNormalizePageDoesNotThrow() throws Exception {
@@ -273,10 +269,8 @@ class PdfDocumentTest {
     @Test
     void fontNormalizeThenRedact() throws Exception {
         try (var doc = PdfDocument.open(pdfPath())) {
-            // Normalize first
             FontNormalizer.normalizeAll(doc);
 
-            // Then redact
             try (var page = doc.page(0)) {
                 int matches = page.redactWordsEx(
                         new String[]{"Hello"}, 0xFF000000, 0f,
@@ -284,7 +278,6 @@ class PdfDocumentTest {
                 assertTrue(matches >= 0);
             }
 
-            // Save incremental
             byte[] bytes = doc.saveBytesIncremental();
             assertTrue(bytes.length > 0);
         }

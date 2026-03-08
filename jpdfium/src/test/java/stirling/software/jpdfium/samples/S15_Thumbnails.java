@@ -42,7 +42,7 @@ public class S15_Thumbnails {
                         if (thumb.isPresent()) {
                             found++;
                             BufferedImage img = thumb.get();
-                            Path outDir = SampleBase.out("thumbnails");
+                            Path outDir = SampleBase.out("S15_thumbnails");
                             Path outFile = outDir.resolve(
                                     SampleBase.stem(input) + "-page-" + p + "-thumb.png");
                             ImageIO.write(img, "PNG", outFile.toFile());

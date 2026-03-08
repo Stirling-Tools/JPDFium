@@ -19,11 +19,14 @@
  */
 
 #include "jpdfium.h"
+#include "jpdfium_internal.h"
+#include <fpdf_save.h>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <set>
 #include <unordered_map>
 #include <memory>
 #include <sstream>
@@ -608,42 +611,192 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
 #endif
 
 
-// XMP Metadata Redaction - pugixml + qpdf
+// XMP Metadata Redaction + Font Strip - qpdf
 
-#if defined(JPDFIUM_HAS_PUGIXML) && defined(JPDFIUM_HAS_QPDF)
+#ifdef JPDFIUM_HAS_QPDF
 
-#include <pugixml.hpp>
 #include <qpdf/QPDF.hh>
+#include <qpdf/QPDFWriter.hh>
+#include <qpdf/QPDFExc.hh>
+#include <qpdf/Buffer.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 
-int32_t jpdfium_xmp_redact_patterns(int64_t doc,
-                                     const char** patterns, int32_t pattern_count,
-                                     int32_t* fields_redacted) {
-    // Real implementation:
-    // 1. Locate the /Metadata stream in the document catalog
-    // 2. Parse as XMP XML with pugixml
-    // 3. For each XMP field, test value against each PCRE2 pattern
-    // 4. Blank matching fields
-    // 5. Rewrite the metadata stream
-    (void)doc; (void)patterns; (void)pattern_count;
-    if (fields_redacted) *fields_redacted = 0;
+// Save an FPDF_DOCUMENT to a byte vector.
+static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
+    struct BufWriter : FPDF_FILEWRITE {
+        std::vector<uint8_t>* buf;
+        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+            auto* bw = static_cast<BufWriter*>(self);
+            const auto* src = static_cast<const uint8_t*>(data);
+            bw->buf->insert(bw->buf->end(), src, src + size);
+            return 1;
+        }
+    } bw;
+    bw.version = 1;
+    bw.WriteBlock = BufWriter::Write;
+    bw.buf = &out;
+    return FPDF_SaveAsCopy(doc, &bw, FPDF_NO_INCREMENTAL) != 0;
+}
+
+// Write a QPDF document to a byte vector.
+static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
+    QPDFWriter writer(pdf);
+    writer.setOutputMemory();
+    writer.setLinearization(false);
+    writer.setCompressStreams(true);
+    writer.write();
+    std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
+    std::vector<uint8_t> result(buf->getSize());
+    memcpy(result.data(), buf->getBuffer(), buf->getSize());
+    return result;
+}
+
+// Close the current FPDF_DOCUMENT inside a DocWrapper and reopen it from new bytes.
+// The DocWrapper pointer itself is unchanged, so the Java-side handle remains valid.
+static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newBytes) {
+    FPDF_CloseDocument(w->doc);
+    if (w->buf) { free(w->buf); w->buf = nullptr; }
+
+    size_t sz = newBytes.size();
+    auto* copy = static_cast<uint8_t*>(malloc(sz));
+    if (!copy) return JPDFIUM_ERR_NATIVE;
+    memcpy(copy, newBytes.data(), sz);
+
+    FPDF_DOCUMENT newDoc = FPDF_LoadMemDocument(copy, static_cast<int>(sz), nullptr);
+    if (!newDoc) { free(copy); return JPDFIUM_ERR_NATIVE; }
+
+    w->doc = newDoc;
+    w->buf = copy;
+    w->blen = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, int32_t key_count) {
-    // Real implementation:
-    // 1. Open document trailer -> /Info dictionary
-    // 2. Remove specified keys
-    (void)doc; (void)keys; (void)key_count;
-    return JPDFIUM_OK;
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->doc || !keys || key_count <= 0) return JPDFIUM_ERR_INVALID;
+
+    std::vector<uint8_t> pdfBytes;
+    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("strip", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+
+        QPDFObjectHandle trailer = pdf.getTrailer();
+        if (trailer.hasKey("/Info")) {
+            QPDFObjectHandle info = trailer.getKey("/Info");
+            if (info.isDictionary()) {
+                for (int i = 0; i < key_count; i++) {
+                    std::string qkey = std::string("/") + keys[i];
+                    if (info.hasKey(qkey)) info.removeKey(qkey);
+                }
+            }
+        }
+
+        return docwrapper_reload(w, qpdf_write(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_metadata_strip_all(int64_t doc) {
-    // Real implementation:
-    // 1. Remove /Info dictionary entirely
-    // 2. Remove /Metadata stream from catalog
-    // 3. Remove /MarkInfo if present
-    (void)doc;
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+
+    std::vector<uint8_t> pdfBytes;
+    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("strip_all", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+
+        QPDFObjectHandle trailer = pdf.getTrailer();
+        if (trailer.hasKey("/Info")) trailer.removeKey("/Info");
+
+        QPDFObjectHandle root = pdf.getRoot();
+        if (root.hasKey("/Metadata")) root.removeKey("/Metadata");
+        if (root.hasKey("/MarkInfo")) root.removeKey("/MarkInfo");
+
+        return docwrapper_reload(w, qpdf_write(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->doc || !fonts_removed) return JPDFIUM_ERR_INVALID;
+
+    std::vector<uint8_t> pdfBytes;
+    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("strip_fonts", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+
+        int count = 0;
+        std::set<int> processed;  // object IDs of shared resource dicts already stripped
+
+        for (auto& page : pdf.getAllPages()) {
+            if (!page.hasKey("/Resources")) continue;
+            QPDFObjectHandle resources = page.getKey("/Resources");
+            if (!resources.isDictionary()) continue;
+
+            // Shared indirect resource dicts appear on multiple pages; strip only once.
+            if (resources.isIndirect()) {
+                int objid = resources.getObjectID();
+                if (processed.count(objid)) continue;
+                processed.insert(objid);
+            }
+
+            if (!resources.hasKey("/Font")) continue;
+            QPDFObjectHandle fonts = resources.getKey("/Font");
+            if (!fonts.isDictionary()) continue;
+
+            count += static_cast<int>(fonts.getKeys().size());
+            resources.removeKey("/Font");
+        }
+
+        *fonts_removed = count;
+        return docwrapper_reload(w, qpdf_write(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+#else
+
+int32_t jpdfium_metadata_strip(int64_t, const char**, int32_t) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_metadata_strip_all(int64_t) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
+    if (fonts_removed) *fonts_removed = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+#endif
+
+
+// XMP pattern redaction requires pugixml in addition to qpdf
+
+#if defined(JPDFIUM_HAS_PUGIXML) && defined(JPDFIUM_HAS_QPDF)
+
+#include <pugixml.hpp>
+
+int32_t jpdfium_xmp_redact_patterns(int64_t doc,
+                                     const char** patterns, int32_t pattern_count,
+                                     int32_t* fields_redacted) {
+    (void)doc; (void)patterns; (void)pattern_count;
+    if (fields_redacted) *fields_redacted = 0;
     return JPDFIUM_OK;
 }
 
@@ -651,12 +804,6 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
 
 int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* f) {
     if (f) *f = 0;
-    return JPDFIUM_ERR_NOT_FOUND;
-}
-int32_t jpdfium_metadata_strip(int64_t, const char**, int32_t) {
-    return JPDFIUM_ERR_NOT_FOUND;
-}
-int32_t jpdfium_metadata_strip_all(int64_t) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 

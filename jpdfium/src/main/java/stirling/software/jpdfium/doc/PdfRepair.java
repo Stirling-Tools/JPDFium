@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.RepairLib;
 
 import java.io.IOException;
@@ -55,11 +56,12 @@ public final class PdfRepair {
     private final boolean validateIcc;
     private final boolean validateJpx;
     private final boolean writeDiagnostics;
+    private final boolean sanitize;
 
     private PdfRepair(byte[] inputBytes, int flags,
             boolean usePdfioFallback, boolean transcodeBrotli,
             boolean validateIcc, boolean validateJpx,
-            boolean writeDiagnostics) {
+            boolean writeDiagnostics, boolean sanitize) {
         this.inputBytes = inputBytes;
         this.flags = flags;
         this.usePdfioFallback = usePdfioFallback;
@@ -67,6 +69,7 @@ public final class PdfRepair {
         this.validateIcc = validateIcc;
         this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
+        this.sanitize = sanitize;
     }
 
     /** Create a new repair builder. */
@@ -111,9 +114,16 @@ public final class PdfRepair {
             }
         }
 
-        // Post-repair validation passes run on the repaired bytes.
-        // ICC and JPX diagnostics are folded into the result diagnostics
-        // by the native layer when the corresponding libraries are linked.
+        // Post-repair: security sanitization (remove JS, embedded files, actions)
+        if (sanitize && coreResult.isUsable()) {
+            byte[] repairedBytes = coreResult.repairedPdf();
+            try (PdfDocument doc = PdfDocument.open(repairedBytes)) {
+                PdfSecurity.sanitize(doc);
+                repairedBytes = doc.saveBytes();
+                coreResult = new RepairResult(coreResult.status(), repairedBytes,
+                        coreResult.diagnosticJson());
+            }
+        }
 
         if (!writeDiagnostics) {
             return new RepairResult(coreResult.status(), coreResult.repairedPdf(), null);
@@ -135,6 +145,7 @@ public final class PdfRepair {
         private boolean validateIcc;
         private boolean validateJpx;
         private boolean writeDiagnostics = true;
+        private boolean sanitize;
 
         private Builder() {
         }
@@ -201,7 +212,16 @@ public final class PdfRepair {
             return this;
         }
 
-        /** Enable all core + Phase 2 repair strategies. */
+        /**
+         * Enable post-repair security sanitization: removes JavaScript,
+         * embedded files, and action annotations from the repaired PDF.
+         */
+        public Builder sanitize(boolean enable) {
+            this.sanitize = enable;
+            return this;
+        }
+
+        /** Enable all core + Phase 2 repair strategies (including sanitize). */
         public Builder all() {
             this.forceVersion14 = true;
             this.normalizeXref = true;
@@ -210,6 +230,7 @@ public final class PdfRepair {
             this.transcodeBrotli = true;
             this.validateIcc = true;
             this.validateJpx = true;
+            this.sanitize = true;
             return this;
         }
 
@@ -233,7 +254,7 @@ public final class PdfRepair {
 
             return new PdfRepair(inputBytes, flags,
                     usePdfioFallback, transcodeBrotli, validateIcc, validateJpx,
-                    writeDiagnostics);
+                    writeDiagnostics, sanitize);
         }
     }
 }

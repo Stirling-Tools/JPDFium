@@ -55,4 +55,36 @@ public final class DocBindings {
     /** Close a raw FPDF_DOCUMENT handle (mirrors FPDF_CloseDocument). */
     public static final MethodHandle FPDF_CloseDocument = downcall("FPDF_CloseDocument",
             FunctionDescriptor.ofVoid(ADDRESS));
+
+    /** Get the PDF file version (e.g. 14 for PDF 1.4). Returns 1 on success. */
+    public static final MethodHandle FPDF_GetFileVersion = downcall("FPDF_GetFileVersion",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Check if the document catalog is tagged. Returns 1 if tagged. */
+    public static final MethodHandle FPDFCatalog_IsTagged = downcallCritical("FPDFCatalog_IsTagged",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Save with explicit PDF version number. */
+    public static final MethodHandle FPDF_SaveWithVersion = downcall("FPDF_SaveWithVersion",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
+
+    /** Count named destinations. */
+    public static final MethodHandle FPDF_CountNamedDests = downcallCritical("FPDF_CountNamedDests",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+
+    /** Get named destination by index. buflen is in/out. */
+    public static final MethodHandle FPDF_GetNamedDest = downcall("FPDF_GetNamedDest",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Get named destination by name. Returns FPDF_DEST or NULL. */
+    public static final MethodHandle FPDF_GetNamedDestByName = downcall("FPDF_GetNamedDestByName",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+
+    /** Initialize form fill environment. Returns FPDF_FORMHANDLE. */
+    public static final MethodHandle FPDFDOC_InitFormFillEnvironment = downcall("FPDFDOC_InitFormFillEnvironment",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+
+    /** Exit form fill environment. */
+    public static final MethodHandle FPDFDOC_ExitFormFillEnvironment = downcall("FPDFDOC_ExitFormFillEnvironment",
+            FunctionDescriptor.ofVoid(ADDRESS));
 }

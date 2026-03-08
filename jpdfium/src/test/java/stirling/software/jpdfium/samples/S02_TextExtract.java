@@ -34,7 +34,7 @@ public class S02_TextExtract {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S02_TextExtract", input, fi + 1, inputs.size());
-            Path outDir = SampleBase.out("text-extract", input);
+            Path outDir = SampleBase.out("S02_text-extract", input);
             Path report = outDir.resolve(SampleBase.stem(input) + "-report.txt");
 
             StringBuilder sb = new StringBuilder();

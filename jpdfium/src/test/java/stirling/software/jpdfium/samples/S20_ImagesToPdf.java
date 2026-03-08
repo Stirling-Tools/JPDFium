@@ -49,7 +49,7 @@ public class S20_ImagesToPdf {
                 .build();
 
         PdfDocument a4Doc = PdfImageConverter.imagesToPdfFromImages(images, a4Opts);
-        Path a4Out = SampleBase.out("images-to-pdf", Path.of("sample")).resolve("a4-output.pdf");
+        Path a4Out = SampleBase.out("S20_images-to-pdf", Path.of("sample")).resolve("a4-output.pdf");
         a4Doc.save(a4Out);
         a4Doc.close();
         System.out.printf("  A4 PDF saved: %s%n", a4Out);
@@ -62,7 +62,7 @@ public class S20_ImagesToPdf {
                 .build();
 
         PdfDocument letterDoc = PdfImageConverter.imagesToPdfFromImages(images, letterOpts);
-        Path letterOut = SampleBase.out("images-to-pdf", Path.of("sample")).resolve("letter-output.pdf");
+        Path letterOut = SampleBase.out("S20_images-to-pdf", Path.of("sample")).resolve("letter-output.pdf");
         letterDoc.save(letterOut);
         letterDoc.close();
         System.out.printf("  Letter PDF saved: %s%n", letterOut);
@@ -74,7 +74,7 @@ public class S20_ImagesToPdf {
                 .build();
 
         PdfDocument fitDoc = PdfImageConverter.imagesToPdfFromImages(images, fitOpts);
-        Path fitOut = SampleBase.out("images-to-pdf", Path.of("sample")).resolve("fit-to-image.pdf");
+        Path fitOut = SampleBase.out("S20_images-to-pdf", Path.of("sample")).resolve("fit-to-image.pdf");
         fitDoc.save(fitOut);
         fitDoc.close();
         System.out.printf("  Fit-to-image PDF saved: %s%n", fitOut);

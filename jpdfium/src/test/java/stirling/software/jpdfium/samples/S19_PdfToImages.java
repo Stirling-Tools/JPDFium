@@ -57,7 +57,7 @@ public class S19_PdfToImages {
                         continue;
                     }
 
-                    Path outDir = SampleBase.out("pdf-to-images", input).resolve(label);
+                    Path outDir = SampleBase.out("S19_pdf-to-images", input).resolve(label);
                     PdfToImageOptions opts = PdfToImageOptions.builder()
                             .format(spec.format)
                             .dpi(spec.dpi)

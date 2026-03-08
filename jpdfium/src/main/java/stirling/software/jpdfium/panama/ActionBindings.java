@@ -49,4 +49,8 @@ public final class ActionBindings {
 
     public static final MethodHandle FPDFDest_GetLocationInPage = downcall("FPDFDest_GetLocationInPage",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Get the view type and params (numParams, params[]). Returns view type as unsigned long. */
+    public static final MethodHandle FPDFDest_GetView = downcall("FPDFDest_GetView",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
 }

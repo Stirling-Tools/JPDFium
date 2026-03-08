@@ -51,7 +51,7 @@ public class S08_FullPipeline {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S08_FullPipeline", input, fi + 1, inputs.size());
-            Path outDir = SampleBase.out("full-pipeline", input);
+            Path outDir = SampleBase.out("S08_full-pipeline", input);
 
             SampleBase.section("Step 1: Inspect");
             try (PdfDocument doc = PdfDocument.open(input)) {

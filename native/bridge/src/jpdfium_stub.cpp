@@ -453,6 +453,11 @@ int32_t jpdfium_metadata_strip_all(int64_t) {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
+    if (fonts_removed) *fonts_removed = 0;
+    return JPDFIUM_OK;
+}
+
 //  ICU4C Text Processing stubs
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {

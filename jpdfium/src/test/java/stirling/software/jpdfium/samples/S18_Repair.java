@@ -31,7 +31,7 @@ public class S18_Repair {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S18_Repair", input, fi + 1, inputs.size());
-            Path outDir = SampleBase.out("repair", input);
+            Path outDir = SampleBase.out("S18_repair", input);
             String stem = SampleBase.stem(input);
 
             byte[] pdfBytes = Files.readAllBytes(input);

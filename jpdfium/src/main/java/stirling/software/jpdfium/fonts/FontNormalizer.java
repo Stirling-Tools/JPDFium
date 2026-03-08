@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.fonts;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.model.FontType;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.util.NativeJsonParser;
 
@@ -180,7 +181,7 @@ public final class FontNormalizer {
      * @param isSubset    true if font has a subset prefix (e.g., ABCDEF+Arial)
      * @param family      font family name
      */
-    public record FontClassification(String type, boolean sfnt, boolean hasCmap,
+    public record FontClassification(FontType type, boolean sfnt, boolean hasCmap,
                                       int numGlyphs, int unitsPerEm, boolean hasKerning,
                                       boolean isSubset, String family) {}
 
@@ -197,10 +198,10 @@ public final class FontNormalizer {
 
     private static FontClassification parseClassificationJson(String json) {
         if (json == null || json.isEmpty()) {
-            return new FontClassification("unknown", false, false, 0, 0, false, false, "");
+            return new FontClassification(FontType.UNKNOWN, false, false, 0, 0, false, false, "");
         }
         return new FontClassification(
-                NativeJsonParser.stringField(json, "type"),
+                FontType.fromName(NativeJsonParser.stringField(json, "type")),
                 NativeJsonParser.boolField(json, "sfnt"),
                 NativeJsonParser.boolField(json, "has_cmap"),
                 NativeJsonParser.intField(json, "num_glyphs"),

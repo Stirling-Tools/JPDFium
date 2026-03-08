@@ -40,18 +40,14 @@ public class S04_Metadata {
                     }
                 }
 
-                // Permissions
                 long perms = doc.permissions();
                 System.out.printf("  Permissions    = 0x%08X%n", perms);
 
-                // Page count
                 int pages = doc.pageCount();
                 System.out.printf("  Page count     = %d%n", pages);
 
-                // Signatures count
                 System.out.printf("  Signatures     = %d%n", doc.signatures().size());
 
-                // Attachments count
                 System.out.printf("  Attachments    = %d%n", doc.attachments().size());
             }
         }

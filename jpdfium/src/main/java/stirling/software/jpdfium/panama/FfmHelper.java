@@ -3,6 +3,7 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
@@ -68,5 +69,131 @@ public final class FfmHelper {
      */
     public static MemorySegment ptrToSegment(long address) {
         return address == 0 ? MemorySegment.NULL : MemorySegment.ofAddress(address);
+    }
+
+    /**
+     * Invoke a MethodHandle that returns an int status code, throwing on non-zero.
+     * Many PDFium functions return 0 for success and non-zero for error.
+     *
+     * @param mh   MethodHandle to invoke
+     * @param args arguments to pass to the MethodHandle
+     * @throws RuntimeException if invocation fails or returns non-zero
+     */
+    public static void invokeCheck(MethodHandle mh, Object... args) {
+        try {
+            int result = (int) mh.invokeExact(args);
+            if (result != 0) {
+                throw new RuntimeException("FFM call failed with code " + result);
+            }
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Throwable t) {
+            throw new RuntimeException("FFM call failed", t);
+        }
+    }
+
+    /**
+     * Invoke a MethodHandle that returns an int status code, returning a default on failure.
+     *
+     * @param mh           MethodHandle to invoke
+     * @param defaultValue value to return if invocation fails or returns non-zero
+     * @param args         arguments to pass to the MethodHandle
+     * @return the result or defaultValue on failure
+     */
+    public static int invokeOrDefault(MethodHandle mh, int defaultValue, Object... args) {
+        try {
+            int result = (int) mh.invokeExact(args);
+            return result != 0 ? defaultValue : result;
+        } catch (Throwable t) {
+            return defaultValue;
+        }
+    }
+
+    /**
+     * Invoke a MethodHandle that returns a MemorySegment, returning MemorySegment.NULL on failure.
+     *
+     * @param mh MethodHandle to invoke
+     * @param args arguments to pass to the MethodHandle
+     * @return the result or MemorySegment.NULL on failure
+     */
+    public static MemorySegment invokeSegment(MethodHandle mh, Object... args) {
+        try {
+            return (MemorySegment) mh.invokeExact(args);
+        } catch (Throwable t) {
+            return MemorySegment.NULL;
+        }
+    }
+
+    /**
+     * Allocate four floats in an Arena for rectangle coordinates (left, bottom, right, top).
+     *
+     * @param arena the Arena to allocate in
+     * @return MemorySegment containing four consecutive floats (16 bytes total)
+     */
+    public static MemorySegment allocateRect(Arena arena) {
+        return arena.allocate(16, 4);
+    }
+
+    /**
+     * Read four floats from a MemorySegment as a rectangle (left, bottom, right, top).
+     *
+     * @param seg MemorySegment containing four floats
+     * @return array of [left, bottom, right, top]
+     */
+    public static float[] readRect(MemorySegment seg) {
+        return new float[]{
+            seg.get(ValueLayout.JAVA_FLOAT, 0),
+            seg.get(ValueLayout.JAVA_FLOAT, 4),
+            seg.get(ValueLayout.JAVA_FLOAT, 8),
+            seg.get(ValueLayout.JAVA_FLOAT, 12)
+        };
+    }
+
+    /**
+     * Allocate four ints in an Arena for RGBA color values.
+     *
+     * @param arena the Arena to allocate in
+     * @return MemorySegment containing four consecutive ints (16 bytes total)
+     */
+    public static MemorySegment allocateColor(Arena arena) {
+        return arena.allocate(16, 4);
+    }
+
+    /**
+     * Read four ints from a MemorySegment as RGBA color values.
+     *
+     * @param seg MemorySegment containing four ints
+     * @return array of [r, g, b, a]
+     */
+    public static int[] readColor(MemorySegment seg) {
+        return new int[]{
+            seg.get(ValueLayout.JAVA_INT, 0),
+            seg.get(ValueLayout.JAVA_INT, 4),
+            seg.get(ValueLayout.JAVA_INT, 8),
+            seg.get(ValueLayout.JAVA_INT, 12)
+        };
+    }
+
+    /**
+     * Allocate two ints in an Arena for start index and count values.
+     *
+     * @param arena the Arena to allocate in
+     * @return MemorySegment containing two consecutive ints (8 bytes total)
+     */
+    public static MemorySegment allocateIntPair(Arena arena) {
+        return arena.allocate(8, 2);
+    }
+
+    /**
+     * Read two ints from a MemorySegment as a pair.
+     *
+     * @param seg MemorySegment containing two ints
+     * @return array of [first, second]
+     */
+    public static int[] readIntPair(MemorySegment seg) {
+        return new int[]{
+            seg.get(ValueLayout.JAVA_INT, 0),
+            seg.get(ValueLayout.JAVA_INT, 4)
+        };
     }
 }

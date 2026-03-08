@@ -35,7 +35,7 @@ public class S01_Render {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S01_Render", input, fi + 1, inputs.size());
-            Path outDir = SampleBase.out("render", input);
+            Path outDir = SampleBase.out("S01_render", input);
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 int n = doc.pageCount();

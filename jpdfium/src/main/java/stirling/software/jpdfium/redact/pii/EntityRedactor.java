@@ -9,6 +9,7 @@ import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -212,7 +213,7 @@ public final class EntityRedactor implements AutoCloseable {
 
     public static final class Builder {
         private final List<Entity> entities = new ArrayList<>();
-        private final Map<PiiCategory, String> patterns = new java.util.EnumMap<>(PiiCategory.class);
+        private final Map<PiiCategory, String> patterns = new EnumMap<>(PiiCategory.class);
         private int coreferenceWindow = 2;
         private final List<String> coreferencePronouns = new ArrayList<>(List.of(
                 "he", "she", "they", "him", "her", "them", "his", "their",

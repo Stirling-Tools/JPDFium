@@ -409,7 +409,6 @@ class CorpusRedactTest {
             html.append("</head>\n<body>\n");
             html.append("<h1>Corpus Redaction Test Report</h1>\n");
 
-            // Summary banner
             String timestamp = LocalDateTime.now().format(
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
             int passed = 0, warned = 0, failed = 0, skipped = 0;
@@ -434,7 +433,6 @@ class CorpusRedactTest {
             html.append(String.format("<span class='skip'>SKIP: %d</span></p>%n", skipped));
             html.append("</div>\n");
 
-            // Thresholds reference
             html.append("<details class='thresholds'><summary>Detection Thresholds</summary>\n");
             html.append("<table><tr><th>Check</th><th>Threshold</th><th>Action</th></tr>\n");
             html.append(String.format(

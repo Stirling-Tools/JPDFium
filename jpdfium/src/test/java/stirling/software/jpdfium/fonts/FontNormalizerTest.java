@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.fonts;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.model.FontType;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -25,8 +26,8 @@ class FontNormalizerTest {
     @Test
     void fontClassificationRecordProperties() {
         var fc = new FontNormalizer.FontClassification(
-                "TrueType", true, true, 256, 2048, true, false, "Arial");
-        assertEquals("TrueType", fc.type());
+                FontType.TRUETYPE, true, true, 256, 2048, true, false, "Arial");
+        assertEquals(FontType.TRUETYPE, fc.type());
         assertTrue(fc.sfnt());
         assertTrue(fc.hasCmap());
         assertEquals(256, fc.numGlyphs());

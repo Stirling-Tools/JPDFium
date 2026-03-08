@@ -35,7 +35,7 @@ public class S11_Attachments {
                 if (atts.isEmpty()) {
                     System.out.println("  (no attachments)");
                 } else {
-                    Path outDir = SampleBase.out("attachments");
+                    Path outDir = SampleBase.out("S11_attachments");
                     System.out.printf("  %d attachment(s)%n", atts.size());
                     for (Attachment att : atts) {
                         System.out.printf("  [%d] \"%s\" (%d bytes)%n",

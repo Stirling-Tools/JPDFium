@@ -50,8 +50,6 @@ class RedactionSessionTest {
         }
     }
 
-    // Mark Phase
-
     @Test
     void markWordsCreatesAnnotations() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
@@ -80,8 +78,6 @@ class RedactionSessionTest {
         }
     }
 
-    // Query Phase
-
     @Test
     void pendingRedactionCountStartsAtZero() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
@@ -97,8 +93,6 @@ class RedactionSessionTest {
         }
     }
 
-    // Undo Phase
-
     @Test
     void clearPageDoesNotThrow() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
@@ -112,8 +106,6 @@ class RedactionSessionTest {
             assertDoesNotThrow(() -> session.clearAll());
         }
     }
-
-    // Commit Phase
 
     @Test
     void commitAllOnEmptyDocument() throws Exception {
@@ -137,12 +129,10 @@ class RedactionSessionTest {
     @Test
     void markThenCommitWorkflow() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
-            // Mark phase
             session.markWords(
                     new String[]{"Hello", "World"}, 0xFF000000,
                     1.5f, false, false, false);
 
-            // Commit phase
             var result = session.commitAll();
             assertTrue(result.totalCommitted() >= 0);
         }
@@ -151,14 +141,11 @@ class RedactionSessionTest {
     @Test
     void markThenCommitThenSave() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
-            // Mark
             session.markWords(new String[]{"test"}, 0xFF000000,
                     0f, false, false, false);
 
-            // Commit
             session.commitAll();
 
-            // Save - document is still alive
             byte[] output = session.saveBytes();
             assertNotNull(output);
             assertTrue(output.length > 0);
@@ -168,12 +155,10 @@ class RedactionSessionTest {
     @Test
     void markThenCommitThenMarkAgain() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
-            // First cycle
             session.markWords(new String[]{"Confidential"}, 0xFF000000,
                     0f, false, false, false);
             session.commitAll();
 
-            // Second cycle - document is still alive, no reload
             session.markWords(new String[]{"Secret"}, 0xFF000000,
                     0f, false, false, false);
             session.commitAll();
@@ -204,10 +189,6 @@ class RedactionSessionTest {
         }
     }
 
-    // Lifecycle
-
-    // Font Normalization
-
     @Test
     void normalizeFontsDoesNotThrow() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
@@ -230,25 +211,19 @@ class RedactionSessionTest {
     @Test
     void normalizeThenMarkThenCommit() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
-            // Normalize first
             session.normalizeFonts();
 
-            // Mark phase
             session.markWords(new String[]{"Hello"}, 0xFF000000,
                     0f, false, false, false);
 
-            // Commit phase
             var result = session.commitAll();
             assertTrue(result.totalCommitted() >= 0);
 
-            // Save incremental
             byte[] output = session.saveIncremental();
             assertNotNull(output);
             assertTrue(output.length > 0);
         }
     }
-
-    // Lifecycle
 
     @Test
     void closedSessionThrows() throws Exception {

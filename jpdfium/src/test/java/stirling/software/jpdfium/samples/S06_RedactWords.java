@@ -85,7 +85,7 @@ public class S06_RedactWords {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S06_Redact", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("redact-words", input).resolve(input.getFileName());
+            Path output = SampleBase.out("S06_redact-words", input).resolve(input.getFileName());
 
             RedactResult result = PdfRedactor.redact(input, opts);
             try (var doc = result.document()) {

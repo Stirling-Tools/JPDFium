@@ -43,7 +43,7 @@ public class S17_NUpLayout {
 
         System.out.printf("S17_NUpLayout  |  %d PDF(s)%n", inputs.size());
 
-        Path outDir = SampleBase.out("nup-layout");
+        Path outDir = SampleBase.out("S17_nup-layout");
         int fi = 0;
 
         for (Path input : inputs) {

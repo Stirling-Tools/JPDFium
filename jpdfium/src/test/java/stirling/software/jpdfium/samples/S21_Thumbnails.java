@@ -35,7 +35,7 @@ public class S21_Thumbnails {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S21_Thumbnails", input, fi + 1, inputs.size());
-            Path outDir = SampleBase.out("thumbnails", input);
+            Path outDir = SampleBase.out("S21_thumbnails", input);
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 int n = doc.pageCount();

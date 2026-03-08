@@ -40,7 +40,7 @@ public class S09_Flatten {
         for (int fi = 0; fi < inputs.size(); fi++) {
             Path input = inputs.get(fi);
             SampleBase.pdfHeader("S09_Flatten", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("flatten", input).resolve(input.getFileName());
+            Path output = SampleBase.out("S09_flatten", input).resolve(input.getFileName());
 
             try (PdfDocument doc = PdfDocument.open(input)) {
                 System.out.printf("  flattening %d page(s) [%s]...%n", doc.pageCount(), MODE);

@@ -387,4 +387,114 @@ public final class PdfPageEditor {
             PageEditBindings.FPDFPage_Delete.invokeExact(doc, pageIndex);
         } catch (Throwable t) { throw new RuntimeException("FPDFPage_Delete failed", t); }
     }
+
+    /**
+     * Get the rotation of a page.
+     *
+     * @param page raw FPDF_PAGE
+     * @return rotation: 0=none, 1=90°CW, 2=180°, 3=270°CW (90°CCW)
+     */
+    public static int getRotation(MemorySegment page) {
+        try {
+            return (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(page);
+        } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetRotation failed", t); }
+    }
+
+    /**
+     * Set the rotation of a page.
+     *
+     * @param page     raw FPDF_PAGE
+     * @param rotation 0=none, 1=90°CW, 2=180°, 3=270°CW (90°CCW)
+     */
+    public static void setRotation(MemorySegment page, int rotation) {
+        try {
+            PageEditBindings.FPDFPage_SetRotation.invokeExact(page, rotation);
+        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetRotation failed", t); }
+    }
+
+    /**
+     * Get the MediaBox of a page.
+     *
+     * @param page raw FPDF_PAGE
+     * @return float[4] = {left, bottom, right, top}, or null if not set
+     */
+    public static float[] getMediaBox(MemorySegment page) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
+            int ok;
+            try {
+                ok = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
+                        page, left, bottom, right, top);
+            } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetMediaBox failed", t); }
+            if (ok == 0) return null;
+            return new float[]{
+                    left.get(ValueLayout.JAVA_FLOAT, 0),
+                    bottom.get(ValueLayout.JAVA_FLOAT, 0),
+                    right.get(ValueLayout.JAVA_FLOAT, 0),
+                    top.get(ValueLayout.JAVA_FLOAT, 0)
+            };
+        }
+    }
+
+    /**
+     * Set the MediaBox of a page.
+     *
+     * @param page   raw FPDF_PAGE
+     * @param left   left edge
+     * @param bottom bottom edge
+     * @param right  right edge
+     * @param top    top edge
+     */
+    public static void setMediaBox(MemorySegment page, float left, float bottom,
+                                    float right, float top) {
+        try {
+            PageEditBindings.FPDFPage_SetMediaBox.invokeExact(page, left, bottom, right, top);
+        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetMediaBox failed", t); }
+    }
+
+    /**
+     * Get the CropBox of a page.
+     *
+     * @param page raw FPDF_PAGE
+     * @return float[4] = {left, bottom, right, top}, or null if not set
+     */
+    public static float[] getCropBox(MemorySegment page) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
+            int ok;
+            try {
+                ok = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
+                        page, left, bottom, right, top);
+            } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetCropBox failed", t); }
+            if (ok == 0) return null;
+            return new float[]{
+                    left.get(ValueLayout.JAVA_FLOAT, 0),
+                    bottom.get(ValueLayout.JAVA_FLOAT, 0),
+                    right.get(ValueLayout.JAVA_FLOAT, 0),
+                    top.get(ValueLayout.JAVA_FLOAT, 0)
+            };
+        }
+    }
+
+    /**
+     * Set the CropBox of a page.
+     *
+     * @param page   raw FPDF_PAGE
+     * @param left   left edge
+     * @param bottom bottom edge
+     * @param right  right edge
+     * @param top    top edge
+     */
+    public static void setCropBox(MemorySegment page, float left, float bottom,
+                                   float right, float top) {
+        try {
+            PageEditBindings.FPDFPage_SetCropBox.invokeExact(page, left, bottom, right, top);
+        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetCropBox failed", t); }
+    }
 }
