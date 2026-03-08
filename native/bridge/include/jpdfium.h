@@ -123,9 +123,20 @@ JPDFIUM_EXPORT int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_i
 JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page);
 
 // Commit phase: burn all REDACT annotations on the page using Object Fission.
-// This permanently removes text/images under each REDACT rect, paints filled
-// rectangles, removes the consumed annotations, and regenerates the content
-// stream.  The document handle remains valid - no reload required.
+// This permanently removes content under each REDACT rect and regenerates the
+// content stream.  Handles ALL page object types:
+//   - Text:    character-level fission (splits text objects, removes only chars
+//              inside redaction rects; 3 encoding strategies: Unicode, FreeType
+//              GID, WinAnsi)
+//   - Image:   overlap-based removal (>70% overlap threshold)
+//   - Path:    subpath-level granularity (decomposes into subpaths at MoveTo
+//              boundaries, removes redacted subpaths, rebuilds survivors with
+//              visual properties preserved)
+//   - Shading: bbox-based removal when fully contained in a redaction rect
+//   - Form:    recursive descent into Form XObjects with matrix concatenation;
+//              removes fully-overlapping forms or individually redacts children
+// Paints filled rectangles, removes consumed annotations.  The document handle
+// remains valid - no reload required.
 // Returns the number of REDACT annotations that were committed in *commitCount.
 JPDFIUM_EXPORT int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
                                               int32_t remove_content,

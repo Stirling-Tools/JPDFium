@@ -23,6 +23,7 @@
 #include <map>
 #include <algorithm>
 #include <unordered_map>
+#include <functional>
 
 #ifdef JPDFIUM_HAS_FREETYPE
 #include <ft2build.h>
@@ -216,7 +217,11 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
         for (int i = objCount - 1; i >= 0; --i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
             int type = FPDFPageObj_GetType(obj);
-            if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE) continue;
+
+            // Handle all content-bearing object types
+            if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE &&
+                type != FPDF_PAGEOBJ_PATH && type != FPDF_PAGEOBJ_SHADING &&
+                type != FPDF_PAGEOBJ_FORM) continue;
 
             float ol, ob, or_, ot;
             if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
@@ -246,21 +251,39 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 }
 
 // Object Fission Algorithm
-// True text redaction that permanently removes targeted characters from the
-// content stream while preserving surrounding text with perfect typographical
-// fidelity.  Implements the "Object Fission" approach:
+// True content redaction that permanently removes targeted content from the
+// content stream. For text, implements character-level "Object Fission"
+// that preserves surrounding text with perfect typographical fidelity.
 //
+// Handles ALL PDF page object types:
+//
+//   TEXT objects:
 //   1. Map text-page character indices to their owning FPDF_PAGEOBJECT via
-//      spatial correlation (bounding-box containment of char centres).
+//      FPDFText_GetTextObject (direct char-to-object mapping).
 //   2. For each page object that contains redacted characters:
 //        - If ALL characters redacted -> destroy the entire object.
 //        - If only SOME characters redacted -> "fission" the object:
-//            a) Create a Prefix text object (chars before redaction) pinned
-//               to the original transformation matrix.
-//            b) Create a Suffix text object (chars after redaction) pinned
-//               to a hybridised matrix: original scale/rotation (a,b,c,d) +
-//               new translation (e,f) from FPDFText_GetCharOrigin.
-//            c) Destroy the original object.
+//            a) Split into per-word fragments at word/redaction boundaries.
+//            b) Each fragment gets absolute positioning from FPDFText_GetCharOrigin.
+//            c) Three encoding strategies: SetText, FreeType GID, WinAnsi.
+//            d) Destroy the original object.
+//
+//   PATH objects (vector graphics, decorations, logos):
+//   - Subpath-level granularity: decompose complex paths into subpaths
+//     (each starting with a MOVETO), independently test each against
+//     redaction rects, rebuild the path from surviving subpaths only.
+//
+//   SHADING objects (gradients, blend fills):
+//   - Remove when bbox is fully contained in a redaction rect.
+//
+//   FORM XObjects (nested content streams):
+//   - Recursive descent: enumerate child objects via FPDFFormObj_* APIs,
+//     transform bounds through cumulative form→page matrix chain,
+//     remove children that are inside redaction rects.
+//
+//   IMAGE objects (raster content, photos, scanned pages):
+//   - Remove when fully contained or >70% overlap with a redaction rect.
+//
 //   3. Paint a filled rectangle at every match bbox.
 //   4. Regenerate the content stream (single FPDFPage_GenerateContent call).
 
@@ -556,19 +579,331 @@ static int32_t objectFissionRedact(
         }
     }
 
-    // 6. Also remove image objects that are mostly inside any match bbox
+    // 6. Remove non-text page objects that overlap redaction regions.
+    //    This handles image, path, shading, and form XObject content.
+    //
+    //    Path objects: subpath-level granularity - extract individual subpaths
+    //    (delimited by MOVETO segments), check each against redaction rects,
+    //    and rebuild the path with only surviving subpaths.
+    //
+    //    Shading objects: bbox-based removal when fully inside any redaction rect.
+    //
+    //    Form XObjects: recursive descent into form object content, removing
+    //    child objects that are inside redaction rects. Uses FPDFFormObj_*
+    //    APIs with coordinate transform from form-local to page space.
+    //
+    //    Image objects: overlap-based removal (>70% threshold).
+
+    // Subpath extraction and per-subpath redaction for path objects.
+    // Each subpath starts with a MOVETO segment and ends before the next MOVETO.
+    struct Subpath {
+        int startIdx;    // index of first segment (MOVETO)
+        int endIdx;      // index past last segment (exclusive)
+        float minX, minY, maxX, maxY;  // bounding box
+    };
+
+    auto extractSubpaths = [](FPDF_PAGEOBJECT path, int segCount) -> std::vector<Subpath> {
+        std::vector<Subpath> subpaths;
+        Subpath current = {0, 0, 1e9f, 1e9f, -1e9f, -1e9f};
+        bool started = false;
+
+        for (int s = 0; s < segCount; s++) {
+            FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(path, s);
+            if (!seg) continue;
+
+            int segType = FPDFPathSegment_GetType(seg);
+            float sx, sy;
+            FPDFPathSegment_GetPoint(seg, &sx, &sy);
+
+            if (segType == FPDF_SEGMENT_MOVETO && started) {
+                // Finish previous subpath
+                current.endIdx = s;
+                subpaths.push_back(current);
+                current = {s, 0, 1e9f, 1e9f, -1e9f, -1e9f};
+            }
+
+            started = true;
+            if (sx < current.minX) current.minX = sx;
+            if (sy < current.minY) current.minY = sy;
+            if (sx > current.maxX) current.maxX = sx;
+            if (sy > current.maxY) current.maxY = sy;
+        }
+
+        if (started) {
+            current.endIdx = segCount;
+            subpaths.push_back(current);
+        }
+        return subpaths;
+    };
+
+    // Check if a subpath's bbox (transformed to page space) is fully inside
+    // any redaction rect.
+    auto isSubpathRedacted = [&](const Subpath& sp, const FS_MATRIX& objMatrix) -> bool {
+        // Transform subpath bbox corners through the object's matrix
+        float corners[4][2] = {
+            {sp.minX, sp.minY}, {sp.maxX, sp.minY},
+            {sp.maxX, sp.maxY}, {sp.minX, sp.maxY}
+        };
+        float tMinX = 1e9f, tMinY = 1e9f, tMaxX = -1e9f, tMaxY = -1e9f;
+        for (auto& c : corners) {
+            float tx = objMatrix.a * c[0] + objMatrix.c * c[1] + objMatrix.e;
+            float ty = objMatrix.b * c[0] + objMatrix.d * c[1] + objMatrix.f;
+            if (tx < tMinX) tMinX = tx;
+            if (ty < tMinY) tMinY = ty;
+            if (tx > tMaxX) tMaxX = tx;
+            if (ty > tMaxY) tMaxY = ty;
+        }
+
+        for (auto& m : matches) {
+            if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY,
+                                 m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Recursive form XObject redaction: removes child objects inside redaction
+    // rects, accounting for the cumulative transform from form-local to page space.
+    std::function<bool(FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage)>
+    redactFormContents = [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage) -> bool {
+        int childCount = FPDFFormObj_CountObjects(formObj);
+        if (childCount <= 0) return false;
+
+        bool changed = false;
+        // Iterate in reverse for safe removal
+        for (int ci = childCount - 1; ci >= 0; ci--) {
+            FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
+            if (!child) continue;
+
+            int childType = FPDFPageObj_GetType(child);
+
+            float cl, cb, cr, ct;
+            if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
+
+            // Transform child bounds through the parent-to-page matrix
+            float corners[4][2] = {
+                {cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}
+            };
+            float tMinX = 1e9f, tMinY = 1e9f, tMaxX = -1e9f, tMaxY = -1e9f;
+            for (auto& c : corners) {
+                float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
+                float ty = parentToPage.b * c[0] + parentToPage.d * c[1] + parentToPage.f;
+                if (tx < tMinX) tMinX = tx;
+                if (ty < tMinY) tMinY = ty;
+                if (tx > tMaxX) tMaxX = tx;
+                if (ty > tMaxY) tMaxY = ty;
+            }
+
+            // Check overlap with any match bbox
+            bool shouldRemove = false;
+            for (auto& m : matches) {
+                if (childType == FPDF_PAGEOBJ_TEXT || childType == FPDF_PAGEOBJ_IMAGE ||
+                    childType == FPDF_PAGEOBJ_PATH || childType == FPDF_PAGEOBJ_SHADING) {
+                    if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY,
+                                         m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
+                        overlapRatio(tMinX, tMinY, tMaxX, tMaxY,
+                                     m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                        shouldRemove = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldRemove) {
+                FPDFFormObj_RemoveObject(formObj, child);
+                FPDFPageObj_Destroy(child);
+                changed = true;
+                // Re-fetch count since we removed an object
+                childCount = FPDFFormObj_CountObjects(formObj);
+                ci = childCount; // will decrement to childCount-1
+                continue;
+            }
+
+            // Recurse into nested form objects
+            if (childType == FPDF_PAGEOBJ_FORM) {
+                FS_MATRIX childMatrix;
+                if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
+                    // Concatenate: child-to-page = childMatrix * parentToPage
+                    FS_MATRIX combined;
+                    combined.a = childMatrix.a * parentToPage.a + childMatrix.b * parentToPage.c;
+                    combined.b = childMatrix.a * parentToPage.b + childMatrix.b * parentToPage.d;
+                    combined.c = childMatrix.c * parentToPage.a + childMatrix.d * parentToPage.c;
+                    combined.d = childMatrix.c * parentToPage.b + childMatrix.d * parentToPage.d;
+                    combined.e = childMatrix.e * parentToPage.a + childMatrix.f * parentToPage.c + parentToPage.e;
+                    combined.f = childMatrix.e * parentToPage.b + childMatrix.f * parentToPage.d + parentToPage.f;
+
+                    if (redactFormContents(child, combined))
+                        changed = true;
+                }
+            }
+        }
+        return changed;
+    };
+
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
-        if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_IMAGE) continue;
+        int type = FPDFPageObj_GetType(obj);
+
+        // Skip text objects - handled by fission above
+        if (type == FPDF_PAGEOBJ_TEXT) continue;
 
         float ol, ob, or_, ot;
         if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
 
+        // Quick reject: no overlap with any match bbox
+        bool anyOverlap = false;
         for (auto& m : matches) {
-            if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
-                overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
-                objsToDestroy.insert(obj);
+            if (rectsOverlap(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                anyOverlap = true;
                 break;
+            }
+        }
+        if (!anyOverlap) continue;
+
+        if (type == FPDF_PAGEOBJ_IMAGE) {
+            // Image: remove if fully contained or >70% overlap
+            for (auto& m : matches) {
+                if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
+                    overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                    objsToDestroy.insert(obj);
+                    break;
+                }
+            }
+        }
+        else if (type == FPDF_PAGEOBJ_PATH) {
+            // Path: subpath-level granularity
+            int segCount = FPDFPath_CountSegments(obj);
+            if (segCount <= 0) continue;
+
+            FS_MATRIX pathMatrix;
+            if (!FPDFPageObj_GetMatrix(obj, &pathMatrix)) continue;
+
+            auto subpaths = extractSubpaths(obj, segCount);
+            if (subpaths.empty()) continue;
+
+            // Check each subpath independently
+            bool anyRemoved = false;
+            bool allRemoved = true;
+
+            for (auto& sp : subpaths) {
+                if (isSubpathRedacted(sp, pathMatrix)) {
+                    anyRemoved = true;
+                } else {
+                    allRemoved = false;
+                }
+            }
+
+            if (allRemoved) {
+                // All subpaths redacted -> remove entire path object
+                objsToDestroy.insert(obj);
+            } else if (anyRemoved) {
+                // Partial: rebuild path with only surviving subpaths.
+                // We rebuild using PDFium's path APIs: create a new path object,
+                // copy surviving segments, replace the original.
+                FPDF_PAGEOBJECT newPath = FPDFPageObj_CreateNewPath(0, 0);
+                if (!newPath) continue;
+
+                bool hasContent = false;
+                for (auto& sp : subpaths) {
+                    if (isSubpathRedacted(sp, pathMatrix)) continue;
+
+                    for (int s = sp.startIdx; s < sp.endIdx; s++) {
+                        FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(obj, s);
+                        if (!seg) continue;
+
+                        int segType = FPDFPathSegment_GetType(seg);
+                        float sx, sy;
+                        FPDFPathSegment_GetPoint(seg, &sx, &sy);
+                        FPDF_BOOL isClose = FPDFPathSegment_GetClose(seg);
+
+                        if (segType == FPDF_SEGMENT_MOVETO) {
+                            FPDFPath_MoveTo(newPath, sx, sy);
+                        } else if (segType == FPDF_SEGMENT_LINETO) {
+                            FPDFPath_LineTo(newPath, sx, sy);
+                            if (isClose) FPDFPath_Close(newPath);
+                        } else if (segType == FPDF_SEGMENT_BEZIERTO) {
+                            // For Bezier, we need 3 control points. The segment
+                            // only gives us this point. PDFium stores bezier as
+                            // a single BezierTo(cp1x,cp1y,cp2x,cp2y,x,y) but
+                            // the segments API gives back 3 consecutive points.
+                            // Actually, each BezierTo segment IS one point.
+                            // We need to accumulate 3 points for a bezier.
+                            // PDFium stores bezier segments as 3 consecutive points.
+                            if (s + 2 < sp.endIdx) {
+                                float c1x, c1y, c2x, c2y, ex, ey;
+                                c1x = sx; c1y = sy;
+                                FPDF_PATHSEGMENT seg2 = FPDFPath_GetPathSegment(obj, s + 1);
+                                FPDF_PATHSEGMENT seg3 = FPDFPath_GetPathSegment(obj, s + 2);
+                                if (seg2 && seg3) {
+                                    FPDFPathSegment_GetPoint(seg2, &c2x, &c2y);
+                                    FPDFPathSegment_GetPoint(seg3, &ex, &ey);
+                                    FPDFPath_BezierTo(newPath, c1x, c1y, c2x, c2y, ex, ey);
+                                    FPDF_BOOL close3 = FPDFPathSegment_GetClose(seg3);
+                                    if (close3) FPDFPath_Close(newPath);
+                                    s += 2;  // skip the 2 consumed segments
+                                }
+                            }
+                        }
+                        hasContent = true;
+                    }
+                }
+
+                if (hasContent) {
+                    // Copy visual properties from original
+                    FPDFPageObj_SetMatrix(newPath, &pathMatrix);
+                    unsigned int fr, fg, fb, fa;
+                    if (FPDFPageObj_GetFillColor(obj, &fr, &fg, &fb, &fa))
+                        FPDFPageObj_SetFillColor(newPath, fr, fg, fb, fa);
+                    unsigned int sr, sg, sb, sa;
+                    if (FPDFPageObj_GetStrokeColor(obj, &sr, &sg, &sb, &sa))
+                        FPDFPageObj_SetStrokeColor(newPath, sr, sg, sb, sa);
+                    float sw;
+                    if (FPDFPageObj_GetStrokeWidth(obj, &sw))
+                        FPDFPageObj_SetStrokeWidth(newPath, sw);
+
+                    // Copy draw mode (fill/stroke)
+                    int fillMode = 0;
+                    FPDF_BOOL stroke = 0;
+                    FPDFPath_GetDrawMode(obj, &fillMode, &stroke);
+                    FPDFPath_SetDrawMode(newPath, fillMode, stroke);
+
+                    FPDFPage_InsertObject(page, newPath);
+                    objsToDestroy.insert(obj);
+                } else {
+                    FPDFPageObj_Destroy(newPath);
+                }
+            }
+        }
+        else if (type == FPDF_PAGEOBJ_SHADING) {
+            // Shading: remove if fully contained in any redaction rect
+            for (auto& m : matches) {
+                if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                    objsToDestroy.insert(obj);
+                    break;
+                }
+            }
+        }
+        else if (type == FPDF_PAGEOBJ_FORM) {
+            // Form XObject: first check if entire form is inside a redaction rect
+            bool formFullyInside = false;
+            for (auto& m : matches) {
+                if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
+                    overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                    formFullyInside = true;
+                    break;
+                }
+            }
+
+            if (formFullyInside) {
+                objsToDestroy.insert(obj);
+            } else {
+                // Recursively redact form contents
+                FS_MATRIX formMatrix;
+                if (FPDFPageObj_GetMatrix(obj, &formMatrix)) {
+                    // Identity as parent since form's own matrix is the first transform
+                    redactFormContents(obj, formMatrix);
+                }
             }
         }
     }
