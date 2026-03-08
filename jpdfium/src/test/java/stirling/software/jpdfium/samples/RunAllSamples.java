@@ -46,8 +46,13 @@ public class RunAllSamples {
         passed += run("S14_StructureTree", () -> S14_StructureTree.main(a));
         passed += run("S15_Thumbnails",    () -> S15_Thumbnails.main(a));
         passed += run("S16_PageEditing",   () -> S16_PageEditing.main(a));
+        passed += run("S17_NUpLayout",     () -> S17_NUpLayout.main(a));
+        passed += run("S18_Repair",        () -> S18_Repair.main(a));
+        passed += run("S19_PdfToImages",   () -> S19_PdfToImages.main(a));
+        passed += run("S20_ImagesToPdf",   () -> S20_ImagesToPdf.main(a));
+        passed += run("S21_Thumbnails",    () -> S21_Thumbnails.main(a));
 
-        int total = 16;
+        int total = 21;
         System.out.printf("Results: %d/%d samples passed%n", passed, total);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
     }
