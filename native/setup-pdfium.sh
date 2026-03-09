@@ -131,39 +131,8 @@ else
     echo "[3/7] Not Linux, skipping build deps install."
 fi
 
-# ---------- Step 4: Patch source for shared-library export ----------
-echo "[4/7] Patching source for shared library build..."
-
-# The upstream FPDF_EXPORT macro only uses visibility("default") when
-# COMPONENT_BUILD is defined, but standalone PDFium builds cannot use
-# is_component_build=true (it requires the full Chromium //base).
-# We patch the header to always export FPDF_EXPORT symbols so that the
-# manually-linked shared library exposes all FPDF_*/EPDF_* symbols.
-if grep -q 'defined(COMPONENT_BUILD)' public/fpdfview.h; then
-    python3 - public/fpdfview.h << 'PYEOF'
-import sys, re
-path = sys.argv[1]
-with open(path) as f:
-    text = f.read()
-old_block = re.compile(
-    r'#if defined\(COMPONENT_BUILD\)\n.*?#endif  // defined\(COMPONENT_BUILD\)\n',
-    re.DOTALL
-)
-new_block = (
-    '#if defined(WIN32)\n'
-    '#define FPDF_EXPORT __declspec(dllexport)\n'
-    '#else\n'
-    '#define FPDF_EXPORT __attribute__((visibility("default")))\n'
-    '#endif\n'
-)
-text = old_block.sub(new_block, text, count=1)
-with open(path, 'w') as f:
-    f.write(text)
-print("  Patched FPDF_EXPORT in fpdfview.h")
-PYEOF
-else
-    echo "  FPDF_EXPORT already patched."
-fi
+# ---------- Step 4: Patch source for standalone builds ----------
+echo "[4/7] Patching source for standalone build..."
 
 # Create stub base/BUILD.gn if missing (standalone builds lack full //base)
 if [ ! -f base/BUILD.gn ] || ! grep -q 'group("base")' base/BUILD.gn 2>/dev/null; then
@@ -182,14 +151,41 @@ if [ -f third_party/libpng/visibility.gni ]; then
     fi
 fi
 
+# Fix null pointer crash in RemoveOrRestoreUnusedResources when a resource
+# type is referenced by page objects but has no page-level resource dictionary.
+# Also fix null dereference in RecordPageObjectResourceUsage when page objects
+# have uninitialized color state (no backing ColorData ref).
+CONTENTGEN="core/fpdfapi/edit/cpdf_pagecontentgenerator.cpp"
+if [ -f "${CONTENTGEN}" ]; then
+    # Patch 1: Guard current_resource_dict->GetKeys() against null
+    if grep -q 'const std::vector<ByteString> keys = current_resource_dict->GetKeys();' "${CONTENTGEN}"; then
+        echo "  Patching RemoveOrRestoreUnusedResources null dereference..."
+        sed -i 's/const std::vector<ByteString> keys = current_resource_dict->GetKeys();/const std::vector<ByteString> keys =\n        current_resource_dict ? current_resource_dict->GetKeys()\n                              : std::vector<ByteString>();/' "${CONTENTGEN}"
+        sed -i 's/RemoveUnusedResources(current_resource_dict, keys,$/current_resource_dict\n            ? RemoveUnusedResources(current_resource_dict, keys,/' "${CONTENTGEN}"
+        sed -i '/? RemoveUnusedResources(current_resource_dict, keys,/{n;s/resource_in_use_of_current_type);/                                    resource_in_use_of_current_type)\n            : CPDF_PageObjectHolder::RemovedResourceMap();/}' "${CONTENTGEN}"
+    fi
+
+    # Patch 2: Guard color_state() accessor calls against uninitialized ref
+    if grep -q 'if (!cs.GetFillColorSpaceResName().IsEmpty())' "${CONTENTGEN}" && \
+       ! grep -q 'if (cs.HasRef())' "${CONTENTGEN}"; then
+        echo "  Patching RecordPageObjectResourceUsage color state null dereference..."
+        sed -i '/const CPDF_ColorState& cs = page_object->color_state();/{n;s/if (!cs.GetFillColorSpaceResName/if (cs.HasRef()) {\n    if (!cs.GetFillColorSpaceResName/}' "${CONTENTGEN}"
+        sed -i '/cs.GetStrokePatternResName());/{n;s/^}/  }\n}/}' "${CONTENTGEN}" 2>/dev/null || true
+    fi
+fi
+
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"
 
-# Static build (is_component_build=false) because standalone PDFium
-# cannot use component build (requires full Chromium //base).
-# Symbol export is handled by the FPDF_EXPORT patch + version script.
-GN_ARGS='is_debug=false is_component_build=false pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false'
+# Component build (is_component_build=true) produces libpdfium.so directly
+# via SOLINK. This sets COMPONENT_BUILD + FPDF_IMPLEMENTATION defines, which
+# gives FPDF_EXPORT symbols visibility("default") automatically.
+#
+# use_allocator_shim=false is critical: without this, PartitionAlloc replaces
+# the system allocator (malloc/free), which crashes when loaded into a JVM
+# that already manages its own heap.
+GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
 
 gn gen "${OUT_DIR}" --args="${GN_ARGS}"
 
@@ -198,46 +194,15 @@ echo "[6/7] Building PDFium (this may take 15-60 minutes)..."
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 ninja -C "${OUT_DIR}" pdfium -j "${NPROC}"
 
-# ---------- Step 7: Link shared library + install ----------
-echo "[7/7] Linking shared library and installing to ${TARGET_DIR}..."
+# ---------- Step 7: Install ----------
+echo "[7/7] Installing to ${TARGET_DIR}..."
 mkdir -p "${TARGET_DIR}/include" "${TARGET_DIR}/lib"
 
-# Detect clang from the build toolchain (depot_tools ships its own)
-CLANG="${PDFIUM_SRC}/third_party/llvm-build/Release+Asserts/bin/clang++"
-if [ ! -f "${CLANG}" ]; then
-    CLANG="clang++"
-fi
-
-# Create version script to export only public API symbols
-VERSION_SCRIPT="$(mktemp)"
-cat > "${VERSION_SCRIPT}" << 'VEOF'
-{
-  global:
-    FPDF*;
-    EPDF*;
-    FORM_*;
-    FSDK_*;
-  local:
-    *;
-};
-VEOF
-
-# Link all object files + archives into a single shared library.
-# Archives contain third-party code; standalone .o files contain PDFium core.
-# --allow-multiple-definition handles overlap between .a and .o files.
-"${CLANG}" -shared -fuse-ld=lld \
-    -o "${OUT_DIR}/libpdfium.so" \
-    -Wl,--whole-archive $(find "${OUT_DIR}/obj" -name "*.a" | sort | tr '\n' ' ') -Wl,--no-whole-archive \
-    $(find "${OUT_DIR}/obj" -name "*.o" | sort | tr '\n' ' ') \
-    -Wl,--allow-multiple-definition \
-    -Wl,--version-script="${VERSION_SCRIPT}" \
-    -lpthread -lm -ldl
-
-rm -f "${VERSION_SCRIPT}"
-
-# Install
-cp "${OUT_DIR}/libpdfium.so" "${TARGET_DIR}/lib/"
-echo "  Copied libpdfium.so -> ${TARGET_DIR}/lib/"
+# Component build produces libpdfium.so plus its dependency .so files.
+# Copy all shared libraries from the output directory.
+cp "${OUT_DIR}"/lib*.so "${TARGET_DIR}/lib/"
+LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"lib*.so 2>/dev/null | wc -l)"
+echo "  Copied ${LIB_COUNT} shared libraries -> ${TARGET_DIR}/lib/"
 
 # Copy public headers
 cp public/*.h "${TARGET_DIR}/include/"

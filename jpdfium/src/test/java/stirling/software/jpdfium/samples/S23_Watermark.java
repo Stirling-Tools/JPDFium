@@ -30,7 +30,7 @@ public class S23_Watermark {
         Path outDir = SampleBase.out("S23_watermark");
 
         // 1. Diagonal "CONFIDENTIAL" text watermark (centered)
-        SampleBase.section("Text watermark - CONFIDENTIAL (center, 45°)");
+        SampleBase.section("Text watermark - CONFIDENTIAL (center, 45 degrees)");
         Watermark textWm = Watermark.text("CONFIDENTIAL")
                 .font("Helvetica").size(72)
                 .color(0xFF0000)

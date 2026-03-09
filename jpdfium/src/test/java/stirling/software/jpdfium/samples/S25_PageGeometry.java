@@ -31,13 +31,13 @@ public class S25_PageGeometry {
         for (Path input : inputs) {
             String stem = SampleBase.stem(input);
 
-            // 1. Rotate 90°
-            SampleBase.section("Rotate 90° CW");
+            // 1. Rotate 90 degrees
+            SampleBase.section("Rotate 90 degrees CW");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {
                     int current = PdfPageGeometry.getRotation(doc, i);
                     PdfPageGeometry.setRotation(doc, i, 90);
-                    System.out.printf("  Page %d: %d° -> 90°%n", i, current);
+                    System.out.printf("  Page %d: %d degrees -> 90 degrees%n", i, current);
                 }
                 Path outFile = outDir.resolve(stem + "-rotated-90.pdf");
                 doc.save(outFile);
@@ -91,7 +91,7 @@ public class S25_PageGeometry {
                         PageSize size = page.size();
                         int rotation = PdfPageGeometry.getRotation(doc, i);
                         Rect cropBox = PdfPageGeometry.getCropBox(doc, i);
-                        System.out.printf("  Page %d: %.0f x %.0f, rotation=%d°, " +
+                        System.out.printf("  Page %d: %.0f x %.0f, rotation=%d degrees, " +
                                         "cropBox=%s%n",
                                 i, size.width(), size.height(), rotation,
                                 cropBox != null ? cropBox : "(default)");

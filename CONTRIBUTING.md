@@ -44,9 +44,29 @@
    ```
 
    > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
-   > On Fedora, also install: `sudo dnf install clang lld pkg-config`.
+   > On Fedora, also install: `sudo dnf install clang lld pkg-config ninja-build`.
    > The build script installs `depot_tools` (gclient/gn/ninja) automatically.
    > Subsequent builds with `--rebuild` are much faster (incremental).
+
+### PDFium Build Details
+
+JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) (branch `embedpdf/main`) which adds
+`EPDF_*` APIs for native encryption, annotation control, and redaction.
+
+The build uses a **component build** (`is_component_build=true`) with `use_allocator_shim=false`:
+- Component build produces `libpdfium.so` plus dependency `.so` files (PartitionAlloc, ICU, zlib, abseil)
+- `use_allocator_shim=false` is **required** — without it, PartitionAlloc replaces the system allocator
+  (malloc/free), causing crashes when loaded into a JVM that manages its own heap
+- `COMPONENT_BUILD` + `FPDF_IMPLEMENTATION` defines are set automatically, giving FPDF_EXPORT symbols
+  `__attribute__((visibility("default")))` — no manual header patching needed
+
+The build script applies these source patches:
+- **`base/BUILD.gn`**: Stub file (standalone PDFium lacks full `//base`)
+- **`third_party/libpng/visibility.gni`**: Adds fpdfsdk to libpng visibility (EmbedPDF adds PNG export)
+- **`cpdf_pagecontentgenerator.cpp`**: Fixes two null pointer crashes in PDFium's resource dict handling
+
+The `NativeLoader` reads a `native-libs.txt` manifest to extract all component `.so` files to a temp
+directory before loading. The dynamic linker resolves dependencies via `RUNPATH=$ORIGIN`.
 
 5. **Open in IntelliJ IDEA** - import as a Gradle project. Add
    `--enable-native-access=ALL-UNNAMED` to Run Configurations -> Templates -> Application -> VM Options.

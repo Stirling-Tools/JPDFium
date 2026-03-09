@@ -163,38 +163,38 @@ public final class PdfAnnotationBuilder {
 
             if (opacity >= 0) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
                 } catch (Throwable ignored) {}
             }
             if (!Float.isNaN(rotation)) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetRotate.invokeExact(annot, rotation);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetRotate.invokeExact(annot, rotation);
                 } catch (Throwable ignored) {}
             }
             if (overlayText != null && type == AnnotationType.REDACT) {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment textSeg = FfmHelper.toWideString(arena, overlayText);
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetOverlayText.invokeExact(annot, textSeg);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOverlayText.invokeExact(annot, textSeg);
                 } catch (Throwable ignored) {}
             }
             if (borderStyle >= 0) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetBorderStyle.invokeExact(annot, borderStyle, borderWidth);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetBorderStyle.invokeExact(annot, borderStyle, borderWidth);
                 } catch (Throwable ignored) {}
             }
             if (textAlignment >= 0) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetTextAlignment.invokeExact(annot, textAlignment);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetTextAlignment.invokeExact(annot, textAlignment);
                 } catch (Throwable ignored) {}
             }
             if (icon >= 0) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
                 } catch (Throwable ignored) {}
             }
             if (generateAppearance) {
                 try {
-                    EmbedPdfAnnotationBindings.EPDFAnnot_GenerateAppearance.invokeExact(annot);
+                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GenerateAppearance.invokeExact(annot);
                 } catch (Throwable ignored) {}
             }
 

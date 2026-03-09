@@ -16,7 +16,7 @@ import java.lang.foreign.MemorySegment;
  *     // Set crop box (1-inch margins on Letter)
  *     PdfPageGeometry.setCropBox(doc, 0, new Rect(72, 72, 468, 648));
  *
- *     // Rotate page 90° clockwise
+ *     // Rotate page 90 degrees clockwise
  *     PdfPageGeometry.setRotation(doc, 0, 90);
  *
  *     // Resize all pages to A4

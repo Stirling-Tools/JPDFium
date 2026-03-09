@@ -530,6 +530,7 @@ static int32_t objectFissionRedact(
         plan.originalObj    = obj;
         plan.removeEntirely = false;
         plan.font           = FPDFTextObj_GetFont(obj);
+        if (!plan.font) continue;  // cannot fission without a font
         FPDFTextObj_GetFontSize(obj, &plan.fontSize);
         plan.renderMode     = FPDFTextObj_GetTextRenderMode(obj);
 

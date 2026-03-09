@@ -392,7 +392,7 @@ public final class PdfPageEditor {
      * Get the rotation of a page.
      *
      * @param page raw FPDF_PAGE
-     * @return rotation: 0=none, 1=90°CW, 2=180°, 3=270°CW (90°CCW)
+     * @return rotation: 0=none, 1=90 degrees CW, 2=180 degrees, 3=270 degrees CW (90 degrees CCW)
      */
     public static int getRotation(MemorySegment page) {
         try {
@@ -404,7 +404,7 @@ public final class PdfPageEditor {
      * Set the rotation of a page.
      *
      * @param page     raw FPDF_PAGE
-     * @param rotation 0=none, 1=90°CW, 2=180°, 3=270°CW (90°CCW)
+     * @param rotation 0=none, 1=90 degrees CW, 2=180 degrees, 3=270 degrees CW (90 degrees CCW)
      */
     public static void setRotation(MemorySegment page, int rotation) {
         try {

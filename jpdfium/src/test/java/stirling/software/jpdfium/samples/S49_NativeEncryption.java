@@ -56,7 +56,7 @@ public class S49_NativeEncryption {
 
         // 3. Unlock owner permissions
         try (PdfDocument doc = PdfDocument.open(encrypted, "user123")) {
-            // Initially opened with user password — restricted permissions
+            // Initially opened with user password - restricted permissions
             boolean ownerBefore = PdfEncryption.isOwnerUnlocked(doc.rawHandle());
             System.out.printf("  Owner unlocked (before): %b%n", ownerBefore);
 
@@ -69,8 +69,8 @@ public class S49_NativeEncryption {
         // 4. Remove encryption and save
         Path decrypted = outDir.resolve(stem + "-native-decrypted.pdf");
         try (PdfDocument doc = PdfDocument.open(encrypted, "owner456")) {
-            // When opened with owner password, we have full access
-            // Save without encryption by not setting any
+            // Explicitly remove encryption before saving
+            PdfEncryption.removeEncryption(doc.rawHandle());
             doc.save(decrypted);
             System.out.printf("  Decrypted: %s (%d bytes)%n", decrypted.getFileName(), Files.size(decrypted));
         }

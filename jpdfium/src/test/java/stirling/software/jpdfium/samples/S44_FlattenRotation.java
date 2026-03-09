@@ -34,7 +34,7 @@ public class S44_FlattenRotation {
                     try (PdfPage page = doc.page(p)) {
                         int originalDegrees = PdfFlattenRotation.flatten(page.rawHandle());
                         if (originalDegrees != 0) {
-                            System.out.printf("  %s page %d: flattened %d° rotation%n",
+                            System.out.printf("  %s page %d: flattened %d degrees rotation%n",
                                     stem, p, originalDegrees);
                             anyFlattened = true;
                         }

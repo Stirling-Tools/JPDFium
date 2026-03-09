@@ -9,7 +9,7 @@ import java.lang.foreign.ValueLayout;
 /**
  * Flatten page rotation into the content stream.
  *
- * <p>Takes a rotated page (90°, 180°, 270°) and applies the rotation transform
+ * Takes a rotated page (90 degrees, 180 degrees, 270 degrees) and applies the rotation transform
  * to all page objects, then resets the rotation flag to 0. This ensures the visual
  * appearance is preserved while removing rotation metadata.
  */
@@ -30,7 +30,7 @@ public final class PdfFlattenRotation {
             rotation = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(rawPage);
         } catch (Throwable t) { return 0; }
 
-        // rotation: 0=0°, 1=90°, 2=180°, 3=270°
+        // rotation: 0=0 degrees, 1=90 degrees, 2=180 degrees, 3=270 degrees
         if (rotation == 0) return 0;
 
         int degrees = rotation * 90;
@@ -58,13 +58,13 @@ public final class PdfFlattenRotation {
         // Compute rotation matrix (a,b,c,d,e,f) based on rotation
         double a, b, c, d, e, f;
         switch (rotation) {
-            case 1: // 90° CCW
+            case 1: // 90 degrees CCW
                 a = 0; b = -1; c = 1; d = 0; e = 0; f = width;
                 break;
-            case 2: // 180°
+            case 2: // 180 degrees
                 a = -1; b = 0; c = 0; d = -1; e = width; f = height;
                 break;
-            case 3: // 270° CCW
+            case 3: // 270 degrees CCW
                 a = 0; b = 1; c = -1; d = 0; e = height; f = 0;
                 break;
             default:
@@ -80,7 +80,7 @@ public final class PdfFlattenRotation {
             } catch (Throwable ignored) {}
         }
 
-        // Swap MediaBox dimensions for 90° and 270°
+        // Swap MediaBox dimensions for 90 degrees and 270 degrees
         if (rotation == 1 || rotation == 3) {
             try {
                 PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPage, 0f, 0f, height, width);

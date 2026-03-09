@@ -157,6 +157,14 @@ if(JPDFIUM_USE_PDFIUM)
             COMMENT "Copied libpdfium → natives resources")
     endif()
 
+    # Generate native-libs.txt manifest for Java NativeLoader
+    add_custom_command(TARGET jpdfium POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${NATIVES_RESOURCES}
+            -DLIB_SUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
+        COMMENT "Generated native-libs.txt")
+
 else()
     # Stub target is the default "jpdfium" for Java tests
     add_library(jpdfium ALIAS jpdfium_stub)
