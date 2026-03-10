@@ -4,9 +4,7 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
-import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -121,7 +119,7 @@ public final class PdfSplit {
      */
     private static final byte[] MINIMAL_PDF_BYTES;
     static {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(512);
         sb.append("%PDF-1.4\n");
         int obj1 = sb.length();
         sb.append("1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
@@ -131,7 +129,7 @@ public final class PdfSplit {
         sb.append("3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n");
         int xrefPos = sb.length();
         sb.append("xref\n0 4\n");
-        sb.append(String.format("0000000000 65535 f \n"));
+        sb.append("0000000000 65535 f \n");
         sb.append(String.format("%010d 00000 n \n", obj1));
         sb.append(String.format("%010d 00000 n \n", obj2));
         sb.append(String.format("%010d 00000 n \n", obj3));

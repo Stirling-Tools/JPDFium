@@ -5,7 +5,6 @@ import stirling.software.jpdfium.PdfDocument;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * SAMPLE 04 - Read PDF document metadata.

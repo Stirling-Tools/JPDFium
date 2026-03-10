@@ -13,7 +13,7 @@ import java.util.List;
  *
  * <p>
  * Demonstrates the full repair cascade:
- * Brotli pre-transcoding → core qpdf repair → PDFio fallback →
+ * Brotli pre-transcoding - core qpdf repair - PDFio fallback -
  * ICC/JPX post-validation.
  *
  * <p>
@@ -45,7 +45,7 @@ public class S18_Repair {
             Files.writeString(diagPath, diagnostics);
             produced.add(diagPath);
 
-            // Full pipeline: Brotli pre-transcoding → core → PDFio fallback
+            // Full pipeline: Brotli pre-transcoding - core - PDFio fallback
             SampleBase.section("Repair (full pipeline)");
             RepairResult result = PdfRepair.builder()
                     .input(pdfBytes)

@@ -1,8 +1,8 @@
 package stirling.software.jpdfium.doc;
 
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -46,7 +46,7 @@ final class QpdfHelper {
     static void run(String... args) {
         List<String> command = new ArrayList<>();
         command.add("qpdf");
-        for (String arg : args) command.add(arg);
+        Collections.addAll(command, args);
 
         try {
             Process p = new ProcessBuilder(command)
@@ -58,7 +58,8 @@ final class QpdfHelper {
                 p.destroyForcibly();
                 throw new RuntimeException("qpdf timed out after 120 seconds");
             }
-            if (p.exitValue() != 0 && p.exitValue() != 3) {
+            if (p.exitValue() != 0 && p.exitValue() != 3 && p.exitValue() != 2) {
+                // qpdf exit 2 = errors but output created (e.g., recoverable issues)
                 // qpdf exit 3 = warnings (success with warnings)
                 throw new RuntimeException("qpdf failed (exit=" + p.exitValue() + "): "
                         + new String(output).trim());

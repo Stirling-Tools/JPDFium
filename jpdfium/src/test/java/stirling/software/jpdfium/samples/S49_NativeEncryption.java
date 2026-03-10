@@ -28,7 +28,7 @@ public class S49_NativeEncryption {
 
         System.out.printf("S49_NativeEncryption  |  %d PDF(s)%n", inputs.size());
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         // 1. In-memory encrypt and save

@@ -139,6 +139,8 @@ public final class PdfAttachments {
         }
     }
 
+    private static final byte[] EMPTY_BYTES = new byte[0];
+
     private static byte[] getAttachmentFile(MemorySegment att) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment outLen = arena.allocate(ValueLayout.JAVA_LONG);
@@ -150,13 +152,13 @@ public final class PdfAttachments {
             } catch (Throwable t) { throw new RuntimeException(t); }
 
             long len = outLen.get(ValueLayout.JAVA_LONG, 0);
-            if (ok == 0 || len <= 0) return new byte[0];
+            if (ok == 0 || len <= 0) return EMPTY_BYTES;
 
             MemorySegment buf = arena.allocate(len);
             try {
                 ok = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(att, buf, len, outLen);
             } catch (Throwable t) { throw new RuntimeException(t); }
-            if (ok == 0) return new byte[0];
+            if (ok == 0) return EMPTY_BYTES;
 
             return buf.asSlice(0, outLen.get(ValueLayout.JAVA_LONG, 0))
                     .toArray(ValueLayout.JAVA_BYTE);

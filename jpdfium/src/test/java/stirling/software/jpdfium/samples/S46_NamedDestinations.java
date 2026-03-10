@@ -28,7 +28,7 @@ public class S46_NamedDestinations {
                 System.out.printf("  %s: %d named destination(s)%n", stem, dests.size());
                 for (int i = 0; i < Math.min(dests.size(), 10); i++) {
                     NamedDestination nd = dests.get(i);
-                    System.out.printf("    [%d] \"%s\" → page %d (%.1f, %.1f) zoom=%.2f view=%s%n",
+                    System.out.printf("    [%d] \"%s\" - page %d (%.1f, %.1f) zoom=%.2f view=%s%n",
                             i, nd.name(), nd.pageIndex(), nd.x(), nd.y(), nd.zoom(), nd.viewType());
                 }
                 if (dests.size() > 10) {
@@ -37,7 +37,7 @@ public class S46_NamedDestinations {
 
                 // Try finding first destination by name if any exist
                 if (!dests.isEmpty()) {
-                    String firstName = dests.get(0).name();
+                    String firstName = dests.getFirst().name();
                     NamedDestination found = PdfNamedDestinations.find(doc.rawHandle(), firstName);
                     System.out.printf("    find(\"%s\"): %s%n", firstName,
                             found != null ? "page " + found.pageIndex() : "not found");

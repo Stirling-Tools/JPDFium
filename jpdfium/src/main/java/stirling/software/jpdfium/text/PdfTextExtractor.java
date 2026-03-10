@@ -6,6 +6,7 @@ import stirling.software.jpdfium.PdfPage;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * High-level structured text extraction from PDF documents.
@@ -30,6 +31,8 @@ import java.util.List;
  * }</pre>
  */
 public final class PdfTextExtractor {
+
+    private static final Pattern COMMA_BEFORE_QUOTE = Pattern.compile(",(?=\")");
 
     private PdfTextExtractor() {}
 
@@ -97,7 +100,7 @@ public final class PdfTextExtractor {
             float x = 0, y = 0, w = 0, h = 0, fontSize = 0;
             String fontName = "";
 
-            String[] pairs = obj.split(",(?=\")");
+            String[] pairs = COMMA_BEFORE_QUOTE.split(obj);
             for (String pair : pairs) {
                 int colon = pair.indexOf(':');
                 if (colon < 0) continue;
@@ -123,7 +126,7 @@ public final class PdfTextExtractor {
 
     /**
      * Groups a flat character list into lines and words.
-     *
+     * <p>
      * Lines are detected by a Y-position shift greater than half the current character height.
      * Using a relative threshold (half-height) rather than a fixed point value makes the
      * segmentation work correctly across different font sizes within the same page.
@@ -133,10 +136,10 @@ public final class PdfTextExtractor {
 
         List<TextLine> lines = new ArrayList<>();
         List<TextChar> currentLineChars = new ArrayList<>();
-        float currentLineY = chars.get(0).y();
+        float currentLineY = chars.getFirst().y();
         // Use half the first character's height as the initial threshold.
         // The threshold is updated per line to adapt to font size changes mid-page.
-        float lineThreshold = chars.get(0).height() * 0.5f;
+        float lineThreshold = chars.getFirst().height() * 0.5f;
 
         for (TextChar ch : chars) {
             if (!currentLineChars.isEmpty() && Math.abs(ch.y() - currentLineY) > lineThreshold) {

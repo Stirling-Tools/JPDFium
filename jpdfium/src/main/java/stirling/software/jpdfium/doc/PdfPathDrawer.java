@@ -13,7 +13,6 @@ import java.lang.foreign.MemorySegment;
 public final class PdfPathDrawer {
 
     private final MemorySegment rawPage;
-    private final MemorySegment rawDoc;
     private MemorySegment currentPath;
 
     // Draw mode flags
@@ -30,7 +29,6 @@ public final class PdfPathDrawer {
     private int lineJoin = 0;
 
     private PdfPathDrawer(MemorySegment rawDoc, MemorySegment rawPage) {
-        this.rawDoc = rawDoc;
         this.rawPage = rawPage;
     }
 
@@ -119,20 +117,13 @@ public final class PdfPathDrawer {
     public void commit() {
         ensurePath();
         try {
-            // Set fill color
             int ok1 = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(currentPath, fillR, fillG, fillB, fillA);
-            // Set stroke color
             int ok2 = (int) PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(currentPath, strokeR, strokeG, strokeB, strokeA);
-            // Set stroke width
             int ok3 = (int) PageEditBindings.FPDFPageObj_SetStrokeWidth.invokeExact(currentPath, strokeWidth);
-            // Set line cap and join
             int ok4 = (int) PageEditBindings.FPDFPageObj_SetLineCap.invokeExact(currentPath, lineCap);
             int ok5 = (int) PageEditBindings.FPDFPageObj_SetLineJoin.invokeExact(currentPath, lineJoin);
-            // Set draw mode
             int ok6 = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(currentPath, fillMode, stroke ? 1 : 0);
-            // Insert into page
             PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, currentPath);
-            // Generate content
             int ok7 = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
         } catch (Throwable t) { throw new RuntimeException("Failed to commit path", t); }
         currentPath = null;

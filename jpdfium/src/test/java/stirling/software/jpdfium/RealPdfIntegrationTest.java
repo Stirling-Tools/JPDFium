@@ -52,7 +52,7 @@ class RealPdfIntegrationTest {
              var page = doc.page(0)) {
             String json = page.extractTextJson();
             assertNotNull(json);
-            assertTrue(json.startsWith("["));
+            assertTrue(!json.isEmpty() && json.charAt(0) == '[');
             assertTrue(json.contains("\"u\":"),  "Should contain unicode codepoints");
             assertTrue(json.contains("\"font\":"), "Should contain font info");
             assertTrue(json.contains("\"size\":"), "Should contain font size");

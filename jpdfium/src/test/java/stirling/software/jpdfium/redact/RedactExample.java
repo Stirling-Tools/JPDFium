@@ -19,7 +19,7 @@ import java.nio.file.Path;
  */
 public class RedactExample {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         Path input  = args.length > 0 ? Path.of(args[0]) : Path.of("/tmp/test.pdf");
         Path output = Path.of("/tmp/redacted.pdf");
 

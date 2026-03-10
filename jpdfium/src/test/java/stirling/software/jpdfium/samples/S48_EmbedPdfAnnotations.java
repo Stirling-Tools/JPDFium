@@ -34,7 +34,7 @@ public class S48_EmbedPdfAnnotations {
 
         System.out.printf("S48_EmbedPdfAnnotations  |  %d PDF(s)%n", inputs.size());
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         try (PdfDocument doc = PdfDocument.open(input)) {

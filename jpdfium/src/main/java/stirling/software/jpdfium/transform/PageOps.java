@@ -5,7 +5,6 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.RenderResult;
 
 import java.awt.image.BufferedImage;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 

@@ -23,7 +23,7 @@ public class S43_StreamOptimizer {
                 inputs.size(), PdfStreamOptimizer.isSupported());
 
         if (PdfStreamOptimizer.isSupported()) {
-            Path input = inputs.get(0);
+            Path input = inputs.getFirst();
             String stem = SampleBase.stem(input);
             long originalSize = Files.size(input);
             System.out.printf("  Original: %s (%d bytes)%n", input.getFileName(), originalSize);
@@ -46,7 +46,7 @@ public class S43_StreamOptimizer {
 
             SampleBase.done("S43_StreamOptimizer", optimized, compacted);
         } else {
-            Path input = inputs.get(0);
+            Path input = inputs.getFirst();
             String stem = SampleBase.stem(input);
             System.out.println("  (qpdf not found - copying original as fallback)");
             Path fallback = outDir.resolve(stem + "-original.pdf");

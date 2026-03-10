@@ -162,7 +162,7 @@ class ObjectFissionCoordinateTest {
      * Run SSN redaction on the given page, flatten, and return saved bytes.
      * Also asserts that at least {@code minMatches} matches were found.
      */
-    private byte[] redactSsn(Path path, int pageIdx, int minMatches) throws Exception {
+    private static byte[] redactSsn(Path path, int pageIdx, int minMatches) throws Exception {
         try (var doc = PdfDocument.open(path)) {
             try (var page = doc.page(pageIdx)) {
                 int n = page.redactWordsEx(
@@ -179,7 +179,7 @@ class ObjectFissionCoordinateTest {
     }
 
     /** Redact SSNs on ALL pages and return the saved document bytes. */
-    private byte[] redactSsnAllPages(Path path) throws Exception {
+    private static byte[] redactSsnAllPages(Path path) throws Exception {
         try (var doc = PdfDocument.open(path)) {
             for (int i = 0; i < doc.pageCount(); i++) {
                 try (var page = doc.page(i)) {
@@ -195,7 +195,7 @@ class ObjectFissionCoordinateTest {
     }
 
     /** Redact arbitrary words on page 0 and return saved bytes. */
-    private byte[] redactWords(Path path, String[] words, boolean regex) throws Exception {
+    private static byte[] redactWords(Path path, String[] words, boolean regex) throws Exception {
         try (var doc = PdfDocument.open(path)) {
             try (var page = doc.page(0)) {
                 page.redactWordsEx(words, 0xFF000000, 0.0f,
@@ -449,7 +449,7 @@ class ObjectFissionCoordinateTest {
         try (var doc = PdfDocument.open(path); var page = doc.page(0)) {
             var pre = find(positions(page), anchor);
             assertFalse(pre.isEmpty(), "Anchor '" + anchor + "' not found in " + pdf);
-            firstCharBefore = pre.get(0);
+            firstCharBefore = pre.getFirst();
         }
 
         byte[] redacted = redactSsn(path, 0, 1);

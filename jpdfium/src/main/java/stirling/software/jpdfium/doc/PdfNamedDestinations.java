@@ -38,7 +38,6 @@ public final class PdfNamedDestinations {
         List<NamedDestination> result = new ArrayList<>((int) count);
         for (int i = 0; i < count; i++) {
             try (Arena arena = Arena.ofConfined()) {
-                // Get name length
                 MemorySegment bufLenSeg = arena.allocate(ValueLayout.JAVA_LONG);
                 bufLenSeg.set(ValueLayout.JAVA_LONG, 0, 0L);
 
@@ -47,7 +46,6 @@ public final class PdfNamedDestinations {
                 long bufLen = bufLenSeg.get(ValueLayout.JAVA_LONG, 0);
                 if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
 
-                // Get name
                 MemorySegment nameBuf = arena.allocate(bufLen);
                 bufLenSeg.set(ValueLayout.JAVA_LONG, 0, bufLen);
                 dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
@@ -56,7 +54,6 @@ public final class PdfNamedDestinations {
 
                 String name = FfmHelper.fromWideString(nameBuf, bufLen);
 
-                // Get destination info
                 int pageIndex;
                 try {
                     pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(rawDoc, dest);

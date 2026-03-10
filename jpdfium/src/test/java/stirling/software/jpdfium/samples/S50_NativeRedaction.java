@@ -39,7 +39,7 @@ public class S50_NativeRedaction {
 
         System.out.printf("S50_NativeRedaction  |  %d PDF(s)%n", inputs.size());
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         // 1. Create redact annotations with overlay text

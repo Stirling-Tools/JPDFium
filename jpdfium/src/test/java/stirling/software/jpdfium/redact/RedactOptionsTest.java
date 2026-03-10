@@ -89,7 +89,7 @@ class RedactOptionsTest {
 
         assertTrue(opts.words().isEmpty());
         assertEquals(1, opts.entities().size());
-        assertEquals("John Smith", opts.entities().get(0).keyword());
+        assertEquals("John Smith", opts.entities().getFirst().keyword());
     }
 
     @Test
@@ -102,7 +102,7 @@ class RedactOptionsTest {
                 .build();
 
         assertEquals(1, opts.words().size());
-        assertEquals("valid", opts.words().get(0));
+        assertEquals("valid", opts.words().getFirst());
     }
 
     @Test

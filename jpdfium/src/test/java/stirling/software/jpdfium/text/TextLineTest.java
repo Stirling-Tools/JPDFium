@@ -15,7 +15,7 @@ class TextLineTest {
     }
 
     private static TextWord word(String text) {
-        var chars = text.chars().mapToObj(cp -> ch(cp)).toList();
+        var chars = text.chars().mapToObj(TextLineTest::ch).toList();
         return new TextWord(chars, 0, 0, 50, 12);
     }
 

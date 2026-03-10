@@ -29,7 +29,7 @@ class PdfTextSearcherTest {
         List<PdfTextSearcher.SearchMatch> matches = PdfTextSearcher.parseMatchesJson(json, 2);
 
         assertEquals(1, matches.size());
-        PdfTextSearcher.SearchMatch m = matches.get(0);
+        PdfTextSearcher.SearchMatch m = matches.getFirst();
         assertEquals(2, m.pageIndex());
         assertEquals(5, m.startIndex());
         assertEquals(3, m.length());

@@ -5,7 +5,6 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.AnnotationType;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.model.RenderResult;
-import stirling.software.jpdfium.model.Rect;
 
 import javax.imageio.ImageIO;
 import java.nio.file.Path;

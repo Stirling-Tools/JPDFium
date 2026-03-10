@@ -4,16 +4,11 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.PdfVersion;
-import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.DocBindings;
-import stirling.software.jpdfium.text.PdfTextExtractor;
-import stirling.software.jpdfium.text.PageText;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
 
 /**
@@ -213,7 +208,7 @@ public final class DocInfo {
     public int permissions() { return permissions; }
 
     public String summary() {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(128);
         sb.append(String.format("%d pages", pageCount));
         if (!blankPages.isEmpty()) sb.append(String.format(" (%d blank)", blankPages.size()));
         int scanned = pageCount - estimatedTextPages - blankPages.size();
@@ -230,23 +225,22 @@ public final class DocInfo {
     }
 
     public String toJson() {
-        StringBuilder sb = new StringBuilder("{");
-        sb.append(String.format("\"pdfVersion\":\"%s\"", pdfVersion));
-        sb.append(String.format(",\"tagged\":%b", tagged));
-        sb.append(String.format(",\"encrypted\":%b", encrypted));
-        sb.append(String.format(",\"pageCount\":%d", pageCount));
-        sb.append(String.format(",\"hasJavaScript\":%b", hasJavaScript));
-        sb.append(String.format(",\"javaScriptCount\":%d", javaScriptCount));
-        sb.append(String.format(",\"signatureCount\":%d", signatureCount));
-        sb.append(String.format(",\"bookmarkCount\":%d", bookmarkCount));
-        sb.append(String.format(",\"attachmentCount\":%d", attachmentCount));
-        sb.append(String.format(",\"formFieldCount\":%d", formFieldCount));
-        sb.append(String.format(",\"imageCount\":%d", imageCount));
-        sb.append(String.format(",\"estimatedTextPages\":%d", estimatedTextPages));
-        sb.append(String.format(",\"fileSize\":%d", fileSize));
-        sb.append(String.format(",\"permissions\":%d", permissions));
-        sb.append("}");
-        return sb.toString();
+        String sb = "{" + String.format("\"pdfVersion\":\"%s\"", pdfVersion) +
+                String.format(",\"tagged\":%b", tagged) +
+                String.format(",\"encrypted\":%b", encrypted) +
+                String.format(",\"pageCount\":%d", pageCount) +
+                String.format(",\"hasJavaScript\":%b", hasJavaScript) +
+                String.format(",\"javaScriptCount\":%d", javaScriptCount) +
+                String.format(",\"signatureCount\":%d", signatureCount) +
+                String.format(",\"bookmarkCount\":%d", bookmarkCount) +
+                String.format(",\"attachmentCount\":%d", attachmentCount) +
+                String.format(",\"formFieldCount\":%d", formFieldCount) +
+                String.format(",\"imageCount\":%d", imageCount) +
+                String.format(",\"estimatedTextPages\":%d", estimatedTextPages) +
+                String.format(",\"fileSize\":%d", fileSize) +
+                String.format(",\"permissions\":%d", permissions) +
+                "}";
+        return sb;
     }
 
     private static class Builder {

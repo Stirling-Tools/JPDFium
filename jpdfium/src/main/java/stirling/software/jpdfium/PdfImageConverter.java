@@ -7,14 +7,12 @@ import stirling.software.jpdfium.model.PdfToImageOptions;
 import stirling.software.jpdfium.model.Position;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
-import stirling.software.jpdfium.transform.PageOps;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
 import java.awt.*;
-import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -408,11 +406,12 @@ public final class PdfImageConverter {
     }
 
     private static void writeImage(BufferedImage image, Path path, PdfToImageOptions options) throws IOException {
+        BufferedImage bufferedImage = image;
         ImageFormat format = options.format();
         String formatName = format.extension();
 
         if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            image = createWhiteBackground(image);
+            bufferedImage = createWhiteBackground(bufferedImage);
             Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(formatName);
             if (writers.hasNext()) {
                 ImageWriter writer = writers.next();
@@ -422,7 +421,7 @@ public final class PdfImageConverter {
                     param.setCompressionQuality(options.quality() / 100.0f);
                     try (var out = ImageIO.createImageOutputStream(path.toFile())) {
                         writer.setOutput(out);
-                        writer.write(null, new IIOImage(image, null, null), param);
+                        writer.write(null, new IIOImage(bufferedImage, null, null), param);
                     }
                 } finally {
                     writer.dispose();
@@ -437,7 +436,7 @@ public final class PdfImageConverter {
                         : ""));
         }
 
-        if (!ImageIO.write(image, formatName, path.toFile())) {
+        if (!ImageIO.write(bufferedImage, formatName, path.toFile())) {
             throw new IOException("No ImageIO writer found for format: " + formatName);
         }
     }
@@ -453,11 +452,12 @@ public final class PdfImageConverter {
     }
 
     private static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
+        BufferedImage bufferedImage = image;
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
 
         if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
             // JPEG/WEBP don't support alpha channels; composite over white if needed
-            image = createWhiteBackground(image);
+            bufferedImage = createWhiteBackground(bufferedImage);
             Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(format.extension());
             if (writers.hasNext()) {
                 ImageWriter writer = writers.next();
@@ -466,7 +466,7 @@ public final class PdfImageConverter {
                     param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
                     param.setCompressionQuality(quality / 100.0f);
                     writer.setOutput(ImageIO.createImageOutputStream(baos));
-                    writer.write(null, new IIOImage(image, null, null), param);
+                    writer.write(null, new IIOImage(bufferedImage, null, null), param);
                 } finally {
                     writer.dispose();
                 }
@@ -474,7 +474,7 @@ public final class PdfImageConverter {
             }
         }
 
-        ImageIO.write(image, format.extension(), baos);
+        ImageIO.write(bufferedImage, format.extension(), baos);
         return baos.toByteArray();
     }
 }

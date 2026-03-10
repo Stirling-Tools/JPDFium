@@ -2,7 +2,6 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.text.PdfBoundedText;
 
 import java.nio.file.Path;

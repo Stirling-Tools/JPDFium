@@ -3,7 +3,6 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
-import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
@@ -112,6 +111,14 @@ public final class AnnotationBindings {
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
     public static final MethodHandle FPDFAnnot_GetFormAdditionalActionJavaScript = downcall("FPDFAnnot_GetFormAdditionalActionJavaScript",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    /** Number of controls in the radio/checkbox group this annotation belongs to. */
+    public static final MethodHandle FPDFAnnot_GetFormControlCount = downcallCritical("FPDFAnnot_GetFormControlCount",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Zero-based index of this control within its radio/checkbox group. */
+    public static final MethodHandle FPDFAnnot_GetFormControlIndex = downcallCritical("FPDFAnnot_GetFormControlIndex",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     // Annotation creation helpers
     public static final MethodHandle FPDFAnnot_AppendAttachmentPoints = downcall("FPDFAnnot_AppendAttachmentPoints",

@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.AnnotationBindings;
+import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JavaScriptBindings;
 
@@ -71,15 +72,21 @@ public final class PdfJavaScriptInspector {
      */
     public static List<JsAction> annotationScripts(MemorySegment rawDoc, List<MemorySegment> pages) {
         // Form fill environment is needed for annotation JS
+        Arena arena = Arena.ofConfined();
         MemorySegment formHandle;
         try {
-            Arena arena = Arena.ofAuto();
             MemorySegment formInfo = arena.allocate(168);
             formInfo.set(ValueLayout.JAVA_INT, 0, 1);
-            formHandle = (MemorySegment) stirling.software.jpdfium.panama.DocBindings.FPDFDOC_InitFormFillEnvironment
+            formHandle = (MemorySegment) DocBindings.FPDFDOC_InitFormFillEnvironment
                     .invokeExact(rawDoc, formInfo);
-        } catch (Throwable t) { return Collections.emptyList(); }
-        if (formHandle.equals(MemorySegment.NULL)) return Collections.emptyList();
+        } catch (Throwable t) {
+            arena.close();
+            return Collections.emptyList();
+        }
+        if (formHandle.equals(MemorySegment.NULL)) {
+            arena.close();
+            return Collections.emptyList();
+        }
 
         try {
             List<JsAction> scripts = new ArrayList<>();
@@ -115,8 +122,9 @@ public final class PdfJavaScriptInspector {
             }
             return scripts;
         } finally {
-            try { stirling.software.jpdfium.panama.DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle); }
+            try { DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle); }
             catch (Throwable ignored) {}
+            arena.close();
         }
     }
 
@@ -136,7 +144,7 @@ public final class PdfJavaScriptInspector {
                     formHandle, annot, event, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
-            AnnotationBindings.FPDFAnnot_GetFormAdditionalActionJavaScript.invokeExact(
+            long written = (long) AnnotationBindings.FPDFAnnot_GetFormAdditionalActionJavaScript.invokeExact(
                     formHandle, annot, event, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) { return ""; }

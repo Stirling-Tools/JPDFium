@@ -79,7 +79,7 @@ public final class RedactOptions {
     private final List<String> coreferencePronouns;
 
     private RedactOptions(Builder b) {
-        this.words = Collections.unmodifiableList(new ArrayList<>(b.words));
+        this.words = List.copyOf(b.words);
         this.boxColor = b.boxColor;
         this.padding = b.padding;
         this.useRegex = b.useRegex;
@@ -94,17 +94,17 @@ public final class RedactOptions {
         this.repairWidths = b.repairWidths;
         this.piiPatterns = Collections.unmodifiableMap(new EnumMap<>(b.piiPatterns));
         this.luhnValidation = b.luhnValidation;
-        this.entities = Collections.unmodifiableList(new ArrayList<>(b.entities));
+        this.entities = List.copyOf(b.entities);
         this.glyphAware = b.glyphAware;
         this.ligatureAware = b.ligatureAware;
         this.bidiAware = b.bidiAware;
         this.graphemeSafe = b.graphemeSafe;
         this.redactMetadata = b.redactMetadata;
         this.stripAllMetadata = b.stripAllMetadata;
-        this.metadataKeysToStrip = Collections.unmodifiableList(new ArrayList<>(b.metadataKeysToStrip));
+        this.metadataKeysToStrip = List.copyOf(b.metadataKeysToStrip);
         this.semanticRedact = b.semanticRedact;
         this.coreferenceWindow = b.coreferenceWindow;
-        this.coreferencePronouns = Collections.unmodifiableList(new ArrayList<>(b.coreferencePronouns));
+        this.coreferencePronouns = List.copyOf(b.coreferencePronouns);
     }
 
     

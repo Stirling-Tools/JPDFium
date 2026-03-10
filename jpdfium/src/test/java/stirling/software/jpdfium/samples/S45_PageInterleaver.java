@@ -1,7 +1,6 @@
 package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.PdfMerge;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageInterleaver;
 
@@ -45,7 +44,7 @@ public class S45_PageInterleaver {
             try (PdfDocument dest = createEmptyDocument()) {
                 int total = PdfPageInterleaver.interleave(
                         dest.rawHandle(), doc1.rawHandle(), doc2.rawHandle(), false);
-                System.out.printf("  Interleaved %s (%d pg) + %s (%d pg) → %d pages%n",
+                System.out.printf("  Interleaved %s (%d pg) + %s (%d pg) - %d pages%n",
                         stem1, doc1.pageCount(), stem2, doc2.pageCount(), total);
 
                 Path outPath = outDir.resolve(stem1 + "-interleaved-" + stem2 + ".pdf");
@@ -83,7 +82,7 @@ public class S45_PageInterleaver {
         sb.append("3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n");
         int xref = sb.length();
         sb.append("xref\n0 4\n");
-        sb.append(String.format("0000000000 65535 f \n"));
+        sb.append("0000000000 65535 f \n");
         sb.append(String.format("%010d 00000 n \n", obj1));
         sb.append(String.format("%010d 00000 n \n", obj2));
         sb.append(String.format("%010d 00000 n \n", obj3));

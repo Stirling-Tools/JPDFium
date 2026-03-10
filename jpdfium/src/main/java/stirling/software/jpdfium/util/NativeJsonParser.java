@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Lightweight parser for the simple JSON arrays returned by native bridge functions.
@@ -12,6 +13,8 @@ import java.util.Map;
  * This avoids pulling in a full JSON library for these trivial shapes.
  */
 public final class NativeJsonParser {
+
+    private static final Pattern COMMA_BEFORE_QUOTE = Pattern.compile(",(?=\")");
 
     private NativeJsonParser() {}
 
@@ -36,7 +39,7 @@ public final class NativeJsonParser {
             pos = objEnd + 1;
 
             Map<String, String> fields = new LinkedHashMap<>();
-            for (String pair : obj.split(",(?=\")")) {
+            for (String pair : COMMA_BEFORE_QUOTE.split(obj)) {
                 int colon = pair.indexOf(':');
                 if (colon < 0) continue;
                 String key = pair.substring(0, colon).replace("\"", "").trim();

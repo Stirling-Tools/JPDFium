@@ -3,9 +3,7 @@ package stirling.software.jpdfium.samples;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.Annotation;
-import stirling.software.jpdfium.doc.PdfAnnotations;
 
-import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.List;
 

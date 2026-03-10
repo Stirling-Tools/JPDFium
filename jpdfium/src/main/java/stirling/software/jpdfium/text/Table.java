@@ -32,11 +32,13 @@ public record Table(
     public int rowCount() { return rows.size(); }
 
     /** Number of columns (based on first row). */
-    public int colCount() { return rows.isEmpty() ? 0 : rows.get(0).size(); }
+    public int colCount() { return rows.isEmpty() ? 0 : rows.getFirst().size(); }
+
+    private static final String[][] EMPTY_GRID = new String[0][0];
 
     /** Returns the table as a 2D String array [row][col]. */
     public String[][] asGrid() {
-        if (rows.isEmpty()) return new String[0][0];
+        if (rows.isEmpty()) return EMPTY_GRID;
         int cols = colCount();
         String[][] grid = new String[rows.size()][cols];
         for (int r = 0; r < rows.size(); r++) {
@@ -50,7 +52,7 @@ public record Table(
 
     /** Export the table as CSV. */
     public String toCsv() {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(rows.size() * 64);
         for (List<String> row : rows) {
             for (int c = 0; c < row.size(); c++) {
                 if (c > 0) sb.append(',');
@@ -68,7 +70,8 @@ public record Table(
 
     /** Export the table as a JSON array of arrays. */
     public String toJson() {
-        StringBuilder sb = new StringBuilder("[");
+        StringBuilder sb = new StringBuilder(rows.size() * 64);
+        sb.append('[');
         for (int r = 0; r < rows.size(); r++) {
             if (r > 0) sb.append(',');
             sb.append('[');

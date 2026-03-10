@@ -72,7 +72,7 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment hSeg = a.allocate(JAVA_LONG);
             // The bridge copies the data - the arena is freed on return.
-            check(JpdfiumH.jpdfium_doc_open_bytes(a.allocateFrom(JAVA_BYTE, data), (long) data.length, hSeg), "docOpenBytes");
+            check(JpdfiumH.jpdfium_doc_open_bytes(a.allocateFrom(JAVA_BYTE, data), data.length, hSeg), "docOpenBytes");
             return hSeg.get(JAVA_LONG, 0);
         }
     }
@@ -384,7 +384,7 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment hSeg = a.allocate(JAVA_LONG);
             check(JpdfiumH.jpdfium_image_to_pdf(
-                    a.allocateFrom(JAVA_BYTE, imageData), (long) imageData.length,
+                    a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
                     pageWidth, pageHeight, margin, position, imageFormat, hSeg), "imageToPdf");
             return hSeg.get(JAVA_LONG, 0);
         }
@@ -406,7 +406,7 @@ public final class JpdfiumLib {
                                         float margin, int position, int imageFormat, int insertAtIndex) {
         try (Arena a = Arena.ofConfined()) {
             check(JpdfiumH.jpdfium_doc_add_image_page(
-                    doc, a.allocateFrom(JAVA_BYTE, imageData), (long) imageData.length,
+                    doc, a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
                     pageWidth, pageHeight, margin, position, imageFormat, insertAtIndex),
                     "docAddImagePage");
         }

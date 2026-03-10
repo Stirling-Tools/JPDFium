@@ -1,6 +1,6 @@
 allprojects {
     group = "stirling.software"
-    version = "1.0-SNAPSHOT"
+    version = findProperty("jpdfium.version")?.toString() ?: "1.0.0-SNAPSHOT"
 
     repositories {
         mavenCentral()
@@ -123,7 +123,15 @@ tasks.register<JavaExec>("runSample") {
         "47" to "S47_BlankPageDetector",
         "48" to "S48_EmbedPdfAnnotations",
         "49" to "S49_NativeEncryption",
-        "50" to "S50_NativeRedaction"
+        "50" to "S50_NativeRedaction",
+        "51" to "S51_Compress",
+        "52" to "S52_BookmarkEditor",
+        "53" to "S53_BarcodeGenerate",
+        "54" to "S54_PageReorder",
+        "55" to "S55_ColorConvert",
+        "56" to "S56_Booklet",
+        "58" to "S58_Analytics",
+        "59" to "S59_FormFill"
     )
     
     val sampleClass = "stirling.software.jpdfium.samples." + 

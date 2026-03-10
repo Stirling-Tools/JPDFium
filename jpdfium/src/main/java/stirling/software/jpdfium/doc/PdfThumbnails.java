@@ -58,8 +58,6 @@ public final class PdfThumbnails {
      * dimensions, then converts from PDFium's BGRA memory layout to a Java
      * {@code BufferedImage} (TYPE_INT_ARGB).
      *
-     * @param page raw FPDF_PAGE segment
-     * @return the thumbnail image, or empty if no thumbnail exists
      */
     // FPDFBitmap format constants
     private static final int FMT_GRAY = 1;

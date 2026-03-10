@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Record representing a tagged structure element in the PDF structure tree.
@@ -22,6 +23,8 @@ public record StructElement(
         Optional<String> lang,
         List<StructElement> children
 ) {
+    private static final Set<String> HEADING_TYPES = Set.of("H", "H1", "H2", "H3", "H4", "H5", "H6");
+
     public StructElement {
         children = children != null ? Collections.unmodifiableList(children) : Collections.emptyList();
     }
@@ -30,8 +33,7 @@ public record StructElement(
      * Returns true if this element is a heading (H, H1-H6).
      */
     public boolean isHeading() {
-        return type.equals("H") || (type.length() == 2 && type.charAt(0) == 'H'
-                && type.charAt(1) >= '1' && type.charAt(1) <= '6');
+        return HEADING_TYPES.contains(type);
     }
 
     /**
