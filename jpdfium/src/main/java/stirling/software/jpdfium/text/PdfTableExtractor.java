@@ -91,9 +91,8 @@ public final class PdfTableExtractor {
         if (columns.size() < MIN_COLUMNS) return List.of();
 
         // Build the table grid
-        List<Table> tables = buildTables(wordRows, columns);
 
-        return tables;
+        return buildTables(wordRows, columns);
     }
 
     private static float medianHeight(List<TextWord> words) {
@@ -116,7 +115,7 @@ public final class PdfTableExtractor {
 
         List<WordRow> rows = new ArrayList<>();
         List<TextWord> currentRow = new ArrayList<>();
-        float currentY = sorted.get(0).y();
+        float currentY = sorted.getFirst().y();
 
         for (TextWord w : sorted) {
             if (!currentRow.isEmpty() && Math.abs(w.y() - currentY) > tolerance) {
@@ -163,7 +162,7 @@ public final class PdfTableExtractor {
 
         // Find clusters in the left-edge positions
         List<Float> columnStarts = new ArrayList<>();
-        float prevX = leftEdges.get(0);
+        float prevX = leftEdges.getFirst();
         columnStarts.add(prevX);
 
         for (int i = 1; i < leftEdges.size(); i++) {
@@ -176,9 +175,9 @@ public final class PdfTableExtractor {
 
         // Deduplicate close column starts
         List<Float> dedupedStarts = new ArrayList<>();
-        dedupedStarts.add(columnStarts.get(0));
+        dedupedStarts.add(columnStarts.getFirst());
         for (int i = 1; i < columnStarts.size(); i++) {
-            float last = dedupedStarts.get(dedupedStarts.size() - 1);
+            float last = dedupedStarts.getLast();
             if (columnStarts.get(i) - last > colGap * 0.5f) {
                 dedupedStarts.add(columnStarts.get(i));
             }

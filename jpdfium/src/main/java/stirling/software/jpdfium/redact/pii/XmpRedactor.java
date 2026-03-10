@@ -4,6 +4,7 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.XmpLib;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * XMP metadata and /Info dictionary redaction.
@@ -109,7 +110,9 @@ public final class XmpRedactor {
         return redacted;
     }
 
+    private static final Pattern REGEX_METACHAR = Pattern.compile("([\\\\.*+?^${}()|\\[\\]])");
+
     private static String escapeRegex(String literal) {
-        return literal.replaceAll("([\\\\.*+?^${}()|\\[\\]])", "\\\\$1");
+        return REGEX_METACHAR.matcher(literal).replaceAll("\\\\$1");
     }
 }

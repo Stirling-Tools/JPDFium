@@ -1,7 +1,6 @@
 package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.panama.NativeLoader;
-import stirling.software.jpdfium.model.Rect;
 
 import javax.imageio.ImageIO;
 import java.io.File;
@@ -10,12 +9,12 @@ import java.nio.file.Path;
 /**
  * Quick manual smoke-test right-click -> Run in IntelliJ.
  * Pass a PDF path as the first argument, or drop a file at /tmp/test.pdf.
- *
+ * <p>
  * JVM args required: --enable-native-access=ALL-UNNAMED
  */
 public class ManualTest {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         NativeLoader.ensureLoaded();
         System.out.println("Native library loaded: " + NativeLoader.detectPlatform());
 

@@ -2,8 +2,6 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.doc.PdfPageEditor;
-import stirling.software.jpdfium.panama.FfmHelper;
-import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;

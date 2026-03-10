@@ -8,7 +8,7 @@ import java.nio.file.Path;
 
 /**
  * Pixel-level image comparison for before/after redaction visual validation.
- *
+ * <p>
  * Used by VisualRedactTest to assert that Object Fission redaction confines
  * visual changes to the expected redacted region and leaves surrounding content
  * untouched.
@@ -33,7 +33,7 @@ public final class VisualDiff {
 
     /**
      * Compare two images pixel by pixel and produce a visualisation of the differences.
-     *
+     * <p>
      * Changed pixels appear red in the diff image so that human inspection is easy.
      * Unchanged pixels are dimmed to give changed pixels contrast.
      * Both images must have equal dimensions.
@@ -85,7 +85,7 @@ public final class VisualDiff {
 
     /**
      * Count changed pixels that fall outside a given rectangular region.
-     *
+     * <p>
      * Differences smaller than {@code channelThreshold} per channel are ignored to
      * absorb sub-pixel anti-aliasing variation at region boundaries.
      *

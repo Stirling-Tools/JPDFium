@@ -4,7 +4,6 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfImageConverter;
 import stirling.software.jpdfium.model.ImageFormat;
 
-import javax.imageio.ImageIO;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;

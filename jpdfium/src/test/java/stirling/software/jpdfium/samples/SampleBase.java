@@ -115,7 +115,7 @@ final class SampleBase {
      * Kept for backward compatibility.
      */
     static Path inputPdf(String[] args) throws Exception {
-        return inputPdfs(args).get(0);
+        return inputPdfs(args).getFirst();
     }
 
     /**

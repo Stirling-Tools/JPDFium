@@ -1,10 +1,6 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.panama.PageImportBindings;
-
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 
 /**
  * Interleave pages from two PDF documents (e.g., for front/back scanning).

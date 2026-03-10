@@ -5,7 +5,6 @@ import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
 import java.io.IOException;
-import java.net.URI;
 import java.net.URL;
 import java.nio.file.Path;
 
@@ -88,7 +87,7 @@ class PdfDocumentTest {
              var page = doc.page(0)) {
             String json = page.extractTextJson();
             assertNotNull(json);
-            assertTrue(json.startsWith("["), "Expected JSON array, got: " + json);
+            assertTrue(!json.isEmpty() && json.charAt(0) == '[', "Expected JSON array, got: " + json);
         }
     }
 
@@ -213,7 +212,7 @@ class PdfDocumentTest {
     void clearPendingRedactionsDoesNotThrow() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
-            assertDoesNotThrow(() -> page.clearPendingRedactions());
+            assertDoesNotThrow(page::clearPendingRedactions);
         }
     }
 

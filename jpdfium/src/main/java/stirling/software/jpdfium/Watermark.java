@@ -117,7 +117,6 @@ public final class Watermark {
         private float opacity = 0.15f;
         private Position position = Position.CENTER;
         private float margin = 0;
-        private float scale = 0.3f; // default: 30% of page width
 
         private ImageBuilder(BufferedImage image) {
             this.image = image;
@@ -126,7 +125,9 @@ public final class Watermark {
         public ImageBuilder opacity(float opacity) { this.opacity = Math.max(0, Math.min(1, opacity)); return this; }
         public ImageBuilder position(Position position) { this.position = position; return this; }
         public ImageBuilder margin(float margin) { this.margin = margin; return this; }
-        public ImageBuilder scale(float scale) { this.scale = Math.max(0.01f, Math.min(1, scale)); return this; }
+        public ImageBuilder scale(float scale) { // default: 30% of page width
+            float scale1 = Math.max(0.01f, Math.min(1, scale));
+            return this; }
 
         public Watermark build() {
             int alpha = (int) (opacity * 255) & 0xFF;

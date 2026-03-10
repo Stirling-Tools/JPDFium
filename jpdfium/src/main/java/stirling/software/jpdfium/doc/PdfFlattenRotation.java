@@ -8,7 +8,7 @@ import java.lang.foreign.ValueLayout;
 
 /**
  * Flatten page rotation into the content stream.
- *
+ * <p>
  * Takes a rotated page (90 degrees, 180 degrees, 270 degrees) and applies the rotation transform
  * to all page objects, then resets the rotation flag to 0. This ensures the visual
  * appearance is preserved while removing rotation metadata.
@@ -35,7 +35,6 @@ public final class PdfFlattenRotation {
 
         int degrees = rotation * 90;
 
-        // Get page dimensions
         float width, height;
         try (Arena arena = Arena.ofConfined()) {
             var l = arena.allocate(ValueLayout.JAVA_FLOAT);

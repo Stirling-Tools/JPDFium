@@ -23,7 +23,7 @@ public record PageText(
 
     /** Returns the full page text with newlines between lines. */
     public String plainText() {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(lines.size() * 80);
         for (int i = 0; i < lines.size(); i++) {
             if (i > 0) sb.append('\n');
             sb.append(lines.get(i).text());

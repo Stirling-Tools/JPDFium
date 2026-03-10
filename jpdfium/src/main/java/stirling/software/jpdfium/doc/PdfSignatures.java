@@ -138,6 +138,8 @@ public final class PdfSignatures {
         }
     }
 
+    private static final byte[] EMPTY_BYTES = new byte[0];
+
     private static byte[] getContents(MemorySegment sig) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
@@ -145,7 +147,7 @@ public final class PdfSignatures {
                 needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(sig,
                         MemorySegment.NULL, 0L);
             } catch (Throwable t) { throw new RuntimeException(t); }
-            if (needed <= 0) return new byte[0];
+            if (needed <= 0) return EMPTY_BYTES;
 
             MemorySegment buf = arena.allocate(needed);
             try {

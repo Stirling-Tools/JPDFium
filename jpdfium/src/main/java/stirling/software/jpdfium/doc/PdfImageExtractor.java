@@ -133,7 +133,7 @@ public final class PdfImageExtractor {
             } catch (Throwable ignored) {}
 
             // If rendered bitmap failed, try metadata + raw data
-            if (width <= 0 || height <= 0 || decodedBytes == null) {
+            if (width == 0 || height <= 0 || decodedBytes == null) {
                 MemorySegment metaSeg = arena.allocate(ImageObjBindings.IMAGE_METADATA_LAYOUT);
                 int metaOk;
                 try {
@@ -160,7 +160,7 @@ public final class PdfImageExtractor {
                             obj, MemorySegment.NULL, 0L);
                     if (rawSize > 0) {
                         MemorySegment rawBuf = arena.allocate(rawSize);
-                        ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
+                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
                         rawBytes = rawBuf.toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable ignored) {}
@@ -171,7 +171,7 @@ public final class PdfImageExtractor {
                             obj, MemorySegment.NULL, 0L);
                     if (decSize > 0) {
                         MemorySegment decBuf = arena.allocate(decSize);
-                        ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
+                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
                         decodedBytes = decBuf.toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable ignored) {}
@@ -218,7 +218,7 @@ public final class PdfImageExtractor {
                         obj, 0, MemorySegment.NULL, 0L);
                 if (needed <= 1) return "none";
                 MemorySegment buf = arena.allocate(needed);
-                ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(obj, 0, buf, needed);
+                long written = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(obj, 0, buf, needed);
                 return FfmHelper.fromByteString(buf, needed);
             }
         } catch (Throwable t) { return "unknown"; }

@@ -43,13 +43,12 @@ public final class PdfMerge {
         }
         if (documents.size() == 1) {
             // Single doc: import all pages into a fresh document
-            PdfDocument src = documents.get(0);
-            PdfDocument dest = PdfDocument.open(src.saveBytes());
-            return dest;
+            PdfDocument src = documents.getFirst();
+            return PdfDocument.open(src.saveBytes());
         }
 
         // Use first document as base, import remaining
-        PdfDocument first = documents.get(0);
+        PdfDocument first = documents.getFirst();
         PdfDocument dest = PdfDocument.open(first.saveBytes());
 
         for (int i = 1; i < documents.size(); i++) {

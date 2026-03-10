@@ -6,8 +6,6 @@ import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 
-import java.lang.foreign.MemorySegment;
-
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
  *

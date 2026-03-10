@@ -1,7 +1,6 @@
 package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.doc.PdfPageEditor;
-import stirling.software.jpdfium.model.FontName;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Position;
 
@@ -160,7 +159,6 @@ public final class WatermarkApplier {
             case TOP_CENTER -> { x = (pageW - objW) / 2f; y = pageH - objH - margin; }
             case TOP_RIGHT -> { x = pageW - objW - margin; y = pageH - objH - margin; }
             case MIDDLE_LEFT -> { x = margin; y = (pageH - objH) / 2f; }
-            case CENTER -> { x = (pageW - objW) / 2f; y = (pageH - objH) / 2f; }
             case MIDDLE_RIGHT -> { x = pageW - objW - margin; y = (pageH - objH) / 2f; }
             case BOTTOM_LEFT -> { x = margin; y = margin; }
             case BOTTOM_CENTER -> { x = (pageW - objW) / 2f; y = margin; }

@@ -29,7 +29,7 @@ class PdfTextExtractorTest {
         List<TextChar> chars = PdfTextExtractor.parseCharsJson(json);
 
         assertEquals(1, chars.size());
-        TextChar ch = chars.get(0);
+        TextChar ch = chars.getFirst();
         assertEquals(0, ch.index());
         assertEquals(65, ch.unicode());   // 'A'
         assertEquals(10.0f, ch.x(), 0.1f);

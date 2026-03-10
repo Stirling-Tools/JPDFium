@@ -61,13 +61,13 @@ public class S22_MergeSplit {
 
         // 3. Split first PDF into single pages
         SampleBase.section("Split into single pages");
-        try (PdfDocument doc = PdfDocument.open(inputs.get(0))) {
+        try (PdfDocument doc = PdfDocument.open(inputs.getFirst())) {
             List<PdfDocument> parts = PdfSplit.split(doc, PdfSplit.SplitStrategy.singlePages());
             try {
                 System.out.printf("  Split %s into %d single-page docs%n",
-                        inputs.get(0).getFileName(), parts.size());
+                        inputs.getFirst().getFileName(), parts.size());
                 for (int i = 0; i < parts.size(); i++) {
-                    Path outFile = outDir.resolve(SampleBase.stem(inputs.get(0))
+                    Path outFile = outDir.resolve(SampleBase.stem(inputs.getFirst())
                             + "-page-" + (i + 1) + ".pdf");
                     parts.get(i).save(outFile);
                     produced.add(outFile);
@@ -79,14 +79,14 @@ public class S22_MergeSplit {
 
         // 4. Split every 2 pages
         SampleBase.section("Split every 2 pages");
-        try (PdfDocument doc = PdfDocument.open(inputs.get(0))) {
+        try (PdfDocument doc = PdfDocument.open(inputs.getFirst())) {
             if (doc.pageCount() >= 2) {
                 List<PdfDocument> parts = PdfSplit.split(doc,
                         PdfSplit.SplitStrategy.everyNPages(2));
                 try {
                     System.out.printf("  Split into %d chunks of ≤2 pages%n", parts.size());
                     for (int i = 0; i < parts.size(); i++) {
-                        Path outFile = outDir.resolve(SampleBase.stem(inputs.get(0))
+                        Path outFile = outDir.resolve(SampleBase.stem(inputs.getFirst())
                                 + "-chunk-" + (i + 1) + ".pdf");
                         parts.get(i).save(outFile);
                         produced.add(outFile);
@@ -101,10 +101,10 @@ public class S22_MergeSplit {
 
         // 5. Extract specific pages
         SampleBase.section("Extract specific pages");
-        try (PdfDocument doc = PdfDocument.open(inputs.get(0))) {
+        try (PdfDocument doc = PdfDocument.open(inputs.getFirst())) {
             Set<Integer> indices = Set.of(0); // first page
             try (PdfDocument extracted = PdfSplit.extractPages(doc, indices)) {
-                Path outFile = outDir.resolve(SampleBase.stem(inputs.get(0))
+                Path outFile = outDir.resolve(SampleBase.stem(inputs.getFirst())
                         + "-extracted-p1.pdf");
                 extracted.save(outFile);
                 produced.add(outFile);
@@ -115,13 +115,13 @@ public class S22_MergeSplit {
 
         // 6. Split by bookmarks
         SampleBase.section("Split by bookmarks");
-        try (PdfDocument doc = PdfDocument.open(inputs.get(0))) {
+        try (PdfDocument doc = PdfDocument.open(inputs.getFirst())) {
             List<PdfDocument> parts = PdfSplit.split(doc,
                     PdfSplit.SplitStrategy.byBookmarks());
             try {
                 System.out.printf("  Split by bookmarks -> %d parts%n", parts.size());
                 for (int i = 0; i < parts.size(); i++) {
-                    Path outFile = outDir.resolve(SampleBase.stem(inputs.get(0))
+                    Path outFile = outDir.resolve(SampleBase.stem(inputs.getFirst())
                             + "-bm-" + (i + 1) + ".pdf");
                     parts.get(i).save(outFile);
                     produced.add(outFile);

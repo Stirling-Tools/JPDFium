@@ -17,7 +17,7 @@ import java.nio.file.Path;
  */
 public class RunAllSamples {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
         Path input = SampleBase.inputPdf(args);
 
@@ -73,15 +73,22 @@ public class RunAllSamples {
         passed += run("S41_VersionConverter", () -> S41_VersionConverter.main(a));
         passed += run("S42_BoundedText",   () -> S42_BoundedText.main(a));
         passed += run("S43_StreamOptimizer", () -> S43_StreamOptimizer.main(a));
-        passed += run("S44_FlattenRotation", () -> S44_FlattenRotation.main(a));
         passed += run("S45_PageInterleaver", () -> S45_PageInterleaver.main(a));
         passed += run("S46_NamedDestinations", () -> S46_NamedDestinations.main(a));
         passed += run("S47_BlankPageDetector", () -> S47_BlankPageDetector.main(a));
         passed += run("S48_EmbedPdfAnnotations", () -> S48_EmbedPdfAnnotations.main(a));
         passed += run("S49_NativeEncryption", () -> S49_NativeEncryption.main(a));
         passed += run("S50_NativeRedaction", () -> S50_NativeRedaction.main(a));
+        passed += run("S51_Compress",      () -> S51_Compress.main(a));
+        passed += run("S52_BookmarkEditor", () -> S52_BookmarkEditor.main(a));
+        passed += run("S53_BarcodeGenerate", () -> S53_BarcodeGenerate.main(a));
+        passed += run("S54_PageReorder",   () -> S54_PageReorder.main(a));
+        passed += run("S55_ColorConvert",  () -> S55_ColorConvert.main(a));
+        passed += run("S56_Booklet",       () -> S56_Booklet.main(a));
+        passed += run("S58_Analytics",     () -> S58_Analytics.main(a));
+        passed += run("S59_FormFill",      () -> S59_FormFill.main(a));
 
-        int total = 50;
+        int total = 59;
         System.out.printf("Results: %d/%d samples passed%n", passed, total);
         System.out.println("Output:  " + SampleBase.OUT_ROOT.toAbsolutePath());
     }

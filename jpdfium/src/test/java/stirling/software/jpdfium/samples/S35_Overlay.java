@@ -31,10 +31,9 @@ public class S35_Overlay {
         }
 
         // 1. Self-overlay: double each page by overlaying the PDF onto itself
-        for (int idx = 0; idx < inputs.size(); idx++) {
-            Path input = inputs.get(idx);
+        for (Path input : inputs) {
             String stem = SampleBase.stem(input);
-            
+
             try (PdfDocument dest = PdfDocument.open(input);
                  PdfDocument dup = PdfDocument.open(input)) {
                 int origCount = dest.pageCount();
@@ -46,7 +45,7 @@ public class S35_Overlay {
                 int overlaid = PdfOverlay.overlayAll(
                         dest.rawHandle(), dup.rawHandle(),
                         origCount, overlayCount);
-                
+
                 System.out.printf("    Overlaid %d pages, new count: %d%n",
                         overlaid, dest.pageCount());
 

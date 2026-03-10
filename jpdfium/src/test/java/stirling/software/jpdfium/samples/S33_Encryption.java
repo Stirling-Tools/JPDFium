@@ -29,7 +29,7 @@ public class S33_Encryption {
             return;
         }
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         // 1. Check encryption status

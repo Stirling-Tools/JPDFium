@@ -53,8 +53,6 @@ public final class PdfRepair {
     private final int flags;
     private final boolean usePdfioFallback;
     private final boolean transcodeBrotli;
-    private final boolean validateIcc;
-    private final boolean validateJpx;
     private final boolean writeDiagnostics;
     private final boolean sanitize;
 
@@ -66,8 +64,6 @@ public final class PdfRepair {
         this.flags = flags;
         this.usePdfioFallback = usePdfioFallback;
         this.transcodeBrotli = transcodeBrotli;
-        this.validateIcc = validateIcc;
-        this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
         this.sanitize = sanitize;
     }

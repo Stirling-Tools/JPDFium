@@ -3,7 +3,6 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
-import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
@@ -209,6 +208,10 @@ public final class PageEditBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT));
     public static final MethodHandle FPDFPageObj_SetDashArray = downcall("FPDFPageObj_SetDashArray",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_FLOAT));
+
+    // Text render mode
+    public static final MethodHandle FPDFTextObj_GetTextRenderMode = downcallCritical("FPDFTextObj_GetTextRenderMode",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Layout of FS_MATRIX: { float a, b, c, d, e, f }. */
     public static final StructLayout FS_MATRIX_LAYOUT = MemoryLayout.structLayout(

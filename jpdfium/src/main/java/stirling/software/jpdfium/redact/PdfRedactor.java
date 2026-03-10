@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Unified PDF redaction service that applies {@link RedactOptions} to an entire document.
@@ -282,8 +283,10 @@ public final class PdfRedactor {
         return total;
     }
 
+    private static final Pattern REGEX_METACHAR = Pattern.compile("([\\\\.*+?^${}()|\\[\\]])");
+
     private static String escapeForRedact(String text, boolean regexMode) {
         if (!regexMode || text == null) return text;
-        return text.replaceAll("([\\\\.*+?^${}()|\\[\\]])", "\\\\$1");
+        return REGEX_METACHAR.matcher(text).replaceAll("\\\\$1");
     }
 }

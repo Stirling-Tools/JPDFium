@@ -20,7 +20,7 @@ import java.util.List;
  */
 public class TextExample {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         Path input = args.length > 0 ? Path.of(args[0]) : Path.of("/tmp/test.pdf");
 
         // Example 1: Extract structured text from a single page

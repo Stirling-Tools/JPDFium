@@ -3,7 +3,6 @@ package stirling.software.jpdfium.samples;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
-import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,7 +38,7 @@ public class S13_PageImport {
                 Path outFile = outDir.resolve(SampleBase.stem(input) + "-doubled.pdf");
                 dest.save(outFile);
                 produced.add(outFile);
-                System.out.printf("  %s: %d → %d pages (%s)%n",
+                System.out.printf("  %s: %d to %d pages (%s)%n",
                         input.getFileName(), before, dest.pageCount(),
                         ok ? "OK" : "FAILED");
             }

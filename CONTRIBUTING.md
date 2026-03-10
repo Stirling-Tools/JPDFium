@@ -26,7 +26,7 @@
    ```bash
    ./gradlew quickTry
    ```
-   This builds the stub bridge and runs all 50 samples in stub mode. Perfect for testing Java-layer changes.
+   This builds the stub bridge and runs all 59 samples in stub mode. Perfect for testing Java-layer changes.
 
 4. **Full Build with Real PDFium** (recommended for production testing)
    ```bash
@@ -40,7 +40,7 @@
    ./gradlew buildRealBridge     # Build native bridge against real PDFium
    ./gradlew test                # Unit tests (stub mode)
    ./gradlew :jpdfium:integrationTest  # Integration tests (real PDFium)
-   ./gradlew runAllSamples       # Run all 50 samples
+   ./gradlew runAllSamples       # Run all 59 samples
    ```
 
    > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
@@ -80,8 +80,8 @@ directory before loading. The dynamic linker resolves dependencies via `RUNPATH=
 | `./gradlew buildRealBridge` | Build real native bridge with PDFium |
 | `./gradlew buildStubBridge` | Build stub native bridge (no PDFium) |
 | `./gradlew fullBuildAndTest` | Full end-to-end: PDFium + real bridge + all tests + samples |
-| `./gradlew runAllSamples` | Run all 50 samples (requires real bridge for full features) |
-| `./gradlew runSample -Psample=01` | Run a specific sample (01-47) |
+| `./gradlew runAllSamples` | Run all 59 samples (requires real bridge for full features) |
+| `./gradlew runSample -Psample=01` | Run a specific sample (01-59) |
 | `./gradlew test` | Run unit tests (stub mode) |
 | `./gradlew :jpdfium:integrationTest` | Run integration tests (real PDFium required) |
 
@@ -89,32 +89,36 @@ directory before loading. The dynamic linker resolves dependencies via `RUNPATH=
 
 | Sample | Feature | Sample | Feature |
 |--------|---------|--------|---------|
-| 01 | Render | 25 | Page Geometry |
-| 02 | Text Extract | 26 | Header/Footer |
-| 03 | Text Search | 27 | Security |
-| 04 | Metadata | 28 | Doc Info |
-| 05 | Bookmarks | 29 | Render Options |
-| 06 | Redact Words | 30 | Form Reader |
-| 07 | Annotations | 31 | Image Extract |
-| 08 | Full Pipeline | 32 | Page Objects |
-| 09 | Flatten | 33 | Encryption |
-| 10 | Signatures | 34 | Linearizer |
-| 11 | Attachments | 35 | Overlay |
-| 12 | Links | 36 | Annotation Builder |
-| 13 | Page Import | 37 | Path Drawer |
-| 14 | Structure Tree | 38 | JavaScript Inspector |
-| 15 | Thumbnails (embedded) | 39 | Web Links |
-| 16 | Page Editing | 40 | Page Boxes |
-| 17 | N-Up Layout | 41 | Version Converter |
-| 18 | Repair | 42 | Bounded Text |
-| 19 | PDF to Images | 43 | Stream Optimizer |
-| 20 | Images to PDF | 44 | Flatten Rotation |
-| 21 | Thumbnails (generated) | 45 | Page Interleaver |
-| 22 | Merge/Split | 46 | Named Destinations |
-| 23 | Watermark | 47 | Blank Page Detector |
-| 24 | Table Extract | 48 | EmbedPDF Annotations |
-| | | 49 | Native Encryption |
-| | | 50 | Native Redaction |
+| 01 | Render | 31 | Image Extract |
+| 02 | Text Extract | 32 | Page Objects |
+| 03 | Text Search | 33 | Encryption |
+| 04 | Metadata | 34 | Linearizer |
+| 05 | Bookmarks | 35 | Overlay |
+| 06 | Redact Words | 36 | Annotation Builder |
+| 07 | Annotations | 37 | Path Drawer |
+| 08 | Full Pipeline | 38 | JavaScript Inspector |
+| 09 | Flatten | 39 | Web Links |
+| 10 | Signatures | 40 | Page Boxes |
+| 11 | Attachments | 41 | Version Converter |
+| 12 | Links | 42 | Bounded Text |
+| 13 | Page Import | 43 | Stream Optimizer |
+| 14 | Structure Tree | 44 | Flatten Rotation |
+| 15 | Thumbnails (embedded) | 45 | Page Interleaver |
+| 16 | Page Editing | 46 | Named Destinations |
+| 17 | N-Up Layout | 47 | Blank Page Detector |
+| 18 | Repair | 48 | EmbedPDF Annotations |
+| 19 | PDF to Images | 49 | Native Encryption |
+| 20 | Images to PDF | 50 | Native Redaction |
+| 21 | Thumbnails (generated) | 51 | Compress |
+| 22 | Merge/Split | 52 | Bookmark Editor |
+| 23 | Watermark | 53 | Barcode Generate |
+| 24 | Table Extract | 54 | Page Reorder |
+| 25 | Page Geometry | 55 | Color Convert |
+| 26 | Header/Footer | 56 | Booklet |
+| 27 | Security | 58 | Analytics |
+| 28 | Doc Info | 59 | Form Fill |
+| 29 | Render Options | | |
+| 30 | Form Reader | | |
 
 **Stub-only development** (no PDFium or native libraries needed):
 ```bash
@@ -198,6 +202,14 @@ JPDFium/
           - RenderOptions.java   # Advanced render options
           - NUpLayout.java
           - QpdfHelper.java
+          - PdfCompressor.java   # PDF compression
+          - PdfBarcode.java      # QR code generation
+          - PdfBookmarkEditor.java # Bookmark editing
+          - PdfPageReorder.java  # Page reordering
+          - PdfColorConverter.java # Color space conversion
+          - PdfPrint.java        # Booklet imposition
+          - PdfAnalytics.java    # Document analytics
+          - PdfFormFiller.java   # Form field filling
           - ...
         - exception/             # JPDFiumException hierarchy
         - fonts/                 # FontInfo, FontNormalizer
@@ -214,10 +226,10 @@ JPDFium/
         - PdfDocumentTest.java   # Unit tests (stub native)
         - RealPdfIntegrationTest.java  # Integration tests (real PDFium)
         - ManualTest.java        # Quick smoke-test (right-click -> Run)
-        - samples/               # Numbered manual-test classes (S01-S50)
-          - RunAllSamples.java   # Execute all 50 samples
+        - samples/               # Numbered manual-test classes (S01-S59)
+          - RunAllSamples.java   # Execute all 59 samples
           - SampleBase.java      # Base class for samples
-          - S01_Render.java ... S50_NativeRedaction.java
+          - S01_Render.java ... S59_FormFill.java
         - ...
 
   jpdfium-natives/               # Platform-specific native JARs
@@ -391,8 +403,8 @@ resulting `libpdfium.so` is placed in `native/pdfium/lib/` with headers in
 
 The `samples` package provides quick 1-click runnable classes for each feature:
 
-Right-click any `S01_Render` ... `S47_BlankPageDetector` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 50 samples in sequence. Output lands in `jpdfium/samples-output/`.
+Right-click any `S01_Render` ... `S59_FormFill` class in IntelliJ and hit Run.
+`RunAllSamples` runs all 59 samples in sequence. Output lands in `jpdfium/samples-output/`.
 
 See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 

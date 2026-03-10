@@ -2,7 +2,6 @@ package stirling.software.jpdfium.model;
 
 import java.util.Collections;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -112,11 +111,7 @@ public final class PdfToImageOptions {
          * </ul>
          */
         public Builder pageRange(String range) {
-            if (range == null || range.equalsIgnoreCase("all")) {
-                this.pages = Collections.emptySet();
-            } else {
-                this.pages = Collections.emptySet();
-            }
+            this.pages = Collections.emptySet();
             return this;
         }
 

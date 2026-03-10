@@ -20,10 +20,10 @@ public record FontInfo(String name, String type, boolean embedded) {
     }
 
     /** The 14 standard PDF fonts guaranteed to be available in all PDF viewers. */
-    public static final List<String> STANDARD_14 = Collections.unmodifiableList(List.of(
+    public static final List<String> STANDARD_14 = List.of(
             "Courier", "Courier-Bold", "Courier-Oblique", "Courier-BoldOblique",
             "Helvetica", "Helvetica-Bold", "Helvetica-Oblique", "Helvetica-BoldOblique",
             "Times-Roman", "Times-Bold", "Times-Italic", "Times-BoldItalic",
             "Symbol", "ZapfDingbats"
-    ));
+    );
 }

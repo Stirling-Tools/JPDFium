@@ -8,10 +8,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * SAMPLE 27 - Security Hardening / Sanitization.
+ * SAMPLE 27 - Security Hardening &amp; Sanitization.
  *
- * <p>Demonstrates PdfSecurity: removing JavaScript, embedded files, actions,
- * metadata, links, fonts, and full sanitization.
+ * <p>Demonstrates the unified {@link PdfSecurity} builder: removing JavaScript,
+ * embedded files, actions, metadata, links, fonts, comments, hidden text, and
+ * flattening forms - all in one configurable pass.
  *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
@@ -22,123 +23,96 @@ public class S27_Security {
         SampleBase.ensureNative();
         List<Path> inputs = SampleBase.inputPdfs(args);
         List<Path> produced = new ArrayList<>();
+        Path outDir = SampleBase.out("S27_security");
+        Path input = inputs.getFirst();
+        String stem = SampleBase.stem(input);
 
         System.out.printf("S27_Security  |  %d PDF(s)%n", inputs.size());
-        Path outDir = SampleBase.out("S27_security");
 
-        for (Path input : inputs) {
-            String stem = SampleBase.stem(input);
+        // 1. Full sanitization (every option enabled)
+        SampleBase.section("Full sanitization");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .all()
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-sanitized-all.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.println(result.summary());
+        }
 
-            // 1. Remove JavaScript only
-            SampleBase.section("Remove JavaScript");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeJavaScript(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-js.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d JS annotation(s)%n",
-                        result.jsAnnotationsRemoved());
-            }
+        // 2. Remove JavaScript only
+        SampleBase.section("Remove JavaScript");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .removeJavaScript(true)
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-no-js.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Removed %d JS annotation(s)%n", result.jsAnnotationsRemoved());
+        }
 
-            // 2. Remove embedded files only
-            SampleBase.section("Remove embedded files");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeEmbeddedFiles(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-attachments.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d attachment(s)%n",
-                        result.embeddedFilesRemoved());
-            }
+        // 3. Remove embedded files + actions
+        SampleBase.section("Remove embedded files + actions");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .removeEmbeddedFiles(true)
+                    .removeActions(true)
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-no-files-actions.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Removed %d files, %d actions%n",
+                    result.embeddedFilesRemoved(), result.actionAnnotationsRemoved());
+        }
 
-            // 3. Remove actions (link annotations) only
-            SampleBase.section("Remove actions");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeActions(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-actions.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d action annotation(s)%n",
-                        result.actionAnnotationsRemoved());
-            }
+        // 4. Remove all metadata
+        SampleBase.section("Strip all metadata");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .removeXmpMetadata(true)
+                    .removeDocumentMetadata(true)
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-no-metadata.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Removed %d XMP + %d doc metadata fields%n",
+                    result.xmpMetadataFieldsRemoved(), result.documentMetadataFieldsRemoved());
+        }
 
-            // 4. Remove XMP metadata only
-            SampleBase.section("Remove XMP metadata");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeXmpMetadata(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-xmp.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d XMP metadata field(s)%n",
-                        result.xmpMetadataFieldsRemoved());
-            }
+        // 5. Remove comments and hidden text
+        SampleBase.section("Remove comments + hidden text");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .removeComments(true)
+                    .removeHiddenText(true)
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-no-comments-hidden.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Removed %d comments, %d hidden text objects%n",
+                    result.commentsRemoved(), result.hiddenTextRemoved());
+        }
 
-            // 5. Remove document metadata only
-            SampleBase.section("Remove document metadata");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeDocumentMetadata(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-doc-meta.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d document metadata field(s)%n",
-                        result.documentMetadataFieldsRemoved());
-            }
-
-            // 6. Remove links only
-            SampleBase.section("Remove links");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeLinks(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-links.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d link(s)%n",
-                        result.linksRemoved());
-            }
-
-            // 7. Remove fonts only
-            SampleBase.section("Remove fonts");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .removeFonts(true)
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-no-fonts.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  Removed %d font(s)%n",
-                        result.fontsRemoved());
-            }
-
-            // 8. Full sanitize (all of the above via builder)
-            SampleBase.section("Full sanitize");
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                PdfSecurity.Result result = PdfSecurity.builder()
-                        .all()
-                        .build()
-                        .execute(doc);
-                Path outFile = outDir.resolve(stem + "-sanitized.pdf");
-                doc.save(outFile);
-                produced.add(outFile);
-                System.out.printf("  %s%n", result.summary());
-            }
+        // 6. Flatten forms + remove links
+        SampleBase.section("Flatten forms + remove links");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfSecurity.Result result = PdfSecurity.builder()
+                    .flattenForms(true)
+                    .removeLinks(true)
+                    .build()
+                    .execute(doc);
+            Path outFile = outDir.resolve(stem + "-flat-no-links.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Flattened %d forms, removed %d links%n",
+                    result.formsFlattened(), result.linksRemoved());
         }
 
         SampleBase.done("S27_Security", produced.toArray(Path[]::new));

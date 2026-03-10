@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Verifies that Object Fission redaction preserves the absolute positions of surviving
  * characters with sub-point accuracy.
- *
+ * <p>
  * The test uses minimal.pdf which contains text including SSN patterns on page 0.
  * After redacting all SSN patterns, non-digit text ("Hello World") must remain in
  * exactly the same coordinates as before. Any coordinate shift indicates the algorithm
@@ -40,7 +40,7 @@ class CharPositionFidelityTest {
      * Core fidelity check: for every character that appears in both the before and
      * after snapshots (matched by unicode value + approximate origin), the position
      * difference must be within POSITION_TOLERANCE_PT.
-     *
+     * <p>
      * This tolerates the redaction removing entire characters (they simply won't appear
      * in the after list) but rejects any case where a surviving character drifted, even
      * by a fraction of a point.
@@ -211,7 +211,7 @@ class CharPositionFidelityTest {
     /**
      * Parse the char-positions JSON produced by jpdfium_text_get_char_positions.
      * Format: [{"i":0,"u":72,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
-     *
+     * <p>
      * Hand-parsed because we control this exact schema and adding a JSON library
      * for one fixed format would be an unnecessary dependency.
      */

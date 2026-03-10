@@ -5,7 +5,6 @@ import stirling.software.jpdfium.panama.TextPageBindings;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 
 /**
  * Extract text within a bounded rectangle on a PDF page.

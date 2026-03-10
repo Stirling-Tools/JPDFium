@@ -1,9 +1,6 @@
 package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
-import stirling.software.jpdfium.PdfPage;
-
-import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 

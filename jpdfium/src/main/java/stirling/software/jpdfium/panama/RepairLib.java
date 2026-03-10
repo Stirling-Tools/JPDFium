@@ -1,7 +1,6 @@
 package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.doc.RepairResult;
-import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -52,7 +51,7 @@ public final class RepairLib {
             MemorySegment outputLenSeg = arena.allocate(JAVA_LONG);
 
             int rc = JpdfiumH.jpdfium_repair_pdf(
-                    inputSeg, (long) input.length,
+                    inputSeg, input.length,
                     outputPtrSeg, outputLenSeg,
                     flags);
 
@@ -94,7 +93,7 @@ public final class RepairLib {
             MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
             JpdfiumH.jpdfium_repair_inspect(
-                    inputSeg, (long) input.length,
+                    inputSeg, input.length,
                     jsonPtrSeg);
 
             MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
@@ -123,7 +122,7 @@ public final class RepairLib {
             MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
 
             int rc = JpdfiumH.jpdfium_brotli_decode(
-                    inputSeg, (long) compressed.length,
+                    inputSeg, compressed.length,
                     outPtrSeg, outLenSeg);
 
             if (rc != 0)
@@ -156,7 +155,7 @@ public final class RepairLib {
             MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
 
             int rc = JpdfiumH.jpdfium_brotli_to_flate(
-                    inputSeg, (long) compressed.length,
+                    inputSeg, compressed.length,
                     outPtrSeg, outLenSeg);
 
             if (rc != 0)
@@ -193,7 +192,7 @@ public final class RepairLib {
             MemorySegment pagesSeg = arena.allocate(JAVA_INT);
 
             int rc = JpdfiumH.jpdfium_pdfio_try_repair(
-                    inputSeg, (long) input.length,
+                    inputSeg, input.length,
                     outPtrSeg, outLenSeg, pagesSeg);
 
             if (rc == ERR_NATIVE) {
@@ -242,7 +241,7 @@ public final class RepairLib {
             MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
             int rc = JpdfiumH.jpdfium_validate_icc_profile(
-                    dataSeg, (long) profileData.length,
+                    dataSeg, profileData.length,
                     expectedComponents, jsonPtrSeg);
 
             MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
@@ -295,7 +294,7 @@ public final class RepairLib {
             MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
             int rc = JpdfiumH.jpdfium_validate_jpx_stream(
-                    dataSeg, (long) jpxData.length, jsonPtrSeg);
+                    dataSeg, jpxData.length, jsonPtrSeg);
 
             MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
             String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
@@ -323,7 +322,7 @@ public final class RepairLib {
             MemorySegment cSeg = arena.allocate(JAVA_INT);
 
             int rc = JpdfiumH.jpdfium_jpx_to_raw(
-                    dataSeg, (long) jpxData.length,
+                    dataSeg, jpxData.length,
                     outPtrSeg, outLenSeg, wSeg, hSeg, cSeg);
 
             if (rc != 0)

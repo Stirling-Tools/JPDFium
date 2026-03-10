@@ -2,7 +2,6 @@ package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.PdfPage;
 
 import java.io.IOException;
 import java.nio.file.Path;

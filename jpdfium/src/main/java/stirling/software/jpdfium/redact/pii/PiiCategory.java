@@ -81,7 +81,7 @@ public enum PiiCategory {
 
     /** All patterns combined into a single regex with named groups. */
     public static String combined() {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(512);
         boolean first = true;
         for (PiiCategory cat : values()) {
             if (!first) sb.append("|");

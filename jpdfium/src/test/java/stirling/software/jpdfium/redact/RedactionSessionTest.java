@@ -103,7 +103,7 @@ class RedactionSessionTest {
     @Test
     void clearAllDoesNotThrow() throws Exception {
         try (var session = RedactionSession.open(pdfPath())) {
-            assertDoesNotThrow(() -> session.clearAll());
+            assertDoesNotThrow(session::clearAll);
         }
     }
 
@@ -230,9 +230,9 @@ class RedactionSessionTest {
         var session = RedactionSession.open(pdfPath());
         session.close();
 
-        assertThrows(IllegalStateException.class, () -> session.document());
-        assertThrows(IllegalStateException.class, () -> session.totalPendingRedactions());
-        assertThrows(IllegalStateException.class, () -> session.commitAll());
+        assertThrows(IllegalStateException.class, session::document);
+        assertThrows(IllegalStateException.class, session::totalPendingRedactions);
+        assertThrows(IllegalStateException.class, session::commitAll);
     }
 
     @Test

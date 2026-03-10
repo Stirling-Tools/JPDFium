@@ -6,17 +6,13 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -446,7 +442,7 @@ class CorpusRedactTest {
 
             // Sort: failures first, then warnings, then passes
             List<PdfReport> sorted = new ArrayList<>(reports);
-            sorted.sort((a, b) -> a.severity.ordinal() - b.severity.ordinal());
+            sorted.sort(Comparator.comparingInt(a -> a.severity.ordinal()));
 
             for (PdfReport r : sorted) {
                 String sevClass = r.severity.name().toLowerCase();

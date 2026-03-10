@@ -22,7 +22,7 @@ public class S34_Linearizer {
         System.out.printf("S34_Linearizer  |  %d PDF(s)  qpdf=%b%n",
                 inputs.size(), PdfLinearizer.isSupported());
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         // 1. Check if already linearized

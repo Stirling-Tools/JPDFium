@@ -20,16 +20,35 @@ import java.util.List;
 /**
  * SAMPLE 39 - Web Links: full CRUD (Create, Read, Update, Delete).
  *
- * <p>Demonstrates PdfWebLinks:
+ * <p>
+ * Demonstrates PdfWebLinks:
  * <ol>
- *   <li><strong>Read</strong>  - extract existing text-based URLs from all pages</li>
- *   <li><strong>Create</strong> - add link annotations on the first two words of page 0
- *       using real text positions from {@link PdfTextExtractor}</li>
- *   <li><strong>Count</strong>  - verify before/after link annotation counts</li>
- *   <li><strong>Save</strong>   - write the PDF with links; render page 0 to PNG</li>
- *   <li><strong>Delete</strong> - remove all link annotations from page 0</li>
- *   <li><strong>Save</strong>   - write the PDF without links; render page 0 to PNG</li>
+ * <li><strong>Read</strong> - extract existing text-based URLs from all
+ * pages</li>
+ * <li><strong>Create</strong> - add link annotations on the first two words of
+ * page 0 using real text positions from {@link PdfTextExtractor}. Links are
+ * styled with blue underline by default (standard hyperlink appearance)</li>
+ * <li><strong>Count</strong> - verify before/after link annotation counts</li>
+ * <li><strong>Save</strong> - write the PDF with links; render page 0 to
+ * PNG</li>
+ * <li><strong>Delete</strong> - remove all link annotations from page 0</li>
+ * <li><strong>Save</strong> - write the PDF without links; render page 0 to
+ * PNG</li>
  * </ol>
+ *
+ * <p>
+ * The addLink method creates visible hyperlinks by default with:
+ * - Blue color (RGB: 0, 0, 255)
+ * - Underline border style
+ * - Auto-generated appearance stream
+ *
+ * <p>
+ * Customize link appearance using the builder consumer:
+ * {@code PdfWebLinks.addLink(page.rawHandle(), rect, url,
+ *     builder -> builder.color(255, 0, 0)    // red
+ *                 .borderWidth(2f)
+ *                 .borderStyle(1)            // solid border
+ *                 .generateAppearance()) }
  */
 public class S39_WebLinks {
 
@@ -71,25 +90,26 @@ public class S39_WebLinks {
                 // Find the first two words using text extraction (real page coords)
                 PageText pageText = PdfTextExtractor.extractPage(doc, 0);
                 List<TextWord> firstWords = new ArrayList<>();
-                outer:
-                for (TextLine line : pageText.lines()) {
+                outer: for (TextLine line : pageText.lines()) {
                     for (TextWord word : line.words()) {
                         if (!word.text().isBlank()) {
                             firstWords.add(word);
-                            if (firstWords.size() == 2) break outer;
+                            if (firstWords.size() == 2)
+                                break outer;
                         }
                     }
                 }
 
                 String[] urls = {
-                    "https://github.com/Stirling-Tools/Stirling-PDF",
-                    "https://github.com/Stirling-Tools/JPDFium"
+                        "https://github.com/Stirling-Tools/Stirling-PDF",
+                        "https://github.com/Stirling-Tools/JPDFium"
                 };
 
                 if (firstWords.isEmpty()) {
                     // Fallback: fixed coordinates when no text is found
                     System.out.println("  (no words found - using fallback coordinates)");
                     Rect fallback = new Rect(72, 720, 200, 20);
+                    // Uses default blue underline styling
                     int idx = PdfWebLinks.addLink(page.rawHandle(), fallback, urls[0]);
                     linkRects.add(fallback);
                     System.out.printf("  Added fallback link at index %d%n", idx);
@@ -97,9 +117,18 @@ public class S39_WebLinks {
                     for (int i = 0; i < firstWords.size(); i++) {
                         TextWord word = firstWords.get(i);
                         // TextWord coords: x=left, y=bottom, in PDF points (origin bottom-left)
-                        Rect wordRect = new Rect(word.x(), word.y(), word.width(), word.height());
-                        int idx = PdfWebLinks.addLink(page.rawHandle(), wordRect, urls[i]);
-                        linkRects.add(wordRect);
+                        // Drop the underline 1.5 points below the text, and add 1 point of horizontal
+                        // padding
+                        float pX = 1.0f;
+                        float pY = 1.5f;
+                        Rect linkRect = new Rect(
+                                word.x() - pX,
+                                word.y() - pY,
+                                word.width() + pX * 2,
+                                word.height() + pY);
+                        // Uses default blue underline styling (customizable via builder consumer)
+                        int idx = PdfWebLinks.addLink(page.rawHandle(), linkRect, urls[i]);
+                        linkRects.add(linkRect);
                         System.out.printf("  Word \"%s\" at (%.1f,%.1f,%.1f,%.1f) -> link idx=%d url=%s%n",
                                 word.text(), word.x(), word.y(),
                                 word.width(), word.height(), idx, urls[i]);
@@ -109,7 +138,8 @@ public class S39_WebLinks {
                 // Flush page content
                 try {
                     PageEditBindings.FPDFPage_GenerateContent.invokeExact(page.rawHandle());
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) {
+                }
 
                 int afterCount = PdfWebLinks.countLinkAnnotations(page.rawHandle());
                 System.out.printf("  Link annotations after: %d (added %d)%n",
@@ -124,7 +154,7 @@ public class S39_WebLinks {
 
             // Render page 0 to PNG to show link areas visually
             try (PdfDocument linked = PdfDocument.open(withLinks);
-                 PdfPage p0 = linked.page(0)) {
+                    PdfPage p0 = linked.page(0)) {
                 RenderResult render = p0.renderAt(150);
                 Path pngWith = outDir.resolve(stem + "-with-links-p0.png");
                 ImageIO.write(render.toBufferedImage(), "PNG", pngWith.toFile());
@@ -148,7 +178,7 @@ public class S39_WebLinks {
             System.out.printf("  Saved: %s%n", noLinks.getFileName());
 
             try (PdfDocument unlinked = PdfDocument.open(noLinks);
-                 PdfPage p0 = unlinked.page(0)) {
+                    PdfPage p0 = unlinked.page(0)) {
                 RenderResult render = p0.renderAt(150);
                 Path pngNo = outDir.resolve(stem + "-no-links-p0.png");
                 ImageIO.write(render.toBufferedImage(), "PNG", pngNo.toFile());

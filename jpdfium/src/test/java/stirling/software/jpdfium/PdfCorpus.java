@@ -13,12 +13,12 @@ import java.util.List;
 
 /**
  * Downloads and caches a large set of publicly available PDF files for corpus-level testing.
- *
+ * <p>
  * PDFs are cached under {@code build/test-corpus/} so the network is only hit on the first
  * run. Subsequent runs are fully offline. Tests that rely on this class should be tagged
  * {@code @Tag("corpus")} and guarded with {@code @EnabledIfSystemProperty} so they are skipped
  * in offline CI environments.
- *
+ * <p>
  * Source: Mozilla pdf.js test suite -- stable, public domain, no authentication required.
  */
 public final class PdfCorpus {

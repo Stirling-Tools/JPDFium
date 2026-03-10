@@ -26,7 +26,7 @@ public class RedactTestPdfGenerator {
     private static final String SSN1 = "123-45-6789";
     private static final String SSN2 = "987-65-4321";
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         OUT_DIR = Path.of(System.getProperty(OUT_DIR_PROP,
                 "jpdfium/src/test/resources"));
         Files.createDirectories(OUT_DIR);

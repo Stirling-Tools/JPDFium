@@ -1,6 +1,5 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;

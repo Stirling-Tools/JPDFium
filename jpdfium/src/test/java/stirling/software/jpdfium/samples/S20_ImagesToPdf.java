@@ -18,7 +18,7 @@ import java.util.List;
  * <p>Demonstrates combining multiple images into a single PDF document.
  * Common use cases:
  * <ul>
- *   <li>Scanner workflow (JPEG/PNG/TIFF → PDF)</li>
+ *   <li>Scanner workflow (JPEG/PNG/TIFF - PDF)</li>
  *   <li>Photo album creation</li>
  *   <li>Document archiving</li>
  *   <li>Fax consolidation</li>

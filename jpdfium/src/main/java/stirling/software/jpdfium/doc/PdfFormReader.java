@@ -4,6 +4,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FormFillBindings;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -31,16 +32,13 @@ public final class PdfFormReader {
      * @return all form fields found
      */
     public static List<FormField> readAll(MemorySegment rawDoc, List<MemorySegment> pages) {
-        MemorySegment formHandle = initFormHandle(rawDoc);
-        if (formHandle.equals(MemorySegment.NULL)) return Collections.emptyList();
-        try {
+        try (var res = initFormResource(rawDoc)) {
+            if (res.formHandle.equals(MemorySegment.NULL)) return Collections.emptyList();
             List<FormField> fields = new ArrayList<>();
             for (int p = 0; p < pages.size(); p++) {
-                fields.addAll(readPageInternal(formHandle, pages.get(p), p));
+                fields.addAll(readPageInternal(res.formHandle, pages.get(p), p));
             }
             return Collections.unmodifiableList(fields);
-        } finally {
-            exitFormHandle(formHandle);
         }
     }
 
@@ -53,16 +51,27 @@ public final class PdfFormReader {
      * @return form fields on this page
      */
     public static List<FormField> readPage(MemorySegment rawDoc, MemorySegment rawPage, int pageIndex) {
-        MemorySegment formHandle = initFormHandle(rawDoc);
-        if (formHandle.equals(MemorySegment.NULL)) return Collections.emptyList();
-        try {
-            return readPageInternal(formHandle, rawPage, pageIndex);
-        } finally {
-            exitFormHandle(formHandle);
+        try (var res = initFormResource(rawDoc)) {
+            if (res.formHandle.equals(MemorySegment.NULL)) return Collections.emptyList();
+            return readPageInternal(res.formHandle, rawPage, pageIndex);
         }
     }
 
     private static List<FormField> readPageInternal(MemorySegment formHandle, MemorySegment rawPage, int pageIndex) {
+        // FORM_OnAfterLoadPage is required for export values, IsChecked, and other
+        // form-field metadata to become available on the annotations.
+        try { FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, formHandle); }
+        catch (Throwable ignored) {}
+
+        try {
+            return readPageAnnotations(formHandle, rawPage, pageIndex);
+        } finally {
+            try { FormFillBindings.FORM_OnBeforeClosePage.invokeExact(rawPage, formHandle); }
+            catch (Throwable ignored) {}
+        }
+    }
+
+    private static List<FormField> readPageAnnotations(MemorySegment formHandle, MemorySegment rawPage, int pageIndex) {
         int annotCount;
         try {
             annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -141,7 +150,7 @@ public final class PdfFormReader {
             long needed = (long) mh.invokeExact(formHandle, annot, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
-            mh.invokeExact(formHandle, annot, buf, needed);
+            long written = (long) mh.invokeExact(formHandle, annot, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) { return ""; }
     }
@@ -152,7 +161,7 @@ public final class PdfFormReader {
                     formHandle, annot, index, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
-            AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
+            long written = (long) AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) { return ""; }
     }
@@ -170,20 +179,31 @@ public final class PdfFormReader {
         } catch (Throwable t) { return new Rect(0, 0, 0, 0); }
     }
 
-    private static MemorySegment initFormHandle(MemorySegment rawDoc) {
-        try {
-            // FPDF_FORMFILLINFO struct - must outlive the form handle.
-            // Use Arena.ofAuto() so it stays alive until form handle is closed.
-            Arena arena = Arena.ofAuto();
-            MemorySegment formInfo = arena.allocate(168);
-            formInfo.set(ValueLayout.JAVA_INT, 0, 1); // version = 1
-            return (MemorySegment) DocBindings.FPDFDOC_InitFormFillEnvironment.invokeExact(rawDoc, formInfo);
-        } catch (Throwable t) { return MemorySegment.NULL; }
+    /**
+     * Holds a FORMHANDLE together with the Arena that backs its FPDF_FORMFILLINFO struct.
+     * The arena must stay open while PDFium holds a pointer to formInfo.
+     */
+    private record FormResource(MemorySegment formHandle, Arena arena) implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle);
+            } catch (Throwable ignored) {}
+            arena.close();
+        }
     }
 
-    private static void exitFormHandle(MemorySegment formHandle) {
+    private static FormResource initFormResource(MemorySegment rawDoc) {
+        Arena arena = Arena.ofConfined();
         try {
-            DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle);
-        } catch (Throwable ignored) {}
+            MemorySegment formInfo = arena.allocate(168);
+            formInfo.set(ValueLayout.JAVA_INT, 0, 1); // version = 1
+            MemorySegment formHandle = (MemorySegment) DocBindings.FPDFDOC_InitFormFillEnvironment
+                    .invokeExact(rawDoc, formInfo);
+            return new FormResource(formHandle, arena);
+        } catch (Throwable t) {
+            arena.close();
+            return new FormResource(MemorySegment.NULL, Arena.ofConfined());
+        }
     }
 }

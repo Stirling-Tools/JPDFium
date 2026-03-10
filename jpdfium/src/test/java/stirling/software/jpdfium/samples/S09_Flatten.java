@@ -1,6 +1,8 @@
 package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.doc.PdfFlattenRotation;
 import stirling.software.jpdfium.model.FlattenMode;
 
 import java.nio.file.Path;
@@ -8,48 +10,71 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * SAMPLE 09 - Flatten PDFs with configurable mode.
+ * SAMPLE 09 - Flatten PDFs (annotations, full rasterization, and rotation).
  *
- * <p>Demonstrates both flatten modes:
+ * <p>Demonstrates all three flatten operations:
  * <ul>
- *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into
- *       static content. Text remains selectable.</li>
- *   <li>{@link FlattenMode#FULL} - rasterizes each page at a specified DPI,
- *       replacing all content with an image. Nothing is selectable.</li>
+ *   <li>FlattenMode.ANNOTATIONS - bakes annotations/forms into static content</li>
+ *   <li>FlattenMode.FULL - rasterizes pages at given DPI (nothing selectable)</li>
+ *   <li>Rotation flattening - applies rotation transform to content, resets rotation flag</li>
  * </ul>
  *
- * <p>Uses {@link PdfDocument#flatten(FlattenMode, int)} which delegates to native
- * PDFium via FFM.
- *
- * <p><strong>VM Options required in IntelliJ:</strong>
+ * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */
 public class S09_Flatten {
 
-    static final FlattenMode MODE = FlattenMode.FULL;
-    static final int         DPI  = 150;
+    static final int DPI = 150;
 
     public static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
         List<Path> inputs = SampleBase.inputPdfs(args);
         List<Path> produced = new ArrayList<>();
+        Path outDir = SampleBase.out("S09_flatten");
+        Path input = inputs.getFirst();
+        String stem = SampleBase.stem(input);
 
-        System.out.printf("S09_Flatten  |  %d PDF(s)  |  mode=%s  DPI=%d%n",
-                inputs.size(), MODE, DPI);
+        System.out.printf("S09_Flatten  |  %d PDF(s)  |  DPI=%d%n", inputs.size(), DPI);
 
-        for (int fi = 0; fi < inputs.size(); fi++) {
-            Path input = inputs.get(fi);
-            SampleBase.pdfHeader("S09_Flatten", input, fi + 1, inputs.size());
-            Path output = SampleBase.out("S09_flatten", input).resolve(input.getFileName());
+        // 1. Annotation flattening (text stays selectable)
+        SampleBase.section("Annotation flatten");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            doc.flatten(FlattenMode.ANNOTATIONS);
+            Path outFile = outDir.resolve(stem + "-annotations.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Flattened %d pages (annotations) -> %s%n",
+                    doc.pageCount(), outFile.getFileName());
+        }
 
-            try (PdfDocument doc = PdfDocument.open(input)) {
-                System.out.printf("  flattening %d page(s) [%s]...%n", doc.pageCount(), MODE);
-                doc.flatten(MODE, DPI);
-                doc.save(output);
+        // 2. Full rasterization (most secure - no text selectable)
+        SampleBase.section("Full rasterization");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            doc.flatten(FlattenMode.FULL, DPI);
+            Path outFile = outDir.resolve(stem + "-rasterized.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            System.out.printf("  Rasterized %d pages at %d DPI -> %s%n",
+                    doc.pageCount(), DPI, outFile.getFileName());
+        }
+
+        // 3. Rotation flattening (applies rotation to content stream)
+        SampleBase.section("Rotation flatten");
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            boolean anyFlattened = false;
+            for (int p = 0; p < doc.pageCount(); p++) {
+                try (PdfPage page = doc.page(p)) {
+                    int degrees = PdfFlattenRotation.flatten(page.rawHandle());
+                    if (degrees != 0) {
+                        System.out.printf("  Page %d: flattened %d° rotation%n", p, degrees);
+                        anyFlattened = true;
+                    }
+                }
             }
-
-            produced.add(output);
-            System.out.println("  saved: " + output.getFileName());
+            Path outFile = outDir.resolve(stem + "-rotation-flattened.pdf");
+            doc.save(outFile);
+            produced.add(outFile);
+            if (!anyFlattened) System.out.println("  No rotated pages found");
         }
 
         SampleBase.done("S09_Flatten", produced.toArray(Path[]::new));

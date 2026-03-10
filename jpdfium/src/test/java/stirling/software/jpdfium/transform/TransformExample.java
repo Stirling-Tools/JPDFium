@@ -22,7 +22,7 @@ import java.util.List;
  */
 public class TransformExample {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         Path input = args.length > 0 ? Path.of(args[0]) : Path.of("/tmp/test.pdf");
 
         // Example 1: Flatten a single page (burn annotations into content)

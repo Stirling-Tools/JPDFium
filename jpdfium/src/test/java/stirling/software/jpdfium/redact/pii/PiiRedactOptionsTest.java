@@ -48,7 +48,7 @@ class PiiRedactOptionsTest {
                 .build();
 
         assertEquals(2, opts.words().size());
-        assertEquals("Confidential", opts.words().get(0));
+        assertEquals("Confidential", opts.words().getFirst());
         assertEquals(0xFFFF0000, opts.boxColor());
         assertEquals(2.0f, opts.padding(), 0.001f);
         assertTrue(opts.useRegex());
@@ -60,8 +60,8 @@ class PiiRedactOptionsTest {
         assertTrue(opts.piiPatterns().containsKey(PiiCategory.PHONE));
         assertTrue(opts.luhnValidation());
         assertEquals(2, opts.entities().size());
-        assertEquals("John Smith", opts.entities().get(0).keyword());
-        assertEquals("PERSON", opts.entities().get(0).label());
+        assertEquals("John Smith", opts.entities().getFirst().keyword());
+        assertEquals("PERSON", opts.entities().getFirst().label());
         assertTrue(opts.normalizeFonts());
         assertTrue(opts.glyphAware());
         assertTrue(opts.ligatureAware());

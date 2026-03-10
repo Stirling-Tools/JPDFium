@@ -57,8 +57,8 @@ class PiiRedactResultTest {
         assertFalse(s.isEmpty());
     }
 
-    private RedactResult createResult(int words, int patterns, int entities,
-                                       int glyphs, int metadata) {
+    private static RedactResult createResult(int words, int patterns, int entities,
+                                             int glyphs, int metadata) {
         List<PatternEngine.Match> patternList = new java.util.ArrayList<>();
         for (int i = 0; i < patterns; i++) {
             patternList.add(new PatternEngine.Match(i, i + 5, "test" + i, null));

@@ -1,11 +1,9 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
