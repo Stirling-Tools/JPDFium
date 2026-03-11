@@ -18,6 +18,26 @@ import java.util.List;
  * Demonstrates the bridging between internal PDF representations and standard Java
  * 2D image formats for further processing.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Page rendering is <b>embarrassingly parallel</b> — each page renders independently.
+ * The PDFium render call is serialized via {@code PDFIUM_LOCK}, but the resulting
+ * image encoding (PNG/JPEG write) and I/O run in true parallel across threads.
+ * <pre>{@code
+ * // Read-only parallel rendering:
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         RenderResult result;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 result = page.renderAt(DPI);
+ *             }
+ *         }
+ *         // Image encoding runs in parallel (no lock needed)
+ *         ImageIO.write(result.toBufferedImage(), "PNG", outFile.toFile());
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for a complete benchmark of all modes.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

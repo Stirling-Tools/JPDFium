@@ -14,6 +14,25 @@ import java.util.List;
  * <p>Demonstrates comprehensive document statistics including text metrics,
  * image counts, font usage, annotations, and more.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>{@code PdfAnalytics.analyze()} internally iterates all pages. For custom
+ * analytics that aggregate per-page stats, use parallel mode:
+ * <pre>{@code
+ * var stats = new ConcurrentHashMap<Integer, Map<String, Object>>();
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         Map<String, Object> pageStats = new HashMap<>();
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 pageStats.put("annotations", page.annotations().size());
+ *                 pageStats.put("size", page.size());
+ *             }
+ *         }
+ *         stats.put(pageIndex, pageStats); // aggregation in parallel
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

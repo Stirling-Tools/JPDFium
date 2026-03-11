@@ -27,7 +27,7 @@ public record CompressResult(
     /** Human-readable summary of the compression. */
     public String summary() {
         StringBuilder sb = new StringBuilder(128);
-        sb.append(String.format("Compressed: %s → %s (%.1f%% reduction)",
+        sb.append(String.format("Compressed: %s -> %s (%.1f%% reduction)",
                 humanSize(originalSize), humanSize(compressedSize), compressionPercent()));
         for (String action : actions) {
             sb.append("\n  \u2713 ").append(action);

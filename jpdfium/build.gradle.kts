@@ -85,6 +85,17 @@ val generateBindings by tasks.registering(Exec::class) {
     args += headerFile.absolutePath
 
     commandLine(args)
+
+    // Skip gracefully when jextract is not installed
+    isIgnoreExitValue = false
+    onlyIf {
+        val jextract = file(jextractBin)
+        if (!jextract.exists()) {
+            logger.warn("jextract not found at $jextractBin — skipping binding generation. " +
+                "Set JEXTRACT_HOME or jpdfium.jextractHome to the jextract installation directory.")
+        }
+        jextract.exists()
+    }
 }
 
 sourceSets.main.get().java.srcDir(generateBindings.map {

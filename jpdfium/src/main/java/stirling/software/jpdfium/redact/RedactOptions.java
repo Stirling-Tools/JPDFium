@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.redact;
 
+import stirling.software.jpdfium.ProcessingMode;
 import stirling.software.jpdfium.redact.pii.PiiCategory;
 
 import java.util.ArrayList;
@@ -78,6 +79,8 @@ public final class RedactOptions {
     private final int coreferenceWindow;
     private final List<String> coreferencePronouns;
 
+    private final ProcessingMode processingMode;
+
     private RedactOptions(Builder b) {
         this.words = List.copyOf(b.words);
         this.boxColor = b.boxColor;
@@ -105,6 +108,7 @@ public final class RedactOptions {
         this.semanticRedact = b.semanticRedact;
         this.coreferenceWindow = b.coreferenceWindow;
         this.coreferencePronouns = List.copyOf(b.coreferencePronouns);
+        this.processingMode = b.processingMode;
     }
 
     
@@ -135,6 +139,8 @@ public final class RedactOptions {
     public boolean semanticRedact() { return semanticRedact; }
     public int coreferenceWindow() { return coreferenceWindow; }
     public List<String> coreferencePronouns() { return coreferencePronouns; }
+    /** Processing mode for batch operations (streaming, parallel, or both). */
+    public ProcessingMode processingMode() { return processingMode; }
 
     /** Entity entry for NER dictionary. */
     public record EntityEntry(String keyword, String label) {}
@@ -176,6 +182,8 @@ public final class RedactOptions {
         private boolean semanticRedact = false;
         private int coreferenceWindow = 2;
         private final List<String> coreferencePronouns = new ArrayList<>();
+
+        private ProcessingMode processingMode = ProcessingMode.DEFAULT;
 
         private Builder() {}
 
@@ -306,6 +314,9 @@ public final class RedactOptions {
             coreferencePronouns.addAll(List.of(pronouns));
             return this;
         }
+
+        /** Set processing mode for batch operations (streaming, parallel, or both). */
+        public Builder processingMode(ProcessingMode mode) { this.processingMode = mode; return this; }
 
         public RedactOptions build() {
             if (words.isEmpty() && piiPatterns.isEmpty() && entities.isEmpty()) {

@@ -49,7 +49,7 @@ tasks.register<Exec>("buildPdfium") {
 // Task to run all 50 samples (full application test)
 tasks.register<JavaExec>("runAllSamples") {
     group = "application"
-    description = "Run all 50 samples to test the complete application"
+    description = "Run all samples to test the complete application"
 
     dependsOn(":jpdfium:compileTestJava", ":jpdfium:processTestResources")
 
@@ -60,6 +60,7 @@ tasks.register<JavaExec>("runAllSamples") {
                 files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
                 files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    maxHeapSize = "2g"
     workingDir = rootProject.projectDir
 }
 
@@ -131,7 +132,35 @@ tasks.register<JavaExec>("runSample") {
         "55" to "S55_ColorConvert",
         "56" to "S56_Booklet",
         "58" to "S58_Analytics",
-        "59" to "S59_FormFill"
+        "59" to "S59_FormFill",
+        "60" to "S60_AutoCrop",
+        "61" to "S61_SearchHighlight",
+        "62" to "S62_PageSplit2Up",
+        "63" to "S63_PageLabels",
+        "64" to "S64_LinkValidation",
+        "65" to "S65_Posterize",
+        "66" to "S66_PdfDiff",
+        "67" to "S67_AutoDeskew",
+        "68" to "S68_FontAudit",
+        "69" to "S69_PdfAConversion",
+        "70" to "S70_PageScaling",
+        "71" to "S71_MarginAdjust",
+        "72" to "S72_SelectiveFlatten",
+        "73" to "S73_AnnotExport",
+        "74" to "S74_ImageReplace",
+        "75" to "S75_LongImage",
+        "76" to "S76_DuplicateDetect",
+        "77" to "S77_ColumnExtract",
+        "78" to "S78_ImageDpi",
+        "79" to "S79_PageMirror",
+        "80" to "S80_Background",
+        "81" to "S81_ReadingOrder",
+        "82" to "S82_ResourceDedup",
+        "83" to "S83_TocGenerate",
+        "84" to "S84_SelectiveRaster",
+        "85" to "S85_AnnotStats",
+        "86" to "S86_PosterizeSizes",
+        "87" to "S87_AutoCropMargins"
     )
     
     val sampleClass = "stirling.software.jpdfium.samples." + 

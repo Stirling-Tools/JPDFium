@@ -12,6 +12,23 @@ import java.util.List;
  *
  * <p>Demonstrates BlankPageDetector: detecting blank pages using fast text check
  * and comprehensive visual analysis.
+ *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Blank detection is per-page and read-only — ideal for parallel mode.
+ * The bitmap render for visual analysis is CPU-heavy; parallel threads
+ * overlap the Java-side pixel analysis.
+ * <pre>{@code
+ * var blankPages = Collections.synchronizedList(new ArrayList<Integer>());
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         boolean blank;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             blank = BlankPageDetector.isBlankText(doc, pageIndex);
+ *         }
+ *         if (blank) blankPages.add(pageIndex);
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
  */
 public class S47_BlankPageDetector {
 

@@ -31,8 +31,6 @@ public final class RepairLib {
     private RepairLib() {
     }
 
-    // Core Repair
-
     /**
      * Attempt to repair a damaged PDF.
      *

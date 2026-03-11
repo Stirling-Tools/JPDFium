@@ -144,8 +144,6 @@ public final class PdfPage implements AutoCloseable {
                 wholeWord, useRegex, removeContent, caseSensitive);
     }
 
-    // Annotation-Based Redaction (Mark → Commit)
-
     /**
      * Mark phase: create a REDACT annotation at the given rectangle.
      * No content is modified - the annotation is stored in the page's

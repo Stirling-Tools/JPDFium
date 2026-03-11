@@ -19,6 +19,26 @@ import java.util.List;
  * structured data mining, NLP integrations, or machine-readable format conversion
  * while retaining critical positional context.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Text extraction is a <b>perfect</b> candidate for parallel processing.
+ * PDFium text extraction is serialized, but downstream NLP, hashing, and
+ * file I/O run in true parallel.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         String text;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             text = PdfTextExtractor.extractPage(doc, pageIndex).plainText();
+ *         }
+ *         // Parallel: hashing, NLP, regex, file writes
+ *         String hash = Integer.toHexString(text.hashCode());
+ *         Files.writeString(outDir.resolve("page-" + pageIndex + ".txt"), text);
+ *     });
+ * }</pre>
+ * <p>For streaming mode (low-memory, large documents), use
+ * {@code ProcessingMode.streamingParallel(4)} to combine both.
+ * See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

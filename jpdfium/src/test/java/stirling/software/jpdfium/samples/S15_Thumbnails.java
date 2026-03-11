@@ -17,6 +17,23 @@ import java.util.Optional;
  * pages. Not all PDFs contain thumbnails - many modern producers omit them
  * since viewers can render them on-the-fly.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Thumbnail extraction is per-page and read-only — ideal for parallel mode.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         Optional<BufferedImage> thumb;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 thumb = page.thumbnailImage();
+ *             }
+ *         }
+ *         // I/O in parallel
+ *         thumb.ifPresent(img -> ImageIO.write(img, "PNG", outFile.toFile()));
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks across all modes.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

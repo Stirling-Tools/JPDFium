@@ -23,7 +23,7 @@ import java.util.*;
  *
  * <p>The filler collects all desired field values via builder methods and applies them
  * atomically in {@link #apply()}, which manages the complete PDFium form-fill lifecycle
- * (environment init → page notifications → value writes → focus commit → cleanup).
+ * (environment init -> page notifications -> value writes -> focus commit -> cleanup).
  *
  * <h2>Quick start</h2>
  * <pre>{@code
@@ -164,7 +164,7 @@ public final class PdfFormFiller {
      * Smart-fill from a flat string map. The field type is detected at {@link #apply()} time:
      * <ul>
      *   <li>Text / editable combo: value is written directly.</li>
-     *   <li>Checkbox: {@code "yes"/"true"/"1"/"on"} (case-insensitive) → checked, else unchecked.</li>
+     *   <li>Checkbox: {@code "yes"/"true"/"1"/"on"} (case-insensitive) -> checked, else unchecked.</li>
      *   <li>Radio: value is matched against export values.</li>
      *   <li>Combo / list: value is matched against option labels (first match wins).</li>
      * </ul>
@@ -343,7 +343,7 @@ public final class PdfFormFiller {
     // Field handlers
 
     /**
-     * Fill a text field using the focus → select-all → replace approach.
+     * Fill a text field using the focus -> select-all -> replace approach.
      * This updates both /V and the appearance stream.
      */
     private boolean handleTextField(MemorySegment formHandle, MemorySegment rawPage,
@@ -354,8 +354,7 @@ public final class PdfFormFiller {
             // Focus the annotation
             int focused = safeInt0b(FormFillBindings.FORM_SetFocusedAnnot, formHandle, annot);
             if (focused == 0) {
-                // Fallback: directly set /V (value persists on save, appearance may not update)
-                setAnnotString(arena, annot, "V", value);
+                setAnnotString(arena, annot, AnnotationKeys.V, value);
                 return true;
             }
             // Select all existing text
@@ -401,11 +400,11 @@ public final class PdfFormFiller {
                 if (nowChecked == wantChecked) return true;
             }
 
-            // Attempt 2: fallback — directly set /V and /AS string values
+            // Attempt 2: fallback - directly set /V and /AS string values
             try (Arena arena = Arena.ofConfined()) {
                 String targetValue = wantChecked ? exportValue : "Off";
-                setAnnotString(arena, annot, "V", targetValue);
-                setAnnotString(arena, annot, "AS", targetValue);
+                setAnnotString(arena, annot, AnnotationKeys.V, targetValue);
+                setAnnotString(arena, annot, AnnotationKeys.AS, targetValue);
                 return true;
             }
         } catch (Throwable t) { return false; }
@@ -429,7 +428,7 @@ public final class PdfFormFiller {
         List<Integer> indices = resolveListIndices(formHandle, annot, fieldName);
         if (indices == null || indices.isEmpty()) return false;
 
-        // FORM_SetIndexSelected operates on the FOCUSED annotation — focus it first
+        // FORM_SetIndexSelected operates on the FOCUSED annotation - focus it first
         safeInt0b(FormFillBindings.FORM_SetFocusedAnnot, formHandle, annot);
 
         int optCount = safeInt0b(AnnotationBindings.FPDFAnnot_GetOptionCount, formHandle, annot);
@@ -453,7 +452,7 @@ public final class PdfFormFiller {
         // Fallback: explicitly set /V for the first selected label so value readback works
         if (any && !selectedLabels.isEmpty()) {
             try (Arena arena = Arena.ofConfined()) {
-                setAnnotString(arena, annot, "V", selectedLabels.getFirst());
+                setAnnotString(arena, annot, AnnotationKeys.V, selectedLabels.getFirst());
             }
         }
         return any;
@@ -496,17 +495,17 @@ public final class PdfFormFiller {
                                 continue;
                             }
 
-                            // Attempt 2: fallback — set /V and /AS directly
+                            // Attempt 2: fallback - set /V and /AS directly
                             try (Arena arena = Arena.ofConfined()) {
-                                setAnnotString(arena, annot, "V", selectedExportValue);
-                                setAnnotString(arena, annot, "AS", selectedExportValue);
+                                setAnnotString(arena, annot, AnnotationKeys.V, selectedExportValue);
+                                setAnnotString(arena, annot, AnnotationKeys.AS, selectedExportValue);
                             }
                             anyFilled = true;
                             pageModified = true;
                         } else {
                             // Deselect non-target radio buttons via /AS = Off
                             try (Arena arena = Arena.ofConfined()) {
-                                setAnnotString(arena, annot, "AS", "Off");
+                                setAnnotString(arena, annot, AnnotationKeys.AS, "Off");
                             }
                         }
                     } catch (Throwable ignored) {
@@ -585,8 +584,6 @@ public final class PdfFormFiller {
         }
     }
 
-    // Low-level helpers
-
     /**
      * Return the page-coordinate centre of an annotation's bounding rectangle,
      * or {@code null} if the rect cannot be read.
@@ -640,7 +637,7 @@ public final class PdfFormFiller {
 
     // Typed invokers
 
-    /** Invoke void(ADDRESS, ADDRESS) — throws FormFillException on error. */
+    /** Invoke void(ADDRESS, ADDRESS) - throws FormFillException on error. */
     private static void safeVoid(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { mh.invokeExact(a, b); }
         catch (Throwable t) { throw new FormFillException("FFM call failed", t); }
@@ -657,17 +654,17 @@ public final class PdfFormFiller {
         try { mh.invokeExact(a, b); } catch (Throwable ignored) {}
     }
 
-    /** Invoke int(ADDRESS) → 0 on error. */
+    /** Invoke int(ADDRESS) -> 0 on error. */
     private static int safeInt0(java.lang.invoke.MethodHandle mh, MemorySegment a) {
         try { return (int) mh.invokeExact(a); } catch (Throwable t) { return 0; }
     }
 
-    /** Invoke int(ADDRESS, ADDRESS) → 0 on error. */
+    /** Invoke int(ADDRESS, ADDRESS) -> 0 on error. */
     private static int safeInt0b(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { return (int) mh.invokeExact(a, b); } catch (Throwable t) { return 0; }
     }
 
-    /** Invoke int(ADDRESS, int) → 0 on error (e.g. FPDFPage_Flatten). */
+    /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
     private static void safeSilentInt2(java.lang.invoke.MethodHandle mh, MemorySegment a, int b) {
         try { mh.invokeExact(a, b); } catch (Throwable ignored) {}
     }
@@ -677,7 +674,7 @@ public final class PdfFormFiller {
         try { mh.invokeExact(a, b, c); } catch (Throwable ignored) {}
     }
 
-    /** Invoke int(ADDRESS, ADDRESS, int, int) → 0 on error. */
+    /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
     private static int safeInt4(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
         try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) { return 0; }
     }
@@ -687,12 +684,10 @@ public final class PdfFormFiller {
         try { mh.invokeExact(a, b, c, d); } catch (Throwable ignored) {}
     }
 
-    /** Invoke ADDRESS(ADDRESS, int) → NULL on error. */
+    /** Invoke ADDRESS(ADDRESS, int) -> NULL on error. */
     private static MemorySegment safeSegment(java.lang.invoke.MethodHandle mh, MemorySegment a, int b) {
         try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) { return MemorySegment.NULL; }
     }
-
-    // Internal records
 
     /** Identifies a radio button annotation by page + annotation index + export value. */
     private record RadioMember(int pageIdx, int annotIdx, String exportValue) {}

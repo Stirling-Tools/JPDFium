@@ -16,6 +16,25 @@ import java.util.Map;
  * <p>Demonstrates geometric table detection and extraction from PDF pages,
  * with CSV and JSON export.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Table extraction is per-page: the PDFium text/geometry call is serialized,
+ * but CSV/JSON generation and file I/O run in true parallel.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         List<Table> tables;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             tables = PdfTableExtractor.extract(doc, pageIndex);
+ *         }
+ *         // CSV/JSON export runs in parallel
+ *         for (Table t : tables) {
+ *             Files.writeString(csvPath, t.toCsv());
+ *             Files.writeString(jsonPath, t.toJson());
+ *         }
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

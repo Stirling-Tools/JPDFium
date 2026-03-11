@@ -152,7 +152,7 @@ public final class PdfBookmarkEditor {
         for (TextChar ch : pt.chars()) {
             if (ch.fontSize() >= minFontSize) {
                 if (!(Math.abs(ch.fontSize() - currentFontSize) < 0.5f) && !current.isEmpty()) {
-                    // Font size changed — emit previous heading
+                    // Font size changed - emit previous heading
                     String text = current.toString().strip();
                     if (!text.isBlank() && text.length() <= 200) {
                         result.add(new HeadingCandidate(text, pageIndex, currentFontSize));
@@ -162,7 +162,7 @@ public final class PdfBookmarkEditor {
                 currentFontSize = ch.fontSize();
                 current.append(ch.toChar());
             } else {
-                // Non-heading character — emit any accumulated heading
+                // Non-heading character - emit any accumulated heading
                 if (!current.isEmpty()) {
                     String text = current.toString().strip();
                     if (!text.isBlank() && text.length() <= 200) {

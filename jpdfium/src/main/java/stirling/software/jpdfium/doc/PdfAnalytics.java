@@ -120,7 +120,7 @@ public final class PdfAnalytics {
         // Reading time
         double readingTimeMinutes = totalWords > 0 ? (double) totalWords / AVG_READING_SPEED_WPM : 0;
 
-        // Font list (simplified to just name→char count)
+        // Font list (simplified to just name->char count)
         List<FontUsage> fontList = fontUsage.entrySet().stream()
                 .map(e -> new FontUsage(e.getKey(), e.getValue()))
                 .sorted(Comparator.comparingInt(FontUsage::charCount).reversed())

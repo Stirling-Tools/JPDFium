@@ -10,7 +10,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.Set;
 
 /**
- * Convert page object colors between color spaces (RGB → grayscale, etc.).
+ * Convert page object colors between color spaces (RGB -> grayscale, etc.).
  *
  * <p>Walks all page objects (text, paths, images) and converts fill/stroke
  * colors to the target color space using luminance-preserving conversion.

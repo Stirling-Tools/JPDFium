@@ -15,6 +15,27 @@ import java.util.Set;
  * <p>Demonstrates conversion to all supported formats using page 0 only,
  * keeping output small but covering every codec path.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Multi-page PDF-to-image conversion is <b>highly parallelizable</b>.
+ * Each page renders independently; image encoding (PNG, JPEG, WEBP) is
+ * CPU-intensive Java-side work that benefits from parallel threads.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         RenderResult result;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 result = page.renderAt(dpi);
+ *             }
+ *         }
+ *         // Encode + write in parallel (heavy CPU work)
+ *         ImageIO.write(result.toBufferedImage(), format, outFile.toFile());
+ *     });
+ * }</pre>
+ * <p>For streaming mode with large documents, use
+ * {@code ProcessingMode.streamingParallel(4)} to limit memory.
+ * See {@link S88_StreamingParallel}.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

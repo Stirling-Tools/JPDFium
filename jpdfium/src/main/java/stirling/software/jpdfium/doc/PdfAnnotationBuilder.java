@@ -116,10 +116,7 @@ public final class PdfAnnotationBuilder {
                 rectSeg.set(ValueLayout.JAVA_FLOAT, 12, rect.y());
                 try {
                     int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
-                    // Non-fatal: markup annotations (highlight/underline/etc.) may derive rect
-                    // from quad points in some PDFium builds; annotation still persists.
-                    if (ok == 0) System.err.println("[PdfAnnotationBuilder] FPDFAnnot_SetRect returned 0 for type " + type);
-                } catch (Throwable t) { System.err.println("[PdfAnnotationBuilder] FPDFAnnot_SetRect error: " + t); }
+                } catch (Throwable ignored) {}
             }
 
             try {
@@ -128,7 +125,7 @@ public final class PdfAnnotationBuilder {
 
             if (contents != null) {
                 try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment key = arena.allocateFrom("Contents");
+                    MemorySegment key = arena.allocateFrom(AnnotationKeys.CONTENTS);
                     MemorySegment value = FfmHelper.toWideString(arena, contents);
                     int svOk = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, key, value);
                 } catch (Throwable ignored) {}

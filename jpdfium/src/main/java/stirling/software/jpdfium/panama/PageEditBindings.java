@@ -107,6 +107,46 @@ public final class PageEditBindings {
     public static final MethodHandle FPDFFont_Close = downcall("FPDFFont_Close",
             FunctionDescriptor.ofVoid(ADDRESS));
 
+    /** Get the font handle from a text page object. Returns FPDF_FONT. */
+    public static final MethodHandle FPDFTextObj_GetFont = downcall("FPDFTextObj_GetFont",
+            FunctionDescriptor.of(ADDRESS, ADDRESS));
+
+    /** Get base font name (PostScript name). Returns bytes needed (incl. NUL), 0 on error. */
+    public static final MethodHandle FPDFFont_GetBaseFontName = downcall("FPDFFont_GetBaseFontName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+
+    /** Get family name. Returns bytes needed (incl. NUL), 0 on error. */
+    public static final MethodHandle FPDFFont_GetFamilyName = downcall("FPDFFont_GetFamilyName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+
+    /** Get decoded font data. Returns FPDF_BOOL. */
+    public static final MethodHandle FPDFFont_GetFontData = downcall("FPDFFont_GetFontData",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS));
+
+    /** Check if font is embedded. Returns 1=embedded, 0=not, -1=failure. */
+    public static final MethodHandle FPDFFont_GetIsEmbedded = downcallCritical("FPDFFont_GetIsEmbedded",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get font descriptor flags (ISO 32000-1 table 123). Returns -1 on failure. */
+    public static final MethodHandle FPDFFont_GetFlags = downcallCritical("FPDFFont_GetFlags",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get font weight (400=normal, 700=bold). Returns -1 on failure. */
+    public static final MethodHandle FPDFFont_GetWeight = downcallCritical("FPDFFont_GetWeight",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get italic angle in degrees. Returns FPDF_BOOL. */
+    public static final MethodHandle FPDFFont_GetItalicAngle = downcall("FPDFFont_GetItalicAngle",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Get font ascent for a given font size. Returns FPDF_BOOL. */
+    public static final MethodHandle FPDFFont_GetAscent = downcall("FPDFFont_GetAscent",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, ADDRESS));
+
+    /** Get font descent for a given font size. Returns FPDF_BOOL. */
+    public static final MethodHandle FPDFFont_GetDescent = downcall("FPDFFont_GetDescent",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, ADDRESS));
+
     public static final MethodHandle FPDFBitmap_GetWidth = downcallCritical("FPDFBitmap_GetWidth",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
@@ -219,4 +259,36 @@ public final class PageEditBindings {
             JAVA_FLOAT.withName("c"), JAVA_FLOAT.withName("d"),
             JAVA_FLOAT.withName("e"), JAVA_FLOAT.withName("f")
     );
+
+    /** Layout of FS_RECTF: { float left, bottom, right, top }. */
+    public static final StructLayout FS_RECTF_LAYOUT = MemoryLayout.structLayout(
+            JAVA_FLOAT.withName("left"), JAVA_FLOAT.withName("bottom"),
+            JAVA_FLOAT.withName("right"), JAVA_FLOAT.withName("top")
+    );
+
+    /** Transform all page content with clipping. matrix and clipRect are FS_MATRIX* and FS_RECTF*. */
+    public static final MethodHandle FPDFPage_TransFormWithClip = downcall("FPDFPage_TransFormWithClip",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Set bitmap on an image object. pages=FPDF_PAGE*, count, image_object, bitmap. */
+    public static final MethodHandle FPDFImageObj_SetBitmap = downcall("FPDFImageObj_SetBitmap",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Load JPEG inline into image object. file_access=FPDF_FILEACCESS*, pages, count, image_object. */
+    public static final MethodHandle FPDFImageObj_LoadJpegFileInline = downcall("FPDFImageObj_LoadJpegFileInline",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Create an image object from external bitmap data. */
+    public static final MethodHandle FPDFBitmap_CreateEx = downcall("FPDFBitmap_CreateEx",
+            FunctionDescriptor.of(ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Insert a page object at a specific index (0 = behind all existing). */
+    public static final MethodHandle FPDFPage_InsertObject_AtIndex = optionalDowncall(
+            "FPDFPage_InsertObject", null); // use InsertObject; index not yet in PDFium
+
+    private static MethodHandle optionalDowncall(String name, MethodHandle fallback) {
+        return LOOKUP.find(name)
+                .map(addr -> LINKER.downcallHandle(addr, FunctionDescriptor.ofVoid(ADDRESS, ADDRESS)))
+                .orElse(fallback);
+    }
 }

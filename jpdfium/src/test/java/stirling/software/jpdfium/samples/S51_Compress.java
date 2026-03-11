@@ -18,6 +18,26 @@ import java.util.List;
  * font subsetting) - qpdf (structural optimization) - metadata stripping.
  * Includes all presets and custom options.
  *
+ * <h3>Streaming &amp; Parallel Guidance (LOW / not parallelizable)</h3>
+ * <p>Compression operates on the <b>entire document</b> (cross-reference table,
+ * object streams, font subsetting). It cannot be split per-page.
+ * <p>However, if you need to compress <b>multiple PDFs</b>, you can parallelize
+ * at the file level:
+ * <pre>{@code
+ * List<Path> inputs = ...;
+ * try (var pool = Executors.newFixedThreadPool(4)) {
+ *     inputs.forEach(input -> pool.submit(() -> {
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfDocument doc = PdfDocument.open(input)) {
+ *                 PdfCompressor.compress(doc, CompressPreset.BALANCED);
+ *                 doc.save(outputPath);
+ *             }
+ *         }
+ *     }));
+ * }
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for the full streaming/parallel guide.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

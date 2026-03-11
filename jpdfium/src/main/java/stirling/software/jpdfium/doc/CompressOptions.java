@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.ProcessingMode;
+
 /**
  * Options for PDF compression (builder pattern).
  *
@@ -24,6 +26,7 @@ public final class CompressOptions {
     private final boolean removeUnusedObjects;
     private final boolean removeMetadata;
     private final boolean removeThumbnails;
+    private final ProcessingMode processingMode;
 
     private CompressOptions(Builder b) {
         this.imageQuality = b.imageQuality;
@@ -34,6 +37,7 @@ public final class CompressOptions {
         this.removeUnusedObjects = b.removeUnusedObjects;
         this.removeMetadata = b.removeMetadata;
         this.removeThumbnails = b.removeThumbnails;
+        this.processingMode = b.processingMode;
     }
 
     public int imageQuality() { return imageQuality; }
@@ -44,6 +48,8 @@ public final class CompressOptions {
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
     public boolean removeMetadata() { return removeMetadata; }
     public boolean removeThumbnails() { return removeThumbnails; }
+    /** Processing mode for batch operations (streaming, parallel, or both). */
+    public ProcessingMode processingMode() { return processingMode; }
 
     public static Builder builder() { return new Builder(); }
 
@@ -56,6 +62,7 @@ public final class CompressOptions {
         private boolean removeUnusedObjects = true;
         private boolean removeMetadata;
         private boolean removeThumbnails;
+        private ProcessingMode processingMode = ProcessingMode.DEFAULT;
 
         private Builder() {}
 
@@ -86,6 +93,9 @@ public final class CompressOptions {
             this.removeMetadata = preset.removeMetadata();
             return this;
         }
+
+        /** Set processing mode for batch operations (streaming, parallel, or both). */
+        public Builder processingMode(ProcessingMode mode) { this.processingMode = mode; return this; }
 
         public CompressOptions build() { return new CompressOptions(this); }
     }

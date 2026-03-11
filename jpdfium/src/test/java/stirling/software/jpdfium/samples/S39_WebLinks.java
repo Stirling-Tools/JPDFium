@@ -59,7 +59,7 @@ public class S39_WebLinks {
 
         System.out.printf("S39_WebLinks  |  %d PDF(s)%n", inputs.size());
 
-        Path input = inputs.get(0);
+        Path input = inputs.getFirst();
         String stem = SampleBase.stem(input);
 
         try (PdfDocument doc = PdfDocument.open(input)) {

@@ -14,6 +14,22 @@ import java.util.List;
  * indexes or interactive viewer search boxes. Resolves character sequences directly
  * to their bounding dimensions, avoiding intermediary text reconstruction overhead.
  *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Per-page text search is <b>embarrassingly parallel</b>. Each page can be
+ * searched independently, and result aggregation runs lock-free.
+ * <pre>{@code
+ * var allMatches = Collections.synchronizedList(new ArrayList<SearchMatch>());
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         List<SearchMatch> matches;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             matches = PdfTextSearcher.searchPage(doc, pageIndex, query);
+ *         }
+ *         allMatches.addAll(matches); // thread-safe aggregation
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for comprehensive benchmarks.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

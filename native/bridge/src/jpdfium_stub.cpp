@@ -483,7 +483,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-//  Annotation-Based Redaction stubs (Mark → Commit pattern)
+//  Annotation-Based Redaction stubs (Mark -> Commit pattern)
 
 int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float,
                                      uint32_t, int32_t* annot_index) {

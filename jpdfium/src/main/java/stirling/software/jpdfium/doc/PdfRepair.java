@@ -99,10 +99,8 @@ public final class PdfRepair {
             }
         }
 
-        // Core repair cascade (qpdf + PDFium)
         RepairResult coreResult = RepairLib.repair(current, flags);
 
-        // If core repair failed, try PDFio fallback
         if (usePdfioFallback && !coreResult.isUsable()) {
             RepairResult pdfioResult = RepairLib.pdfioRepair(current);
             if (pdfioResult.isUsable()) {
@@ -110,7 +108,6 @@ public final class PdfRepair {
             }
         }
 
-        // Post-repair: security sanitization (remove JS, embedded files, actions)
         if (sanitize && coreResult.isUsable()) {
             byte[] repairedBytes = coreResult.repairedPdf();
             try (PdfDocument doc = PdfDocument.open(repairedBytes)) {

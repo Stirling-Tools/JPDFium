@@ -19,6 +19,27 @@ import java.util.List;
  *   <li>Rotation flattening - applies rotation transform to content, resets rotation flag</li>
  * </ul>
  *
+ * <h3>Streaming &amp; Parallel Guidance (MEDIUM benefit)</h3>
+ * <p>Flattening modifies pages. Use the <b>split-merge</b> pattern: the pipeline
+ * splits the document into single-page PDFs, processes them in parallel, and
+ * merges the results.
+ * <pre>{@code
+ * // Modify pages with parallel split-merge:
+ * PdfPipeline.processAndSave(input, output,
+ *     ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         try (PdfPage page = doc.page(pageIndex)) {
+ *             PdfFlattenRotation.flatten(page.rawHandle());
+ *         }
+ *     });
+ *
+ * // Or use streaming for low-memory large documents:
+ * PdfPipeline.processAndSave(input, output,
+ *     ProcessingMode.streaming(),
+ *     (doc, pageIndex) -> { doc.flatten(FlattenMode.ANNOTATIONS); });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

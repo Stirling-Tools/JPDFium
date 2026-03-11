@@ -1,6 +1,5 @@
 package stirling.software.jpdfium.fonts;
 
-import java.util.Collections;
 import java.util.List;
 
 /**

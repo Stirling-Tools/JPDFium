@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.ProcessingMode;
 import stirling.software.jpdfium.model.ColorScheme;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -23,6 +24,7 @@ public final class RenderOptions {
     private final boolean antiAlias;
     private final int background;
     private final ColorScheme colorScheme;
+    private final ProcessingMode processingMode;
 
     private RenderOptions(Builder b) {
         this.dpi = b.dpi;
@@ -33,6 +35,7 @@ public final class RenderOptions {
         this.antiAlias = b.antiAlias;
         this.background = b.background;
         this.colorScheme = b.colorScheme;
+        this.processingMode = b.processingMode;
     }
 
     public static Builder builder() { return new Builder(); }
@@ -42,6 +45,8 @@ public final class RenderOptions {
     public boolean printing() { return printing; }
     public boolean annotations() { return annotations; }
     public ColorScheme colorScheme() { return colorScheme; }
+    /** Processing mode for batch operations (streaming, parallel, or both). */
+    public ProcessingMode processingMode() { return processingMode; }
 
     int flags() {
         int flags = 0;
@@ -127,6 +132,7 @@ public final class RenderOptions {
         private boolean antiAlias = true;
         private int background = 0xFFFFFFFF;
         private ColorScheme colorScheme = null;
+        private ProcessingMode processingMode = ProcessingMode.DEFAULT;
 
         private Builder() {}
 
@@ -138,6 +144,8 @@ public final class RenderOptions {
         public Builder antiAlias(boolean a) { this.antiAlias = a; return this; }
         public Builder background(int argb) { this.background = argb; return this; }
         public Builder colorScheme(ColorScheme cs) { this.colorScheme = cs; return this; }
+        /** Set processing mode for batch operations (streaming, parallel, or both). */
+        public Builder processingMode(ProcessingMode mode) { this.processingMode = mode; return this; }
 
         public RenderOptions build() { return new RenderOptions(this); }
     }

@@ -39,7 +39,7 @@ public final class PdfCompressor {
 
     /**
      * Compress a document using the given options.
-     * Pipeline: Ghostscript (lossy) → qpdf (structural) → metadata strip.
+     * Pipeline: Ghostscript (lossy) -> qpdf (structural) -> metadata strip.
      *
      * @param doc  the source document
      * @param opts compression options

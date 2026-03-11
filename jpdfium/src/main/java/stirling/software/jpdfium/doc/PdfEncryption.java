@@ -11,9 +11,9 @@ import java.nio.file.Path;
  *
  * <p>Supports two encryption backends:
  * <ol>
- *   <li><b>Native (in-memory)</b> – AES-256 via {@code EPDF_SetEncryption}, applied
+ *   <li><b>Native (in-memory)</b> - AES-256 via {@code EPDF_SetEncryption}, applied
  *       in-memory before save. No external process needed.</li>
- *   <li><b>qpdf subprocess</b> – AES-128/256, file-to-file operations.
+ *   <li><b>qpdf subprocess</b> - AES-128/256, file-to-file operations.
  *       Useful when working with file paths directly.</li>
  * </ol>
  */

@@ -27,11 +27,6 @@ import java.util.Optional;
  */
 public final class PdfMetadata {
 
-    private static final String[] STANDARD_TAGS = {
-            "Title", "Author", "Subject", "Keywords",
-            "Creator", "Producer", "CreationDate", "ModDate"
-    };
-
     private final MemorySegment docSeg;
 
     private PdfMetadata(MemorySegment docSeg) {
@@ -47,24 +42,24 @@ public final class PdfMetadata {
         return new PdfMetadata(doc);
     }
 
-    public Optional<String> title()        { return get("Title"); }
-    public Optional<String> author()       { return get("Author"); }
-    public Optional<String> subject()      { return get("Subject"); }
-    public Optional<String> keywords()     { return get("Keywords"); }
-    public Optional<String> creator()      { return get("Creator"); }
-    public Optional<String> producer()     { return get("Producer"); }
-    public Optional<String> creationDate() { return get("CreationDate"); }
-    public Optional<String> modDate()      { return get("ModDate"); }
+    public Optional<String> title()        { return get(MetadataTag.TITLE); }
+    public Optional<String> author()       { return get(MetadataTag.AUTHOR); }
+    public Optional<String> subject()      { return get(MetadataTag.SUBJECT); }
+    public Optional<String> keywords()     { return get(MetadataTag.KEYWORDS); }
+    public Optional<String> creator()      { return get(MetadataTag.CREATOR); }
+    public Optional<String> producer()     { return get(MetadataTag.PRODUCER); }
+    public Optional<String> creationDate() { return get(MetadataTag.CREATION_DATE); }
+    public Optional<String> modDate()      { return get(MetadataTag.MOD_DATE); }
 
     /**
-     * Get a metadata value by tag name.
+     * Get a metadata value by tag.
      *
-     * @param tag one of: Title, Author, Subject, Keywords, Creator, Producer, CreationDate, ModDate
+     * @param tag the metadata tag
      * @return the value, or empty if not present
      */
-    public Optional<String> get(String tag) {
+    public Optional<String> get(MetadataTag tag) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment tagSeg = arena.allocateFrom(tag);
+            MemorySegment tagSeg = arena.allocateFrom(tag.pdfKey());
 
             // Double-call pattern: first call gets required buffer size
             long needed;
@@ -90,8 +85,8 @@ public final class PdfMetadata {
      */
     public Map<String, String> all() {
         Map<String, String> map = new LinkedHashMap<>();
-        for (String tag : STANDARD_TAGS) {
-            get(tag).ifPresent(v -> map.put(tag, v));
+        for (MetadataTag tag : MetadataTag.values()) {
+            get(tag).ifPresent(v -> map.put(tag.pdfKey(), v));
         }
         return map;
     }

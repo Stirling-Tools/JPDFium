@@ -16,6 +16,25 @@ import java.util.Set;
  * <p>Demonstrates text and image watermarks applied to PDF documents
  * using the PdfPageEditor-based watermark engine.
  *
+ * <h3>Streaming &amp; Parallel Guidance (MEDIUM benefit)</h3>
+ * <p>Watermarking modifies pages individually. Use the <b>split-merge</b> pattern
+ * for parallel application:
+ * <pre>{@code
+ * PdfPipeline.processAndSave(input, output,
+ *     ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         WatermarkApplier.apply(doc, watermark); // applies to all pages in chunk
+ *     });
+ *
+ * // Or streaming for large documents:
+ * PdfPipeline.processAndSave(input, output,
+ *     ProcessingMode.streaming(),
+ *     (doc, pageIndex) -> {
+ *         WatermarkApplier.apply(doc, watermark);
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

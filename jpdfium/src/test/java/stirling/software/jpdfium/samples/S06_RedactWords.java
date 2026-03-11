@@ -23,6 +23,24 @@ import java.util.List;
  *
  * <p>All capabilities are configured via a single {@link RedactOptions} builder.
  *
+ * <h3>Streaming &amp; Parallel Guidance (MEDIUM benefit)</h3>
+ * <p>Redaction modifies pages. For large documents, use the split-merge pattern:
+ * <pre>{@code
+ * RedactOptions opts = RedactOptions.builder()
+ *     .words(List.of("confidential", "secret"))
+ *     .processingMode(ProcessingMode.parallel(4))  // built-in support
+ *     .build();
+ * PdfRedactor.redact(input, output, opts);
+ * }</pre>
+ * <p>For streaming mode (low memory on very large files):
+ * <pre>{@code
+ * RedactOptions opts = RedactOptions.builder()
+ *     .words(wordList)
+ *     .processingMode(ProcessingMode.streaming())
+ *     .build();
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

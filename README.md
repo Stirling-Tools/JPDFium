@@ -4,68 +4,95 @@ High-performance Java 25 FFM bindings for PDFium (EmbedPDF fork).
 
 ## Features
 
-- PDF Rendering - Render pages to RGBA bitmaps at any DPI
-- Text Extraction - Structured page to line to word to character extraction with font and position metadata
-- Text Search - Literal string search via PDFium native search engine
-- True Redaction - Removes content from the PDF stream (not a cosmetic overlay); region, regex-pattern, and word-list redaction with full Unicode support
-- PII Redaction Pipeline - PCRE2 JIT pattern engine, FlashText NER, HarfBuzz glyph-level redaction, font normalization, XMP metadata stripping, semantic coreference expansion - all native via FFM
-- Native Redaction - Built-in EPDFAnnot_ApplyRedaction for shading, JBIG2, transparent PNG, Form XObject redaction (complementary to Object Fission)
-- Document Metadata - Read title, author, subject, creator, dates, permissions, page labels
-- Bookmarks - Full outline/TOC tree traversal with nested bookmarks, destinations, and URI actions
-- Bookmark Editing - Full CRUD: create, rename, reorder, delete bookmarks with page destinations and nesting; auto-generate from headings
-- Annotations - Full CRUD: list, create, modify, delete annotations with type/rect/color/flags/contents
-- EmbedPDF Annotation Extensions - Opacity, rotation, appearance generation, border style/dash patterns, reply types, icons, overlay text, per-annotation flattening
-- Hyperlinks - Enumerate and hit-test page links with action type and URI resolution
-- Digital Signatures - Read-only inspection of signature metadata (sub-filter, reason, time, contents, DocMDP)
-- Embedded Attachments - List, extract, add, and delete embedded file attachments
-- Page Thumbnails - Extract pre-rendered decoded/raw thumbnail data from pages
-- Structure Tree - Accessibility tagged structure (headings, paragraphs, tables) traversal
-- Page Import/Export - Import pages between documents, copy viewer preferences, delete pages
-- Page Editing - Create/modify page objects (text, rectangles, paths), set colors/transforms
-- PDF to Images - Convert pages to PNG, JPEG, TIFF, WEBP, BMP with configurable DPI and quality
-- Images to PDF - Combine images into PDFs (scanner workflow, photo albums) with page size and positioning options
-- N-up Layout - Tile multiple pages onto one sheet (2-up, 4-up, 6-up, 9-up) for booklet printing
-- PDF Merge - Merge multiple PDFs from open documents or file paths into one, with proper internal reference handling
-- PDF Split - Split PDFs by strategy: every N pages, by bookmark boundaries, single pages, extract specific pages or ranges
-- Watermarking - Text and image watermarks with builder pattern: position, rotation, opacity, font, size, color
-- Page Geometry - Crop (CropBox), rotate, resize (MediaBox), and read page geometry at the page level
-- Header/Footer/Bates - Add headers, footers, and Bates numbering with template variables ({page}, {pages}, {date})
-- Security Hardening and Sanitization - Unified builder: remove JavaScript, embedded files, action annotations, comments, hidden text; flatten forms; strip XMP/document metadata - all in one pass with audit log
-- Table Extraction - Geometric table detection from text positions with CSV/JSON export
-- PDF Repair - Multi-stage cascade repair: Brotli transcoding, qpdf recovery, PDFio fallback, ICC/JPX validation, optional security sanitization
-- Secure PDF-Image - Convert pages to rasterized images, stripping all selectable text and vector content
-- Document Info Audit - One-call comprehensive PDF analysis: version, tagged status, encryption, page count, images, form fields, blank pages
-- Form Field Reading - Extract form fields (text, button, combo, list, signature) with values, options, and checked state
-- Form Field Filling - Programmatically fill text fields, checkboxes, radio buttons, combo/list boxes with builder pattern; batch fill from map; flatten after fill
-- Image Extraction - Extract embedded images from PDF pages with metadata (dimensions, color space, compression filter)
-- Page Objects Enumeration - List all page objects (text, image, path, shading, form) with bounds, colors, transform matrix, transparency
-- Encryption/Decryption - Native AES-256 in-memory encryption plus qpdf file-to-file operations, with user/owner passwords and permission control
-- PDF Linearization - Fast web view optimization for browser loading (requires qpdf)
-- Stream Optimization - Object stream compression and cross-reference streams for file size reduction (requires qpdf)
-- PDF Compression - Full pipeline: Ghostscript (image resampling, font subsetting, lossy JPEG) to qpdf (structural optimization) to metadata stripping; presets (WEB, SCREEN, PRINT, LOSSLESS, MAXIMUM) and custom quality/DPI
-- Version Conversion - Read and set PDF file version (1.4, 1.5, 1.6, 1.7, 2.0)
-- Page Overlay - Stamp pages from one PDF onto another (watermark, letterhead)
-- Page Interleaving - Merge front/back scans into proper page order (duplex scanning workflow)
-- Named Destinations - Lookup bookmark-like named destinations with view type and coordinates
-- Web Links - Extract text-based URLs, add visible hyperlink annotations with blue underline (customizable color, border, opacity), remove link annotations
-- Page Boxes - Read/set all five PDF boxes: MediaBox, CropBox, BleedBox, TrimBox, ArtBox
-- Blank Page Detection - Detect blank pages via text content and visual uniformity analysis
-- JavaScript Inspection - Audit document-level and annotation-level JavaScript for security
-- Bounded Text Extraction - Extract text blocks with bounding boxes, font name, and size
-- Advanced Render Options - Grayscale, print mode, dark mode color scheme, custom DPI
-- Vector Path Drawing - Draw rectangles, lines, bezier curves with fill/stroke colors and line styles
-- Rotation Flattening - Apply rotation transform to page content, removing rotation metadata
-- QR Code Generation - Pure-Java QR encoder (versions 1-40, numeric/alphanumeric/byte modes, all ECC levels); vector PDF path output at any zoom level
-- Barcode Stamping - Add QR codes to pages with builder: content, size, position, margin, foreground/background color, ECC level
-- Page Reorder - Reorder pages by index list, reverse, or custom sequence; swap and move pages
-- Color Conversion - Convert page content between color spaces (RGB, grayscale, CMYK)
-- PDF Analytics - Comprehensive document analysis: page count, total text, image count, font usage, file size breakdown
-- Page Normalization - Load pages with rotation normalized, get unrotated page sizes
-- Annotation Rendering - Render individual annotations to bitmaps
-- Booklet Imposition - Saddle-stitch booklet layout for print; pages arranged on sheets for folding
-- Cross-Platform - Linux x64/arm64, macOS x64/arm64, Windows x64
-- Zero JNI - Pure FFM (java.lang.foreign), no JNI boilerplate
-- MIT - PDFium is Apache 2.0, this project is MIT
+- PDF Rendering: Render pages to RGBA bitmaps at any DPI
+- Text Extraction: Structured page to line to word to character extraction with font and position metadata
+- Text Search: Literal string search via PDFium native search engine
+- True Redaction: Removes content from the PDF stream (not a cosmetic overlay); region, regex-pattern, and word-list redaction with full Unicode support
+- PII Redaction Pipeline: PCRE2 JIT pattern engine, FlashText NER, HarfBuzz glyph-level redaction, font normalization, XMP metadata stripping, semantic coreference expansion - all native via FFM
+- Native Redaction: Built-in EPDFAnnot_ApplyRedaction for shading, JBIG2, transparent PNG, Form XObject redaction (complementary to Object Fission)
+- Document Metadata: Read title, author, subject, creator, dates, permissions, page labels
+- Bookmarks: Full outline/TOC tree traversal with nested bookmarks, destinations, and URI actions
+- Bookmark Editing: Full CRUD: create, rename, reorder, delete bookmarks with page destinations and nesting; auto-generate from headings
+- Annotations: Full CRUD: list, create, modify, delete annotations with type/rect/color/flags/contents
+- EmbedPDF Annotation Extensions: Opacity, rotation, appearance generation, border style/dash patterns, reply types, icons, overlay text, per-annotation flattening
+- Hyperlinks: Enumerate and hit-test page links with action type and URI resolution
+- Digital Signatures: Read-only inspection of signature metadata (sub-filter, reason, time, contents, DocMDP)
+- Embedded Attachments: List, extract, add, and delete embedded file attachments
+- Page Thumbnails: Extract pre-rendered decoded/raw thumbnail data from pages
+- Structure Tree: Accessibility tagged structure (headings, paragraphs, tables) traversal
+- Page Import/Export: Import pages between documents, copy viewer preferences, delete pages
+- Page Editing: Create/modify page objects (text, rectangles, paths), set colors/transforms
+- PDF to Images: Convert pages to PNG, JPEG, TIFF, WEBP, BMP with configurable DPI and quality
+- Images to PDF: Combine images into PDFs (scanner workflow, photo albums) with page size and positioning options
+- N-up Layout: Tile multiple pages onto one sheet (2-up, 4-up, 6-up, 9-up) for booklet printing
+- PDF Merge: Merge multiple PDFs from open documents or file paths into one, with proper internal reference handling
+- PDF Split: Split PDFs by strategy: every N pages, by bookmark boundaries, single pages, extract specific pages or ranges
+- Watermarking: Text and image watermarks with builder pattern: position, rotation, opacity, font, size, color
+- Page Geometry: Crop (CropBox), rotate, resize (MediaBox), and read page geometry at the page level
+- Header/Footer/Bates: Add headers, footers, and Bates numbering with template variables ({page}, {pages}, {date})
+- Security Hardening and Sanitization: Unified builder: remove JavaScript, embedded files, action annotations, comments, hidden text; flatten forms; strip XMP/document metadata - all in one pass with audit log
+- Table Extraction: Geometric table detection from text positions with CSV/JSON export
+- PDF Repair: Multi-stage cascade repair: Brotli transcoding, qpdf recovery, PDFio fallback, ICC/JPX validation, optional security sanitization
+- Secure PDF-Image: Convert pages to rasterized images, stripping all selectable text and vector content
+- Document Info Audit: One-call comprehensive PDF analysis: version, tagged status, encryption, page count, images, form fields, blank pages
+- Form Field Reading: Extract form fields (text, button, combo, list, signature) with values, options, and checked state
+- Form Field Filling: Programmatically fill text fields, checkboxes, radio buttons, combo/list boxes with builder pattern; batch fill from map; flatten after fill
+- Image Extraction: Extract embedded images from PDF pages with metadata (dimensions, color space, compression filter)
+- Page Objects Enumeration: List all page objects (text, image, path, shading, form) with bounds, colors, transform matrix, transparency
+- Encryption/Decryption: Native AES-256 in-memory encryption plus qpdf file-to-file operations, with user/owner passwords and permission control
+- PDF Linearization: Fast web view optimization for browser loading (requires qpdf)
+- Stream Optimization: Object stream compression and cross-reference streams for file size reduction (requires qpdf)
+- PDF Compression: Full pipeline: Ghostscript (image resampling, font subsetting, lossy JPEG) to qpdf (structural optimization) to metadata stripping; presets (WEB, SCREEN, PRINT, LOSSLESS, MAXIMUM) and custom quality/DPI
+- Version Conversion: Read and set PDF file version (1.4, 1.5, 1.6, 1.7, 2.0)
+- Page Overlay: Stamp pages from one PDF onto another (watermark, letterhead)
+- Page Interleaving: Merge front/back scans into proper page order (duplex scanning workflow)
+- Named Destinations: Lookup bookmark-like named destinations with view type and coordinates
+- Web Links: Extract text-based URLs, add visible hyperlink annotations with blue underline (customizable color, border, opacity), remove link annotations
+- Page Boxes: Read/set all five PDF boxes: MediaBox, CropBox, BleedBox, TrimBox, ArtBox
+- Blank Page Detection: Detect blank pages via text content and visual uniformity analysis
+- JavaScript Inspection: Audit document-level and annotation-level JavaScript for security
+- Bounded Text Extraction: Extract text blocks with bounding boxes, font name, and size
+- Advanced Render Options: Grayscale, print mode, dark mode color scheme, custom DPI
+- Vector Path Drawing: Draw rectangles, lines, bezier curves with fill/stroke colors and line styles
+- Rotation Flattening: Apply rotation transform to page content, removing rotation metadata
+- QR Code Generation: Pure-Java QR encoder (versions 1-40, numeric/alphanumeric/byte modes, all ECC levels); vector PDF path output at any zoom level
+- Barcode Stamping: Add QR codes to pages with builder: content, size, position, margin, foreground/background color, ECC level
+- Page Reorder: Reorder pages by index list, reverse, or custom sequence; swap and move pages
+- Auto-Crop: Detect content bounds (text-based or bitmap-based) and trim whitespace margins; uniform crop across all pages
+- Search and Highlight: Find text occurrences and create highlight, underline, strikeout, or squiggly annotations with custom colors
+- PDF Diff/Compare: Text-level diff (LCS algorithm) and visual pixel-level comparison between two PDF documents
+- 2-Up Page Splitting: Split side-by-side scanned pages into individual pages with optional gutter detection
+- Auto-Deskew: Detect and correct skew rotation in scanned pages using projection-profile variance analysis (Postl algorithm)
+- Font Audit: Enumerate all fonts: base name, family, weight, flags, embedding status, italic angle, data size, and per-page usage
+- Page Labels: Read PDF page labels (i, ii, 1, 2, A-1, etc.) via FPDF_GetPageLabel
+- Link Validation: Enumerate all web links and validate via concurrent HTTP HEAD requests with timeout, redirect tracking, and summary report
+- PDF/A Conversion: Convert to PDF/A-1b, PDF/A-2b, or PDF/A-3b conformance via Ghostscript with sRGB ICC profile auto-detection
+- Posterize: Split pages into NxM tile grids with configurable overlap for poster-size printing
+- Posterize with Paper Sizes: Split pages to target paper sizes (A3, A4, Letter, custom cm/inch) with auto-calculated grids
+- Color Conversion: Convert page content between color spaces (RGB, grayscale, CMYK)
+- PDF Analytics: Comprehensive document analysis: page count, total text, image count, font usage, file size breakdown
+- Page Normalization: Load pages with rotation normalized, get unrotated page sizes
+- Annotation Rendering: Render individual annotations to bitmaps
+- Booklet Imposition: Saddle-stitch booklet layout for print; pages arranged on sheets for folding
+- Page Scaling: Fit pages to target paper sizes (A4, A3, Letter, custom) with fit modes: fit page, fit width, fit height, stretch
+- Margin Adjustment: Add uniform, asymmetric, or binding margins to pages
+- Selective Flattening: Flatten only specific annotation types (highlights, ink, stamps) while preserving others
+- Annotation Export/Import: Export annotations to JSON and import into other documents
+- Image Replacement: Replace embedded images with solid-color placeholders
+- Long Image Rendering: Render entire document as one continuous vertical image
+- Duplicate Page Detection: Detect exact and fuzzy duplicate pages via perceptual hashing
+- Column Extraction: Extract multi-column text layouts with configurable gutter thresholds
+- Image DPI Report: Analyze embedded images for DPI and resolution compliance
+- Page Mirror/Flip: Horizontally or vertically flip page content
+- Background Addition: Add solid-color backgrounds behind page content
+- Reading Order Detection: Detect text blocks and their reading order for accessibility
+- Resource Deduplication: Detect duplicate embedded image resources for optimization
+- TOC Generation: Auto-detect headings and generate table of contents pages
+- Selective Rasterization: Convert specific pages to bitmap while keeping others vector
+- Annotation Statistics: Generate comprehensive annotation stats with JSON export
+- Cross-Platform: Linux x64/arm64, macOS x64/arm64, Windows x64
+- Zero JNI: Pure FFM (java.lang.foreign), no JNI boilerplate
+- MIT: PDFium is Apache 2.0, this project is MIT
 
 ## Quick Start
 
@@ -175,6 +202,8 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"));
 ```
 JPDFium/
 +-- README.md                    # This file
++-- CONTRIBUTING.md              # Contribution guide and development setup
++-- TESTING.md                   # Redaction testing documentation
 +-- build.gradle.kts             # Root build configuration with custom tasks
 +-- settings.gradle.kts          # Project modules definition
 +-- gradlew, gradlew.bat         # Gradle wrapper scripts
@@ -264,6 +293,16 @@ JPDFium/
 |   |   |   +-- PdfColorConverter.java # Color space conversion
 |   |   |   +-- PdfPrint.java          # Booklet imposition
 |   |   |   +-- PdfAnalytics.java      # Document analytics
+|   |   |   +-- PdfAutoCrop.java       # Auto-crop whitespace
+|   |   |   +-- PdfSearchHighlighter.java # Search and highlight
+|   |   |   +-- PdfDiff.java           # PDF comparison
+|   |   |   +-- PdfPageSplitter.java   # 2-up page splitting
+|   |   |   +-- PdfDeskew.java         # Auto-deskew
+|   |   |   +-- PdfFontAuditor.java    # Font audit
+|   |   |   +-- PdfPageLabels.java     # Page labels
+|   |   |   +-- PdfLinkValidator.java  # Link validation
+|   |   |   +-- PdfAConverter.java     # PDF/A conversion
+|   |   |   +-- PdfPosterizer.java     # Posterize
 |   |   |   +-- [model classes...]
 |   |   +-- text/                      # Text processing
 |   |   |   +-- PdfTextExtractor.java  # Structured text extraction
@@ -275,9 +314,16 @@ JPDFium/
 |   |   |   +-- PdfPageGeometry.java   # Page geometry
 |   |   |   +-- PdfPageBoxes.java      # Page boxes
 |   |   +-- redact/                    # Redaction
+|   |   |   +-- PdfRedactor.java       # Main redaction API
+|   |   |   +-- RedactionSession.java  # Redaction session
 |   |   |   +-- RedactOptions.java     # Redaction configuration
+|   |   |   +-- RedactResult.java      # Redaction result
 |   |   |   +-- pii/                   # PII redaction pipeline
+|   |   |       +-- PatternEngine.java # PCRE2 pattern engine
+|   |   |       +-- PiiCategory.java   # PII categories enum
 |   |   |       +-- EntityRedactor.java # NER redaction
+|   |   |       +-- GlyphRedactor.java # Glyph-level redaction
+|   |   |       +-- XmpRedactor.java   # XMP metadata redaction
 |   |   +-- fonts/                     # Font processing
 |   |   |   +-- FontNormalizer.java    # Font normalization
 |   |   |   +-- FontInfo.java          # Font metadata
@@ -334,7 +380,6 @@ JPDFium/
 |       +-- S41_VersionConverter.java  # Convert PDF versions
 |       +-- S42_BoundedText.java       # Bounded text extraction
 |       +-- S43_StreamOptimizer.java   # Optimize streams
-|       +-- S44_FlattenRotation.java   # Flatten rotation
 |       +-- S45_PageInterleaver.java   # Interleave pages
 |       +-- S46_NamedDestinations.java # Named destinations
 |       +-- S47_BlankPageDetector.java # Detect blank pages
@@ -349,7 +394,36 @@ JPDFium/
 |       +-- S56_Booklet.java           # Booklet imposition
 |       +-- S58_Analytics.java         # Document analytics
 |       +-- S59_FormFill.java          # Form field filling
-|       +-- RunAllSamples.java         # Run all 59 samples
+|       +-- S60_AutoCrop.java          # Auto-crop whitespace
+|       +-- S61_SearchHighlight.java   # Search and highlight
+|       +-- S62_PageSplit2Up.java      # Split 2-up pages
+|       +-- S63_PageLabels.java        # Read page labels
+|       +-- S64_LinkValidation.java    # Validate web links
+|       +-- S65_Posterize.java         # Posterize pages
+|       +-- S66_PdfDiff.java           # Compare PDFs
+|       +-- S67_AutoDeskew.java        # Auto-deskew pages
+|       +-- S68_FontAudit.java         # Audit fonts
+|       +-- S69_PdfAConversion.java    # Convert to PDF/A
+|       +-- S70_PageScaling.java       # Page scaling to paper sizes
+|       +-- S71_MarginAdjust.java      # Add margins to pages
+|       +-- S72_SelectiveFlatten.java  # Flatten specific annotation types
+|       +-- S73_AnnotExport.java       # Export/import annotations as JSON
+|       +-- S74_ImageReplace.java      # Replace images with solid colors
+|       +-- S75_LongImage.java         # Render document as long image
+|       +-- S76_DuplicateDetect.java   # Detect duplicate pages
+|       +-- S77_ColumnExtract.java     # Extract multi-column text
+|       +-- S78_ImageDpi.java          # Image DPI analysis
+|       +-- S79_PageMirror.java        # Mirror/flip pages
+|       +-- S80_Background.java        # Add solid-color backgrounds
+|       +-- S81_ReadingOrder.java      # Detect reading order
+|       +-- S82_ResourceDedup.java     # Detect duplicate resources
+|       +-- S83_TocGenerate.java       # Generate table of contents
+|       +-- S84_SelectiveRaster.java   # Selective page rasterization
+|       +-- S85_AnnotStats.java        # Annotation statistics
+|       +-- S86_PosterizeSizes.java    # Posterize with paper sizes
+|       +-- S87_AutoCropMargins.java   # Auto-crop with margin configs
+|       +-- S88_StreamingParallel.java # Streaming parallel processing
+|       +-- RunAllSamples.java         # Run all 88 samples
 |       +-- SampleBase.java            # Sample utilities
 +-- jpdfium-natives/             # Native library JARs
 |   +-- jpdfium-natives-linux-x64/
@@ -411,11 +485,10 @@ page.findTextJson(String query)              // match positions as JSON
 page.redactRegion(Rect, int argbColor)
 page.redactPattern(String regex, int argbColor)
 page.redactWords(String[] words, int argb, float padding, boolean wholeWord,
-                 boolean useRegex, boolean removeContent)
-// Object Fission - true text removal, returns match count:
-int matches = page.redactWordsEx(String[] words, int argb, float padding,
-                                  boolean wholeWord, boolean useRegex,
-                                  boolean removeContent, boolean caseSensitive)
+                 boolean useRegex, boolean removeContent, boolean caseSensitive)
+page.redactWordsEx(String[] words, int argb, float padding, boolean wholeWord,
+                   boolean useRegex, boolean removeContent, boolean caseSensitive,
+                   boolean flattenAfter)    // Object Fission - true text removal
 page.flatten()                               // commit annotations to content stream
 page.annotations()                           // to List<Annotation>
 page.links()                                 // to List<PdfLink>
@@ -532,7 +605,7 @@ PdfFormFiller.fill(doc)
     .select("comboName", "option")         // select combo/list option
     .selectByIndex("comboName", 0)         // select by index
     .fromMap(Map.of(...))                  // smart fill from map (auto-detect types)
-    .flatten()                             // flatten form after fill (optional)
+    .flatten()                             // flatten form fields after fill (optional)
     .apply()                               // to FillResult (summary, counts)
 FillResult.summary()                       // to String "Filled 5 fields on 2 pages"
 
@@ -999,7 +1072,7 @@ try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
             .parent()
         .add("Chapter 2", 5)
         .build();
-    
+
     byte[] result = PdfBookmarkEditor.setBookmarks(doc, tree);
     Files.write(Path.of("output.pdf"), result);
 }
@@ -1019,19 +1092,19 @@ import stirling.software.jpdfium.doc.PdfPageReorder;
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     // Reverse all pages
     PdfPageReorder.reverse(doc);
-    
+
     // Swap first and last page
     PdfPageReorder.swapPages(doc, 0, doc.pageCount() - 1);
-    
+
     // Move last page to front
     PdfPageReorder.movePage(doc, doc.pageCount() - 1, 0);
-    
+
     // Custom reorder (even pages first, then odd)
     List<Integer> order = new ArrayList<>();
     for (int i = 0; i < doc.pageCount(); i += 2) order.add(i);
     for (int i = 1; i < doc.pageCount(); i += 2) order.add(i);
     PdfPageReorder.reorder(doc, order);
-    
+
     doc.save(Path.of("output.pdf"));
 }
 ```
@@ -1043,10 +1116,10 @@ import stirling.software.jpdfium.doc.PdfColorConverter;
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     // Convert entire document to grayscale
     PdfColorConverter.toGrayscale(doc);
-    
+
     // Convert only specific pages
     PdfColorConverter.toGrayscale(doc, Set.of(0, 1, 2));
-    
+
     // Custom options: text only, preserve black
     PdfColorConverter.convert(doc, ColorConvertOptions.builder()
         .targetColorSpace(ColorSpace.GRAYSCALE)
@@ -1055,7 +1128,7 @@ try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
         .convertImages(false)
         .preserveBlack(true)
         .build());
-    
+
     doc.save(Path.of("output.pdf"));
 }
 ```
@@ -1072,7 +1145,7 @@ try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     try (PdfDocument booklet = PdfPrint.booklet(doc)) {
         booklet.save(Path.of("booklet-a3.pdf"));
     }
-    
+
     // Custom: Tabloid sheets with right binding
     BookletOptions opts = BookletOptions.builder()
         .sheetSize(new PageSize(792, 1224))  // 11x17 inches
@@ -1159,6 +1232,124 @@ try (PdfDocument doc = PdfDocument.open(Path.of("form.pdf"))) {
         .apply();
     System.out.println(result.summary());
     doc.save(Path.of("flattened.pdf"));
+}
+```
+
+### PdfAutoCrop
+```java
+import stirling.software.jpdfium.doc.PdfAutoCrop;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("scanned.pdf"))) {
+    // Detect content bounds using text positions
+    Rect bounds = PdfAutoCrop.detectContentBoundsText(doc, 0, 10);
+
+    // Detect content bounds using bitmap rendering
+    Rect bmBounds = PdfAutoCrop.detectContentBoundsBitmap(doc, 0, 72, 240, 10);
+
+    // Auto-crop all pages with uniform crop box
+    int cropped = PdfAutoCrop.cropAll(doc, 10, false, true);
+    doc.save(Path.of("cropped.pdf"));
+}
+```
+
+### PdfSearchHighlighter
+```java
+import stirling.software.jpdfium.doc.PdfSearchHighlighter;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
+    PdfSearchHighlighter.HighlightResult result =
+        PdfSearchHighlighter.highlight(doc, "important",
+            AnnotationType.HIGHLIGHT, 255, 255, 0, 128);
+    System.out.printf("%d matches found%n", result.totalMatches());
+    doc.save(Path.of("highlighted.pdf"));
+}
+```
+
+### PdfDiff
+```java
+import stirling.software.jpdfium.doc.PdfDiff;
+
+try (PdfDocument doc1 = PdfDocument.open(Path.of("v1.pdf"));
+     PdfDocument doc2 = PdfDocument.open(Path.of("v2.pdf"))) {
+    PdfDiff.DiffResult result = PdfDiff.compare(doc1, doc2, true, true, 150, 30);
+    for (PdfDiff.TextChange tc : result.textChanges()) {
+        System.out.printf("Page %d [%s]: '%s' -> '%s'%n",
+            tc.pageIndex(), tc.type(), tc.oldText(), tc.newText());
+    }
+}
+```
+
+### PdfPageSplitter
+```java
+import stirling.software.jpdfium.doc.PdfPageSplitter;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("2up-scan.pdf"))) {
+    int split = PdfPageSplitter.split2Up(doc, true, true, null);
+    doc.save(Path.of("split.pdf")); // 2x the pages
+}
+```
+
+### PdfDeskew
+```java
+import stirling.software.jpdfium.doc.PdfDeskew;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("skewed.pdf"))) {
+    PdfDeskew.DeskewResult r = PdfDeskew.detectSkew(doc, 0);
+    System.out.printf("Angle: %.2f degrees confidence: %.1f%n", r.angle(), r.confidence());
+    PdfDeskew.deskewAll(doc, 7.0f, 0.05f, 2.0f);
+    doc.save(Path.of("straight.pdf"));
+}
+```
+
+### PdfFontAuditor
+```java
+import stirling.software.jpdfium.doc.PdfFontAuditor;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
+    PdfFontAuditor.AuditReport report = PdfFontAuditor.audit(doc);
+    for (PdfFontAuditor.FontInfo fi : report.fonts()) {
+        System.out.printf("%-30s embedded=%b weight=%d%n",
+            fi.baseName(), fi.embedded(), fi.weight());
+    }
+}
+```
+
+### PdfPageLabels
+```java
+import stirling.software.jpdfium.doc.PdfPageLabels;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("book.pdf"))) {
+    List<String> labels = PdfPageLabels.list(doc);  // ["i","ii","1","2",...]
+}
+```
+
+### PdfLinkValidator
+```java
+import stirling.software.jpdfium.doc.PdfLinkValidator;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("with-links.pdf"))) {
+    PdfLinkValidator.LinkReport report = PdfLinkValidator.validate(doc);
+    System.out.println(report.summary());
+    // "12 links: 10 valid, 1 broken, 1 timeout, 0 errors"
+}
+```
+
+### PdfAConverter
+```java
+import stirling.software.jpdfium.doc.PdfAConverter;
+
+PdfAConverter.ConversionResult r = PdfAConverter.convert(
+    Path.of("input.pdf"), Path.of("output-pdfa.pdf"),
+    PdfAConverter.PdfALevel.PDFA_2B);
+```
+
+### PdfPosterizer
+```java
+import stirling.software.jpdfium.doc.PdfPosterizer;
+
+try (PdfDocument doc = PdfDocument.open(Path.of("poster.pdf"))) {
+    PdfPosterizer.posterize(doc, 3, 3, 18.0f); // 3x3 grid, 18pt overlap
+    doc.save(Path.of("poster-tiles.pdf"));
 }
 ```
 
@@ -1288,13 +1479,13 @@ Quick Try-Out (no PDFium or native dependencies needed):
 ```bash
 ./gradlew quickTry
 ```
-This builds the stub bridge and runs all 59 samples. Perfect for first-time testing.
+This builds the stub bridge and runs all 88 samples. Perfect for first-time testing.
 
 Full Build with Real PDFium (one command):
 ```bash
 ./gradlew fullBuildAndTest
 ```
-This downloads PDFium, builds the real native bridge, runs all tests, and executes all 59 samples.
+This downloads PDFium, builds the real native bridge, runs all tests, and executes all 88 samples.
 
 ### Manual Build Steps
 
@@ -1313,7 +1504,7 @@ This downloads PDFium, builds the real native bridge, runs all tests, and execut
 # 4. Run integration tests (real PDFium required)
 ./gradlew :jpdfium:integrationTest
 
-# 5. Run all 59 samples
+# 5. Run all 88 samples
 ./gradlew runAllSamples
 ```
 
@@ -1389,7 +1580,6 @@ jpdfium/src/test/java/stirling/software/jpdfium/samples/
   - S41_VersionConverter.java  to samples-output/S41_version_converter/ (PDF version)
   - S42_BoundedText.java       to stdout (bounded text blocks)
   - S43_StreamOptimizer.java   to samples-output/S43_stream_optimizer/ (optimized PDF)
-  - S44_FlattenRotation.java   to samples-output/S44_flatten_rotation/ (rotation applied)
   - S45_PageInterleaver.java   to samples-output/S45_page_interleaver/ (interleaved PDF)
   - S46_NamedDestinations.java to stdout (named destinations)
   - S47_BlankPageDetector.java to stdout (blank page report)
@@ -1404,7 +1594,36 @@ jpdfium/src/test/java/stirling/software/jpdfium/samples/
   - S56_Booklet.java           to samples-output/S56_booklet/ (booklet imposition)
   - S58_Analytics.java         to stdout (document analytics)
   - S59_FormFill.java          to samples-output/S59_form_fill/ (filled forms + PNGs)
-  - RunAllSamples.java         to all 59 samples (smoke test)
+  - S60_AutoCrop.java          to samples-output/S60_auto-crop/ (whitespace trimmed)
+  - S61_SearchHighlight.java   to samples-output/S61_search-highlight/ (highlighted PDFs)
+  - S62_PageSplit2Up.java      to samples-output/S62_page-split-2up/ (split pages)
+  - S63_PageLabels.java        to stdout (page label enumeration)
+  - S64_LinkValidation.java    to stdout (link enumeration and HTTP validation)
+  - S65_Posterize.java         to samples-output/S65_posterize/ (tiled poster PDFs)
+  - S66_PdfDiff.java           to stdout (text and visual diff between PDFs)
+  - S67_AutoDeskew.java        to samples-output/S67_auto-deskew/ (deskewed pages)
+  - S68_FontAudit.java         to stdout (font inventory report)
+  - S69_PdfAConversion.java    to samples-output/S69_pdfa-conversion/ (PDF/A output)
+  - S70_PageScaling.java       to samples-output/S70_page_scaling/ (scaled pages)
+  - S71_MarginAdjust.java      to samples-output/S71_margin_adjust/ (adjusted margins)
+  - S72_SelectiveFlatten.java  to samples-output/S72_selective_flatten/ (selective flatten)
+  - S73_AnnotExport.java       to samples-output/S73_annot_export/ (annotation JSON export)
+  - S74_ImageReplace.java      to samples-output/S74_image_replace/ (replaced images)
+  - S75_LongImage.java         to samples-output/S75_long_image/ (continuous vertical image)
+  - S76_DuplicateDetect.java   to stdout (duplicate page detection report)
+  - S77_ColumnExtract.java     to stdout (multi-column text extraction)
+  - S78_ImageDpi.java          to stdout (image DPI analysis report)
+  - S79_PageMirror.java        to samples-output/S79_page_mirror/ (mirrored/flipped pages)
+  - S80_Background.java        to samples-output/S80_background/ (solid-color backgrounds)
+  - S81_ReadingOrder.java      to stdout (reading order detection)
+  - S82_ResourceDedup.java     to stdout (resource deduplication report)
+  - S83_TocGenerate.java       to samples-output/S83_toc_generate/ (auto-generated TOC)
+  - S84_SelectiveRaster.java   to samples-output/S84_selective_raster/ (selective rasterization)
+  - S85_AnnotStats.java        to stdout (annotation statistics JSON)
+  - S86_PosterizeSizes.java    to samples-output/S86_posterize_sizes/ (poster with paper sizes)
+  - S87_AutoCropMargins.java   to samples-output/S87_auto_crop_margins/ (auto-crop margins)
+  - S88_StreamingParallel.java to stdout (streaming parallel processing)
+  - RunAllSamples.java         to all samples (smoke test)
 ```
 
 One-time IntelliJ setup: Run to Edit Configurations to Templates to Application to VM Options:
@@ -1423,6 +1642,14 @@ Run a specific sample by number:
 ./gradlew runSample -Psample=51    # Run S51_Compress
 ./gradlew runSample -Psample=56    # Run S56_Booklet
 ./gradlew runSample -Psample=59    # Run S59_FormFill
+./gradlew runSample -Psample=60    # Run S60_AutoCrop
+./gradlew runSample -Psample=65    # Run S65_Posterize
+./gradlew runSample -Psample=69    # Run S69_PdfAConversion
+./gradlew runSample -Psample=70    # Run S70_PageScaling
+./gradlew runSample -Psample=75    # Run S75_LongImage
+./gradlew runSample -Psample=80    # Run S80_Background
+./gradlew runSample -Psample=85    # Run S85_AnnotStats
+./gradlew runSample -Psample=88    # Run S88_StreamingParallel
 ```
 
 Run all samples:

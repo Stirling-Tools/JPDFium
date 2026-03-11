@@ -15,6 +15,26 @@ import java.util.List;
  *
  * <p>Demonstrates PdfImageExtractor: extracting images from PDF pages with
  * metadata (dimensions, color space, compression filter) and saving them.
+ *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Image extraction is per-page and read-only. The PDFium extraction call is
+ * serialized, but image decoding, format conversion, and file writes run in
+ * true parallel.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         List<ExtractedImage> images;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 images = PdfImageExtractor.extract(
+ *                     doc.rawHandle(), page.rawHandle(), pageIndex);
+ *             }
+ *         }
+ *         // Save images in parallel
+ *         for (ExtractedImage img : images) img.save(outPath);
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
  */
 public class S31_ImageExtract {
 

@@ -136,7 +136,7 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Get all document metadata as key→value map.
+     * Get all document metadata as key->value map.
      */
     public Map<String, String> metadata() {
         return PdfMetadata.of(rawHandle()).all();
@@ -146,7 +146,13 @@ public final class PdfDocument implements AutoCloseable {
      * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
      */
     public Optional<String> metadata(String tag) {
-        return PdfMetadata.of(rawHandle()).get(tag);
+        // Find matching MetadataTag by pdfKey, fall back to direct lookup
+        for (MetadataTag mt : MetadataTag.values()) {
+            if (mt.pdfKey().equalsIgnoreCase(tag)) {
+                return PdfMetadata.of(rawHandle()).get(mt);
+            }
+        }
+        return Optional.empty();
     }
 
     /**

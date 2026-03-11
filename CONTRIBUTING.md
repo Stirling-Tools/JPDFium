@@ -26,21 +26,21 @@
    ```bash
    ./gradlew quickTry
    ```
-   This builds the stub bridge and runs all 59 samples in stub mode. Perfect for testing Java-layer changes.
+   This builds the stub bridge and runs all 88 samples in stub mode. Perfect for testing Java-layer changes.
 
 4. **Full Build with Real PDFium** (recommended for production testing)
    ```bash
    # One command: build PDFium from source, build real bridge, run all tests and samples
    ./gradlew fullBuildAndTest
    ```
-   
+
    Or step by step:
    ```bash
    ./gradlew buildPdfium         # Build PDFium from EmbedPDF fork (~15 GB, first time takes 15-60 min)
    ./gradlew buildRealBridge     # Build native bridge against real PDFium
    ./gradlew test                # Unit tests (stub mode)
    ./gradlew :jpdfium:integrationTest  # Integration tests (real PDFium)
-   ./gradlew runAllSamples       # Run all 59 samples
+   ./gradlew runAllSamples       # Run all 88 samples
    ```
 
    > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
@@ -55,10 +55,10 @@ JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) (branch `em
 
 The build uses a **component build** (`is_component_build=true`) with `use_allocator_shim=false`:
 - Component build produces `libpdfium.so` plus dependency `.so` files (PartitionAlloc, ICU, zlib, abseil)
-- `use_allocator_shim=false` is **required** — without it, PartitionAlloc replaces the system allocator
+- `use_allocator_shim=false` is **required** - without it, PartitionAlloc replaces the system allocator
   (malloc/free), causing crashes when loaded into a JVM that manages its own heap
 - `COMPONENT_BUILD` + `FPDF_IMPLEMENTATION` defines are set automatically, giving FPDF_EXPORT symbols
-  `__attribute__((visibility("default")))` — no manual header patching needed
+  `__attribute__((visibility("default")))` - no manual header patching needed
 
 The build script applies these source patches:
 - **`base/BUILD.gn`**: Stub file (standalone PDFium lacks full `//base`)
@@ -80,45 +80,45 @@ directory before loading. The dynamic linker resolves dependencies via `RUNPATH=
 | `./gradlew buildRealBridge` | Build real native bridge with PDFium |
 | `./gradlew buildStubBridge` | Build stub native bridge (no PDFium) |
 | `./gradlew fullBuildAndTest` | Full end-to-end: PDFium + real bridge + all tests + samples |
-| `./gradlew runAllSamples` | Run all 59 samples (requires real bridge for full features) |
-| `./gradlew runSample -Psample=01` | Run a specific sample (01-59) |
+| `./gradlew runAllSamples` | Run all 88 samples (requires real bridge for full features) |
+| `./gradlew runSample -Psample=01` | Run a specific sample (01-88) |
 | `./gradlew test` | Run unit tests (stub mode) |
 | `./gradlew :jpdfium:integrationTest` | Run integration tests (real PDFium required) |
 
 ### Sample Numbers
 
-| Sample | Feature | Sample | Feature |
-|--------|---------|--------|---------|
-| 01 | Render | 31 | Image Extract |
-| 02 | Text Extract | 32 | Page Objects |
-| 03 | Text Search | 33 | Encryption |
-| 04 | Metadata | 34 | Linearizer |
-| 05 | Bookmarks | 35 | Overlay |
-| 06 | Redact Words | 36 | Annotation Builder |
-| 07 | Annotations | 37 | Path Drawer |
-| 08 | Full Pipeline | 38 | JavaScript Inspector |
-| 09 | Flatten | 39 | Web Links |
-| 10 | Signatures | 40 | Page Boxes |
-| 11 | Attachments | 41 | Version Converter |
-| 12 | Links | 42 | Bounded Text |
-| 13 | Page Import | 43 | Stream Optimizer |
-| 14 | Structure Tree | 44 | Flatten Rotation |
-| 15 | Thumbnails (embedded) | 45 | Page Interleaver |
-| 16 | Page Editing | 46 | Named Destinations |
-| 17 | N-Up Layout | 47 | Blank Page Detector |
-| 18 | Repair | 48 | EmbedPDF Annotations |
-| 19 | PDF to Images | 49 | Native Encryption |
-| 20 | Images to PDF | 50 | Native Redaction |
-| 21 | Thumbnails (generated) | 51 | Compress |
-| 22 | Merge/Split | 52 | Bookmark Editor |
-| 23 | Watermark | 53 | Barcode Generate |
-| 24 | Table Extract | 54 | Page Reorder |
-| 25 | Page Geometry | 55 | Color Convert |
-| 26 | Header/Footer | 56 | Booklet |
-| 27 | Security | 58 | Analytics |
-| 28 | Doc Info | 59 | Form Fill |
-| 29 | Render Options | | |
-| 30 | Form Reader | | |
+| Sample | Feature | Sample | Feature | Sample | Feature |
+|--------|---------|--------|---------|--------|---------|
+| 01 | Render | 31 | Image Extract | 61 | Search Highlight |
+| 02 | Text Extract | 32 | Page Objects | 62 | Page Split 2-Up |
+| 03 | Text Search | 33 | Encryption | 63 | Page Labels |
+| 04 | Metadata | 34 | Linearizer | 64 | Link Validation |
+| 05 | Bookmarks | 35 | Overlay | 65 | Posterize |
+| 06 | Redact Words | 36 | Annotation Builder | 66 | PDF Diff |
+| 07 | Annotations | 37 | Path Drawer | 67 | Auto-Deskew |
+| 08 | Full Pipeline | 38 | JavaScript Inspector | 68 | Font Audit |
+| 09 | Flatten | 39 | Web Links | 69 | PDF/A Conversion |
+| 10 | Signatures | 40 | Page Boxes | 70 | Page Scaling |
+| 11 | Attachments | 41 | Version Converter | 71 | Margin Adjust |
+| 12 | Links | 42 | Bounded Text | 72 | Selective Flatten |
+| 13 | Page Import | 43 | Stream Optimizer | 73 | Annotation Export |
+| 14 | Structure Tree | 44 | Flatten Rotation | 74 | Image Replace |
+| 15 | Thumbnails (embedded) | 45 | Page Interleaver | 75 | Long Image |
+| 16 | Page Editing | 46 | Named Destinations | 76 | Duplicate Detect |
+| 17 | N-Up Layout | 47 | Blank Page Detector | 77 | Column Extract |
+| 18 | Repair | 48 | EmbedPDF Annotations | 78 | Image DPI |
+| 19 | PDF to Images | 49 | Native Encryption | 79 | Page Mirror |
+| 20 | Images to PDF | 50 | Native Redaction | 80 | Background |
+| 21 | Thumbnails (generated) | 51 | Compress | 81 | Reading Order |
+| 22 | Merge/Split | 52 | Bookmark Editor | 82 | Resource Dedup |
+| 23 | Watermark | 53 | Barcode Generate | 83 | TOC Generate |
+| 24 | Table Extract | 54 | Page Reorder | 84 | Selective Raster |
+| 25 | Page Geometry | 55 | Color Convert | 85 | Annotation Stats |
+| 26 | Header/Footer | 56 | Booklet | 86 | Posterize Sizes |
+| 27 | Security | 58 | Analytics | 87 | AutoCrop Margins |
+| 28 | Doc Info | 59 | Form Fill | 88 | Streaming Parallel |
+| 29 | Render Options | 60 | AutoCrop | | |
+| 30 | Form Reader | | | | |
 
 **Stub-only development** (no PDFium or native libraries needed):
 ```bash
@@ -226,10 +226,10 @@ JPDFium/
         - PdfDocumentTest.java   # Unit tests (stub native)
         - RealPdfIntegrationTest.java  # Integration tests (real PDFium)
         - ManualTest.java        # Quick smoke-test (right-click -> Run)
-        - samples/               # Numbered manual-test classes (S01-S59)
-          - RunAllSamples.java   # Execute all 59 samples
+        - samples/               # Numbered manual-test classes (S01-S88)
+          - RunAllSamples.java   # Execute all 88 samples
           - SampleBase.java      # Base class for samples
-          - S01_Render.java ... S59_FormFill.java
+          - S01_Render.java ... S88_StreamingParallel.java
         - ...
 
   jpdfium-natives/               # Platform-specific native JARs
@@ -367,7 +367,7 @@ not throw) so Java-layer tests pass without installing native dependencies.
 
 JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) of PDFium, which adds
 native encryption, annotation, and redaction APIs (the `EPDF_*` / `EPDFAnnot_*` symbols).
-No pre-built binaries are available — the library must be built from source.
+No pre-built binaries are available - the library must be built from source.
 
 ```bash
 # 1. Build PDFium from EmbedPDF fork source (first run: ~15 GB download + 15-60 min build)
@@ -403,8 +403,8 @@ resulting `libpdfium.so` is placed in `native/pdfium/lib/` with headers in
 
 The `samples` package provides quick 1-click runnable classes for each feature:
 
-Right-click any `S01_Render` ... `S59_FormFill` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 59 samples in sequence. Output lands in `jpdfium/samples-output/`.
+Right-click any `S01_Render` ... `S88_StreamingParallel` class in IntelliJ and hit Run.
+`RunAllSamples` runs all 88 samples in sequence. Output lands in `jpdfium/samples-output/`.
 
 See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 

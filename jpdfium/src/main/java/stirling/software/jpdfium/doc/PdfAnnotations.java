@@ -128,7 +128,7 @@ public final class PdfAnnotations {
     public static void setContents(MemorySegment page, int index, String content) {
         MemorySegment annot = openAnnot(page, index);
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment key = arena.allocateFrom("Contents");
+            MemorySegment key = arena.allocateFrom(AnnotationKeys.CONTENTS);
             MemorySegment value = FfmHelper.toWideString(arena, content);
             try {
                 int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, key, value);
@@ -202,7 +202,7 @@ public final class PdfAnnotations {
             flags = (int) AnnotationBindings.FPDFAnnot_GetFlags.invokeExact(annot);
         } catch (Throwable t) { throw new RuntimeException(t); }
 
-        Optional<String> contents = getAnnotStringValue(annot, "Contents");
+        Optional<String> contents = getAnnotStringValue(annot, AnnotationKeys.CONTENTS);
 
         return new Annotation(index, AnnotationType.fromCode(subtypeCode), rect, flags, contents);
     }

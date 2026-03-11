@@ -15,6 +15,19 @@ import java.util.List;
  * setting colors and transforms, inserting them into a page, and
  * generating page content.
  *
+ * <h3>Streaming &amp; Parallel Guidance (MEDIUM benefit)</h3>
+ * <p>Page editing modifies pages individually. Use split-merge for parallel:
+ * <pre>{@code
+ * PdfPipeline.processAndSave(input, output,
+ *     ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         try (PdfPage page = doc.page(pageIndex)) {
+ *             PdfPageEditor.addText(page, "STAMP", 72, 72, 12);
+ *         }
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
+ *
  * <p><strong>VM Options required:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */

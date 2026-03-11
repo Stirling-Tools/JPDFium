@@ -128,11 +128,9 @@ public final class NativeLoader {
     }
 
     public static String detectPlatform() {
-        String os   = System.getProperty("os.name").toLowerCase();
-        String arch = System.getProperty("os.arch").toLowerCase();
-        String osKey   = os.contains("win") ? "windows" : os.contains("mac") ? "darwin" : "linux";
-        String archKey = (arch.equals("aarch64") || arch.equals("arm64")) ? "arm64" : "x64";
-        return osKey + "-" + archKey;
+        String os = System.getProperty("os.name").toLowerCase();
+        String osKey = os.contains("win") ? "windows" : os.contains("mac") ? "darwin" : "linux";
+        return osKey + "-" + Architecture.detect().key();
     }
 
     static String nativeFilename(String lib) {

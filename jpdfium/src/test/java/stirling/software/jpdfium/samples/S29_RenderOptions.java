@@ -15,6 +15,26 @@ import java.util.List;
  *
  * <p>Demonstrates RenderOptions: rendering with grayscale, print mode,
  * custom DPI.
+ *
+ * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
+ * <p>Same pattern as S01_Render. Each page renders independently; image
+ * encoding is CPU-intensive Java-side work that runs in true parallel.
+ * <pre>{@code
+ * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
+ *     (doc, pageIndex) -> {
+ *         BufferedImage img;
+ *         synchronized (PdfPipeline.PDFIUM_LOCK) {
+ *             try (PdfPage page = doc.page(pageIndex)) {
+ *                 RenderOptions opts = RenderOptions.builder()
+ *                     .dpi(200).grayscale(true).build();
+ *                 img = opts.render(page.rawHandle(),
+ *                     page.size().width(), page.size().height());
+ *             }
+ *         }
+ *         ImageIO.write(img, "PNG", outFile.toFile()); // parallel I/O
+ *     });
+ * }</pre>
+ * <p>See {@link S88_StreamingParallel} for benchmarks.
  */
 public class S29_RenderOptions {
 

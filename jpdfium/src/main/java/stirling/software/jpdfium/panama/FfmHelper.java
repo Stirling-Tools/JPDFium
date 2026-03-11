@@ -195,4 +195,72 @@ public final class FfmHelper {
             seg.get(ValueLayout.JAVA_INT, 4)
         };
     }
+
+    /**
+     * Invoke a MethodHandle that returns an int, returning 0 on failure.
+     * Use for fire-and-forget calls where failure is acceptable.
+     *
+     * @param mh   MethodHandle to invoke
+     * @param args arguments to pass to the MethodHandle
+     * @return the result or 0 on failure
+     */
+    public static int safeInt(MethodHandle mh, Object... args) {
+        try {
+            return (int) mh.invokeExact(args);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * Invoke a MethodHandle that returns a long, returning 0 on failure.
+     *
+     * @param mh   MethodHandle to invoke
+     * @param args arguments to pass to the MethodHandle
+     * @return the result or 0 on failure
+     */
+    public static long safeLong(MethodHandle mh, Object... args) {
+        try {
+            return (long) mh.invokeExact(args);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * Invoke a MethodHandle silently, ignoring all exceptions.
+     * Use for cleanup calls where failure is acceptable.
+     *
+     * @param mh   MethodHandle to invoke
+     * @param args arguments to pass to the MethodHandle
+     */
+    public static void safeSilent(MethodHandle mh, Object... args) {
+        try {
+            mh.invokeExact(args);
+        } catch (Throwable t) {
+            // Ignore
+        }
+    }
+
+    /**
+     * Allocate a UTF-8 string and invoke a MethodHandle that takes (segment, string).
+     * Returns the int result or 0 on failure.
+     *
+     * @param arena  Arena for allocation
+     * @param mh     MethodHandle expecting (MemorySegment, MemorySegment)
+     * @param target The target segment (e.g., annotation)
+     * @param key    The string key
+     * @param value  The string value
+     * @return the result or 0 on failure
+     */
+    public static int setStringKeyValue(Arena arena, MethodHandle mh,
+                                         MemorySegment target, String key, String value) {
+        try {
+            MemorySegment keySeg = arena.allocateFrom(key);
+            MemorySegment valueSeg = toWideString(arena, value);
+            return (int) mh.invokeExact(target, keySeg, valueSeg);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
 }

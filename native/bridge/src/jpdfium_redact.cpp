@@ -141,9 +141,9 @@ static std::wstring decomposeLigatures(const std::wstring& input) {
     return result;
 }
 
-// Unicode → WinAnsi charcode mapping
+// Unicode -> WinAnsi charcode mapping
 // WinAnsi bytes 0x80-0x9F map to Unicode codepoints that differ from their
-// byte value (e.g. U+20AC → 0x80 for €). The 0x20-0x7F and 0xA0-0xFF ranges
+// byte value (e.g. U+20AC -> 0x80 for €). The 0x20-0x7F and 0xA0-0xFF ranges
 // are identity-mapped. Returns 0 for unmappable codepoints.
 static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
     if (unicode >= 0x20 && unicode <= 0x7F) return unicode;
@@ -166,11 +166,11 @@ static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
         case 0x2019: return 0x92;  // '
         case 0x201C: return 0x93;  // "
         case 0x201D: return 0x94;  // "
-        case 0x2022: return 0x95;  // •
-        case 0x2013: return 0x96;  // –
-        case 0x2014: return 0x97;  // —
+        case 0x2022: return 0x95;  // bullet
+        case 0x2013: return 0x96;  // -
+        case 0x2014: return 0x97;  // -
         case 0x02DC: return 0x98;  // ˜
-        case 0x2122: return 0x99;  // ™
+        case 0x2122: return 0x99;  // TM
         case 0x0161: return 0x9A;  // š
         case 0x203A: return 0x9B;  // ›
         case 0x0153: return 0x9C;  // œ
@@ -278,7 +278,7 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 //
 //   FORM XObjects (nested content streams):
 //   - Recursive descent: enumerate child objects via FPDFFormObj_* APIs,
-//     transform bounds through cumulative form→page matrix chain,
+//     transform bounds through cumulative form->page matrix chain,
 //     remove children that are inside redaction rects.
 //
 //   IMAGE objects (raster content, photos, scanned pages):
@@ -371,7 +371,7 @@ static int32_t objectFissionRedact(
     //    as before to keep spaces in the correct text flow.
     int objCount = FPDFPage_CountObjects(page);
 
-    // Build a reverse map: FPDF_PAGEOBJECT pointer → object index
+    // Build a reverse map: FPDF_PAGEOBJECT pointer -> object index
     std::unordered_map<uintptr_t, int> objPtrToIndex;
     for (int oi = 0; oi < objCount; oi++) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);

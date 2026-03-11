@@ -43,7 +43,7 @@ public final class FormFillBindings {
     }
 
     /**
-     * {@code FORM_OnAfterLoadPage(FPDF_PAGE page, FPDF_FORMHANDLE hHandle) → void}.
+     * {@code FORM_OnAfterLoadPage(FPDF_PAGE page, FPDF_FORMHANDLE hHandle) -> void}.
      *
      * <p>Must be called immediately after opening a page (via {@code FPDF_LoadPage} or
      * equivalent) when a form fill environment is active. Notifies the form system that
@@ -53,7 +53,7 @@ public final class FormFillBindings {
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS));
 
     /**
-     * {@code FORM_OnBeforeClosePage(FPDF_PAGE page, FPDF_FORMHANDLE hHandle) → void}.
+     * {@code FORM_OnBeforeClosePage(FPDF_PAGE page, FPDF_FORMHANDLE hHandle) -> void}.
      *
      * <p>Must be called immediately before closing a page. Allows the form system to
      * flush pending changes and clean up page-level state.
@@ -62,7 +62,7 @@ public final class FormFillBindings {
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS));
 
     /**
-     * {@code FORM_SetFocusedAnnot(FPDF_FORMHANDLE handle, FPDF_ANNOTATION annot) → FPDF_BOOL}.
+     * {@code FORM_SetFocusedAnnot(FPDF_FORMHANDLE handle, FPDF_ANNOTATION annot) -> FPDF_BOOL}.
      *
      * <p>Programmatically focuses an annotation. For text fields, this must be called before
      * {@link #FORM_SelectAllText} and {@link #FORM_ReplaceSelection} to route input to the
@@ -72,7 +72,7 @@ public final class FormFillBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /**
-     * {@code FORM_SelectAllText(FPDF_FORMHANDLE hHandle, FPDF_PAGE page) → FPDF_BOOL}.
+     * {@code FORM_SelectAllText(FPDF_FORMHANDLE hHandle, FPDF_PAGE page) -> FPDF_BOOL}.
      *
      * <p>Selects all text in the currently focused text field. Call this before
      * {@link #FORM_ReplaceSelection} to replace any existing content.
@@ -82,7 +82,7 @@ public final class FormFillBindings {
 
     /**
      * {@code FORM_ReplaceSelection(FPDF_FORMHANDLE hHandle, FPDF_PAGE page,
-     * FPDF_WIDESTRING wsText) → void}.
+     * FPDF_WIDESTRING wsText) -> void}.
      *
      * <p>Replaces the current selection with the given UTF-16LE text. Used after
      * {@link #FORM_SetFocusedAnnot} and {@link #FORM_SelectAllText} to set a text field
@@ -93,7 +93,7 @@ public final class FormFillBindings {
 
     /**
      * {@code FORM_SetIndexSelected(FPDF_FORMHANDLE hHandle, FPDF_PAGE page, int index,
-     * FPDF_BOOL selected) → FPDF_BOOL}.
+     * FPDF_BOOL selected) -> FPDF_BOOL}.
      *
      * <p>Selects or deselects a list item at the given zero-based index. Works for combo
      * boxes and list boxes. The {@code page} parameter must be the raw FPDF_PAGE handle.
@@ -103,7 +103,7 @@ public final class FormFillBindings {
 
     /**
      * {@code FORM_OnLButtonDown(FPDF_FORMHANDLE hHandle, FPDF_PAGE page, uint32_t modifier,
-     * double page_x, double page_y) → void}.
+     * double page_x, double page_y) -> void}.
      *
      * <p>Simulates a left mouse-button press at the given page coordinates. Used together with
      * {@link #FORM_OnLButtonUp} to toggle checkboxes and select radio buttons programmatically.
@@ -113,7 +113,7 @@ public final class FormFillBindings {
 
     /**
      * {@code FORM_OnLButtonUp(FPDF_FORMHANDLE hHandle, FPDF_PAGE page, uint32_t modifier,
-     * double page_x, double page_y) → void}.
+     * double page_x, double page_y) -> void}.
      *
      * <p>Simulates a left mouse-button release. Must follow {@link #FORM_OnLButtonDown} to
      * complete a click on a form widget.
@@ -122,7 +122,7 @@ public final class FormFillBindings {
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_DOUBLE, JAVA_DOUBLE));
 
     /**
-     * {@code FORM_ForceToKillFocus(FPDF_FORMHANDLE hHandle) → FPDF_BOOL}.
+     * {@code FORM_ForceToKillFocus(FPDF_FORMHANDLE hHandle) -> FPDF_BOOL}.
      *
      * <p>Commits the value of the currently focused field and removes focus.
      * Call this after finishing all fills on a page to ensure changes are flushed.
