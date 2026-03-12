@@ -192,16 +192,7 @@ public final class PdfBookmarkEditor {
         List<BookmarkEntry> entries = tree.entries();
         if (entries.isEmpty()) return originalPdf;
 
-        // We'll use qpdf to first normalize the PDF, then update it with JSON
-        // But the simplest approach for outlines is to write them as an incremental update
-        // to the PDF. We append new indirect objects for the outline dictionary.
-
-        // Strategy: save the original to a temp file, run qpdf --json-output to get
-        // the document structure, find the catalog, add /Outlines reference, add outline
-        // objects, then write back using --update-from-json.
-
-        // For simplicity and reliability, we create the outline objects as a direct
-        // PDF incremental update appended to the original file.
+        // Write outlines as a PDF incremental update appended to the original file.
         return appendOutlines(originalPdf, entries, pageCount);
     }
 

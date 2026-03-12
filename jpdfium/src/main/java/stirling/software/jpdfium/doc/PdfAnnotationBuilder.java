@@ -115,11 +115,15 @@ public final class PdfAnnotationBuilder {
                 rectSeg.set(ValueLayout.JAVA_FLOAT, 8, rect.x() + rect.width());
                 rectSeg.set(ValueLayout.JAVA_FLOAT, 12, rect.y());
                 try {
-                    int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
+                    // Non-fatal: markup annotations (highlight/underline/etc.) may derive rect
+                    // from quad points in some PDFium builds; annotation still persists.
+                    @SuppressWarnings("unused")
+                    int rectOk = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
                 } catch (Throwable ignored) {}
             }
 
             try {
+                @SuppressWarnings("unused")
                 int colorOk = (int) AnnotationBindings.FPDFAnnot_SetColor.invokeExact(annot, 0, r, g, b, a);
             } catch (Throwable ignored) {}
 
@@ -127,17 +131,20 @@ public final class PdfAnnotationBuilder {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment key = arena.allocateFrom(AnnotationKeys.CONTENTS);
                     MemorySegment value = FfmHelper.toWideString(arena, contents);
+                    @SuppressWarnings("unused")
                     int svOk = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, key, value);
                 } catch (Throwable ignored) {}
             }
 
             try {
+                @SuppressWarnings("unused")
                 int borderOk = (int) AnnotationBindings.FPDFAnnot_SetBorder.invokeExact(annot, 0f, 0f, borderWidth);
             } catch (Throwable ignored) {}
 
             if (uri != null) {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment uriSeg = arena.allocateFrom(uri);
+                    @SuppressWarnings("unused")
                     int uriOk = (int) AnnotationBindings.FPDFAnnot_SetURI.invokeExact(annot, uriSeg);
                 } catch (Throwable ignored) {}
             }
@@ -154,43 +161,51 @@ public final class PdfAnnotationBuilder {
                     qp.set(ValueLayout.JAVA_FLOAT, 8, right);  qp.set(ValueLayout.JAVA_FLOAT, 12, top);
                     qp.set(ValueLayout.JAVA_FLOAT, 16, left);  qp.set(ValueLayout.JAVA_FLOAT, 20, bottom);
                     qp.set(ValueLayout.JAVA_FLOAT, 24, right); qp.set(ValueLayout.JAVA_FLOAT, 28, bottom);
+                    @SuppressWarnings("unused")
                     int qpOk = (int) AnnotationBindings.FPDFAnnot_AppendAttachmentPoints.invokeExact(annot, qp);
                 } catch (Throwable ignored) {}
             }
 
             if (opacity >= 0) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
                 } catch (Throwable ignored) {}
             }
             if (!Float.isNaN(rotation)) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetRotate.invokeExact(annot, rotation);
                 } catch (Throwable ignored) {}
             }
             if (overlayText != null && type == AnnotationType.REDACT) {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment textSeg = FfmHelper.toWideString(arena, overlayText);
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOverlayText.invokeExact(annot, textSeg);
                 } catch (Throwable ignored) {}
             }
             if (borderStyle >= 0) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetBorderStyle.invokeExact(annot, borderStyle, borderWidth);
                 } catch (Throwable ignored) {}
             }
             if (textAlignment >= 0) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetTextAlignment.invokeExact(annot, textAlignment);
                 } catch (Throwable ignored) {}
             }
             if (icon >= 0) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
                 } catch (Throwable ignored) {}
             }
             if (generateAppearance) {
                 try {
+                    @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GenerateAppearance.invokeExact(annot);
                 } catch (Throwable ignored) {}
             }

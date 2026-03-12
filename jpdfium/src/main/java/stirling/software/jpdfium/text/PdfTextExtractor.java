@@ -101,22 +101,27 @@ public final class PdfTextExtractor {
             String fontName = "";
 
             String[] pairs = COMMA_BEFORE_QUOTE.split(obj);
-            for (String pair : pairs) {
-                int colon = pair.indexOf(':');
-                if (colon < 0) continue;
-                String key = pair.substring(0, colon).replace("\"", "").trim();
-                String val = pair.substring(colon + 1).trim();
+            try {
+                for (String pair : pairs) {
+                    int colon = pair.indexOf(':');
+                    if (colon < 0) continue;
+                    String key = pair.substring(0, colon).replace("\"", "").trim();
+                    String val = pair.substring(colon + 1).trim();
 
-                switch (key) {
-                    case "i" -> index = Integer.parseInt(val);
-                    case "u" -> unicode = Integer.parseInt(val);
-                    case "x" -> x = Float.parseFloat(val);
-                    case "y" -> y = Float.parseFloat(val);
-                    case "w" -> w = Float.parseFloat(val);
-                    case "h" -> h = Float.parseFloat(val);
-                    case "size" -> fontSize = Float.parseFloat(val);
-                    case "font" -> fontName = val.replace("\"", "");
+                    switch (key) {
+                        case "i" -> index = Integer.parseInt(val);
+                        case "u" -> unicode = Integer.parseInt(val);
+                        case "x" -> x = Float.parseFloat(val);
+                        case "y" -> y = Float.parseFloat(val);
+                        case "w" -> w = Float.parseFloat(val);
+                        case "h" -> h = Float.parseFloat(val);
+                        case "size" -> fontSize = Float.parseFloat(val);
+                        case "font" -> fontName = val.replace("\"", "");
+                    }
                 }
+            } catch (NumberFormatException ignored) {
+                // Skip malformed entries from the native bridge
+                continue;
             }
 
             chars.add(new TextChar(index, unicode, x, y, w, h, fontName, fontSize));

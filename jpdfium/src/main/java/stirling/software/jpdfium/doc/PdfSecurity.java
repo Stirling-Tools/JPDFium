@@ -241,7 +241,8 @@ public final class PdfSecurity {
 
     private static int doRemoveComments(PdfDocument doc) {
         int removed = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        for (int i = 0; i < count; i++) {
             try (PdfPage page = doc.page(i)) {
                 removed += removeCommentAnnotations(page.rawHandle());
             }
@@ -251,7 +252,8 @@ public final class PdfSecurity {
 
     private static int doRemoveHiddenText(PdfDocument doc) {
         int removed = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        for (int i = 0; i < count; i++) {
             try (PdfPage page = doc.page(i)) {
                 removed += removeHiddenTextObjects(page.rawHandle());
             }
@@ -261,7 +263,8 @@ public final class PdfSecurity {
 
     private static int doFlattenForms(PdfDocument doc) {
         int formCount = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        for (int i = 0; i < count; i++) {
             try (PdfPage page = doc.page(i)) {
                 for (Annotation a : PdfAnnotations.list(page.rawHandle())) {
                     if (a.type() == AnnotationType.WIDGET) formCount++;
@@ -312,7 +315,7 @@ public final class PdfSecurity {
             }
         }
         if (removed > 0) {
-            try { int gcOk = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
+            try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
             catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
         }
         return removed;
@@ -320,7 +323,8 @@ public final class PdfSecurity {
 
     private static int removeAnnotationsByTypeAcrossAllPages(PdfDocument doc, AnnotationType... types) {
         int removed = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        for (int i = 0; i < count; i++) {
             try (PdfPage page = doc.page(i)) {
                 removed += removeAnnotationsByType(page.rawHandle(), types);
             }

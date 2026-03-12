@@ -13,7 +13,7 @@ import java.lang.foreign.MemorySegment;
  *
  * <p>Supports two modes:
  * <ul>
- *   <li><b>Grid-based</b>: split into xFactor × yFactor tiles with optional overlap</li>
+ *   <li><b>Grid-based</b>: split into xFactor x yFactor tiles with optional overlap</li>
  *   <li><b>Target-size</b>: automatically compute the grid so each tile fits a target
  *       paper size (A4, A3, A5, Letter, Legal, or custom dimensions)</li>
  * </ul>
@@ -25,7 +25,7 @@ import java.lang.foreign.MemorySegment;
  * // Target-size: tiles that print on A3 sheets
  * PdfPosterizer.posterize(doc, PaperSize.A3, 18.0f);
  *
- * // Custom target: tiles that print on 20cm × 30cm sheets
+ * // Custom target: tiles that print on 20cm x 30cm sheets
  * PdfPosterizer.posterize(doc, PaperSize.ofCm(20, 30), 10.0f);
  * }</pre>
  */
@@ -35,35 +35,35 @@ public final class PdfPosterizer {
 
     /** Standard and custom paper sizes for target-size posterization. */
     public record PaperSize(float widthPt, float heightPt, String name) {
-        /** A5: 148 × 210 mm */
+        /** A5: 148 x 210 mm */
         public static final PaperSize A5 = new PaperSize(419.53f, 595.28f, "A5");
-        /** A4: 210 × 297 mm */
+        /** A4: 210 x 297 mm */
         public static final PaperSize A4 = new PaperSize(595.28f, 841.89f, "A4");
-        /** A3: 297 × 420 mm */
+        /** A3: 297 x 420 mm */
         public static final PaperSize A3 = new PaperSize(841.89f, 1190.55f, "A3");
-        /** A2: 420 × 594 mm */
+        /** A2: 420 x 594 mm */
         public static final PaperSize A2 = new PaperSize(1190.55f, 1683.78f, "A2");
-        /** A1: 594 × 841 mm */
+        /** A1: 594 x 841 mm */
         public static final PaperSize A1 = new PaperSize(1683.78f, 2383.94f, "A1");
-        /** A0: 841 × 1189 mm */
+        /** A0: 841 x 1189 mm */
         public static final PaperSize A0 = new PaperSize(2383.94f, 3370.39f, "A0");
-        /** US Letter: 8.5 × 11 in */
+        /** US Letter: 8.5 x 11 in */
         public static final PaperSize LETTER = new PaperSize(612f, 792f, "Letter");
-        /** US Legal: 8.5 × 14 in */
+        /** US Legal: 8.5 x 14 in */
         public static final PaperSize LEGAL = new PaperSize(612f, 1008f, "Legal");
-        /** US Tabloid: 11 × 17 in */
+        /** US Tabloid: 11 x 17 in */
         public static final PaperSize TABLOID = new PaperSize(792f, 1224f, "Tabloid");
 
         /** Create a custom paper size from centimeters. */
         public static PaperSize ofCm(float widthCm, float heightCm) {
             return new PaperSize(widthCm * 72f / 2.54f, heightCm * 72f / 2.54f,
-                    String.format("%.1fcm×%.1fcm", widthCm, heightCm));
+                    String.format("%.1fcm x %.1fcm", widthCm, heightCm));
         }
 
         /** Create a custom paper size from inches. */
         public static PaperSize ofInch(float widthIn, float heightIn) {
             return new PaperSize(widthIn * 72f, heightIn * 72f,
-                    String.format("%.1fin×%.1fin", widthIn, heightIn));
+                    String.format("%.1fin x %.1fin", widthIn, heightIn));
         }
     }
 

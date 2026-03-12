@@ -134,7 +134,10 @@ public class RunAllSamples {
             new Sample("S84_SelectiveRaster", () -> S84_SelectiveRaster.main(a)),
             new Sample("S85_AnnotStats",    () -> S85_AnnotStats.main(a)),
             new Sample("S86_PosterizeSizes", () -> S86_PosterizeSizes.main(a)),
-            new Sample("S87_AutoCropMargins", () -> S87_AutoCropMargins.main(a))
+            new Sample("S87_AutoCropMargins", () -> S87_AutoCropMargins.main(a)),
+            new Sample("S89_StructureEditor", () -> S89_StructureEditor.main(a)),
+            new Sample("S90_Layers", () -> S90_Layers.main(a)),
+            new Sample("S91_AnnotationExchange", () -> S91_AnnotationExchange.main(a))
         );
 
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {

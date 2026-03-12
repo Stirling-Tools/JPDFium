@@ -64,6 +64,10 @@ native/zopfli/build/
 native/libjxl/build/
 native/jbig2enc/build/
 
+# Rust build artifacts (cargo target directory)
+native/rust/target/
+native/rust/Cargo.lock
+
 .DS_Store
 .DS_Store?
 ._*

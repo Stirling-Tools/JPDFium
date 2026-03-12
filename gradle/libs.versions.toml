@@ -1,6 +1,6 @@
 [versions]
 junit = "6.0.3"
-pdfbox = "3.0.6"
+pdfbox = "3.0.7"
 twelvemonkeys = "3.13.1"
 
 [libraries]

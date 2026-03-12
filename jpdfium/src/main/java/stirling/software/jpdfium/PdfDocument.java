@@ -27,14 +27,19 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     public static PdfDocument open(Path path) {
+        if (path == null) throw new IllegalArgumentException("path must not be null");
         return new PdfDocument(JpdfiumLib.docOpen(path.toAbsolutePath().toString()));
     }
 
     public static PdfDocument open(byte[] data) {
+        if (data == null) throw new IllegalArgumentException("data must not be null");
+        if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
         return new PdfDocument(JpdfiumLib.docOpenBytes(data));
     }
 
     public static PdfDocument open(Path path, String password) {
+        if (path == null) throw new IllegalArgumentException("path must not be null");
+        if (password == null) throw new IllegalArgumentException("password must not be null");
         return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
     }
 
@@ -75,7 +80,8 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void flatten(FlattenMode mode, int dpi) {
         ensureOpen();
-        for (int i = 0; i < pageCount(); i++) {
+        int count = pageCount();
+        for (int i = 0; i < count; i++) {
             switch (mode) {
                 case ANNOTATIONS -> {
                     try (PdfPage page = page(i)) {

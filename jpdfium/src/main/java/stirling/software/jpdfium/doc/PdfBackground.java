@@ -68,32 +68,10 @@ public final class PdfBackground {
                 throw new RuntimeException("FPDFPath_SetDrawMode failed", t);
             }
 
-            // Insert at the front of the z-order. PDFium InsertObject appends
-            // (highest z-order), so we insert the background first, then move existing
-            // objects. Actually, a simpler approach: insert the rect, then we need
-            // it at the back. Since InsertObject always appends to back of rendering,
-            // which means it appears ON TOP.
-            //
-            // Workaround: We'll insert the background object. It will be on top,
-            // but since it's fully opaque and behind text, we need to adjust.
-            // Actually PDF rendering order is first-inserted = bottom of z-order.
-            // InsertObject adds to the END of the page object list = top of z-order.
-            //
-            // To put it at the back, we'll need to remove all existing objects,
-            // add our background, then re-add them. This is expensive, so instead
-            // we use the approach of inserting the background and accepting it's
-            // on top but with z-order consideration.
-            //
-            // Better approach: use FPDFPage_InsertObject to add behind. But that
-            // always appends. The simplest reliable approach is inserting before
-            // generating content - the rect at bottom z = first object in list.
-            //
-            // Let's use a transform to move existing content above. Actually,
-            // the simplest working approach: collect existing objects count, insert
-            // our rect at the end, then use object manipulation to reorder.
-            //
-            // Simplest: For a background, we just need the rect to be first in the list.
-            // Remove all objects, add bg rect, re-add originals.
+            // PDFium InsertObject appends to the end (top of z-order).
+            // To place the background behind existing content, we remove all
+            // existing objects, insert the background rect first, then re-add
+            // the originals on top.
 
             int existingCount;
             try {

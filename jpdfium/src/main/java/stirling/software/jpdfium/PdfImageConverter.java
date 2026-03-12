@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * PDF ↔ Image conversion utilities.
+ * PDF to Image conversion utilities.
  *
  * <p>Provides bidirectional conversion between PDFs and images:
  * <ul>
@@ -64,6 +64,8 @@ public final class PdfImageConverter {
     }
 
     private PdfImageConverter() {}
+
+    // PDF -> Images
 
     /**
      * Convert all PDF pages to images and save to the output directory.
@@ -201,6 +203,8 @@ public final class PdfImageConverter {
         }
     }
 
+    // Images -> PDF
+
     /**
      * Convert a list of image files to a PDF document.
      *
@@ -283,6 +287,8 @@ public final class PdfImageConverter {
     public static PdfDocument imageToPdf(Path imagePath, ImageToPdfOptions options) throws IOException {
         return imagesToPdf(List.of(imagePath), options);
     }
+
+    // Internal helpers
 
     private static final int MAX_IMAGE_DIMENSION = 65000;
 

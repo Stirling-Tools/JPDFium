@@ -124,7 +124,7 @@ class RedactionSessionTest {
         }
     }
 
-    // Full Mark → Commit Workflow
+    // Full Mark -> Commit Workflow
 
     @Test
     void markThenCommitWorkflow() throws Exception {

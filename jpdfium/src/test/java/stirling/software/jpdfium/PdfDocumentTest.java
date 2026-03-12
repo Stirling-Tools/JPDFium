@@ -63,7 +63,7 @@ class PdfDocumentTest {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
             var result = page.renderAt(72);
-            // At 72 DPI, A4 (595×842 pt) renders to 595×842 px
+            // At 72 DPI, A4 (595x842 pt) renders to 595x842 px
             assertTrue(result.width()  > 0);
             assertTrue(result.height() > 0);
             assertEquals((long) result.width() * result.height() * 4, result.rgba().length);
@@ -169,7 +169,7 @@ class PdfDocumentTest {
         }
     }
 
-    // Annotation-Based Redaction (Mark → Commit)
+    // Annotation-Based Redaction (Mark -> Commit)
 
     @Test
     void markRedactRegion() throws Exception {

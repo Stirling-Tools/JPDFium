@@ -64,7 +64,12 @@ public final class PdfRedactor {
      */
     public static RedactResult redact(Path inputPath, RedactOptions options) {
         PdfDocument doc = PdfDocument.open(inputPath);
-        return redact(doc, options);
+        try {
+            return redact(doc, options);
+        } catch (Throwable t) {
+            doc.close();
+            throw t;
+        }
     }
 
     /**
@@ -76,7 +81,12 @@ public final class PdfRedactor {
      */
     public static RedactResult redact(byte[] pdfBytes, RedactOptions options) {
         PdfDocument doc = PdfDocument.open(pdfBytes);
-        return redact(doc, options);
+        try {
+            return redact(doc, options);
+        } catch (Throwable t) {
+            doc.close();
+            throw t;
+        }
     }
 
     /**

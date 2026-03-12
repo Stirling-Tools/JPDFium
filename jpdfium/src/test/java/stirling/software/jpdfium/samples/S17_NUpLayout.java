@@ -28,7 +28,7 @@ public class S17_NUpLayout {
         int pagesPerSheet() { return cols * rows; }
     }
 
-    // Presets to demonstrate: 2-up (1×2), 4-up (2×2), 6-up (3×2), 9-up (3×3)
+    // Presets to demonstrate: 2-up (1x2), 4-up (2x2), 6-up (3x2), 9-up (3x3)
     private static final List<Grid> GRIDS = List.of(
             new Grid(1, 2, "2up"),
             new Grid(2, 2, "4up"),

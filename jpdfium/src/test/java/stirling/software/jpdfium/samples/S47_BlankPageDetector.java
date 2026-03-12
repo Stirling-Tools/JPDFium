@@ -14,7 +14,7 @@ import java.util.List;
  * and comprehensive visual analysis.
  *
  * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
- * <p>Blank detection is per-page and read-only — ideal for parallel mode.
+ * <p>Blank detection is per-page and read-only - ideal for parallel mode.
  * The bitmap render for visual analysis is CPU-heavy; parallel threads
  * overlap the Java-side pixel analysis.
  * <pre>{@code

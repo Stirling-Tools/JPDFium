@@ -428,7 +428,7 @@ class ObjectFissionCoordinateTest {
     /**
      * Tc (character spacing) and Tw (word spacing) text-state operators are NOT
      * preserved in fissioned text objects, so intra-fragment positions drift by
-     * up to Tc×N or Tw×words.  We verify only that:
+     * up to Tc*N or Tw*words.  We verify only that:
      *  (a) the SSN is removed,
      *  (b) the suffix text content survives, and
      *  (c) the first character of the suffix is within the operator-value tolerance.

@@ -58,7 +58,7 @@ public class GettingStartedExample {
             System.out.println("\n=== 2. Page Info ===");
             try (PdfPage page = doc.page(0)) {
                 PageSize size = page.size();
-                System.out.printf("Page 0: %.1f × %.1f pt (%.1f × %.1f mm)%n",
+                System.out.printf("Page 0: %.1f x %.1f pt (%.1f x %.1f mm)%n",
                         size.width(), size.height(),
                         size.width() * 25.4 / 72, size.height() * 25.4 / 72);
             }
@@ -67,7 +67,7 @@ public class GettingStartedExample {
             System.out.println("\n=== 3. Render to PNG ===");
             try (PdfPage page = doc.page(0)) {
                 RenderResult result = page.renderAt(150);  // 150 DPI
-                System.out.printf("Rendered: %d × %d px (%d bytes)%n",
+                System.out.printf("Rendered: %d x %d px (%d bytes)%n",
                         result.width(), result.height(), result.rgba().length);
 
                 ImageIO.write(result.toBufferedImage(), "PNG", new File("/tmp/page0.png"));

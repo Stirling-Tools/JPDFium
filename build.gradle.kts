@@ -160,7 +160,11 @@ tasks.register<JavaExec>("runSample") {
         "84" to "S84_SelectiveRaster",
         "85" to "S85_AnnotStats",
         "86" to "S86_PosterizeSizes",
-        "87" to "S87_AutoCropMargins"
+        "87" to "S87_AutoCropMargins",
+        "89" to "S89_StructureEditor",
+        "90" to "S90_Layers",
+        "91" to "S91_AnnotationExchange",
+        "92" to "S92_RustCompress"
     )
     
     val sampleClass = "stirling.software.jpdfium.samples." + 
@@ -231,4 +235,75 @@ tasks.register("quickTry") {
         println("  For full testing, run: ./gradlew fullBuildAndTest")
         println("========================================")
     }
+}
+
+// ── Maven Central Publishing (Central Portal via OSSRH Staging API) ──────────
+//
+// After running:  ./gradlew publishAllPublicationsToCentralPortalRepository
+// the artifacts sit in the OSSRH staging area.  You must then POST to finalize
+// the deployment so it appears in the Central Portal for review / auto-release.
+//
+// Usage:
+//   ./gradlew publishAllToCentralPortal            # publish + finalize (user_managed)
+//   ./gradlew publishAllToCentralPortal -PautoRelease=true  # publish + auto-release
+//
+// Prerequisites (set in ~/.gradle/gradle.properties or env):
+//   centralPortalUsername / CENTRAL_PORTAL_USERNAME
+//   centralPortalPassword / CENTRAL_PORTAL_PASSWORD
+//   signing.key / GPG_SIGNING_KEY
+//   signing.password / GPG_SIGNING_PASSWORD
+
+tasks.register("finalizePortalDeployment") {
+    group = "publishing"
+    description = "POST to the OSSRH Staging API to push the deployment to the Central Portal"
+
+    doLast {
+        val namespace = project.group.toString()  // e.g. "stirling.software"
+        val autoRelease = (findProperty("autoRelease")?.toString() ?: "false").toBoolean()
+        val publishingType = if (autoRelease) "automatic" else "user_managed"
+        val url = "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/$namespace?publishing_type=$publishingType"
+
+        val tokenUser = findProperty("centralPortalUsername")?.toString()
+            ?: findProperty("ossrhUsername")?.toString()
+            ?: System.getenv("CENTRAL_PORTAL_USERNAME")
+            ?: System.getenv("OSSRH_USERNAME")
+            ?: error("No Central Portal username configured")
+        val tokenPass = findProperty("centralPortalPassword")?.toString()
+            ?: findProperty("ossrhPassword")?.toString()
+            ?: System.getenv("CENTRAL_PORTAL_PASSWORD")
+            ?: System.getenv("OSSRH_PASSWORD")
+            ?: error("No Central Portal password configured")
+
+        val bearer = java.util.Base64.getEncoder().encodeToString("$tokenUser:$tokenPass".toByteArray())
+
+        val client = java.net.http.HttpClient.newHttpClient()
+        val request = java.net.http.HttpRequest.newBuilder()
+            .uri(java.net.URI.create(url))
+            .header("Authorization", "Bearer $bearer")
+            .POST(java.net.http.HttpRequest.BodyPublishers.noBody())
+            .build()
+
+        println("Finalizing deployment to Central Portal (publishingType=$publishingType) ...")
+        val response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+        if (response.statusCode() in 200..299) {
+            println("✓ Deployment finalized successfully (HTTP ${response.statusCode()})")
+            if (autoRelease) {
+                println("  Auto-release enabled — artifacts will appear on Maven Central after validation (~10-30 min)")
+            } else {
+                println("  Go to https://central.sonatype.com/publishing/deployments to review and publish")
+            }
+        } else {
+            error("✗ Failed to finalize deployment: HTTP ${response.statusCode()}\n${response.body()}")
+        }
+    }
+}
+
+tasks.register("publishAllToCentralPortal") {
+    group = "publishing"
+    description = "Publish all modules to the Central Portal (upload + finalize)"
+
+    // Publish all subprojects that apply maven-publish
+    dependsOn(subprojects.filter { it.plugins.hasPlugin("maven-publish") }.map { "${it.path}:publishAllPublicationsToCentralPortalRepository" })
+    finalizedBy("finalizePortalDeployment")
 }

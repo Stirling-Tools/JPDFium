@@ -5,17 +5,17 @@ package stirling.software.jpdfium;
  *
  * <p>Two orthogonal strategies can be enabled independently or combined:
  * <ul>
- *   <li><b>Streaming</b>: low-memory mode. Processes pages one at a time with
+ *   <li><b>Streaming</b> - low-memory mode. Processes pages one at a time with
  *       periodic save/reload cycles that release PDFium's internal page caches
  *       and native memory. Keeps heap and RSS pressure low for large documents.</li>
- *   <li><b>Parallel</b>: multi-threaded mode. Splits the document into chunks,
+ *   <li><b>Parallel</b> - multi-threaded mode. Splits the document into chunks,
  *       processes each chunk on a separate thread with its own PDFium document
  *       instance, then merges results back. PDFium is not thread-safe within a
  *       single document, so each thread receives an independent copy.</li>
  * </ul>
  *
  * <p>When both are enabled, each parallel chunk is processed in streaming mode
- * internally: combining throughput with low memory pressure.
+ * internally - combining throughput with low memory pressure.
  *
  * <h3>Usage</h3>
  * <pre>{@code

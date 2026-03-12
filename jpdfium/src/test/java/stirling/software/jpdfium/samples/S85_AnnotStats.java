@@ -34,7 +34,7 @@ public class S85_AnnotStats {
                 var stats = PdfAnnotationStats.analyze(doc);
                 report.append(stats.summary());
 
-                String line = String.format("  %d annotations, %d/%d pages annotated, avg area=%.1f pt²",
+                String line = String.format("  %d annotations, %d/%d pages annotated, avg area=%.1f pt^2",
                         stats.totalCount(), stats.annotatedPageCount(),
                         stats.totalPages(), stats.avgAreaPt2());
                 System.out.println("  " + stem + ": " + line);

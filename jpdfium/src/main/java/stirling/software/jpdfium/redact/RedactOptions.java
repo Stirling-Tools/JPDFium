@@ -319,9 +319,11 @@ public final class RedactOptions {
         public Builder processingMode(ProcessingMode mode) { this.processingMode = mode; return this; }
 
         public RedactOptions build() {
-            if (words.isEmpty() && piiPatterns.isEmpty() && entities.isEmpty()) {
+            boolean hasContentOp = !words.isEmpty() || !piiPatterns.isEmpty() || !entities.isEmpty();
+            boolean hasMetadataOp = stripAllMetadata || redactMetadata || !metadataKeysToStrip.isEmpty();
+            if (!hasContentOp && !hasMetadataOp) {
                 throw new IllegalStateException(
-                        "At least one word, PII pattern, or NER entity is required");
+                        "At least one word, PII pattern, NER entity, or metadata operation is required");
             }
             return new RedactOptions(this);
         }

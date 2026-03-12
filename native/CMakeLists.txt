@@ -46,8 +46,9 @@ endif()
 #   cmake -DJPDFIUM_USE_PDFIUM=ON -DPDFIUM_DIR=/path/to/pdfium-linux-x64 ..
 option(JPDFIUM_USE_PDFIUM "Build against real PDFium (requires PDFIUM_DIR)" OFF)
 
-# Stub library (always built for testing)
-
+# Stub library (always built for testing).
+# jpdfium_stub.cpp contains inline stubs for every jpdfium_rust_* function
+# (they return JPDFIUM_ERR_NATIVE so unit tests run without PDFium/Rust).
 add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp)
 target_include_directories(jpdfium_stub PUBLIC bridge/include)
 set_target_properties(jpdfium_stub PROPERTIES
@@ -91,6 +92,43 @@ if(JPDFIUM_USE_PDFIUM)
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
     target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+
+    # ── Rust integration (required for real PDFium build) ────────────────────
+    find_program(CARGO_CMD cargo)
+    if(NOT CARGO_CMD)
+        message(FATAL_ERROR
+            "cargo not found. Rust is required to build JPDFium.\n"
+            "Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n"
+            "or run: bash native/build-rust.sh")
+    endif()
+
+    # Build the Rust static library. If the .a already exists, skip the build
+    # (build-real.sh runs cargo build --release before invoking cmake).
+    set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/libjpdfium_rust.a")
+    if(NOT EXISTS "${RUST_LIB}")
+        message(STATUS "Building Rust static library...")
+        execute_process(
+            COMMAND ${CARGO_CMD} build --release
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+            RESULT_VARIABLE RUST_BUILD_RESULT)
+        if(NOT RUST_BUILD_RESULT EQUAL 0)
+            message(FATAL_ERROR
+                "Rust build failed (exit code ${RUST_BUILD_RESULT}).\n"
+                "Run manually: bash native/build-rust.sh")
+        endif()
+    endif()
+
+    # Link the static library with --whole-archive so Rust #[no_mangle] symbols
+    # are preserved (they are called from Java/FFM, not from C++ code).
+    target_link_libraries(jpdfium PRIVATE
+        -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
+    # On Linux, Rust staticlibs need these system libraries.
+    if(JPDFIUM_OS STREQUAL "linux")
+        target_link_libraries(jpdfium PRIVATE dl pthread m)
+    endif()
+    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_RUST)
+    message(STATUS "Rust integration: lopdf + zopfli + oxipng + fast_image_resize")
+    message(STATUS "  Rust lib: ${RUST_LIB}")
 
     # Native library dependencies (all required for full functionality)
     find_package(PkgConfig REQUIRED)

@@ -19,7 +19,7 @@ import java.util.List;
  * 2D image formats for further processing.
  *
  * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
- * <p>Page rendering is <b>embarrassingly parallel</b> — each page renders independently.
+ * <p>Page rendering is <b>embarrassingly parallel</b> - each page renders independently.
  * The PDFium render call is serialized via {@code PDFIUM_LOCK}, but the resulting
  * image encoding (PNG/JPEG write) and I/O run in true parallel across threads.
  * <pre>{@code

@@ -37,7 +37,7 @@ public final class RepairCorpus {
     private RepairCorpus() {}
 
     /**
-     * Returns all damage specimens as a name→bytes map.
+     * Returns all damage specimens as a name->bytes map.
      * Names follow the pattern {@code damage-<category>-<variant>}.
      */
     public static Map<String, byte[]> all() throws IOException {

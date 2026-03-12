@@ -42,7 +42,7 @@ public final class PdfAnnotationStats {
             var sb = new StringBuilder();
             sb.append(String.format("Annotation Statistics: %d annotations across %d/%d pages%n",
                     totalCount, annotatedPageCount, totalPages));
-            sb.append(String.format("Total area: %.1f pt², average: %.1f pt²%n",
+            sb.append(String.format("Total area: %.1f pt^2, average: %.1f pt^2%n",
                     totalAreaPt2, avgAreaPt2));
             sb.append("By type:%n".replace("%n", System.lineSeparator()));
             countByType.entrySet().stream()

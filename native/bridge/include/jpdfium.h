@@ -427,6 +427,11 @@ JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc,
                                                       int32_t cols, int32_t rows,
                                                       uint8_t** output, int64_t* outputLen);
 
+// Rust-powered compression, repair, and image resize functions.
+// Declared in a separate header for clarity; included here so jextract and
+// callers only need to include jpdfium.h.
+#include "jpdfium_rust.h"
+
 #ifdef __cplusplus
 }
 #endif

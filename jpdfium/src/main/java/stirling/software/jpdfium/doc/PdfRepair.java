@@ -16,6 +16,9 @@ import java.nio.file.Path;
  * <li><b>Pre-repair</b>: Brotli-Flate transcoding (PDF 2.0+ compat)</li>
  * <li><b>Core</b>: PDFium tolerant open - qpdf recovery - startxref fix</li>
  * <li><b>Fallback</b>: PDFio third-opinion XRef repair</li>
+ * <li><b>Rust fallback</b> (opt-in): lopdf tolerant XRef rebuild - final cascade
+ * stage when all C-based repair strategies fail. Enabled via
+ * {@link Builder#useLopdfFallback(boolean)} or included in {@link Builder#all()}.</li>
  * <li><b>Post-repair</b>: ICC profile validation (lcms2), JPEG2000 validation
  * (OpenJPEG)</li>
  * </ol>
@@ -40,7 +43,7 @@ import java.nio.file.Path;
  * <p>
  * All underlying libraries are MIT-compatible:
  * qpdf (Apache 2.0), PDFium (BSD), Brotli (MIT), PDFio (Apache 2.0),
- * lcms2 (MIT), OpenJPEG (BSD 2-Clause).
+ * lcms2 (MIT), OpenJPEG (BSD 2-Clause), lopdf (MIT, Rust).
  */
 public final class PdfRepair {
 
@@ -52,18 +55,25 @@ public final class PdfRepair {
     private final byte[] inputBytes;
     private final int flags;
     private final boolean usePdfioFallback;
+    private final boolean useLopdfFallback;
     private final boolean transcodeBrotli;
+    private final boolean validateIcc;
+    private final boolean validateJpx;
     private final boolean writeDiagnostics;
     private final boolean sanitize;
 
     private PdfRepair(byte[] inputBytes, int flags,
-            boolean usePdfioFallback, boolean transcodeBrotli,
+            boolean usePdfioFallback, boolean useLopdfFallback,
+            boolean transcodeBrotli,
             boolean validateIcc, boolean validateJpx,
             boolean writeDiagnostics, boolean sanitize) {
         this.inputBytes = inputBytes;
         this.flags = flags;
         this.usePdfioFallback = usePdfioFallback;
+        this.useLopdfFallback = useLopdfFallback;
         this.transcodeBrotli = transcodeBrotli;
+        this.validateIcc = validateIcc;
+        this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
         this.sanitize = sanitize;
     }
@@ -108,6 +118,15 @@ public final class PdfRepair {
             }
         }
 
+        // Final fallback: Rust/lopdf tolerant XRef rebuild.
+        // Only attempted when all C-based strategies have failed and the option is enabled.
+        if (useLopdfFallback && !coreResult.isUsable()) {
+            RepairResult rustResult = RepairLib.rustRepair(current);
+            if (rustResult.isUsable()) {
+                coreResult = rustResult;
+            }
+        }
+
         if (sanitize && coreResult.isUsable()) {
             byte[] repairedBytes = coreResult.repairedPdf();
             try (PdfDocument doc = PdfDocument.open(repairedBytes)) {
@@ -134,6 +153,7 @@ public final class PdfRepair {
         private boolean normalizeXref;
         private boolean fixStartxref;
         private boolean usePdfioFallback;
+        private boolean useLopdfFallback;
         private boolean transcodeBrotli;
         private boolean validateIcc;
         private boolean validateJpx;
@@ -179,6 +199,23 @@ public final class PdfRepair {
             return this;
         }
 
+        /**
+         * Enable lopdf (Rust) XRef rebuild as a final fallback (opt-in).
+         *
+         * <p>Tried only after both the core qpdf pipeline and the PDFio fallback have
+         * failed. lopdf's tolerant parser can often recover PDFs with corrupted XRef
+         * tables that qpdf and PDFio cannot parse at all.
+         *
+         * <p>Included automatically by {@link #all()}.  If the Rust library is not
+         * compiled in, this option is silently ignored (no error is thrown).
+         *
+         * @param enable {@code true} to enable (default {@code false})
+         */
+        public Builder useLopdfFallback(boolean enable) {
+            this.useLopdfFallback = enable;
+            return this;
+        }
+
         /** Enable Brotli-Flate pre-repair transcoding (opt-in, requires libbrotli). */
         public Builder transcodeBrotli(boolean enable) {
             this.transcodeBrotli = enable;
@@ -214,12 +251,13 @@ public final class PdfRepair {
             return this;
         }
 
-        /** Enable all core + Phase 2 repair strategies (including sanitize). */
+        /** Enable all core + Phase 2 repair strategies (including Rust lopdf + sanitize). */
         public Builder all() {
             this.forceVersion14 = true;
             this.normalizeXref = true;
             this.fixStartxref = true;
             this.usePdfioFallback = true;
+            this.useLopdfFallback = true;
             this.transcodeBrotli = true;
             this.validateIcc = true;
             this.validateJpx = true;
@@ -246,8 +284,8 @@ public final class PdfRepair {
                 flags |= FLAG_FIX_STARTXREF;
 
             return new PdfRepair(inputBytes, flags,
-                    usePdfioFallback, transcodeBrotli, validateIcc, validateJpx,
-                    writeDiagnostics, sanitize);
+                    usePdfioFallback, useLopdfFallback, transcodeBrotli,
+                    validateIcc, validateJpx, writeDiagnostics, sanitize);
         }
     }
 }

@@ -32,10 +32,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * SAMPLE 88 — Streaming &amp; Parallel Processing: Comprehensive Showcase.
+ * SAMPLE 88 - Streaming &amp; Parallel Processing: Comprehensive Showcase.
  *
  * <p>This sample demonstrates how <b>every parallelizable operation</b> in JPDFium
- * (S01–S87) can be accelerated with {@link PdfPipeline} and {@link ProcessingMode}.
+ * (S01-S87) can be accelerated with {@link PdfPipeline} and {@link ProcessingMode}.
  * It generates a large synthetic test corpus, runs each operation category in
  * sequential, parallel, and streaming modes, then produces a benchmark report
  * with JMX/RSS metrics.
@@ -59,14 +59,14 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>The following are whole-document operations that cannot be meaningfully
  * parallelized or streamed:
  * <ul>
- *   <li>S04 Metadata, S05 Bookmarks, S10 Signatures — document-level reads</li>
- *   <li>S11 Attachments, S13 PageImport, S17 NUp — cross-document assembly</li>
- *   <li>S18 Repair, S22 MergeSplit — document-wide structural ops</li>
- *   <li>S27 Security, S33 Encryption, S49 NativeEncryption — global crypto</li>
- *   <li>S34 Linearize, S41 VersionConvert, S43 StreamOptimize — structural</li>
- *   <li>S45 Interleave, S52 BookmarkEditor, S56 Booklet — page reordering</li>
- *   <li>S51 Compress, S66 PdfDiff, S69 PdfA — external tool pipelines</li>
- *   <li>S54 PageReorder, S82 ResourceDedup, S83 TocGenerate — sequential</li>
+ *   <li>S04 Metadata, S05 Bookmarks, S10 Signatures - document-level reads</li>
+ *   <li>S11 Attachments, S13 PageImport, S17 NUp - cross-document assembly</li>
+ *   <li>S18 Repair, S22 MergeSplit - document-wide structural ops</li>
+ *   <li>S27 Security, S33 Encryption, S49 NativeEncryption - global crypto</li>
+ *   <li>S34 Linearize, S41 VersionConvert, S43 StreamOptimize - structural</li>
+ *   <li>S45 Interleave, S52 BookmarkEditor, S56 Booklet - page reordering</li>
+ *   <li>S51 Compress, S66 PdfDiff, S69 PdfA - external tool pipelines</li>
+ *   <li>S54 PageReorder, S82 ResourceDedup, S83 TocGenerate - sequential</li>
  * </ul>
  *
  * <h3>How to enable streaming/parallel in YOUR sample</h3>
@@ -76,24 +76,25 @@ import java.util.concurrent.atomic.AtomicLong;
  * <h3>Test Corpus</h3>
  * <p>Generates three synthetic PDFs from existing test resources:
  * <ul>
- *   <li><b>large-text.pdf</b> — 200 pages, text-heavy (from mozilla_tracemonkey.pdf)</li>
- *   <li><b>large-forms.pdf</b> — 200 pages, form-heavy (from all_form_fields.pdf)</li>
- *   <li><b>large-mixed.pdf</b> — 300 pages, mixed content (interleaved text + forms)</li>
+ *   <li><b>large-text.pdf</b> - 200 pages, text-heavy (from mozilla_tracemonkey.pdf)</li>
+ *   <li><b>large-forms.pdf</b> - 200 pages, form-heavy (from all_form_fields.pdf)</li>
+ *   <li><b>large-mixed.pdf</b> - 300 pages, mixed content (interleaved text + forms)</li>
  * </ul>
  *
  * <h3>Monitoring Stack</h3>
  * <ul>
- *   <li>{@code MemoryMXBean} — peak heap usage per benchmark</li>
- *   <li>{@code GarbageCollectorMXBean} — GC count and pause time</li>
- *   <li>{@code /proc/self/status} VmRSS — native + heap resident memory (Linux)</li>
- *   <li>Thread-name tracking — proves parallel execution</li>
- *   <li>Wall-clock timing — speedup calculations</li>
+ *   <li>{@code MemoryMXBean} - peak heap usage per benchmark</li>
+ *   <li>{@code GarbageCollectorMXBean} - GC count and pause time</li>
+ *   <li>{@code /proc/self/status} VmRSS - native + heap resident memory (Linux)</li>
+ *   <li>Thread-name tracking - proves parallel execution</li>
+ *   <li>Wall-clock timing - speedup calculations</li>
  * </ul>
  *
  * @see ProcessingMode
  * @see PdfPipeline
  */
 public class S88_StreamingParallel {
+
 
     /** Pages for text-heavy and form-heavy corpus PDFs. */
     private static final int CORPUS_PAGES_STD  = 200;
@@ -114,7 +115,7 @@ public class S88_StreamingParallel {
         Path reportFile = outDir.resolve("report.txt");
 
         System.out.println("╔══════════════════════════════════════════════════════════╗");
-        System.out.println("║  S88 — Streaming & Parallel: All-Operations Benchmark   ║");
+        System.out.println("|  S88 - Streaming & Parallel: All-Operations Benchmark   |");
         System.out.println("╚══════════════════════════════════════════════════════════╝");
         System.out.printf("  JVM:        %s %s%n",
                 System.getProperty("java.vm.name"),
@@ -172,55 +173,223 @@ public class S88_StreamingParallel {
         ProcessingMode COMBINED  = ProcessingMode.builder().streaming(true)
                 .parallel(PARALLEL_THREADS).flushInterval(FLUSH_INTERVAL).build();
 
+        // ══════════════════════════════════════════════════════════════
+        //  PHASE 2: Per-Page READ-ONLY operations (parallelize via forEach)
+        //
+        //  These operations read data from each page independently.
+        //  Perfect candidates for parallel mode - each page task acquires
+        //  PDFIUM_LOCK only for the native call, Java processing overlaps.
+        //
+        //  Corresponding samples:
+        //    S01 Render, S02 TextExtract, S03 TextSearch, S07 Annotations,
+        //    S12 Links, S15/S21 Thumbnails, S24 TableExtract, S29 RenderOpts,
+        //    S30 FormReader, S31 ImageExtract, S32 PageObjects, S42 BoundedText,
+        //    S47 BlankDetect, S58 Analytics, S60 AutoCrop (detect), S64 LinkValidation,
+        //    S67 AutoDeskew (detect), S68 FontAudit, S76 DuplicateDetect,
+        //    S77 ColumnExtract, S78 ImageDpi, S81 ReadingOrder, S85 AnnotStats
+        // ══════════════════════════════════════════════════════════════
         System.out.println("═══ PHASE 2: Read-Only Operations ═════════════════════════\n");
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (e.g. S02_TextExtract):
+        //   Replace the manual page loop:
+        //     for (int i = 0; i < n; i++) { page.extractTextJson(); ... }
+        //   With PdfPipeline:
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         String text;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             try (PdfPage p = doc.page(i)) { text = p.extractTextJson(); }
+        //         }
+        //         processText(text);  // runs in parallel across 4 threads
+        //     });
+        //
         results.put("TextExtract+Hash", benchmarkCategory(
                 "Text Extract + Hash (S02,S03,S42,S77)", textPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 textHashOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (e.g. S01_Render):
+        //   For streaming (saves memory on large PDFs):
+        //     PdfPipeline.forEach(pdf, ProcessingMode.streaming(), (doc, i) -> {
+        //         try (PdfPage page = doc.page(i)) {
+        //             RenderResult result = page.renderAt(DPI);
+        //             ImageIO.write(result.toBufferedImage(), "PNG", outFile.toFile());
+        //         }
+        //     });
+        //   For parallel rendering (PDFIUM_LOCK required):
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         byte[] pixels;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             try (PdfPage p = doc.page(i)) { pixels = p.renderAt(DPI).rgba(); }
+        //         }
+        //         ImageIO.write(toBufferedImage(pixels), "PNG", outFile.toFile());
+        //     });
+        //
         results.put("Render", benchmarkCategory(
                 "Page Rendering (S01,S19,S21,S29)", textPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 renderOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (e.g. S07_Annotations):
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         List<Annotation> annots;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             try (PdfPage page = doc.page(i)) { annots = page.annotations(); }
+        //         }
+        //         // Classify, count, serialize - runs in parallel
+        //         analyzeAnnotations(annots);
+        //     });
+        //
         results.put("AnnotInspect", benchmarkCategory(
                 "Annotation Inspect (S07,S12,S73,S85)", formPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 annotInspectOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (S24_TableExtract):
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         List<Table> tables;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             tables = PdfTableExtractor.extract(doc, i);
+        //         }
+        //         for (Table t : tables) { t.toCsv(); }  // parallel CSV generation
+        //     });
+        //
         results.put("TableExtract", benchmarkCategory(
                 "Table Extract (S24)", textPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 tableExtractOp()));
 
+        // CAT 5: Detection (S47 Blank, S60 AutoCrop, S67 Deskew)
+        //
+        // HOW TO ADD TO YOUR SAMPLE (e.g. S47_BlankPageDetector):
+        //     Map<Integer, Boolean> blanks = new ConcurrentHashMap<>();
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         boolean blank;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             try (PdfPage page = doc.page(i)) {
+        //                 blank = BlankPageDetector.isBlankText(page.rawHandle());
+        //             }
+        //         }
+        //         blanks.put(i, blank);  // thread-safe collection
+        //     });
+        //
+        // HOW TO ADD TO S60_AutoCrop (detection phase):
+        //     Map<Integer, Rect> bounds = new ConcurrentHashMap<>();
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         Rect r;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             r = PdfAutoCrop.detectContentBoundsText(doc, i, 10);
+        //         }
+        //         if (r != null) bounds.put(i, r);
+        //     });
+        //
         results.put("Detection", benchmarkCategory(
                 "Detect (S47 blank, S60 crop detect)", mixedPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 detectionOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (e.g. S58_Analytics per-page):
+        //     PdfPipeline.forEach(pdf, ProcessingMode.parallel(4), (doc, i) -> {
+        //         String charData;
+        //         PageSize size;
+        //         synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //             try (PdfPage page = doc.page(i)) {
+        //                 charData = page.extractCharPositionsJson();
+        //                 size = page.size();
+        //             }
+        //         }
+        //         // Parse JSON, compute density, aggregate - parallel
+        //         double density = charData.length() / (size.width() * size.height());
+        //     });
+        //
         results.put("PageInspect", benchmarkCategory(
                 "Page Inspect (S32,S58,S68,S78)", formPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 pageInspectOp()));
 
+        // ══════════════════════════════════════════════════════════════
+        //  PHASE 3: Per-Page MODIFICATION operations (parallelize via
+        //  PdfPipeline.process / processAndSave with split-merge)
+        //
+        //  These operations modify each page. Parallel mode splits the
+        //  document into chunks, processes each chunk independently, then
+        //  merges results. Streaming flushes periodically to release caches.
+        //
+        //  Corresponding samples:
+        //    S06 Redact, S09 Flatten, S16 PageEditing, S23 Watermark,
+        //    S25 PageGeometry, S26 HeaderFooter, S36 AnnotBuilder,
+        //    S37 PathDrawer, S39 WebLinks, S40 PageBoxes, S48 EmbedPdfAnnots,
+        //    S50 NativeRedact, S53 Barcode, S55 ColorConvert, S59 FormFill,
+        //    S60 AutoCrop (apply), S61 SearchHighlight, S65 Posterize,
+        //    S70 PageScaling, S71 MarginAdjust, S72 SelectiveFlatten,
+        //    S74 ImageReplace, S79 PageMirror, S80 Background,
+        //    S84 SelectiveRaster, S86 PosterizeSizes, S87 AutoCropMargins
+        // ══════════════════════════════════════════════════════════════
         System.out.println("\n═══ PHASE 3: Modification Operations ══════════════════════\n");
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (S09_Flatten):
+        //   Streaming (low memory for large rasterize jobs):
+        //     PdfPipeline.processAndSave(input, output,
+        //         ProcessingMode.streaming(),
+        //         (doc, i) -> {
+        //             try (PdfPage page = doc.page(i)) {
+        //                 PdfFlattenRotation.flatten(page.rawHandle());
+        //             }
+        //         });
+        //
+        //   Parallel (split-merge):
+        //     PdfPipeline.processAndSave(input, output,
+        //         ProcessingMode.parallel(4),
+        //         (doc, i) -> {
+        //             synchronized (PdfPipeline.PDFIUM_LOCK) {
+        //                 try (PdfPage page = doc.page(i)) {
+        //                     PdfFlattenRotation.flatten(page.rawHandle());
+        //                 }
+        //             }
+        //         });
+        //
         results.put("Flatten", benchmarkModifyCategory(
                 "Flatten (S09,S72)", formPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 flattenOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (S60_AutoCrop with crop apply):
+        //     PdfPipeline.processAndSave(input, output,
+        //         ProcessingMode.streaming(),
+        //         (doc, i) -> {
+        //             Rect bounds = PdfAutoCrop.detectContentBoundsText(doc, i, 10);
+        //             // Apply crop based on detected bounds
+        //         });
+        //
         results.put("AutoCropApply", benchmarkModifyCategory(
                 "AutoCrop Apply (S60,S87)", textPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 autoCropApplyOp()));
 
+        //
+        // HOW TO ADD TO YOUR SAMPLE (S84_SelectiveRaster):
+        //     PdfPipeline.processAndSave(input, output,
+        //         ProcessingMode.streaming(),  // flush frees raster buffers
+        //         (doc, i) -> {
+        //             if (shouldRasterize(i)) {
+        //                 doc.convertPageToImage(i, 72);
+        //             }
+        //         });
+        //
         results.put("SelectiveRaster", benchmarkModifyCategory(
                 "Selective Raster (S84,S65,S86)", textPdf,
                 SEQ, PAR, STREAM, COMBINED,
                 selectiveRasterOp()));
 
+        // ══════════════════════════════════════════════════════════════
+        //  PHASE 4: Verification & Report
+        // ══════════════════════════════════════════════════════════════
         System.out.println("\n═══ PHASE 4: Verification ═════════════════════════════════\n");
 
         report.append("================================================================\n");
@@ -279,6 +448,24 @@ public class S88_StreamingParallel {
         SampleBase.done("S88_StreamingParallel", corpusText, corpusForms, corpusMixed, reportFile);
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  OPERATION DEFINITIONS
+    //
+    //  Each method returns a PdfPipeline.PageOperation that demonstrates
+    //  how the corresponding sample(s) would use PdfPipeline.
+    //
+    //  PATTERN for read-only parallel:
+    //    Use PdfPipeline.forEach() - one shared document, one task per page.
+    //    Wrap PDFium calls in synchronized(PdfPipeline.PDFIUM_LOCK).
+    //    Java-side work runs in parallel outside the lock.
+    //
+    //  PATTERN for modification parallel:
+    //    Use PdfPipeline.processAndSave() - splits doc into chunks,
+    //    processes each chunk on a thread, merges results.
+    //    The PageOperation runs inside the chunk context, so PDFium
+    //    calls need PDFIUM_LOCK in parallel mode.
+    // ════════════════════════════════════════════════════════════════
+
     /**
      * Text extraction + SHA-256 hashing (S02, S03, S42, S77).
      *
@@ -294,7 +481,7 @@ public class S88_StreamingParallel {
                     text = page.extractTextJson();
                 }
             }
-            // CPU-bound Java work — runs in parallel across threads
+            // CPU-bound Java work - runs in parallel across threads
             try {
                 byte[] data = text.getBytes(StandardCharsets.UTF_8);
                 byte[] inflated = new byte[Math.max(data.length, 64 * 1024)];
@@ -333,7 +520,7 @@ public class S88_StreamingParallel {
                     pixels = result.rgba();
                 }
             }
-            // Simulate post-processing (image encoding) — parallel
+            // Simulate post-processing (image encoding) - parallel
             long sum = 0;
             for (int i = 0; i < pixels.length; i += 997) sum += pixels[i];
             if (sum == Long.MIN_VALUE) System.out.print("");
@@ -353,7 +540,7 @@ public class S88_StreamingParallel {
                     annots = page.annotations();
                 }
             }
-            // Java-side classification — runs in parallel
+            // Java-side classification - runs in parallel
             int highlights = 0, widgets = 0, other = 0;
             for (Annotation a : annots) {
                 AnnotationType type = a.type();
@@ -378,7 +565,7 @@ public class S88_StreamingParallel {
             synchronized (PdfPipeline.PDFIUM_LOCK) {
                 tables = PdfTableExtractor.extract(doc, pageIndex);
             }
-            // Java-side CSV generation — parallel
+            // Java-side CSV generation - parallel
             for (Table t : tables) {
                 String csv = t.toCsv();
                 csv.hashCode(); // prevent elimination
@@ -401,7 +588,7 @@ public class S88_StreamingParallel {
                 }
                 cropBounds = PdfAutoCrop.detectContentBoundsText(doc, pageIndex, 10);
             }
-            // Java-side aggregation — parallel
+            // Java-side aggregation - parallel
             String result = String.format("p%d: blank=%b crop=%s",
                     pageIndex, isBlank, cropBounds != null ? "found" : "none");
             result.hashCode(); // prevent elimination
@@ -423,7 +610,7 @@ public class S88_StreamingParallel {
                     size = page.size();
                 }
             }
-            // Java-side analysis — parallel
+            // Java-side analysis - parallel
             int charCount = charPositions.length();
             double density = charCount / (size.width() * size.height());
             String stats = String.format("p%d: %d chars, density=%.4f",
@@ -431,6 +618,7 @@ public class S88_StreamingParallel {
             stats.hashCode(); // prevent elimination
         };
     }
+
 
     /**
      * Flatten rotation (S09, S72).
@@ -475,6 +663,10 @@ public class S88_StreamingParallel {
             }
         };
     }
+
+    // ════════════════════════════════════════════════════════════════
+    //  BENCHMARK HARNESS
+    // ════════════════════════════════════════════════════════════════
 
     /**
      * Benchmarks a read-only operation across 4 modes.
@@ -597,7 +789,7 @@ public class S88_StreamingParallel {
 
         long startNs = System.nanoTime();
         try (PdfDocument result = PdfPipeline.process(pdf, mode, wrapped)) {
-            // discard — measuring processing time
+            // discard - measuring processing time
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
         stopMonitor(monitor);
@@ -629,6 +821,10 @@ public class S88_StreamingParallel {
         }
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  DATA STRUCTURES
+    // ════════════════════════════════════════════════════════════════
+
     record Metrics(
             long durationMs,
             long peakHeapMB, long peakRssMB,
@@ -641,6 +837,10 @@ public class S88_StreamingParallel {
             Metrics sequential, Metrics parallel,
             Metrics streaming, Metrics combined
     ) {}
+
+    // ════════════════════════════════════════════════════════════════
+    //  REPORT FORMATTING
+    // ════════════════════════════════════════════════════════════════
 
     private static String formatGroup(BenchmarkGroup g) {
         StringBuilder sb = new StringBuilder();
@@ -676,6 +876,10 @@ public class S88_StreamingParallel {
         sb.append("\n");
         return sb.toString();
     }
+
+    // ════════════════════════════════════════════════════════════════
+    //  MONITORING HELPERS
+    // ════════════════════════════════════════════════════════════════
 
     private static Thread startMonitor(MemoryMXBean memBean, AtomicLong peakHeap, AtomicLong peakRss) {
         Thread monitor = new Thread(() -> {
@@ -729,6 +933,17 @@ public class S88_StreamingParallel {
         return b > 0 ? (double) a / b : 1.0;
     }
 
+    // ════════════════════════════════════════════════════════════════
+    //  CORPUS GENERATION
+    //
+    //  Large documents amplify the advantages of streaming (less cache
+    //  pressure) and parallel (more work to distribute across threads).
+    //  Three corpus PDFs target different content profiles:
+    //    - text-heavy: exercises text extraction, search, NLP pipelines
+    //    - form-heavy: exercises annotation inspection, form processing
+    //    - mixed: combines both for realistic enterprise documents
+    // ════════════════════════════════════════════════════════════════
+
     private static byte[] generateCorpus(Path templatePath, int targetPages, String label) {
         System.out.printf("  Generating %s corpus (%d pages)...", label, targetPages);
         System.out.flush();
@@ -777,3 +992,131 @@ public class S88_StreamingParallel {
                 .orElse(inputs.getFirst());
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//  STREAMING / PARALLEL GUIDE
+// ════════════════════════════════════════════════════════════════════════
+//
+//  This guide explains how to enable streaming and parallel modes in ANY
+//  JPDFium sample. The patterns below are universal.
+//
+//  ──────────────────────────────────────────────────────────────────────
+//  1. STREAMING MODE (low memory)
+//  ──────────────────────────────────────────────────────────────────────
+//
+//  Streaming mode periodically saves and reloads the document to release
+//  PDFium's internal caches (font renderer, page parser, image decoder).
+//  This keeps heap and RSS low for large documents (100+ pages).
+//
+//  BEFORE (standard loop):
+//    try (PdfDocument doc = PdfDocument.open(input)) {
+//        for (int i = 0; i < doc.pageCount(); i++) {
+//            try (PdfPage page = doc.page(i)) {
+//                page.renderAt(150);     // Caches accumulate
+//            }
+//        }
+//    }
+//
+//  AFTER (streaming):
+//    PdfPipeline.processAndSave(input, output,
+//        ProcessingMode.streaming(),     // flush every 50 pages (default)
+//        (doc, i) -> {
+//            try (PdfPage page = doc.page(i)) {
+//                page.renderAt(150);     // Caches released between flushes
+//            }
+//        });
+//
+//  Or for read-only:
+//    PdfPipeline.forEach(input, ProcessingMode.streaming(), (doc, i) -> {
+//        try (PdfPage page = doc.page(i)) {
+//            String text = page.extractTextJson();
+//        }
+//    });
+//
+//  Custom flush interval:
+//    ProcessingMode.builder().streaming(true).flushInterval(20).build()
+//
+//  ──────────────────────────────────────────────────────────────────────
+//  2. PARALLEL MODE (multi-threaded)
+//  ──────────────────────────────────────────────────────────────────────
+//
+//  CRITICAL: PDFium is NOT thread-safe. All PDFium calls must be wrapped
+//  in synchronized(PdfPipeline.PDFIUM_LOCK). Java-side work (hashing,
+//  NLP, image encoding, I/O) runs in parallel between lock acquisitions.
+//
+//  Read-only parallel (shared document):
+//    PdfPipeline.forEach(input, ProcessingMode.parallel(4), (doc, i) -> {
+//        String text;
+//        synchronized (PdfPipeline.PDFIUM_LOCK) {
+//            try (PdfPage page = doc.page(i)) {
+//                text = page.extractTextJson();     // serialized
+//            }
+//        }
+//        processText(text);                         // parallel!
+//    });
+//
+//  Modification parallel (split-merge):
+//    PdfPipeline.processAndSave(input, output,
+//        ProcessingMode.parallel(4),
+//        (doc, i) -> {
+//            synchronized (PdfPipeline.PDFIUM_LOCK) {
+//                try (PdfPage page = doc.page(i)) {
+//                    PdfFlattenRotation.flatten(page.rawHandle());
+//                }
+//            }
+//        });
+//
+//  The more Java work per page, the better the parallel speedup.
+//  Pure PDFium-only operations (like flatten) have minimal speedup
+//  because the lock serializes them. But operations with significant
+//  Java-side processing (text analysis, image encoding, hashing)
+//  scale near-linearly with thread count.
+//
+//  ──────────────────────────────────────────────────────────────────────
+//  3. COMBINED MODE (streaming + parallel)
+//  ──────────────────────────────────────────────────────────────────────
+//
+//  Best for very large documents (1000+ pages) with CPU-heavy operations:
+//    PdfPipeline.processAndSave(input, output,
+//        ProcessingMode.streamingParallel(4),
+//        (doc, i) -> { ... });
+//
+//  Or with the builder for custom flush:
+//    ProcessingMode.builder()
+//        .streaming(true).parallel(4).flushInterval(25)
+//        .build()
+//
+//  ──────────────────────────────────────────────────────────────────────
+//  4. WHICH SAMPLES BENEFIT?
+//  ──────────────────────────────────────────────────────────────────────
+//
+//  HIGH BENEFIT (per-page read + Java processing):
+//    S01 Render, S02 TextExtract, S03 TextSearch, S07 Annotations,
+//    S12 Links, S15/S21 Thumbnails, S24 TableExtract, S29 RenderOptions,
+//    S30 FormReader, S31 ImageExtract, S32 PageObjects, S42 BoundedText,
+//    S47 BlankDetect, S58 Analytics, S60 AutoCrop, S64 LinkValidation,
+//    S67 AutoDeskew, S68 FontAudit, S76 DuplicateDetect, S77 ColumnExtract,
+//    S78 ImageDpi, S81 ReadingOrder, S85 AnnotStats
+//
+//  MEDIUM BENEFIT (per-page modification via split-merge):
+//    S06 Redact, S09 Flatten, S16 PageEditing, S23 Watermark,
+//    S25 PageGeometry, S26 HeaderFooter, S36 AnnotBuilder,
+//    S37 PathDrawer, S39 WebLinks, S40 PageBoxes, S48 EmbedPdfAnnots,
+//    S50 NativeRedact, S53 Barcode, S55 ColorConvert, S59 FormFill,
+//    S61 SearchHighlight, S65 Posterize, S70 PageScaling, S71 MarginAdjust,
+//    S72 SelectiveFlatten, S74 ImageReplace, S79 PageMirror,
+//    S80 Background, S84 SelectiveRaster, S86 PosterizeSizes,
+//    S87 AutoCropMargins
+//
+//  NO BENEFIT (whole-document operations):
+//    S04 Metadata, S05 Bookmarks, S10 Signatures, S11 Attachments,
+//    S13 PageImport, S14 StructureTree, S17 NUpLayout, S18 Repair,
+//    S20 ImagesToPdf, S22 MergeSplit, S27 Security, S28 DocInfo,
+//    S33 Encryption, S34 Linearize, S35 Overlay, S38 JavaScriptInspect,
+//    S41 VersionConvert, S43 StreamOptimize, S45 PageInterleave,
+//    S46 NamedDests, S49 NativeEncryption, S51 Compress,
+//    S52 BookmarkEditor, S54 PageReorder, S56 Booklet,
+//    S62 PageSplit2Up, S63 PageLabels, S66 PdfDiff,
+//    S69 PdfAConversion, S75 LongImage, S82 ResourceDedup,
+//    S83 TocGenerate
+//  ──────────────────────────────────────────────────────────────────────

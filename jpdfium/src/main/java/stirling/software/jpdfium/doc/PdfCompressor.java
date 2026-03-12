@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.panama.RustBridgeBindings;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -11,13 +12,17 @@ import java.util.List;
 /**
  * PDF compression and file size reduction.
  *
- * <p>Combines three compression strategies in an optimal pipeline:
+ * <p>Combines four compression strategies in an optimal pipeline:
  * <ol>
  *   <li><strong>Ghostscript</strong> (if available): image resampling, font subsetting,
  *       lossy JPEG compression, and PDF stream re-encoding</li>
  *   <li><strong>qpdf</strong> (if available): structural optimization via object streams,
  *       cross-reference stream compression, and unreferenced object removal</li>
  *   <li><strong>PDFium</strong>: metadata stripping via {@link PdfSecurity}</li>
+ *   <li><strong>Rust/zopfli</strong> (optional, if compiled in): lopdf reloads the output
+ *       and recompresses every FlateDecode stream with zopfli, typically saving a further
+ *       10-25% over standard DEFLATE. Enabled via
+ *       {@link CompressOptions.Builder#useZopfliDeflate(boolean)}.</li>
  * </ol>
  *
  * <pre>{@code
@@ -39,7 +44,8 @@ public final class PdfCompressor {
 
     /**
      * Compress a document using the given options.
-     * Pipeline: Ghostscript (lossy) -> qpdf (structural) -> metadata strip.
+     * Pipeline: Ghostscript (lossy) -> qpdf (structural) -> metadata strip
+     *           -> Rust/zopfli recompression (optional).
      *
      * @param doc  the source document
      * @param opts compression options
@@ -121,6 +127,21 @@ public final class PdfCompressor {
             deleteQuietly(tempIn);
             deleteQuietly(tempGs);
             deleteQuietly(tempOut);
+        }
+
+        // 4. Rust/zopfli post-processing pass (optional)
+        if (opts.useZopfliDeflate()) {
+            byte[] zopfliResult = RustBridgeBindings.rustCompressPdf(
+                    resultBytes, opts.zopfliIterations());
+            if (zopfliResult != null && zopfliResult.length < resultBytes.length) {
+                resultBytes = zopfliResult;
+                actions.add("Rust/zopfli: recompressed FlateDecode streams (%d iterations)"
+                        .formatted(opts.zopfliIterations()));
+            } else if (zopfliResult != null) {
+                // zopfli produced larger output (unlikely but possible for tiny PDFs) - discard
+                actions.add("Rust/zopfli: skipped (zopfli output not smaller)");
+            }
+            // null means Rust not available - silently skip
         }
 
         CompressResult result = new CompressResult(

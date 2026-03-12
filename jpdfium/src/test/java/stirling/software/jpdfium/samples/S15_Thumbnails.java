@@ -18,7 +18,7 @@ import java.util.Optional;
  * since viewers can render them on-the-fly.
  *
  * <h3>Streaming &amp; Parallel Guidance (HIGH benefit)</h3>
- * <p>Thumbnail extraction is per-page and read-only — ideal for parallel mode.
+ * <p>Thumbnail extraction is per-page and read-only - ideal for parallel mode.
  * <pre>{@code
  * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
  *     (doc, pageIndex) -> {

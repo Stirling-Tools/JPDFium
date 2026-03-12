@@ -584,6 +584,8 @@ public final class PdfFormFiller {
         }
     }
 
+    // Low-level helpers
+
     /**
      * Return the page-coordinate centre of an annotation's bounding rectangle,
      * or {@code null} if the rect cannot be read.
@@ -608,6 +610,7 @@ public final class PdfFormFiller {
             long needed = (long) mh.invokeExact(arg1, arg2, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
+            @SuppressWarnings("unused")
             long written = (long) mh.invokeExact(arg1, arg2, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) { return ""; }
@@ -619,6 +622,7 @@ public final class PdfFormFiller {
                     .invokeExact(formHandle, annot, index, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
+            @SuppressWarnings("unused")
             long written = (long) AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) { return ""; }
@@ -631,6 +635,7 @@ public final class PdfFormFiller {
             MemorySegment.copy(keyBytes, 0, keyBuf, ValueLayout.JAVA_BYTE, 0, keyBytes.length);
             keyBuf.set(ValueLayout.JAVA_BYTE, keyBytes.length, (byte) 0);
             MemorySegment valueSeg = FfmHelper.toWideString(arena, value);
+            @SuppressWarnings("unused")
             int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, keyBuf, valueSeg);
         } catch (Throwable ignored) {}
     }
@@ -669,11 +674,6 @@ public final class PdfFormFiller {
         try { mh.invokeExact(a, b); } catch (Throwable ignored) {}
     }
 
-    /** Invoke int(ADDRESS, ADDRESS, int) silently. */
-    private static void safeSilent0b_int(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b, int c) {
-        try { mh.invokeExact(a, b, c); } catch (Throwable ignored) {}
-    }
-
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
     private static int safeInt4(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
         try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) { return 0; }
@@ -688,6 +688,8 @@ public final class PdfFormFiller {
     private static MemorySegment safeSegment(java.lang.invoke.MethodHandle mh, MemorySegment a, int b) {
         try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) { return MemorySegment.NULL; }
     }
+
+    // Internal records
 
     /** Identifies a radio button annotation by page + annotation index + export value. */
     private record RadioMember(int pageIdx, int annotIdx, String exportValue) {}

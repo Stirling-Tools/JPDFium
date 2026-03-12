@@ -19,20 +19,20 @@ import java.util.function.BiConsumer;
  *
  * <h3>Modes</h3>
  * <ul>
- *   <li><b>Sequential</b>: processes pages in order on the calling thread.</li>
- *   <li><b>Streaming</b>: processes pages one at a time with periodic save/reload
+ *   <li><b>Sequential</b> - processes pages in order on the calling thread.</li>
+ *   <li><b>Streaming</b> - processes pages one at a time with periodic save/reload
  *       cycles to release PDFium internal caches and reduce memory pressure.</li>
- *   <li><b>Parallel</b>: uses a thread pool to execute page operations
+ *   <li><b>Parallel</b> - uses a thread pool to execute page operations
  *       concurrently. PDFium calls are serialized via {@link #PDFIUM_LOCK}
  *       (the library is not thread-safe), but Java-side processing between
  *       PDFium calls runs in true parallel across worker threads.</li>
- *   <li><b>Streaming + Parallel</b>: combines both: parallel worker threads
+ *   <li><b>Streaming + Parallel</b> - combines both: parallel worker threads
  *       with streaming flush to keep memory low.</li>
  * </ul>
  *
  * <h3>Thread Safety &amp; PDFium</h3>
  * <p>PDFium's internal state (font renderer, document loader, page parser) is
- * <b>not thread-safe</b>: even across independent document instances. All
+ * <b>not thread-safe</b> - even across independent document instances. All
  * PDFium native calls must be serialized. The pipeline handles this via
  * {@link #PDFIUM_LOCK}.
  *
@@ -83,7 +83,7 @@ public final class PdfPipeline {
     /**
      * Global lock for all PDFium native calls. PDFium's internal state
      * (font renderer, document loader, page parser) is <b>not thread-safe</b>
-     * even across independent document instances.
+     * - even across independent document instances.
      *
      * <p>In parallel mode, wrap all PDFium calls (page open/close, text
      * extraction, rendering, annotation CRUD) with
@@ -223,7 +223,7 @@ public final class PdfPipeline {
             chunks.add(new int[]{start, end});
         }
 
-        // Split into chunk byte arrays (sequential: PDFium not thread safe)
+        // Split into chunk byte arrays (sequential - PDFium not thread safe)
         List<byte[]> chunkBytes = new ArrayList<>();
         try (PdfDocument source = PdfDocument.open(sourceBytes)) {
             for (int[] chunk : chunks) {
@@ -233,7 +233,7 @@ public final class PdfPipeline {
             }
         }
 
-        // Process chunks on thread pool: consumer must use PDFIUM_LOCK
+        // Process chunks on thread pool - consumer must use PDFIUM_LOCK
         record ChunkResult(int order, byte[] bytes) {}
 
         ExecutorService executor = Executors.newFixedThreadPool(

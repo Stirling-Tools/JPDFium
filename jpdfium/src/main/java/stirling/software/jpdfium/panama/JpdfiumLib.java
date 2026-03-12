@@ -53,10 +53,11 @@ public final class JpdfiumLib {
     static void check(int rc, String ctx) {
         if (rc == OK) return;
         throw switch (rc) {
-            case ERR_PASSWORD -> new PdfPasswordException("Password required/incorrect - " + ctx);
-            case ERR_IO       -> new JPDFiumException("IO error - " + ctx);
-            case ERR_INVALID  -> new PdfCorruptException("Invalid/corrupt PDF - " + ctx);
-            default           -> new JPDFiumException("Native error " + rc + " - " + ctx);
+            case ERR_PASSWORD  -> new PdfPasswordException("Password required/incorrect - " + ctx);
+            case ERR_IO        -> new JPDFiumException("IO error - " + ctx);
+            case ERR_INVALID   -> new PdfCorruptException("Invalid/corrupt PDF - " + ctx);
+            case ERR_NOT_FOUND -> new JPDFiumException("Resource not found - " + ctx);
+            default            -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
 

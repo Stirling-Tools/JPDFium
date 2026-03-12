@@ -26,21 +26,21 @@
    ```bash
    ./gradlew quickTry
    ```
-   This builds the stub bridge and runs all 88 samples in stub mode. Perfect for testing Java-layer changes.
+   This builds the stub bridge and runs all 87 samples in stub mode. Perfect for testing Java-layer changes.
 
 4. **Full Build with Real PDFium** (recommended for production testing)
    ```bash
    # One command: build PDFium from source, build real bridge, run all tests and samples
    ./gradlew fullBuildAndTest
    ```
-
+   
    Or step by step:
    ```bash
    ./gradlew buildPdfium         # Build PDFium from EmbedPDF fork (~15 GB, first time takes 15-60 min)
    ./gradlew buildRealBridge     # Build native bridge against real PDFium
    ./gradlew test                # Unit tests (stub mode)
    ./gradlew :jpdfium:integrationTest  # Integration tests (real PDFium)
-   ./gradlew runAllSamples       # Run all 88 samples
+   ./gradlew runAllSamples       # Run all 87 samples
    ```
 
    > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
@@ -80,8 +80,8 @@ directory before loading. The dynamic linker resolves dependencies via `RUNPATH=
 | `./gradlew buildRealBridge` | Build real native bridge with PDFium |
 | `./gradlew buildStubBridge` | Build stub native bridge (no PDFium) |
 | `./gradlew fullBuildAndTest` | Full end-to-end: PDFium + real bridge + all tests + samples |
-| `./gradlew runAllSamples` | Run all 88 samples (requires real bridge for full features) |
-| `./gradlew runSample -Psample=01` | Run a specific sample (01-88) |
+| `./gradlew runAllSamples` | Run all 87 samples (requires real bridge for full features) |
+| `./gradlew runSample -Psample=01` | Run a specific sample (01-87) |
 | `./gradlew test` | Run unit tests (stub mode) |
 | `./gradlew :jpdfium:integrationTest` | Run integration tests (real PDFium required) |
 
@@ -116,7 +116,7 @@ directory before loading. The dynamic linker resolves dependencies via `RUNPATH=
 | 25 | Page Geometry | 55 | Color Convert | 85 | Annotation Stats |
 | 26 | Header/Footer | 56 | Booklet | 86 | Posterize Sizes |
 | 27 | Security | 58 | Analytics | 87 | AutoCrop Margins |
-| 28 | Doc Info | 59 | Form Fill | 88 | Streaming Parallel |
+| 28 | Doc Info | 59 | Form Fill | | |
 | 29 | Render Options | 60 | AutoCrop | | |
 | 30 | Form Reader | | | | |
 
@@ -226,10 +226,10 @@ JPDFium/
         - PdfDocumentTest.java   # Unit tests (stub native)
         - RealPdfIntegrationTest.java  # Integration tests (real PDFium)
         - ManualTest.java        # Quick smoke-test (right-click -> Run)
-        - samples/               # Numbered manual-test classes (S01-S88)
-          - RunAllSamples.java   # Execute all 88 samples
+        - samples/               # Numbered manual-test classes (S01-S87)
+          - RunAllSamples.java   # Execute all 87 samples
           - SampleBase.java      # Base class for samples
-          - S01_Render.java ... S88_StreamingParallel.java
+          - S01_Render.java ... S87_AutoCropMargins.java
         - ...
 
   jpdfium-natives/               # Platform-specific native JARs
@@ -403,8 +403,8 @@ resulting `libpdfium.so` is placed in `native/pdfium/lib/` with headers in
 
 The `samples` package provides quick 1-click runnable classes for each feature:
 
-Right-click any `S01_Render` ... `S88_StreamingParallel` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 88 samples in sequence. Output lands in `jpdfium/samples-output/`.
+Right-click any `S01_Render` ... `S87_AutoCropMargins` class in IntelliJ and hit Run.
+`RunAllSamples` runs all 87 samples in sequence. Output lands in `jpdfium/samples-output/`.
 
 See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
 

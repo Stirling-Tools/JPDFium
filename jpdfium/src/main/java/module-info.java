@@ -8,6 +8,7 @@
  * (or {@code --enable-native-access=ALL-UNNAMED} when running from the classpath).
  */
 module stirling.software.jpdfium {
+    // Public API packages
     exports stirling.software.jpdfium;
     exports stirling.software.jpdfium.exception;
     exports stirling.software.jpdfium.fonts;
@@ -18,9 +19,11 @@ module stirling.software.jpdfium {
     exports stirling.software.jpdfium.text.edit;
     exports stirling.software.jpdfium.transform;
 
+    // Internal: FFM bindings and advanced PDF API - exported for Spring Boot and advanced consumers
     exports stirling.software.jpdfium.panama;
     exports stirling.software.jpdfium.doc;
 
-    requires java.desktop;
-    requires java.net.http;
+    // Standard library requirements
+    requires java.desktop;      // java.awt.image.BufferedImage
+    requires java.net.http;     // java.net.http.HttpClient for link validation
 }

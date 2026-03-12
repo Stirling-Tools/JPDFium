@@ -70,13 +70,19 @@ publishing {
 
     repositories {
         maven {
-            name = "sonatype"
-            val releasesUrl = uri("https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/")
-            val snapshotsUrl = uri("https://s01.oss.sonatype.org/content/repositories/snapshots/")
+            name = "centralPortal"
+            val releasesUrl = uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
+            val snapshotsUrl = uri("https://central.sonatype.com/repository/maven-snapshots/")
             url = if (version.toString().endsWith("SNAPSHOT")) snapshotsUrl else releasesUrl
             credentials {
-                username = findProperty("ossrhUsername")?.toString() ?: System.getenv("OSSRH_USERNAME") ?: ""
-                password = findProperty("ossrhPassword")?.toString() ?: System.getenv("OSSRH_PASSWORD") ?: ""
+                username = findProperty("centralPortalUsername")?.toString()
+                    ?: findProperty("ossrhUsername")?.toString()
+                    ?: System.getenv("CENTRAL_PORTAL_USERNAME")
+                    ?: System.getenv("OSSRH_USERNAME") ?: ""
+                password = findProperty("centralPortalPassword")?.toString()
+                    ?: findProperty("ossrhPassword")?.toString()
+                    ?: System.getenv("CENTRAL_PORTAL_PASSWORD")
+                    ?: System.getenv("OSSRH_PASSWORD") ?: ""
             }
         }
     }
@@ -88,6 +94,6 @@ signing {
     val signingPassword = findProperty("signing.password")?.toString() ?: System.getenv("GPG_SIGNING_PASSWORD")
     if (signingKey != null && signingPassword != null) {
         useInMemoryPgpKeys(signingKey, signingPassword)
+        sign(publishing.publications["mavenJava"])
     }
-    sign(publishing.publications["mavenJava"])
 }

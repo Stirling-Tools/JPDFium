@@ -97,7 +97,7 @@ public final class NativeLoader {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     String trimmed = line.trim();
-                    if (!trimmed.isEmpty() && !(!trimmed.isEmpty() && trimmed.charAt(0) == '#')) {
+                    if (!trimmed.isEmpty() && trimmed.charAt(0) != '#') {
                         result.add(trimmed);
                     }
                 }

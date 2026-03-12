@@ -50,7 +50,7 @@ class RectTest {
 
     @Test
     void noIntersectTouchingEdge() {
-        // Edge-touching: x + width == o.x  → NOT overlapping
+        // Edge-touching: x + width == o.x  -> NOT overlapping
         Rect a = Rect.of(0, 0, 5, 5);
         Rect b = Rect.of(5, 0, 5, 5);
         assertFalse(a.intersects(b));

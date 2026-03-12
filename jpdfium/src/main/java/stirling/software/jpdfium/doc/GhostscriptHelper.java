@@ -46,7 +46,10 @@ final class GhostscriptHelper {
                 return false;
             }
             return p.exitValue() == 0;
-        } catch (IOException | InterruptedException e) {
+        } catch (IOException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             return false;
         }
     }

@@ -11,7 +11,7 @@ import java.util.Arrays;
  * <ul>
  *   <li>Encoding modes: numeric, alphanumeric, byte, kanji</li>
  *   <li>Automatic mode selection based on content analysis</li>
- *   <li>Versions 1 through 40 (21×21 to 177×177 modules)</li>
+ *   <li>Versions 1 through 40 (21x21 to 177x177 modules)</li>
  *   <li>All four error-correction levels (L/M/Q/H)</li>
  *   <li>Reed-Solomon error correction over GF(256)</li>
  *   <li>All 8 mask patterns with full penalty scoring (rules 1-4)</li>
@@ -547,7 +547,7 @@ final class QrEncoder {
             }
         }
 
-        // Rule 2: 2×2 blocks of same color
+        // Rule 2: 2x2 blocks of same color
         for (int row = 0; row < size - 1; row++) {
             for (int col = 0; col < size - 1; col++) {
                 boolean v = m[row][col];

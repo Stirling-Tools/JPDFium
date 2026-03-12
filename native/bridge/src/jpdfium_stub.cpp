@@ -545,3 +545,44 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
     // Delegate to full save for stub
     return jpdfium_doc_save_bytes(handle, data, len);
 }
+
+// Rust-powered stubs — return JPDFIUM_ERR_NATIVE when Rust is not compiled in.
+
+int32_t jpdfium_rust_compress_pdf(
+        const uint8_t*, int64_t,
+        uint8_t** out_ptr, int64_t* out_len,
+        int32_t) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_rust_repair_lopdf(
+        const uint8_t*, int64_t,
+        uint8_t** out_ptr, int64_t* out_len) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_rust_resize_pixels(
+        const uint8_t*, int64_t,
+        int32_t, int32_t, int32_t, int32_t, int32_t,
+        uint8_t** out_ptr, int64_t* out_len) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_rust_compress_png(
+        const uint8_t*, int64_t,
+        uint8_t** out_ptr, int64_t* out_len,
+        int32_t) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+void jpdfium_rust_free(uint8_t*) {
+    // No-op: no buffer was allocated by the stub
+}

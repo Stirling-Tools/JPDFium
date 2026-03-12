@@ -23,7 +23,7 @@ import java.lang.foreign.ValueLayout;
  * try (PdfDocument doc = PdfDocument.open(Path.of("scanned.pdf"))) {
  *     for (int i = 0; i < doc.pageCount(); i++) {
  *         var result = PdfDeskew.detectSkew(doc, i);
- *         System.out.printf("Page %d: angle=%.2f° confidence=%.1f%n",
+ *         System.out.printf("Page %d: angle=%.2f deg confidence=%.1f%n",
  *             i, result.angle(), result.confidence());
  *     }
  *     PdfDeskew.deskewAll(doc, 7.0f, 0.05f, 2.0f);

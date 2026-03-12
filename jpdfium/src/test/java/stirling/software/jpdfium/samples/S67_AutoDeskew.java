@@ -54,7 +54,7 @@ public class S67_AutoDeskew {
                 SampleBase.section(stem + " - skew detection");
                 for (int p = 0; p < Math.min(doc.pageCount(), 5); p++) {
                     PdfDeskew.DeskewResult result = PdfDeskew.detectSkew(doc, p);
-                    System.out.printf("  Page %d: angle=%.3f° confidence=%.2f%n",
+                    System.out.printf("  Page %d: angle=%.3f deg confidence=%.2f%n",
                             p, result.angle(), result.confidence());
                 }
             }

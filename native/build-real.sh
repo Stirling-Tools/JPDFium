@@ -12,6 +12,11 @@ if [ ! -d "${PDFIUM_DIR}/include" ]; then
     exit 1
 fi
 
+# Build the Rust static library first (required).
+echo "Building Rust dependencies..."
+bash "${SCRIPT_DIR}/build-rust.sh"
+
+echo ""
 echo "Building libjpdfium.so with real PDFium..."
 cmake -B "${SCRIPT_DIR}/build-real" \
       -S "${SCRIPT_DIR}" \

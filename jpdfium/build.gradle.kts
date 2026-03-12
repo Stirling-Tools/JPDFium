@@ -64,7 +64,12 @@ val jpdfiumFunctions = listOf(
     // Image to PDF
     "jpdfium_image_to_pdf", "jpdfium_doc_add_image_page",
     // N-Up Layout
-    "jpdfium_import_n_pages_to_one"
+    "jpdfium_import_n_pages_to_one",
+    // compression, repair, and image resize
+    "jpdfium_rust_compress_pdf",
+    "jpdfium_rust_repair_lopdf",
+    "jpdfium_rust_resize_pixels",
+    "jpdfium_rust_free"
 )
 
 val generateBindings by tasks.registering(Exec::class) {

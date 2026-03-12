@@ -1,0 +1,16 @@
+[package]
+name = "jpdfium-impl"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "jpdfium_rust"
+crate-type = ["staticlib"]
+
+[dependencies]
+libc = "0.2"
+lopdf = "0.39"
+oxipng = { version = "10.1", default-features = false, features = ["zopfli"] }
+zopfli = "0.8"
+flate2 = "1.1"
+fast_image_resize = "6.0"

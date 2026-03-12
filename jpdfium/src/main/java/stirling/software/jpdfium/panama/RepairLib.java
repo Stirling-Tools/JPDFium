@@ -7,6 +7,9 @@ import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.*;
 
+// RustBridgeBindings is loaded lazily - the static reference is only resolved
+// when rustRepair() is first called.
+
 /**
  * FFM bindings for the PDF repair pipeline.
  *
@@ -299,6 +302,40 @@ public final class RepairLib {
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
         }
+    }
+
+    // Rust (lopdf)
+
+    /**
+     * Attempt to repair a damaged PDF using lopdf's tolerant XRef parser.
+     *
+     * <p>This is the final fallback stage in the repair cascade, tried only when
+     * all C-based repair strategies (qpdf + PDFio) have failed.  lopdf can often
+     * parse PDFs with heavily corrupted cross-reference tables that qpdf and PDFio
+     * reject entirely.  Saving the document immediately after loading rebuilds the
+     * XRef table from scratch.
+     *
+     * <p>If the Rust library is not compiled in (the native function returns
+     * {@code JPDFIUM_ERR_NATIVE = -99}), this method returns
+     * {@code RepairResult.Status.FAILED} with a diagnostic message.
+     *
+     * @param input raw PDF bytes (may be damaged)
+     * @return repair result; {@link RepairResult#isUsable()} is {@code true} on
+     *         success
+     */
+    public static RepairResult rustRepair(byte[] input) {
+        if (input == null || input.length == 0) {
+            return new RepairResult(RepairResult.Status.FAILED, null,
+                    "{\"error\":\"empty input\"}");
+        }
+
+        byte[] repaired = RustBridgeBindings.rustRepairLopdf(input);
+        if (repaired != null && repaired.length > 0) {
+            String diag = "{\"source\":\"rust-lopdf\",\"status\":\"fixed\"}";
+            return new RepairResult(RepairResult.Status.FIXED, repaired, diag);
+        }
+        return new RepairResult(RepairResult.Status.FAILED, null,
+                "{\"source\":\"rust-lopdf\",\"status\":\"failed\"}");
     }
 
     /**
