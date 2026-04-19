@@ -52,6 +52,9 @@ compile_commands.json
 
 jpdfium-natives/**/src/main/resources/natives/
 
+# CI-staged per-platform native binaries (populated by release/snapshot workflows)
+native/dist/
+
 native/pdfium/
 native/pdfium-*/
 *.tgz

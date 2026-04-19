@@ -1,0 +1,175 @@
+name: Release to Central Portal
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 1.0.0). If omitted on tag push, derived from the tag.'
+        required: false
+      autoRelease:
+        description: 'Auto-release to Maven Central without manual Publish click'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Fan out: build native libraries on each platform ──────────────────────
+  build-natives:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+            shell: bash
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            shell: bash
+          - platform: darwin-x64
+            runner: macos-13
+            shell: bash
+          - platform: darwin-arm64
+            runner: macos-14
+            shell: bash
+          - platform: windows-x64
+            runner: windows-latest
+            shell: 'bash'  # git-bash provided by actions/checkout
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Install build deps (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config
+
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: brew install cmake ninja
+
+      - name: Install build deps (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: choco install -y cmake ninja
+
+      - name: Setup PDFium
+        run: bash native/setup-pdfium.sh
+
+      - name: Build native bridge
+        run: bash native/build-real.sh
+
+      - name: Stage binaries for publish
+        run: |
+          mkdir -p native/dist/${{ matrix.platform }}
+          # build-real.sh writes libjpdfium.* into native/build-real/
+          # PDFium itself ships inside native/pdfium/lib/
+          find native/build-real -maxdepth 3 -type f \( \
+                -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
+             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
+          find native/pdfium/lib native/pdfium -maxdepth 3 -type f \( \
+                -name 'libpdfium.*' -o -name 'pdfium.dll' \
+             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \; 2>/dev/null || true
+          echo "--- staged ---"
+          ls -la native/dist/${{ matrix.platform }}/
+
+      - name: Sanity check
+        run: |
+          test -n "$(ls -A native/dist/${{ matrix.platform }}/)" || {
+            echo "ERROR: no native binaries staged for ${{ matrix.platform }}"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Fan in: assemble, sign, publish everything from one runner ────────────
+  publish:
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+          pattern: natives-*
+
+      - name: Flatten into native/dist/<platform>/
+        run: |
+          mkdir -p native/dist
+          for d in .artifacts/natives-*; do
+            plat="${d##*natives-}"
+            mkdir -p "native/dist/$plat"
+            cp -v "$d"/* "native/dist/$plat/"
+          done
+          echo "--- final layout ---"
+          find native/dist -type f | sort
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            VERSION="${REF#v}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not resolve version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Publish to Central Portal
+        env:
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
+        run: |
+          ARGS=(publishAllToCentralPortal -Pjpdfium.version=${{ steps.v.outputs.version }})
+          if [ "${{ inputs.autoRelease }}" = "true" ]; then
+            ARGS+=(-PautoRelease=true)
+          fi
+          ./gradlew "${ARGS[@]}" --no-daemon --stacktrace
+
+      - name: Summary
+        run: |
+          echo "### Published com.stirling:*:${{ steps.v.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.autoRelease }}" = "true" ]; then
+            echo "Auto-release enabled — artifacts will land on Maven Central in 10–30 min." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> $GITHUB_STEP_SUMMARY
+          fi

@@ -1,0 +1,117 @@
+name: Snapshot to Central Portal
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-natives:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-13 }
+          - { platform: darwin-arm64, runner: macos-14 }
+          - { platform: windows-x64,  runner: windows-latest }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Install build deps (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config
+
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: brew install cmake ninja
+
+      - name: Install build deps (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: choco install -y cmake ninja
+
+      - run: bash native/setup-pdfium.sh
+      - run: bash native/build-real.sh
+
+      - name: Stage binaries
+        run: |
+          mkdir -p native/dist/${{ matrix.platform }}
+          find native/build-real -maxdepth 3 -type f \( \
+                -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
+             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
+          find native/pdfium/lib native/pdfium -maxdepth 3 -type f \( \
+                -name 'libpdfium.*' -o -name 'pdfium.dll' \
+             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \; 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 3
+
+  publish-snapshot:
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+          pattern: natives-*
+
+      - name: Flatten into native/dist/<platform>/
+        run: |
+          mkdir -p native/dist
+          for d in .artifacts/natives-*; do
+            plat="${d##*natives-}"
+            mkdir -p "native/dist/$plat"
+            cp -v "$d"/* "native/dist/$plat/"
+          done
+
+      - name: Publish SNAPSHOT
+        env:
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
+        run: |
+          # Snapshots use the -SNAPSHOT version from gradle.properties and skip the
+          # finalize step — the Central Portal snapshots repo is mutable.
+          ./gradlew \
+            :jpdfium:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-bom:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-spring:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-linux-x64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-linux-arm64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-darwin-x64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToCentralPortalRepository \
+            --no-daemon --stacktrace

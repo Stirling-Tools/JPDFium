@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      - name: Install build deps (Windows)
+        if: runner.os == 'Windows'
+        run: choco install -y cmake ninja
+
+      - name: Build stub bridge (no PDFium required)
+        run: bash native/build-stub.sh
+
+      - name: Compile + unit tests
+        run: ./gradlew build -x :jpdfium:integrationTest --no-daemon --stacktrace
+
+  publish-dry-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: publishToMavenLocal
+        run: ./gradlew publishToMavenLocal -Pjpdfium.version=0.0.0-ci --no-daemon --stacktrace
+
+      - name: Inspect artifacts
+        run: |
+          find ~/.m2/repository/com/stirling -type f \
+            \( -name '*.jar' -o -name '*.pom' \) | sort
+          # Every published artifact must have sources + javadoc alongside it.
+          missing=0
+          for pom in $(find ~/.m2/repository/com/stirling -name '*.pom'); do
+            base=${pom%.pom}
+            art=$(basename "$base")
+            case "$art" in
+              *-bom-*) continue ;;  # BOMs have no jars
+            esac
+            for suffix in '.jar' '-sources.jar' '-javadoc.jar'; do
+              if [ ! -f "${base}${suffix}" ]; then
+                echo "MISSING: ${base}${suffix}"
+                missing=1
+              fi
+            done
+          done
+          exit $missing
