@@ -69,8 +69,11 @@ jobs:
         if: matrix.platform == 'windows-x64'
         run: choco install -y cmake ninja
 
-      - name: Setup PDFium
-        run: bash native/setup-pdfium.sh
+      - name: Fetch prebuilt PDFium (pinned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: Build native bridge
         run: bash native/build-real.sh

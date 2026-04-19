@@ -1,0 +1,17 @@
+# This file pins the prebuilt PDFium release that JPDFium's publish workflows
+# consume instead of building PDFium from source on every push.
+#
+# The value must be the tag of a GitHub Release in this repository that was
+# produced by the `Prebuild PDFium` workflow (.github/workflows/prebuild-pdfium.yml).
+# That release carries one tarball per platform: pdfium-<platform>.tar.gz.
+#
+# Format: pdfium-YYYYMMDD-<shortSha>
+# Example: pdfium-20260420-65816fe
+#
+# Bootstrap: if this file is empty (as on first install), trigger the
+# `Prebuild PDFium` workflow manually. It will build PDFium ×5, publish a
+# release, and open a PR bumping this file to the new tag.
+#
+# Subsequent updates: the weekly cron in `Prebuild PDFium` auto-opens a PR
+# bumping this pin when EmbedPDF's fork HEAD moves. Review release notes and
+# merge when you want the new version to take effect.

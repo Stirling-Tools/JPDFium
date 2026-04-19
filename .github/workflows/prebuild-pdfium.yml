@@ -1,0 +1,219 @@
+name: Prebuild PDFium
+
+# Builds the EmbedPDF PDFium fork on 5 host platforms, uploads the resulting
+# include/ + lib/ tree as a per-platform tarball attached to a GitHub Release,
+# and opens a PR bumping native/pdfium.version to the new release tag.
+#
+# Consumers (release.yml, snapshot.yml, publish-github-packages.yml, ci.yml)
+# read that pin and skip the expensive source build entirely — they just
+# `gh release download` and move on.
+#
+# Triggers:
+#   - Manual (workflow_dispatch) for bootstrap and ad-hoc rebuilds
+#   - Weekly cron: Monday 03:00 UTC, picks up latest embedpdf/main HEAD
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Specific EmbedPDF commit SHA to build (default: embedpdf/main HEAD)'
+        required: false
+      dry-run:
+        description: 'Build but do not create a release or PR'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: write         # create releases, push the pin-bump branch
+  pull-requests: write    # open the auto-PR
+
+concurrency:
+  group: prebuild-pdfium
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the PDFium SHA once so every matrix job builds the same commit.
+  resolve-sha:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.r.outputs.sha }}
+      short: ${{ steps.r.outputs.short }}
+      tag: ${{ steps.r.outputs.tag }}
+    steps:
+      - name: Resolve EmbedPDF HEAD
+        id: r
+        run: |
+          if [ -n "${{ inputs.sha }}" ]; then
+            SHA="${{ inputs.sha }}"
+          else
+            SHA=$(git ls-remote https://github.com/embedpdf/pdfium.git refs/heads/embedpdf/main | awk '{print $1}')
+          fi
+          if [ -z "$SHA" ]; then
+            echo "ERROR: could not resolve PDFium SHA" >&2
+            exit 1
+          fi
+          SHORT="${SHA:0:7}"
+          TAG="pdfium-$(date -u +%Y%m%d)-${SHORT}"
+          echo "sha=$SHA"       >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT"   >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"       >> "$GITHUB_OUTPUT"
+          echo "Building PDFium $SHA  →  release tag $TAG"
+
+  build:
+    needs: resolve-sha
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-13 }
+          - { platform: darwin-arm64, runner: macos-14 }
+          - { platform: windows-x64,  runner: windows-latest }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git
+
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: brew install cmake ninja
+
+      - name: Install build deps (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: choco install -y cmake ninja python3
+
+      - name: Build PDFium at pinned SHA
+        env:
+          PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
+        run: |
+          # Override the branch pointer used by setup-pdfium.sh so every
+          # matrix job builds the exact same commit even if embedpdf/main
+          # moves while the matrix is running.
+          export EMBEDPDF_PIN_SHA="$PINNED_SHA"
+          bash native/setup-pdfium.sh
+
+      - name: Package artifacts
+        run: |
+          mkdir -p .prebuild
+          # Tar the include/ + lib/ trees produced by setup-pdfium.sh.
+          tar -czf ".prebuild/pdfium-${{ matrix.platform }}.tar.gz" \
+            -C native/pdfium include lib
+          ls -lh .prebuild/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfium-${{ matrix.platform }}
+          path: .prebuild/pdfium-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    needs: [resolve-sha, build]
+    if: inputs.dry-run != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: .prebuild
+          pattern: pdfium-*
+          merge-multiple: true
+
+      - name: Sanity check
+        run: |
+          ls -lh .prebuild/
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+            test -f ".prebuild/pdfium-$p.tar.gz" || { echo "MISSING: $p"; exit 1; }
+          done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:   ${{ needs.resolve-sha.outputs.tag }}
+          SHA:   ${{ needs.resolve-sha.outputs.sha }}
+          SHORT: ${{ needs.resolve-sha.outputs.short }}
+        run: |
+          NOTES=$(cat <<EOF
+          **PDFium prebuild** — build inputs for JPDFium publishing workflows.
+
+          This is an **infrastructure release**, not a user-facing library release.
+          See regular \`v*.*.*\` tags for JPDFium library versions on Maven Central.
+
+          - EmbedPDF fork SHA: \`$SHA\`
+          - Source: <https://github.com/embedpdf/pdfium/commit/$SHA>
+          - Consumers pin this via \`native/pdfium.version\`.
+
+          ### Assets
+          | Platform      | Tarball                          |
+          |---------------|----------------------------------|
+          | linux-x64     | pdfium-linux-x64.tar.gz          |
+          | linux-arm64   | pdfium-linux-arm64.tar.gz        |
+          | darwin-x64    | pdfium-darwin-x64.tar.gz         |
+          | darwin-arm64  | pdfium-darwin-arm64.tar.gz       |
+          | windows-x64   | pdfium-windows-x64.tar.gz        |
+
+          Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
+          EOF
+          )
+          gh release create "$TAG" \
+            --title "PDFium prebuild $TAG" \
+            --notes "$NOTES" \
+            --prerelease \
+            .prebuild/pdfium-*.tar.gz
+
+      - name: Open auto-PR to bump the pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve-sha.outputs.tag }}
+          SHA: ${{ needs.resolve-sha.outputs.sha }}
+        run: |
+          BRANCH="pdfium-pin-bump/$TAG"
+
+          # Check whether the pin already matches (e.g. a rebuild of the same SHA)
+          CURRENT=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
+          if [ "$CURRENT" = "$TAG" ]; then
+            echo "Pin already at $TAG — nothing to PR."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+
+          # Strip any existing non-comment line, append the new tag
+          {
+            grep '^#' native/pdfium.version || true
+            echo ""
+            echo "$TAG"
+          } > native/pdfium.version.new
+          mv native/pdfium.version.new native/pdfium.version
+
+          git add native/pdfium.version
+          git commit -m "Bump PDFium pin to $TAG"
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "Bump PDFium pin to $TAG" \
+            --body "Automated bump from weekly prebuild.
+
+          - New tag: [$TAG](../../releases/tag/$TAG)
+          - EmbedPDF SHA: [\`$SHA\`](https://github.com/embedpdf/pdfium/commit/$SHA)
+
+          Merging this PR will make all subsequent JPDFium publishes consume this prebuild.
+          Previous pins remain available as GitHub Releases — safe to revert if needed."

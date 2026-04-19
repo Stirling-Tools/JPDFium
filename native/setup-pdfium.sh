@@ -18,6 +18,20 @@
 # The script will install depot_tools (gclient/gn/ninja) automatically.
 set -euo pipefail
 
+# Portable in-place sed — BSD (macOS) requires a backup suffix argument to -i,
+# GNU sed treats it as optional. Using -i.bak works on both; the .bak files are
+# removed after each edit. All uses of `sed -i` below go through this wrapper.
+sed_i() {
+    local file
+    local -a sed_args
+    # Last positional arg is the file (one per invocation below); everything
+    # before it is passed through to sed.
+    file="${!#}"
+    sed_args=("${@:1:$#-1}")
+    sed -i.bak "${sed_args[@]}" "$file"
+    rm -f "${file}.bak"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET_DIR="${SCRIPT_DIR}/pdfium"
 BUILD_DIR="${SCRIPT_DIR}/pdfium-src"
@@ -107,11 +121,18 @@ fi
 
 cd "${PDFIUM_SRC}"
 
-# Ensure we are on the EmbedPDF branch
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-if [ "${CURRENT_BRANCH}" != "${EMBEDPDF_BRANCH}" ]; then
-    echo "  Switching to ${EMBEDPDF_BRANCH}..."
-    git checkout "${EMBEDPDF_BRANCH}" 2>/dev/null || git checkout -b "${EMBEDPDF_BRANCH}" "origin/${EMBEDPDF_BRANCH}"
+# If EMBEDPDF_PIN_SHA is set (CI prebuild path), hard-check that exact commit so
+# every matrix runner builds byte-identical inputs. Otherwise stay on the branch.
+if [ -n "${EMBEDPDF_PIN_SHA:-}" ]; then
+    echo "  Pinning to SHA ${EMBEDPDF_PIN_SHA}..."
+    git fetch --depth=1 origin "${EMBEDPDF_PIN_SHA}"
+    git checkout --detach "${EMBEDPDF_PIN_SHA}"
+else
+    CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ "${CURRENT_BRANCH}" != "${EMBEDPDF_BRANCH}" ]; then
+        echo "  Switching to ${EMBEDPDF_BRANCH}..."
+        git checkout "${EMBEDPDF_BRANCH}" 2>/dev/null || git checkout -b "${EMBEDPDF_BRANCH}" "origin/${EMBEDPDF_BRANCH}"
+    fi
 fi
 echo "  Commit: $(git log --oneline -1)"
 
@@ -146,8 +167,8 @@ fi
 if [ -f third_party/libpng/visibility.gni ]; then
     if ! grep -q 'fpdfsdk' third_party/libpng/visibility.gni; then
         echo "  Adding fpdfsdk to libpng visibility..."
-        sed -i '/visibility += \[ "\/\/third_party:png" \]/a\  visibility += [ "//fpdfsdk:*" ]' \
-            third_party/libpng/visibility.gni
+        sed_i '/visibility += \[ "\/\/third_party:png" \]/a\
+  visibility += [ "//fpdfsdk:*" ]' third_party/libpng/visibility.gni
     fi
 fi
 
@@ -160,17 +181,17 @@ if [ -f "${CONTENTGEN}" ]; then
     # Patch 1: Guard current_resource_dict->GetKeys() against null
     if grep -q 'const std::vector<ByteString> keys = current_resource_dict->GetKeys();' "${CONTENTGEN}"; then
         echo "  Patching RemoveOrRestoreUnusedResources null dereference..."
-        sed -i 's/const std::vector<ByteString> keys = current_resource_dict->GetKeys();/const std::vector<ByteString> keys =\n        current_resource_dict ? current_resource_dict->GetKeys()\n                              : std::vector<ByteString>();/' "${CONTENTGEN}"
-        sed -i 's/RemoveUnusedResources(current_resource_dict, keys,$/current_resource_dict\n            ? RemoveUnusedResources(current_resource_dict, keys,/' "${CONTENTGEN}"
-        sed -i '/? RemoveUnusedResources(current_resource_dict, keys,/{n;s/resource_in_use_of_current_type);/                                    resource_in_use_of_current_type)\n            : CPDF_PageObjectHolder::RemovedResourceMap();/}' "${CONTENTGEN}"
+        sed_i 's/const std::vector<ByteString> keys = current_resource_dict->GetKeys();/const std::vector<ByteString> keys =\'$'\n''        current_resource_dict ? current_resource_dict->GetKeys()\'$'\n''                              : std::vector<ByteString>();/' "${CONTENTGEN}"
+        sed_i 's/RemoveUnusedResources(current_resource_dict, keys,$/current_resource_dict\'$'\n''            ? RemoveUnusedResources(current_resource_dict, keys,/' "${CONTENTGEN}"
+        sed_i '/? RemoveUnusedResources(current_resource_dict, keys,/{n;s/resource_in_use_of_current_type);/                                    resource_in_use_of_current_type)\'$'\n''            : CPDF_PageObjectHolder::RemovedResourceMap();/;}' "${CONTENTGEN}"
     fi
 
     # Patch 2: Guard color_state() accessor calls against uninitialized ref
     if grep -q 'if (!cs.GetFillColorSpaceResName().IsEmpty())' "${CONTENTGEN}" && \
        ! grep -q 'if (cs.HasRef())' "${CONTENTGEN}"; then
         echo "  Patching RecordPageObjectResourceUsage color state null dereference..."
-        sed -i '/const CPDF_ColorState& cs = page_object->color_state();/{n;s/if (!cs.GetFillColorSpaceResName/if (cs.HasRef()) {\n    if (!cs.GetFillColorSpaceResName/}' "${CONTENTGEN}"
-        sed -i '/cs.GetStrokePatternResName());/{n;s/^}/  }\n}/}' "${CONTENTGEN}" 2>/dev/null || true
+        sed_i '/const CPDF_ColorState& cs = page_object->color_state();/{n;s/if (!cs.GetFillColorSpaceResName/if (cs.HasRef()) {\'$'\n''    if (!cs.GetFillColorSpaceResName/;}' "${CONTENTGEN}"
+        sed_i '/cs.GetStrokePatternResName());/{n;s/^}/  }\'$'\n''}/;}' "${CONTENTGEN}" 2>/dev/null || true
     fi
 fi
 
