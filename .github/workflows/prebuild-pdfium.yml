@@ -23,8 +23,17 @@ on:
         type: boolean
         required: false
         default: false
+      force:
+        description: 'Force rebuild even if the release for the resolved SHA already exists'
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: '0 3 * * 1'
+  # Auto-run on the test branch so pushes there self-bootstrap.
+  # Guarded by a "release already exists" check so repeat pushes are ~5-second no-ops.
+  push:
+    branches: [publishing-setup]
 
 permissions:
   contents: write         # create releases, push the pin-bump branch
@@ -39,12 +48,16 @@ jobs:
   resolve-sha:
     runs-on: ubuntu-latest
     outputs:
-      sha: ${{ steps.r.outputs.sha }}
+      sha:   ${{ steps.r.outputs.sha }}
       short: ${{ steps.r.outputs.short }}
-      tag: ${{ steps.r.outputs.tag }}
+      tag:   ${{ steps.r.outputs.tag }}
+      skip:  ${{ steps.r.outputs.skip }}
     steps:
       - name: Resolve EmbedPDF HEAD
         id: r
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
         run: |
           if [ -n "${{ inputs.sha }}" ]; then
             SHA="${{ inputs.sha }}"
@@ -57,13 +70,25 @@ jobs:
           fi
           SHORT="${SHA:0:7}"
           TAG="pdfium-$(date -u +%Y%m%d)-${SHORT}"
-          echo "sha=$SHA"       >> "$GITHUB_OUTPUT"
-          echo "short=$SHORT"   >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"       >> "$GITHUB_OUTPUT"
-          echo "Building PDFium $SHA  →  release tag $TAG"
+
+          # Skip the whole matrix if we've already built & released this tag.
+          SKIP="false"
+          if [ "$FORCE" != "true" ] && gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            SKIP="true"
+            echo "Release $TAG already exists — skipping build. Pass force=true to rebuild."
+          fi
+
+          echo "sha=$SHA"     >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP"   >> "$GITHUB_OUTPUT"
+          echo "SHA  : $SHA"
+          echo "Tag  : $TAG"
+          echo "Skip : $SKIP"
 
   build:
     needs: resolve-sha
+    if: needs.resolve-sha.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -121,7 +146,7 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    if: inputs.dry-run != true
+    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -174,27 +199,24 @@ jobs:
             --prerelease \
             .prebuild/pdfium-*.tar.gz
 
-      - name: Open auto-PR to bump the pin
+      - name: Update the pin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.resolve-sha.outputs.tag }}
-          SHA: ${{ needs.resolve-sha.outputs.sha }}
+          TAG:      ${{ needs.resolve-sha.outputs.tag }}
+          SHA:      ${{ needs.resolve-sha.outputs.sha }}
+          SRC_REF:  ${{ github.ref_name }}
         run: |
-          BRANCH="pdfium-pin-bump/$TAG"
-
-          # Check whether the pin already matches (e.g. a rebuild of the same SHA)
+          # If the pin already matches (e.g. manual re-run of the same SHA), nothing to do.
           CURRENT=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
           if [ "$CURRENT" = "$TAG" ]; then
-            echo "Pin already at $TAG — nothing to PR."
+            echo "Pin already at $TAG — nothing to commit."
             exit 0
           fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git checkout -b "$BRANCH"
-
-          # Strip any existing non-comment line, append the new tag
+          # Rewrite pin file: preserve comments, append new tag.
           {
             grep '^#' native/pdfium.version || true
             echo ""
@@ -202,18 +224,31 @@ jobs:
           } > native/pdfium.version.new
           mv native/pdfium.version.new native/pdfium.version
 
-          git add native/pdfium.version
-          git commit -m "Bump PDFium pin to $TAG"
-          git push -u origin "$BRANCH"
-
-          gh pr create \
-            --base main \
-            --head "$BRANCH" \
-            --title "Bump PDFium pin to $TAG" \
-            --body "Automated bump from weekly prebuild.
+          # On the test branch, push the bump directly so the next push triggers
+          # publish workflows with a valid pin. On main / any other branch,
+          # open an auto-PR for human review.
+          if [ "$SRC_REF" = "publishing-setup" ]; then
+            git fetch origin "$SRC_REF"
+            git checkout "$SRC_REF"
+            git add native/pdfium.version
+            git commit -m "Bump PDFium pin to $TAG [skip ci]"
+            git push origin "$SRC_REF"
+            echo "Pushed pin bump directly to $SRC_REF."
+          else
+            BRANCH="pdfium-pin-bump/$TAG"
+            git checkout -b "$BRANCH"
+            git add native/pdfium.version
+            git commit -m "Bump PDFium pin to $TAG"
+            git push -u origin "$BRANCH"
+            gh pr create \
+              --base "$SRC_REF" \
+              --head "$BRANCH" \
+              --title "Bump PDFium pin to $TAG" \
+              --body "Automated bump from prebuild-pdfium workflow.
 
           - New tag: [$TAG](../../releases/tag/$TAG)
           - EmbedPDF SHA: [\`$SHA\`](https://github.com/embedpdf/pdfium/commit/$SHA)
 
           Merging this PR will make all subsequent JPDFium publishes consume this prebuild.
-          Previous pins remain available as GitHub Releases — safe to revert if needed."
+          Previous pins remain as GitHub Releases — safe to revert if needed."
+          fi

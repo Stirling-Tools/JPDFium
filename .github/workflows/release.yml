@@ -59,15 +59,27 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
+            libqpdf-dev libpugixml-dev libunibreak-dev
 
       - name: Install build deps (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        run: brew install cmake ninja
+        run: |
+          brew install cmake ninja \
+            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
+            pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       - name: Install build deps (Windows)
         if: matrix.platform == 'windows-x64'
-        run: choco install -y cmake ninja
+        run: |
+          choco install -y cmake ninja
+          vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
+                        icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
+                        libunibreak:x64-windows
+          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)
         env:
