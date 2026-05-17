@@ -343,13 +343,33 @@ fi
 
 # For Linux arm64 cross-compile from x64 host, the bundled Chromium clang
 # acts as a cross-compiler (--target=aarch64-linux-gnu), but it needs a
-# matching sysroot for arm64 system libraries. Toggle use_sysroot=true so
-# Chromium pulls its hermetic Debian Bullseye arm64 sysroot during the hook
-# stage of gclient sync. linux-x64 native build keeps use_sysroot=false.
+# matching sysroot for arm64 system libraries. Toggle use_sysroot=true and
+# explicitly invoke install-sysroot.py — gclient sync's hooks don't pull
+# the arm64 sysroot unless target_cpu is in the .gclient (it's only in
+# GN args here), so we trigger it manually. linux-x64 native build keeps
+# use_sysroot=false.
 if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
     GN_ARGS="${GN_ARGS/use_sysroot=false/use_sysroot=true}"
     echo "  Linux arm64 cross-compile: use_sysroot=true (Chromium hermetic sysroot)"
+    if [ -f build/linux/sysroot_scripts/install-sysroot.py ]; then
+        echo "  Installing arm64 sysroot..."
+        python3 build/linux/sysroot_scripts/install-sysroot.py --arch=arm64
+    else
+        echo "  WARNING: install-sysroot.py not found at expected path."
+    fi
 fi
+
+# On Windows, depot_tools needs to populate python3_bin_reldir.txt before
+# gn can use its python3 wrapper. The first invocation of any depot_tools
+# command normally triggers bootstrap, but DEPOT_TOOLS_UPDATE=0 (which we
+# set above for speed) suppresses it. Force initialization here by running
+# a no-op gclient command with UPDATE temporarily re-enabled.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        echo "  Initializing depot_tools python3 wrapper on Windows..."
+        DEPOT_TOOLS_UPDATE=1 gclient --version 2>&1 || true
+        ;;
+esac
 
 gn gen "${OUT_DIR}" --args="${GN_ARGS}"
 
