@@ -115,9 +115,18 @@ export DEPOT_TOOLS_UPDATE=0
 # of falling back to the GIT_CACHE_PATH env var. Widen the catch so the
 # fallback works. Harmless on Linux/macOS (the call doesn't raise there).
 GIT_CACHE_PY="${DEPOT_TOOLS_DIR}/git_cache.py"
-if [ -f "${GIT_CACHE_PY}" ] && ! grep -q 'FileNotFoundError' "${GIT_CACHE_PY}"; then
-    sed_i 's/except subprocess.CalledProcessError:/except (subprocess.CalledProcessError, FileNotFoundError):/' "${GIT_CACHE_PY}"
-    echo "  Patched depot_tools/git_cache.py to also catch FileNotFoundError."
+if [ -f "${GIT_CACHE_PY}" ]; then
+    # Idempotent: sed replaces the bare except with the widened tuple. Running
+    # this twice is a no-op because the second pass won't match. (Previous
+    # version of this guard used `! grep -q FileNotFoundError`, which was too
+    # broad — that string appears elsewhere in depot_tools and silently
+    # skipped the patch.)
+    sed_i 's/except subprocess\.CalledProcessError:/except (subprocess.CalledProcessError, FileNotFoundError):/g' "${GIT_CACHE_PY}"
+    if grep -q 'except (subprocess.CalledProcessError, FileNotFoundError)' "${GIT_CACHE_PY}"; then
+        echo "  Patched depot_tools/git_cache.py to also catch FileNotFoundError."
+    else
+        echo "  WARNING: depot_tools/git_cache.py did not contain the expected except clause."
+    fi
 fi
 # Always set GIT_CACHE_PATH so the patched fallback in git_cache.py has a value.
 export GIT_CACHE_PATH="${BUILD_DIR}/.gitcache"
@@ -129,24 +138,18 @@ cd "${BUILD_DIR}"
 
 if [ ! -f "${BUILD_DIR}/.gclient" ]; then
     echo "[2/7] Configuring gclient for EmbedPDF fork..."
-    # Write .gclient directly (instead of `gclient config --unmanaged`) so we can
-    # disable the reclient dep. PDFium's DEPS does NOT gate buildtools/reclient
-    # with a checkout_reclient variable — the dep is unconditional — so the only
-    # way to skip it is custom_deps mapped to None. Without this, gclient sync
-    # hard-fails on linux-arm64 runners with "no such package:
-    # infra/rbe/client/linux-arm64" because reclient has no arm64 CIPD build.
-    # download_remoteexec_cfg=False is also set: it gates three DEPS hooks that
-    # fetch remoteexec config from Google's internal CIPD bucket, irrelevant to
-    # standalone builds and unreachable from public CI.
+    # download_remoteexec_cfg=False gates three DEPS hooks that fetch
+    # remoteexec config from Google's internal CIPD bucket, unreachable from
+    # public CI. The buildtools/reclient dep is removed below by patching
+    # DEPS directly — custom_deps in .gclient did not take effect for reasons
+    # unclear (likely a path-prefix mismatch between gclient versions), so we
+    # patch the dep out at the source instead.
     cat > "${BUILD_DIR}/.gclient" <<GCLIENT_EOF
 solutions = [
   {
     "name"        : "pdfium",
     "url"         : "${EMBEDPDF_REPO}",
     "managed"     : False,
-    "custom_deps" : {
-      "pdfium/buildtools/reclient": None,
-    },
     "custom_vars" : {
       "download_remoteexec_cfg": False,
     },
@@ -157,20 +160,16 @@ fi
 
 PDFIUM_SRC="${BUILD_DIR}/pdfium"
 
+# Pre-clone the source manually so we can patch DEPS BEFORE gclient processes
+# the sub-deps. PDFium's DEPS pins buildtools/reclient at
+# infra/rbe/client/<platform>, which has no linux-arm64 CIPD build, so gclient
+# sync hard-fails on arm64 runners with "no such package:
+# infra/rbe/client/linux-arm64". We don't use remote execution anyway
+# (use_remoteexec=false in GN args), so this dep is dead weight on all
+# platforms — strip it out before sync.
 if [ ! -d "${PDFIUM_SRC}/.git" ]; then
-    echo "[2/7] Running gclient sync (this downloads ~10 GB of dependencies)..."
-    gclient sync --no-history --shallow
-else
-    if [ "${ACTION}" = "rebuild" ]; then
-        echo "[2/7] Updating source..."
-        cd "${PDFIUM_SRC}"
-        git fetch origin "${EMBEDPDF_BRANCH}"
-        git checkout "origin/${EMBEDPDF_BRANCH}"
-        cd "${BUILD_DIR}"
-        gclient sync --no-history --shallow
-    else
-        echo "[2/7] Source already checked out."
-    fi
+    echo "[2/7] Pre-cloning source so DEPS can be patched..."
+    git clone --depth=1 --branch "${EMBEDPDF_BRANCH}" "${EMBEDPDF_REPO}" "${PDFIUM_SRC}"
 fi
 
 cd "${PDFIUM_SRC}"
@@ -189,6 +188,66 @@ else
     fi
 fi
 echo "  Commit: $(git log --oneline -1)"
+
+# Patch DEPS to remove the buildtools/reclient dep. PDFium's DEPS hard-pins
+# reclient as an unconditional cipd dep; the platform interpolation
+# (infra/rbe/client/${{platform}}) breaks on linux-arm64 because no arm64
+# package is published, and we don't use remote execution anyway. We tried
+# custom_deps in .gclient (both 'pdfium/buildtools/reclient' and
+# 'buildtools/reclient' as keys) but neither took effect for this gclient
+# version + this DEPS layout. Patching the DEPS file directly is reliable.
+if [ -f DEPS ] && grep -q "'buildtools/reclient'" DEPS; then
+    echo "  Patching DEPS to remove buildtools/reclient dep..."
+    python3 - DEPS <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    lines = f.readlines()
+# Strip the 'buildtools/reclient' dep block. The block contains nested braces
+# (a 'packages': [{...}] list), so a regex with [^{}] won't match across them.
+# Use a brace-counting scan instead: enter skip mode when we see the dep key
+# with a '{', exit when brace depth returns to zero.
+out = []
+skipping = False
+brace_depth = 0
+removed = 0
+for line in lines:
+    if not skipping and "'buildtools/reclient'" in line and ':' in line and '{' in line:
+        skipping = True
+        brace_depth = line.count('{') - line.count('}')
+        continue
+    if skipping:
+        brace_depth += line.count('{') - line.count('}')
+        if brace_depth <= 0:
+            skipping = False
+            removed += 1
+        continue
+    out.append(line)
+if removed == 0:
+    print("  buildtools/reclient block found by grep but brace scan didn't match.")
+    sys.exit(0)
+with open(path, 'w') as f:
+    f.write(''.join(out))
+print(f"  Removed {removed} buildtools/reclient dep block from DEPS.")
+PY_EOF
+fi
+
+# Now run gclient sync. With DEPS patched, cipd ensure won't try to fetch
+# infra/rbe/client/linux-arm64. The source is already cloned, so
+# --managed=False (set in .gclient) means gclient only processes sub-deps.
+cd "${BUILD_DIR}"
+if [ ! -d "${PDFIUM_SRC}/third_party/abseil-cpp" ]; then
+    echo "[2b/7] Running gclient sync (this downloads ~10 GB of dependencies)..."
+    gclient sync --no-history --shallow
+else
+    if [ "${ACTION}" = "rebuild" ]; then
+        echo "[2b/7] Re-syncing sub-deps..."
+        gclient sync --no-history --shallow
+    else
+        echo "[2b/7] Sub-deps already synced."
+    fi
+fi
+cd "${PDFIUM_SRC}"
 
 # ---------- Step 3: Install Linux build deps ----------
 if [ "$(uname -s)" = "Linux" ]; then
