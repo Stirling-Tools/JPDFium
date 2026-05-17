@@ -107,6 +107,22 @@ esac
 # Prevent depot_tools from auto-updating (speeds up repeated runs)
 export DEPOT_TOOLS_UPDATE=0
 
+# depot_tools' git_cache.py shells out to `git` via subprocess.check_output to
+# discover the cache path. On Windows the call raises FileNotFoundError when
+# Python's CreateProcess can't resolve the binary (common cause: depot_tools'
+# git.bat shim is on PATH but not as a literal `git` filename). The upstream
+# except clause only catches CalledProcessError, so the script crashes instead
+# of falling back to the GIT_CACHE_PATH env var. Widen the catch so the
+# fallback works. Harmless on Linux/macOS (the call doesn't raise there).
+GIT_CACHE_PY="${DEPOT_TOOLS_DIR}/git_cache.py"
+if [ -f "${GIT_CACHE_PY}" ] && ! grep -q 'FileNotFoundError' "${GIT_CACHE_PY}"; then
+    sed_i 's/except subprocess.CalledProcessError:/except (subprocess.CalledProcessError, FileNotFoundError):/' "${GIT_CACHE_PY}"
+    echo "  Patched depot_tools/git_cache.py to also catch FileNotFoundError."
+fi
+# Always set GIT_CACHE_PATH so the patched fallback in git_cache.py has a value.
+export GIT_CACHE_PATH="${BUILD_DIR}/.gitcache"
+mkdir -p "${GIT_CACHE_PATH}"
+
 # ---------- Step 2: gclient checkout ----------
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
@@ -114,20 +130,24 @@ cd "${BUILD_DIR}"
 if [ ! -f "${BUILD_DIR}/.gclient" ]; then
     echo "[2/7] Configuring gclient for EmbedPDF fork..."
     # Write .gclient directly (instead of `gclient config --unmanaged`) so we can
-    # disable reclient and remoteexec config download via custom_vars. Reclient
-    # has no linux-arm64 build published in CIPD, so gclient sync hard-fails on
-    # arm64 runners without this override. download_remoteexec_cfg is irrelevant
-    # to standalone builds and pulls config from Google's internal CIPD bucket
-    # that isn't reachable from public CI.
+    # disable the reclient dep. PDFium's DEPS does NOT gate buildtools/reclient
+    # with a checkout_reclient variable — the dep is unconditional — so the only
+    # way to skip it is custom_deps mapped to None. Without this, gclient sync
+    # hard-fails on linux-arm64 runners with "no such package:
+    # infra/rbe/client/linux-arm64" because reclient has no arm64 CIPD build.
+    # download_remoteexec_cfg=False is also set: it gates three DEPS hooks that
+    # fetch remoteexec config from Google's internal CIPD bucket, irrelevant to
+    # standalone builds and unreachable from public CI.
     cat > "${BUILD_DIR}/.gclient" <<GCLIENT_EOF
 solutions = [
   {
     "name"        : "pdfium",
     "url"         : "${EMBEDPDF_REPO}",
     "managed"     : False,
-    "custom_deps" : {},
+    "custom_deps" : {
+      "pdfium/buildtools/reclient": None,
+    },
     "custom_vars" : {
-      "checkout_reclient": False,
       "download_remoteexec_cfg": False,
     },
   },
