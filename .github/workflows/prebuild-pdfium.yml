@@ -93,13 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # TEMPORARILY DISABLED during publishing-setup bring-up: linux-x64,
-          # darwin-x64, darwin-arm64 are confirmed green and re-running them
-          # on every iteration costs ~17 min per round. Re-enable all five
-          # rows once linux-arm64 + windows-x64 also pass — the final release
-          # job needs all five tarballs (the Sanity check in the release job
-          # explicitly checks for each platform).
-          # - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64   }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64   }
           # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
           # an "Exec format error" because Chromium's bundled clang for arm64
           # hosts isn't usable in this PDFium revision — the binary in
@@ -110,8 +104,8 @@ jobs:
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64 }
           # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
-          # - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64   }
-          # - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64 }
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64   }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64 }
           - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64   }
     runs-on: ${{ matrix.runner }}
     defaults:
@@ -176,13 +170,7 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    # TEMPORARILY GATED on workflow_dispatch during publishing-setup bring-up:
-    # the matrix is reduced to the two platforms still being fixed, so the
-    # Sanity check's "all five tarballs present" assertion would fail every
-    # push and mask whether the actual builds succeeded. Re-enable for push
-    # events by changing this to `github.event_name != 'pull_request'` (or
-    # similar) once all five matrix rows are passing.
-    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true' && github.event_name == 'workflow_dispatch'
+    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
