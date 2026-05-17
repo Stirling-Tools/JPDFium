@@ -346,11 +346,14 @@ fi
 # matching sysroot for arm64 system libraries. Toggle use_sysroot=true and
 # explicitly invoke install-sysroot.py — gclient sync's hooks don't pull
 # the arm64 sysroot unless target_cpu is in the .gclient (it's only in
-# GN args here), so we trigger it manually. linux-x64 native build keeps
-# use_sysroot=false.
+# GN args here), so we trigger it manually. Also force use_custom_libcxx=true
+# because the cross-compile build can't find libc++ module headers (e.g.
+# `__configuration/abi.h`) when using the system libc++ search paths. Native
+# linux-x64 keeps use_sysroot=false / use_custom_libcxx=false (system libs).
 if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
     GN_ARGS="${GN_ARGS/use_sysroot=false/use_sysroot=true}"
-    echo "  Linux arm64 cross-compile: use_sysroot=true (Chromium hermetic sysroot)"
+    GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
+    echo "  Linux arm64 cross-compile: use_sysroot=true, use_custom_libcxx=true"
     if [ -f build/linux/sysroot_scripts/install-sysroot.py ]; then
         echo "  Installing arm64 sysroot..."
         python3 build/linux/sysroot_scripts/install-sysroot.py --arch=arm64
@@ -359,13 +362,17 @@ if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
     fi
 fi
 
-# On Windows, depot_tools needs to populate python3_bin_reldir.txt before
-# gn can use its python3 wrapper. The first invocation of any depot_tools
-# command normally triggers bootstrap, but DEPOT_TOOLS_UPDATE=0 (which we
-# set above for speed) suppresses it. Force initialization here by running
-# a no-op gclient command with UPDATE temporarily re-enabled.
+# Windows has no system libc++, so use_custom_libcxx=false produces broken
+# component builds — abseil-cpp.dll fails to link with undefined symbols on
+# std::__Cr::basic_string template instantiations because the libc++ DLL
+# doesn't export them when built in "use system libc++" mode. Force
+# use_custom_libcxx=true so Chromium builds and exports its own libc++.
+# Also initialize depot_tools' python3 wrapper (writes python3_bin_reldir.txt)
+# which gn needs before it can call any python3 build step.
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
+        GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
+        echo "  Windows: use_custom_libcxx=true"
         echo "  Initializing depot_tools python3 wrapper on Windows..."
         DEPOT_TOOLS_UPDATE=1 gclient --version 2>&1 || true
         ;;
