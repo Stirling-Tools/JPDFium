@@ -118,10 +118,22 @@ if(JPDFIUM_USE_PDFIUM)
         endif()
     endif()
 
-    # Link the static library with --whole-archive so Rust #[no_mangle] symbols
-    # are preserved (they are called from Java/FFM, not from C++ code).
-    target_link_libraries(jpdfium PRIVATE
-        -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
+    # Link the static library with whole-archive semantics so Rust #[no_mangle]
+    # symbols are preserved (they are called from Java/FFM, not from C++ code).
+    # GNU ld and lld use --whole-archive/--no-whole-archive bracketing; Apple's
+    # ld64 uses -force_load <path> (no bracketing — applies per-archive); MSVC
+    # link.exe uses /WHOLEARCHIVE:<file>.
+    if(APPLE)
+        target_link_libraries(jpdfium PRIVATE
+            -Wl,-force_load,"${RUST_LIB}")
+    elseif(MSVC)
+        target_link_libraries(jpdfium PRIVATE
+            "${RUST_LIB}"
+            "/WHOLEARCHIVE:${RUST_LIB}")
+    else()
+        target_link_libraries(jpdfium PRIVATE
+            -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
+    endif()
     # On Linux, Rust staticlibs need these system libraries.
     if(JPDFIUM_OS STREQUAL "linux")
         target_link_libraries(jpdfium PRIVATE dl pthread m)
