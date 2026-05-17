@@ -353,7 +353,15 @@ fi
 if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
     GN_ARGS="${GN_ARGS/use_sysroot=false/use_sysroot=true}"
     GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
-    echo "  Linux arm64 cross-compile: use_sysroot=true, use_custom_libcxx=true"
+    # Disable AArch64 Branch Target Identification. The default Chromium
+    # arm64 link adds `-Wl,-z,force-bti`, which requires every input object
+    # to have the GNU_PROPERTY_AARCH64_FEATURE_1_BTI marker. The Debian
+    # Bullseye arm64 sysroot's CRT objects (crti.o, crtn.o, crtbeginS.o,
+    # crtendS.o) were compiled before BTI was widely adopted and lack that
+    # property, so SOLINK of libc++.so fails. Disabling BTI matches what
+    # bblanchon/pdfium-binaries does for arm64.
+    GN_ARGS="${GN_ARGS} arm_control_flow_integrity=\"none\""
+    echo "  Linux arm64 cross-compile: use_sysroot=true, use_custom_libcxx=true, BTI off"
     if [ -f build/linux/sysroot_scripts/install-sysroot.py ]; then
         echo "  Installing arm64 sysroot..."
         python3 build/linux/sysroot_scripts/install-sysroot.py --arch=arm64
