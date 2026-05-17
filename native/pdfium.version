@@ -15,3 +15,5 @@
 # Subsequent updates: the weekly cron in `Prebuild PDFium` auto-opens a PR
 # bumping this pin when EmbedPDF's fork HEAD moves. Review release notes and
 # merge when you want the new version to take effect.
+
+pdfium-20260517-ef8389f
