@@ -128,9 +128,21 @@ if [ -f "${GIT_CACHE_PY}" ]; then
         echo "  WARNING: depot_tools/git_cache.py did not contain the expected except clause."
     fi
 fi
-# Always set GIT_CACHE_PATH so the patched fallback in git_cache.py has a value.
-export GIT_CACHE_PATH="${BUILD_DIR}/.gitcache"
-mkdir -p "${GIT_CACHE_PATH}"
+# On Windows, set GIT_CACHE_PATH to empty string. The patched git_cache.py
+# returns this as the cachepath, which is falsy — gclient_scm's _GetMirror
+# then sees no cache and falls back to direct clones, sidestepping the
+# depot_tools git.bat shim which cmd.exe child processes can't resolve
+# from bash's exported PATH. On Linux/macOS, use a real cache dir for sync
+# performance.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        export GIT_CACHE_PATH=""
+        ;;
+    *)
+        export GIT_CACHE_PATH="${BUILD_DIR}/.gitcache"
+        mkdir -p "${GIT_CACHE_PATH}"
+        ;;
+esac
 
 # ---------- Step 2: gclient checkout ----------
 mkdir -p "${BUILD_DIR}"
@@ -322,10 +334,21 @@ OUT_DIR="out/Release"
 GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
 
 # Honor TARGET_CPU for cross-compile builds (e.g. darwin-x64 from macos-14
-# arm64 runner). Defaults to host CPU when unset.
+# arm64 runner, or linux-arm64 from ubuntu-latest x64 runner). Defaults to
+# host CPU when unset.
 if [ -n "${TARGET_CPU:-}" ]; then
     GN_ARGS="${GN_ARGS} target_cpu=\"${TARGET_CPU}\""
-    echo "  Cross-compile target_cpu: ${TARGET_CPU}"
+    echo "  target_cpu: ${TARGET_CPU}"
+fi
+
+# For Linux arm64 cross-compile from x64 host, the bundled Chromium clang
+# acts as a cross-compiler (--target=aarch64-linux-gnu), but it needs a
+# matching sysroot for arm64 system libraries. Toggle use_sysroot=true so
+# Chromium pulls its hermetic Debian Bullseye arm64 sysroot during the hook
+# stage of gclient sync. linux-x64 native build keeps use_sysroot=false.
+if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
+    GN_ARGS="${GN_ARGS/use_sysroot=false/use_sysroot=true}"
+    echo "  Linux arm64 cross-compile: use_sysroot=true (Chromium hermetic sysroot)"
 fi
 
 gn gen "${OUT_DIR}" --args="${GN_ARGS}"

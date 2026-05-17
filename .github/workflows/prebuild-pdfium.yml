@@ -94,7 +94,14 @@ jobs:
       matrix:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64   }
-          - { platform: linux-arm64,  runner: ubuntu-24.04-arm,  target_cpu: arm64 }
+          # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
+          # an "Exec format error" because Chromium's bundled clang for arm64
+          # hosts isn't usable in this PDFium revision — the binary in
+          # third_party/llvm-build/.../bin/clang is x86_64 even on arm64 runners.
+          # Cross-compiling from x64 with target_cpu=arm64 uses the x64 clang
+          # binary with --target=aarch64-linux-gnu, which works. This is also
+          # how bblanchon/pdfium-binaries handles linux-arm64.
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64 }
           # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64   }
