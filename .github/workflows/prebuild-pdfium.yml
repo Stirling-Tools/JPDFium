@@ -93,11 +93,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest }
-          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-13 }
-          - { platform: darwin-arm64, runner: macos-14 }
-          - { platform: windows-x64,  runner: windows-latest }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64   }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm,  target_cpu: arm64 }
+          # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
+          # free runner is constrained to the point of 24h queue timeouts.
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64   }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64 }
+          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64   }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -119,14 +121,29 @@ jobs:
         if: matrix.platform == 'windows-x64'
         run: choco install -y cmake ninja python3
 
+      - name: Configure Windows depot_tools environment
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          # depot_tools git_cache.py shells out via Python subprocess. Python's
+          # CreateProcess on Windows can't resolve .bat shims without shell=True,
+          # so the real Git-for-Windows git.exe must precede depot_tools' git.bat
+          # on PATH. setup-pdfium.sh handles PATH ordering internally, but
+          # GITHUB_PATH needs git.exe up front for actions before the script.
+          echo "C:\\Program Files\\Git\\cmd" >> "$GITHUB_PATH"
+          # Avoid depot_tools trying to pull Google's internal VS toolchain.
+          echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> "$GITHUB_ENV"
+
       - name: Build PDFium at pinned SHA
         env:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
+          TARGET_CPU: ${{ matrix.target_cpu }}
         run: |
           # Override the branch pointer used by setup-pdfium.sh so every
           # matrix job builds the exact same commit even if embedpdf/main
           # moves while the matrix is running.
           export EMBEDPDF_PIN_SHA="$PINNED_SHA"
+          export TARGET_CPU="$TARGET_CPU"
           bash native/setup-pdfium.sh
 
       - name: Package artifacts

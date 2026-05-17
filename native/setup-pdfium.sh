@@ -84,7 +84,22 @@ if [ ! -d "${DEPOT_TOOLS_DIR}" ]; then
 else
     echo "[1/7] depot_tools already present."
 fi
-export PATH="${DEPOT_TOOLS_DIR}:${PATH}"
+# PATH ordering matters on Windows: depot_tools ships git.bat shims that
+# Python's subprocess.CreateProcess can't resolve (no PATHEXT lookup without
+# shell=True). Keep the real Git-for-Windows git.exe ahead of depot_tools'
+# git.bat so depot_tools' internal subprocess calls (e.g. git_cache.py
+# GetCachePath) succeed. On other OSes, depot_tools should win.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        export PATH="${PATH}:${DEPOT_TOOLS_DIR}"
+        # depot_tools tries to fetch Google's bundled VS toolchain by default —
+        # not available outside Google, breaks the Windows build.
+        export DEPOT_TOOLS_WIN_TOOLCHAIN=0
+        ;;
+    *)
+        export PATH="${DEPOT_TOOLS_DIR}:${PATH}"
+        ;;
+esac
 
 # Bootstrap depot_tools (downloads bundled Python, cipd, etc.)
 (cd "${DEPOT_TOOLS_DIR}" && bash ensure_bootstrap 2>/dev/null || true)
@@ -98,7 +113,26 @@ cd "${BUILD_DIR}"
 
 if [ ! -f "${BUILD_DIR}/.gclient" ]; then
     echo "[2/7] Configuring gclient for EmbedPDF fork..."
-    gclient config --unmanaged "${EMBEDPDF_REPO}"
+    # Write .gclient directly (instead of `gclient config --unmanaged`) so we can
+    # disable reclient and remoteexec config download via custom_vars. Reclient
+    # has no linux-arm64 build published in CIPD, so gclient sync hard-fails on
+    # arm64 runners without this override. download_remoteexec_cfg is irrelevant
+    # to standalone builds and pulls config from Google's internal CIPD bucket
+    # that isn't reachable from public CI.
+    cat > "${BUILD_DIR}/.gclient" <<GCLIENT_EOF
+solutions = [
+  {
+    "name"        : "pdfium",
+    "url"         : "${EMBEDPDF_REPO}",
+    "managed"     : False,
+    "custom_deps" : {},
+    "custom_vars" : {
+      "checkout_reclient": False,
+      "download_remoteexec_cfg": False,
+    },
+  },
+]
+GCLIENT_EOF
 fi
 
 PDFIUM_SRC="${BUILD_DIR}/pdfium"
@@ -208,6 +242,13 @@ OUT_DIR="out/Release"
 # that already manages its own heap.
 GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
 
+# Honor TARGET_CPU for cross-compile builds (e.g. darwin-x64 from macos-14
+# arm64 runner). Defaults to host CPU when unset.
+if [ -n "${TARGET_CPU:-}" ]; then
+    GN_ARGS="${GN_ARGS} target_cpu=\"${TARGET_CPU}\""
+    echo "  Cross-compile target_cpu: ${TARGET_CPU}"
+fi
+
 gn gen "${OUT_DIR}" --args="${GN_ARGS}"
 
 # ---------- Step 6: Build ----------
@@ -219,10 +260,38 @@ ninja -C "${OUT_DIR}" pdfium -j "${NPROC}"
 echo "[7/7] Installing to ${TARGET_DIR}..."
 mkdir -p "${TARGET_DIR}/include" "${TARGET_DIR}/lib"
 
-# Component build produces libpdfium.so plus its dependency .so files.
+# Component build produces a main library plus its dependencies. Extensions
+# differ by OS: .so on Linux, .dylib on macOS, .dll on Windows. Filenames
+# differ too: Linux/macOS use the lib prefix, Windows does not.
+case "$(uname -s)" in
+    Linux*)
+        LIB_EXT="so"
+        MAIN_LIB="libpdfium.so"
+        ;;
+    Darwin*)
+        LIB_EXT="dylib"
+        MAIN_LIB="libpdfium.dylib"
+        ;;
+    MINGW*|MSYS*|CYGWIN*)
+        LIB_EXT="dll"
+        MAIN_LIB="pdfium.dll"
+        ;;
+    *)
+        echo "ERROR: Unsupported OS for install step: $(uname -s)" >&2
+        exit 1
+        ;;
+esac
+
 # Copy all shared libraries from the output directory.
-cp "${OUT_DIR}"/lib*.so "${TARGET_DIR}/lib/"
-LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"lib*.so 2>/dev/null | wc -l)"
+if [ "${LIB_EXT}" = "dll" ]; then
+    # Windows: pdfium.dll plus dependency DLLs and their import libraries.
+    cp "${OUT_DIR}"/*.dll "${TARGET_DIR}/lib/"
+    cp "${OUT_DIR}"/*.dll.lib "${TARGET_DIR}/lib/" 2>/dev/null || true
+    LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"*.dll 2>/dev/null | wc -l)"
+else
+    cp "${OUT_DIR}"/lib*."${LIB_EXT}" "${TARGET_DIR}/lib/"
+    LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"lib*."${LIB_EXT}" 2>/dev/null | wc -l)"
+fi
 echo "  Copied ${LIB_COUNT} shared libraries -> ${TARGET_DIR}/lib/"
 
 # Copy public headers
@@ -230,15 +299,37 @@ cp public/*.h "${TARGET_DIR}/include/"
 HEADER_COUNT="$(ls -1 public/*.h | wc -l)"
 echo "  Copied ${HEADER_COUNT} headers -> ${TARGET_DIR}/include/"
 
-# Verify EPDF symbols are exported
-EPDF_COUNT="$(nm -D "${TARGET_DIR}/lib/libpdfium.so" 2>/dev/null | grep -c ' T.*EPDF' || true)"
-FPDF_COUNT="$(nm -D "${TARGET_DIR}/lib/libpdfium.so" 2>/dev/null | grep -c ' T.*FPDF' || true)"
+MAIN_LIB_PATH="${TARGET_DIR}/lib/${MAIN_LIB}"
+if [ ! -f "${MAIN_LIB_PATH}" ]; then
+    echo "  ERROR: Main library not found at ${MAIN_LIB_PATH}" >&2
+    exit 1
+fi
+echo "  Main library: ${MAIN_LIB_PATH}"
+
+# Verify EPDF symbols are exported. nm flags differ by OS:
+#   Linux: nm -D (dynamic symbols)
+#   macOS: nm -gU (external defined symbols; macOS prefixes underscores)
+#   Windows: dumpbin /exports (if available) — skip otherwise.
+case "$(uname -s)" in
+    Linux*)
+        EPDF_COUNT="$(nm -D "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*EPDF' || true)"
+        FPDF_COUNT="$(nm -D "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*FPDF' || true)"
+        ;;
+    Darwin*)
+        EPDF_COUNT="$(nm -gU "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}EPDF' || true)"
+        FPDF_COUNT="$(nm -gU "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}FPDF' || true)"
+        ;;
+    *)
+        EPDF_COUNT="(skipped on $(uname -s))"
+        FPDF_COUNT="(skipped on $(uname -s))"
+        ;;
+esac
 echo ""
 echo "  Symbol verification:"
 echo "    EPDF_* symbols: ${EPDF_COUNT}"
 echo "    FPDF_* symbols: ${FPDF_COUNT}"
 
-if [ "${EPDF_COUNT}" -eq 0 ]; then
+if [ "${EPDF_COUNT}" = "0" ]; then
     echo ""
     echo "  WARNING: No EPDF_* symbols found! The build may not include EmbedPDF extensions."
     echo "  Make sure you are on the embedpdf/main branch."
