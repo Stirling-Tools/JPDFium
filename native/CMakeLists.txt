@@ -102,9 +102,15 @@ if(JPDFIUM_USE_PDFIUM)
             "or run: bash native/build-rust.sh")
     endif()
 
-    # Build the Rust static library. If the .a already exists, skip the build
-    # (build-real.sh runs cargo build --release before invoking cmake).
-    set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/libjpdfium_rust.a")
+    # Build the Rust static library. If the staticlib already exists, skip
+    # the build (build-real.sh runs cargo build --release before invoking
+    # cmake). Cargo's output name differs by toolchain: GNU-style targets
+    # produce libjpdfium_rust.a, MSVC produces jpdfium_rust.lib.
+    if(MSVC)
+        set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/jpdfium_rust.lib")
+    else()
+        set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/libjpdfium_rust.a")
+    endif()
     if(NOT EXISTS "${RUST_LIB}")
         message(STATUS "Building Rust static library...")
         execute_process(
