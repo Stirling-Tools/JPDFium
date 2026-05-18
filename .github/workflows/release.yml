@@ -34,9 +34,8 @@ jobs:
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             shell: bash
-          - platform: darwin-x64
-            runner: macos-13
-            shell: bash
+          # TODO: darwin-x64 dropped — macos-13 free runner queues for 24h+.
+          # Restore once cross-compile from macos-14 is set up.
           - platform: darwin-arm64
             runner: macos-14
             shell: bash

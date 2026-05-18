@@ -20,7 +20,8 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-13 }
+          # TODO: darwin-x64 dropped — macos-13 free runner queues for 24h+.
+          # Restore once cross-compile from macos-14 is set up or macos-13-large is in budget.
           - { platform: darwin-arm64, runner: macos-14 }
           - { platform: windows-x64,  runner: windows-latest }
     runs-on: ${{ matrix.runner }}
@@ -131,7 +132,6 @@ jobs:
             :jpdfium-spring:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-linux-x64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-linux-arm64:publishAllPublicationsToCentralPortalRepository \
-            :jpdfium-natives:jpdfium-natives-darwin-x64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToCentralPortalRepository \
             --no-daemon --stacktrace

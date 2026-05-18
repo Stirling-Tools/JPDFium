@@ -192,9 +192,20 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::PUGIXML)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PUGIXML)
 
-    # libunibreak - grapheme cluster boundaries
-    pkg_check_modules(UNIBREAK REQUIRED IMPORTED_TARGET libunibreak)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::UNIBREAK)
+    # libunibreak - grapheme cluster boundaries. vcpkg's port ships a CMake
+    # config but not a .pc file, so on Windows the pkg_check_modules lookup
+    # fails. Fall back to find_library / find_path when pkg-config can't
+    # locate it.
+    pkg_check_modules(UNIBREAK IMPORTED_TARGET libunibreak)
+    if(UNIBREAK_FOUND)
+        target_link_libraries(jpdfium PRIVATE PkgConfig::UNIBREAK)
+    else()
+        find_library(UNIBREAK_LIB NAMES unibreak libunibreak REQUIRED)
+        find_path(UNIBREAK_INCLUDE_DIR NAMES unibreakdef.h linebreak.h REQUIRED)
+        target_link_libraries(jpdfium PRIVATE "${UNIBREAK_LIB}")
+        target_include_directories(jpdfium PRIVATE "${UNIBREAK_INCLUDE_DIR}")
+        message(STATUS "  libunibreak (find_library fallback): ${UNIBREAK_LIB}")
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_UNIBREAK)
 
     message(STATUS "JPDFium native libraries: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak")

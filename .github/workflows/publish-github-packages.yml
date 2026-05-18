@@ -26,7 +26,10 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-13 }
+          # TODO: darwin-x64 (Intel Mac). The macos-13 free runner pool has
+          # 24h+ queues; cross-compiling x86_64 from macos-14 requires x64
+          # builds of pcre2/freetype/harfbuzz/icu/qpdf/pugixml/libunibreak
+          # which Homebrew doesn't ship dual-arch. Defer to a follow-up.
           - { platform: darwin-arm64, runner: macos-14 }
           - { platform: windows-x64,  runner: windows-latest }
     runs-on: ${{ matrix.runner }}
@@ -175,7 +178,6 @@ jobs:
             :jpdfium-spring:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-linux-x64:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-linux-arm64:publishAllPublicationsToGithubPackagesRepository \
-            :jpdfium-natives:jpdfium-natives-darwin-x64:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToGithubPackagesRepository \
             -Pjpdfium.version=${{ steps.v.outputs.version }} \
