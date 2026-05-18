@@ -80,15 +80,18 @@ jobs:
           find native/build-real -maxdepth 3 -type f \( \
                 -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
              \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
-          # Component-built PDFium ships ~5 dependency libs alongside the main
-          # lib. Copy them all — System.load fails otherwise with
-          # "Can't find dependent libraries" on Windows / equivalent on Linux/macOS.
+          # Component-built PDFium siblings (libabsl, icuuc, libpng, libc++ ...).
+          # Filter out Windows debug helpers that PDFium's gn build pulls into
+          # out/Release/ (dbghelp.dll, msdia140.dll, symsrv.dll, dbgcore.dll,
+          # vccorlib140.dll) — not runtime deps, ~5 MB of waste.
           if [ -d native/pdfium/lib ]; then
-            cp -v native/pdfium/lib/*.dll \
-                  native/pdfium/lib/lib*.so \
-                  native/pdfium/lib/lib*.so.* \
-                  native/pdfium/lib/lib*.dylib \
-                  native/dist/${{ matrix.platform }}/ 2>/dev/null || true
+            find native/pdfium/lib -maxdepth 1 -type f \( \
+                  -name '*.dll' -o -name 'lib*.so' -o -name 'lib*.so.*' -o -name 'lib*.dylib' \
+               \) \
+               ! -name 'dbghelp.dll' ! -name 'dbgcore.dll' \
+               ! -name 'msdia*.dll'   ! -name 'symsrv.dll' \
+               ! -name 'vccorlib*.dll' \
+               -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
           # Bridge runtime deps — walk the bridge's import table and copy
           # only what's actually referenced, skipping system libs. Also

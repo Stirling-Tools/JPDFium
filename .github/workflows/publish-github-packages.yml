@@ -98,12 +98,18 @@ jobs:
              \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           # PDFium component-build dependencies (libabsl, icuuc, libpng, libc++ ...).
           # System.load on pdfium.dll fails otherwise: "Can't find dependent libraries".
+          # Filter out Windows debug helpers that PDFium's gn build picks up
+          # from the MSVC install dir (dbghelp.dll, msdia140.dll, symsrv.dll,
+          # dbgcore.dll, vccorlib140.dll) — they're not runtime deps, just
+          # Chromium-style symbol-collection scaffolding, and add ~5 MB.
           if [ -d native/pdfium/lib ]; then
-            cp -v native/pdfium/lib/*.dll \
-                  native/pdfium/lib/lib*.so \
-                  native/pdfium/lib/lib*.so.* \
-                  native/pdfium/lib/lib*.dylib \
-                  native/dist/${{ matrix.platform }}/ 2>/dev/null || true
+            find native/pdfium/lib -maxdepth 1 -type f \( \
+                  -name '*.dll' -o -name 'lib*.so' -o -name 'lib*.so.*' -o -name 'lib*.dylib' \
+               \) \
+               ! -name 'dbghelp.dll' ! -name 'dbgcore.dll' \
+               ! -name 'msdia*.dll'   ! -name 'symsrv.dll' \
+               ! -name 'vccorlib*.dll' \
+               -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
           # Bridge's own dynamic deps — pcre2-8, freetype, harfbuzz, icu, qpdf,
           # pugixml, libunibreak + transitive deps. bundle-runtime-deps.sh

@@ -69,16 +69,12 @@ bundle_linux() {
         done < <(ldd "$target" 2>/dev/null || true)
     done
 
-    # libicuuc et al. use SONAME like libicuuc.so.74 with a symlink to the
-    # versioned file. ldd resolves to the symlink target, but the bridge's
-    # NEEDED entry refers to the SONAME. Make sure both names are present.
-    for f in "$DIST_DIR"/*.so.*; do
-        [ -e "$f" ] || continue
-        local short="${f%.so.*}.so"
-        if [ ! -e "$short" ] && [ -e "$f" ]; then
-            cp "$f" "$short"
-        fi
-    done
+    # NOTE: deliberately NOT creating libfoo.so unversioned aliases for the
+    # bundled SONAME-versioned files. The bridge's NEEDED entries reference
+    # SONAMEs like libicudata.so.74 — that's what the runtime loader looks
+    # up. Unversioned libfoo.so is a compile-time linker convention that
+    # nothing needs at runtime. Skipping the alias copies saves the jar
+    # 30+ MB on Linux (icudata, gnutls, unistring, p11-kit, libqpdf, etc.).
 
     # Linux's dynamic loader does NOT propagate DT_RUNPATH transitively (this
     # is a deliberate security restriction). The bridge already has
