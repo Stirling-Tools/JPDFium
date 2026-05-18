@@ -38,8 +38,8 @@ bundle_linux() {
     local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+|ld-linux)\.so'
 
     # Recursive walk: queue of files to process; each file's ldd output gets
-    # filtered and unseen entries get copied + queued.
-    declare -A seen
+    # filtered and uncopied entries get copied + queued. We use file-existence
+    # in DIST_DIR as the "seen" check so this works under bash 3.2 (macOS) too.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
@@ -62,9 +62,8 @@ bundle_linux() {
             local base
             base=$(basename "$path")
             local dest="$DIST_DIR/$base"
-            if [ -z "${seen[$base]:-}" ] && [ ! -e "$dest" ]; then
+            if [ ! -e "$dest" ]; then
                 cp -v "$path" "$dest"
-                seen[$base]=1
                 queue+=("$dest")
             fi
         done < <(ldd "$target" 2>/dev/null || true)
@@ -102,43 +101,46 @@ bundle_macos() {
     local bridge="$DIST_DIR/libjpdfium.dylib"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib to bundle for"; return 0; }
 
-    declare -A seen
+    # Use file existence in DIST_DIR as the "seen" marker — works under macOS'
+    # bash 3.2 (which lacks declare -A) without needing brewed bash on PATH.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
         queue=("${queue[@]:1}")
 
-        # otool -L output: first line is the file itself, then deps:
-        #   /opt/homebrew/lib/libfoo.dylib (compatibility version ...)
+        # otool -L output: first line is the file itself, then deps. Pipe
+        # protected with || true so bridges with zero non-system deps (or any
+        # otool exit oddity) don't trip set -o pipefail.
         local deps
-        deps=$(otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}')
+        deps=$(otool -L "$target" 2>/dev/null | tail -n +2 | awk '{print $1}' || true)
+        [ -z "$deps" ] && continue
+
         while IFS= read -r dep; do
             [ -z "$dep" ] && continue
             case "$dep" in
-                # System libs are always present and code-signed; skip.
-                /System/*|/usr/lib/*) continue;;
-                # @rpath / @loader_path / @executable_path entries are already
-                # relative; nothing to rewrite.
-                @*) continue;;
+                /System/*|/usr/lib/*) continue;;  # always present, signed
+                @*) continue;;                    # already relative
             esac
             [ -f "$dep" ] || continue
 
             local base
             base=$(basename "$dep")
             local dest="$DIST_DIR/$base"
-            if [ -z "${seen[$base]:-}" ]; then
-                if [ ! -e "$dest" ]; then
-                    cp -v "$dep" "$dest"
-                fi
-                chmod u+w "$dest"
-                # Rewrite the lib's own id so consumers reference it via
-                # @loader_path (otherwise they'd carry the original abs path).
+            local is_new=0
+            if [ ! -e "$dest" ]; then
+                cp -v "$dep" "$dest"
+                is_new=1
+            fi
+            # Always ensure writability for install_name_tool (brew dylibs
+            # come copied as 0644 owned by the runner, but better safe).
+            chmod u+w "$dest" 2>/dev/null || true
+            if [ "$is_new" = "1" ]; then
+                # Set the lib's own id to @loader_path so anything linking
+                # against it carries the relative reference.
                 install_name_tool -id "@loader_path/$base" "$dest" 2>/dev/null || true
-                seen[$base]=1
                 queue+=("$dest")
             fi
-            # Rewrite the dependency reference in the consumer (target) to
-            # use the bundled copy.
+            # Rewrite the consumer (target)'s dep reference to the bundled copy.
             install_name_tool -change "$dep" "@loader_path/$base" "$target" 2>/dev/null || true
         done <<<"$deps"
     done
