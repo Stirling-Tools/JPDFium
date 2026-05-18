@@ -79,9 +79,17 @@ jobs:
           find native/build-real -maxdepth 3 -type f \( \
                 -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
              \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
-          find native/pdfium/lib native/pdfium -maxdepth 3 -type f \( \
-                -name 'libpdfium.*' -o -name 'pdfium.dll' \
-             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \; 2>/dev/null || true
+          # Component-built PDFium ships ~5 dependency libs alongside the main
+          # lib. Copy them all — System.load fails otherwise with
+          # "Can't find dependent libraries" on Windows / equivalent on Linux/macOS.
+          if [ -d native/pdfium/lib ]; then
+            cp -v native/pdfium/lib/*.dll \
+                  native/pdfium/lib/lib*.so \
+                  native/pdfium/lib/lib*.so.* \
+                  native/pdfium/lib/lib*.dylib \
+                  native/dist/${{ matrix.platform }}/ 2>/dev/null || true
+          fi
+          ls -la native/dist/${{ matrix.platform }}/
 
       - uses: actions/upload-artifact@v4
         with:
