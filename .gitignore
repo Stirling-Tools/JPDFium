@@ -6,7 +6,7 @@ gradle-app.setting
 .gradletasknamecache
 local.properties
 
-gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
 
 .idea/
