@@ -2,7 +2,7 @@ name: Snapshot to Central Portal
 
 on:
   push:
-    branches: [main]
+    branches: [main, publishing-setup]   # publishing-setup temporary, for bring-up testing
   workflow_dispatch: {}
 
 permissions:
