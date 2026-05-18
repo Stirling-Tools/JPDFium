@@ -64,12 +64,18 @@ jobs:
       - name: Install build deps (Windows)
         if: matrix.platform == 'windows-x64'
         run: |
-          choco install -y cmake ninja
+          choco install -y cmake ninja pkgconfiglite
           # vcpkg ships preinstalled on windows-latest; pick up the libs we need.
           vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
                         icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
                         libunibreak:x64-windows
-          echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> "$GITHUB_ENV"
+          # CMakeLists.txt uses pkg_check_modules for these libs (same code path
+          # as Linux/macOS). Point PKG_CONFIG_PATH at vcpkg's generated .pc
+          # files so the lookups resolve.
+          {
+            echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)
         env:

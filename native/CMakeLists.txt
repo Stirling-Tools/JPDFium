@@ -134,9 +134,26 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
     endif()
-    # On Linux, Rust staticlibs need these system libraries.
+    # Rust staticlibs don't carry their own platform system-lib dependencies —
+    # the consuming target has to supply them.
     if(JPDFIUM_OS STREQUAL "linux")
         target_link_libraries(jpdfium PRIVATE dl pthread m)
+    elseif(APPLE)
+        # CoreFoundation: iana-time-zone calls CFRelease / CFCopyTimeZone etc.
+        # Security + SystemConfiguration: pulled by common TLS/network crates.
+        find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+        find_library(SECURITY_FRAMEWORK Security)
+        find_library(SYSTEMCONFIGURATION_FRAMEWORK SystemConfiguration)
+        target_link_libraries(jpdfium PRIVATE
+            ${COREFOUNDATION_FRAMEWORK}
+            ${SECURITY_FRAMEWORK}
+            ${SYSTEMCONFIGURATION_FRAMEWORK})
+    elseif(WIN32)
+        # Rust crates link these via #[link] / #pragma comment, but staticlibs
+        # need them at the consumer level. ws2_32 (sockets), userenv (env vars),
+        # bcrypt + ncrypt (crypto), advapi32 (registry), ntdll (low-level).
+        target_link_libraries(jpdfium PRIVATE
+            ws2_32 userenv bcrypt ncrypt advapi32 ntdll)
     endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_RUST)
     message(STATUS "Rust integration: lopdf + zopfli + oxipng + fast_image_resize")
