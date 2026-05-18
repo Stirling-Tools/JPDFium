@@ -61,7 +61,8 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
-            libqpdf-dev libpugixml-dev libunibreak-dev
+            libqpdf-dev libpugixml-dev libunibreak-dev \
+            patchelf
 
       - name: Install build deps (macOS)
         if: startsWith(matrix.platform, 'darwin-')
@@ -108,10 +109,13 @@ jobs:
                   native/pdfium/lib/lib*.dylib \
                   native/dist/${{ matrix.platform }}/ 2>/dev/null || true
           fi
-          # Bridge's own dynamic dependencies — on Windows they're vcpkg DLLs.
+          # Bridge's own dynamic dependencies — bundle so users don't need
+          # apt/brew installs at runtime.
           if [ "${{ matrix.platform }}" = "windows-x64" ] && [ -n "$VCPKG_INSTALLATION_ROOT" ]; then
             cp -v "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll \
                   native/dist/${{ matrix.platform }}/ 2>/dev/null || true
+          else
+            bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           fi
           echo "--- staged ---"
           ls -la native/dist/${{ matrix.platform }}/

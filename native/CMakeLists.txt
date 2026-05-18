@@ -236,6 +236,27 @@ if(JPDFIUM_USE_PDFIUM)
         target_compile_definitions(jpdfium PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     endif()
 
+    # Hermetic natives jar: the publish workflows bundle each third-party
+    # dynamic dependency (pcre2, freetype, harfbuzz, icu, qpdf, pugixml,
+    # libunibreak — and their transitive deps) next to libjpdfium.* in the
+    # platform's natives jar so downstream users don't need apt/brew installs.
+    # The bridge needs to look in its own directory FIRST for those deps:
+    if(APPLE)
+        # macOS dyld: @loader_path resolves to the dir of the loading binary.
+        set_target_properties(jpdfium PROPERTIES
+            INSTALL_RPATH "@loader_path"
+            BUILD_RPATH "@loader_path")
+    elseif(UNIX)
+        # Linux ld.so: $ORIGIN is the dir of the loading binary. -z origin
+        # enables it; the literal $ORIGIN must reach the linker unexpanded.
+        set_target_properties(jpdfium PROPERTIES
+            INSTALL_RPATH "\$ORIGIN"
+            BUILD_RPATH "\$ORIGIN")
+        target_link_options(jpdfium PRIVATE "-Wl,-rpath,\$ORIGIN" "-Wl,-z,origin")
+    endif()
+    # Windows has no RUNPATH equivalent — the NativeLoader pre-loads each
+    # dep by absolute path on Windows specifically (see Java side).
+
     set_target_properties(jpdfium PROPERTIES
         OUTPUT_NAME "jpdfium"
         POSITION_INDEPENDENT_CODE ON)
