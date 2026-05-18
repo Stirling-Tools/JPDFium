@@ -24,7 +24,13 @@ cmake -B "${SCRIPT_DIR}/build-real" \
       -DPDFIUM_DIR="${PDFIUM_DIR}" \
       -DCMAKE_BUILD_TYPE=Release
 
-cmake --build "${SCRIPT_DIR}/build-real" --parallel
+# --config Release is required for multi-config generators (Visual Studio on
+# Windows). Single-config generators (Ninja, Make) honor CMAKE_BUILD_TYPE
+# at configure time and ignore --config, so this is safe across platforms.
+# Without this the Windows bridge linked against debug runtimes (MSVCP140D.dll,
+# VCRUNTIME140D.dll, ucrtbased.dll, freetyped.dll) which don't ship on user
+# machines and cause `Can't find dependent libraries` at System.load time.
+cmake --build "${SCRIPT_DIR}/build-real" --parallel --config Release
 
 echo ""
 echo "Built: $(find "${SCRIPT_DIR}/build-real" -name 'libjpdfium.*' -type f)"
