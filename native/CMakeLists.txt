@@ -136,8 +136,18 @@ if(JPDFIUM_USE_PDFIUM)
         # target_link_libraries treats /WHOLEARCHIVE: as a path and CMake
         # mangles it into a file lookup. target_link_options passes raw
         # flags to link.exe — use that instead and link the .lib normally.
+        # /FORCE:MULTIPLE silences LNK2005 for duplicate import descriptors:
+        # Rust's staticlib bundles its own kernel32/bcryptprimitives import
+        # stubs, and MSVC's auto-link adds them too. Both copies are
+        # functionally identical metadata; the linker just needs permission
+        # to keep one. (CRT MSVCRT also collides, which is unavoidable when
+        # Rust ships its own runtime alongside the MSVC runtime.)
         target_link_libraries(jpdfium PRIVATE "${RUST_LIB}")
-        target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${RUST_LIB}")
+        target_link_options(jpdfium PRIVATE
+            "/WHOLEARCHIVE:${RUST_LIB}"
+            "/FORCE:MULTIPLE"
+            "/IGNORE:4006"
+            "/IGNORE:4088")
     else()
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
