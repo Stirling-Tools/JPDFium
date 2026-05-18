@@ -95,15 +95,21 @@ jobs:
           find native/build-real -maxdepth 3 -type f \( \
                 -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
              \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
-          # PDFium + ALL its component-build dependency libs. With is_component_build=true
-          # pdfium ships as ~5 shared libs (icuuc, abseil, libpng, etc.) — System.load
-          # on the main lib fails with "Can't find dependent libraries" unless the
-          # siblings are on the same dir. Copy the entire lib/ tree.
+          # PDFium component-build dependencies (libabsl, icuuc, libpng, libc++ ...).
+          # System.load on pdfium.dll fails otherwise: "Can't find dependent libraries".
           if [ -d native/pdfium/lib ]; then
             cp -v native/pdfium/lib/*.dll \
                   native/pdfium/lib/lib*.so \
                   native/pdfium/lib/lib*.so.* \
                   native/pdfium/lib/lib*.dylib \
+                  native/dist/${{ matrix.platform }}/ 2>/dev/null || true
+          fi
+          # Bridge's own dynamic dependencies — pcre2-8, freetype, harfbuzz, icuuc,
+          # qpdf, pugixml, libunibreak. On Linux/macOS these come from system
+          # packages already on the loader's default path; on Windows they're
+          # vcpkg's installed/x64-windows/bin/*.dll and need to ship alongside.
+          if [ "${{ matrix.platform }}" = "windows-x64" ] && [ -n "$VCPKG_INSTALLATION_ROOT" ]; then
+            cp -v "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll \
                   native/dist/${{ matrix.platform }}/ 2>/dev/null || true
           fi
           ls -la native/dist/${{ matrix.platform }}/
