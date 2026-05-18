@@ -154,11 +154,127 @@ bundle_macos() {
     done
 }
 
+bundle_windows() {
+    local bridge="$DIST_DIR/jpdfium.dll"
+    [ -f "$bridge" ] || { echo "no jpdfium.dll to bundle for"; return 0; }
+
+    # Walk import table of every DLL in DIST_DIR, copying the bridge's runtime
+    # deps from vcpkg's installed bin while skipping Windows system DLLs.
+    # Use dumpbin (ships with Visual Studio on github-runner windows-latest).
+    if ! command -v dumpbin >/dev/null 2>&1; then
+        # Fallback to PATH lookup — VS install dir varies. Try a few.
+        local vs_dumpbin
+        vs_dumpbin=$(find "/c/Program Files/Microsoft Visual Studio" \
+                     -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+        if [ -z "$vs_dumpbin" ]; then
+            echo "ERROR: dumpbin not on PATH and not findable under VS install" >&2
+            return 1
+        fi
+        DUMPBIN="$vs_dumpbin"
+    else
+        DUMPBIN=dumpbin
+    fi
+
+    # Windows DLLs we never need to ship — they're always present on a
+    # Windows installation, signed and version-managed by the OS.
+    is_system_dll() {
+        local lc
+        lc=$(echo "$1" | tr 'A-Z' 'a-z')
+        case "$lc" in
+            kernel*.dll|user32.dll|advapi32.dll|gdi32.dll|ole32.dll \
+            |oleaut32.dll|ws2_32.dll|crypt32.dll|shell32.dll|shlwapi.dll \
+            |comctl32.dll|comdlg32.dll|winmm.dll|ntdll.dll|userenv.dll \
+            |bcrypt.dll|bcryptprimitives.dll|ncrypt.dll|secur32.dll \
+            |version.dll|setupapi.dll|iphlpapi.dll|netapi32.dll|psapi.dll \
+            |imm32.dll|dwmapi.dll|uxtheme.dll|rpcrt4.dll|wldap32.dll \
+            |winhttp.dll|wininet.dll|opengl32.dll|gdiplus.dll|d3d*.dll \
+            |dxgi.dll|mscoree.dll|mfplat.dll|propsys.dll|powrprof.dll \
+            |dbgcore.dll|dbghelp.dll|msdia140.dll|symsrv.dll \
+            |api-*.dll|ext-*.dll)
+                return 0;;
+        esac
+        return 1
+    }
+
+    # Search locations for resolving a DLL by name.
+    local search_dirs=(
+        "$DIST_DIR"
+        "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
+        "native/pdfium/lib"
+    )
+    find_dll() {
+        local name="$1"
+        local d
+        for d in "${search_dirs[@]}"; do
+            if [ -f "$d/$name" ]; then echo "$d/$name"; return 0; fi
+        done
+        return 1
+    }
+
+    # Recursive walk by basename — copy only first occurrence per name.
+    local queue=("$bridge")
+    while [ "${#queue[@]}" -gt 0 ]; do
+        local target="${queue[0]}"
+        queue=("${queue[@]:1}")
+        # dumpbin /dependents lines are indented DLL names. Filter via regex.
+        local deps
+        deps=$("$DUMPBIN" //dependents "$target" 2>/dev/null \
+               | grep -oE '[A-Za-z0-9_+.-]+\.[Dd][Ll][Ll]' \
+               | sort -u || true)
+        while IFS= read -r dep; do
+            [ -z "$dep" ] && continue
+            if is_system_dll "$dep"; then continue; fi
+            # If we already have it in the dist dir we're done with this name.
+            local dest="$DIST_DIR/$dep"
+            if [ -e "$dest" ]; then continue; fi
+            local src
+            src=$(find_dll "$dep" || true)
+            if [ -z "$src" ]; then
+                echo "  (skipping $dep — not found in any source dir)" >&2
+                continue
+            fi
+            cp -v "$src" "$dest"
+            queue+=("$dest")
+        done <<<"$deps"
+    done
+}
+
 case "$PLATFORM" in
-    linux-*)  bundle_linux ;;
-    darwin-*) bundle_macos ;;
+    linux-*)
+        bundle_linux
+        # Strip debug symbols from the bridge to slash binary size. The
+        # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
+        # but Rust's #[no_mangle] + statically linked third-party crates still
+        # leave megabytes of section info. Safe on shared libs.
+        if command -v strip >/dev/null 2>&1; then
+            strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
+            # Also strip the bundled libs — they came from /usr/lib already
+            # stripped on most distros, but be defensive.
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -L "$f" ] && continue
+                [ -e "$f" ] || continue
+                strip --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
+        ;;
+    darwin-*)
+        bundle_macos
+        # macOS strip wants -S (debug symbols only) to keep the symbol table
+        # the loader needs. -x would strip non-global symbols which can
+        # break dlsym lookups.
+        if command -v strip >/dev/null 2>&1; then
+            strip -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -L "$f" ] && continue
+                [ -e "$f" ] || continue
+                strip -S "$f" 2>/dev/null || true
+            done
+        fi
+        ;;
     windows-*)
-        echo "Windows already bundles vcpkg DLLs in the Stage binaries step — nothing to do here."
+        bundle_windows
+        # The MSVC linker strips PE files in Release config already; no
+        # equivalent `strip` step needed.
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2

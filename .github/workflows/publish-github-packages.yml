@@ -105,15 +105,12 @@ jobs:
                   native/pdfium/lib/lib*.dylib \
                   native/dist/${{ matrix.platform }}/ 2>/dev/null || true
           fi
-          # Bridge's own dynamic dependencies — pcre2-8, freetype, harfbuzz,
-          # icu, qpdf, pugixml, libunibreak + transitive deps. Bundle them
-          # so the published natives jar is hermetic (no apt/brew at runtime).
-          if [ "${{ matrix.platform }}" = "windows-x64" ] && [ -n "$VCPKG_INSTALLATION_ROOT" ]; then
-            cp -v "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/"*.dll \
-                  native/dist/${{ matrix.platform }}/ 2>/dev/null || true
-          else
-            bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
-          fi
+          # Bridge's own dynamic deps — pcre2-8, freetype, harfbuzz, icu, qpdf,
+          # pugixml, libunibreak + transitive deps. bundle-runtime-deps.sh
+          # walks the bridge's import table per-platform (ldd / otool / dumpbin)
+          # and copies only what's actually referenced, skipping system libs.
+          # No more blanket vcpkg bin glob → no debug-helper bloat in the jar.
+          bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
       - name: Sanity check
