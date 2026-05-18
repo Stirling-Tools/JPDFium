@@ -31,10 +31,20 @@ val stageNatives by tasks.registering(Copy::class) {
     description = "Copy pre-built native libraries from native/dist/$platform/ into the jar resource tree"
     group = "build"
     from(distDir) {
+        // Match every shared library shape we ship: the bridge, PDFium itself,
+        // every PDFium component lib (e.g. libchrome_zlib.so — no version
+        // suffix), every bundled third-party dependency (versioned like
+        // libicuuc.so.74 on Linux, base name on macOS), every Windows DLL.
+        // Earlier this list was narrower and silently dropped Linux PDFium
+        // component libs because their basename matched lib*.so but not
+        // *.so.* (no version) — the consumer-side System.load on libpdfium.so
+        // then failed with "libthird_party_abseil-cpp_absl.so: cannot open
+        // shared object file".
         include(
-            "libjpdfium.so", "libjpdfium.dylib", "jpdfium.dll",
-            "libpdfium.so", "libpdfium.dylib", "pdfium.dll",
-            "*.so.*", "*.dll", "*.dylib"
+            "*.so",        // Linux: lib*.so (incl. PDFium components, bridge)
+            "*.so.*",      // Linux: versioned bundled deps (libicuuc.so.74 etc.)
+            "*.dylib",     // macOS: lib*.dylib
+            "*.dll"        // Windows: *.dll (incl. vcpkg runtime DLLs)
         )
     }
     into(stagedPlatformDir)
