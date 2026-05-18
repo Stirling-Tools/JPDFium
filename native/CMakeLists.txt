@@ -210,6 +210,14 @@ if(JPDFIUM_USE_PDFIUM)
 
     message(STATUS "JPDFium native libraries: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak")
 
+    if(WIN32)
+        # windows.h defines min and max as macros, which clobber std::min /
+        # std::max in jpdfium_redact.cpp (overlapRatio) and probably other
+        # call sites. NOMINMAX suppresses those macros so the std:: versions
+        # work as expected. WIN32_LEAN_AND_MEAN also trims unneeded headers.
+        target_compile_definitions(jpdfium PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+
     set_target_properties(jpdfium PROPERTIES
         OUTPUT_NAME "jpdfium"
         POSITION_INDEPENDENT_CODE ON)
