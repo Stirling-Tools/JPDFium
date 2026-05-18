@@ -133,9 +133,11 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE
             -Wl,-force_load,"${RUST_LIB}")
     elseif(MSVC)
-        target_link_libraries(jpdfium PRIVATE
-            "${RUST_LIB}"
-            "/WHOLEARCHIVE:${RUST_LIB}")
+        # target_link_libraries treats /WHOLEARCHIVE: as a path and CMake
+        # mangles it into a file lookup. target_link_options passes raw
+        # flags to link.exe — use that instead and link the .lib normally.
+        target_link_libraries(jpdfium PRIVATE "${RUST_LIB}")
+        target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${RUST_LIB}")
     else()
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
