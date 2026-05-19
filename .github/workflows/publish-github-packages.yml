@@ -46,9 +46,8 @@ jobs:
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
-        # Switch apt to the Azure mirror — ports.ubuntu.com (arm64 mirror) has
-        # multi-hour outages periodically. Azure mirror is network-adjacent to
-        # GH runners. Retry 3x for any residual glitches.
+        # Azure apt mirror + 3x retry + mingw-w64 (for Windows ICU cross-build)
+        # + meson (for harfbuzz-no-glib rebuild).
         run: |
           sudo sed -i \
             -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
@@ -57,9 +56,10 @@ jobs:
             /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
           for attempt in 1 2 3; do
             sudo apt-get update && sudo apt-get install -y \
-              build-essential cmake ninja-build pkg-config \
+              build-essential cmake ninja-build pkg-config meson \
               libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
               libqpdf-dev libpugixml-dev libunibreak-dev \
+              mingw-w64 binutils-mingw-w64 \
               patchelf && exit 0
             echo "apt install attempt $attempt failed; retrying in 30s..." >&2
             sleep 30
@@ -128,19 +128,16 @@ jobs:
 
       - name: Build qpdf with native crypto (Linux)
         if: startsWith(matrix.platform, 'linux-')
-        # Rebuild libqpdf with --with-crypto=native to drop the GNUTLS
-        # transitive chain (~8-9 MB). Must run BEFORE build-real.sh so the
-        # bridge links against the new /usr/local libqpdf.
         run: bash native/build-qpdf-native-crypto.sh
+
+      - name: Build harfbuzz without GLib (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: bash native/build-harfbuzz-no-glib.sh
 
       - run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
         if: startsWith(matrix.platform, 'linux-')
-        # Strips ~25 MB of unused ICU data (locales, currencies, collations,
-        # RBNF, ...) and repackages libicudata.so. The bundler step will then
-        # pick up the trimmed lib via ldd on the bridge. No-op on macOS
-        # (data embedded) and Windows (TBD).
         run: bash native/build-minimal-icu.sh
 
       - name: Stage binaries

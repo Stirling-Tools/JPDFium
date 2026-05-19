@@ -13,7 +13,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
+  # so the windows-x64 job can download it as an artifact during its own
+  # build. The matrix can't have per-cell needs:, so we do this as a
+  # separate prep job that the matrix depends on. ~5-7 min CI overhead;
+  # saves ~25 MB on the windows-x64 natives jar.
+  prep-windows-icu:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps (Linux + mingw-w64)
+        run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential icu-devtools libicu-dev \
+              mingw-w64 binutils-mingw-w64 \
+              curl unzip && exit 0
+            sleep 30
+          done
+          exit 1
+      - name: Cross-build minimal Windows icudt78.dll
+        run: bash native/build-minimal-icu-windows.sh
+      - name: Upload trimmed Windows icudt78.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/icudt78.dll
+          if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
+          retention-days: 1
+
   build-natives:
+    needs: prep-windows-icu
+    if: always()  # build even if prep failed; windows job falls back to vcpkg's full icudt78.dll
     strategy:
       fail-fast: false
       matrix:
@@ -45,6 +84,11 @@ jobs:
         # runners. azure.ports.ubuntu.com proxies ports.ubuntu.com; same for
         # archive.ubuntu.com -> azure.archive.ubuntu.com on x64.
         # Also retry 3x in case the Azure mirror has its own glitch.
+        #
+        # mingw-w64 + binutils-mingw-w64 lets the Linux x64 job cross-build
+        # a Windows icudt78.dll (Task #7 — drops ~28 MB of unused ICU data
+        # from the windows-x64 natives jar). meson + ninja-build for the
+        # harfbuzz-without-glib rebuild (drops libglib).
         run: |
           sudo sed -i \
             -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
@@ -53,9 +97,10 @@ jobs:
             /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
           for attempt in 1 2 3; do
             sudo apt-get update && sudo apt-get install -y \
-              build-essential cmake ninja-build pkg-config \
+              build-essential cmake ninja-build pkg-config meson \
               libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
               libqpdf-dev libpugixml-dev libunibreak-dev \
+              mingw-w64 binutils-mingw-w64 \
               patchelf && exit 0
             echo "apt install attempt $attempt failed; retrying in 30s..." >&2
             sleep 30
@@ -109,10 +154,17 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         # Rebuild libqpdf with --with-crypto=native to drop the GNUTLS
         # transitive chain (libgnutls + libnettle + libgmp + libp11-kit +
-        # libidn2 + libunistring + libtasn1 + libbrotli* + libglib ~ 8-9 MB).
+        # libidn2 + libunistring + libtasn1 + libbrotli* ~ 7-8 MB).
         # Must run BEFORE build-real.sh so the bridge links against the new
         # /usr/local libqpdf.
         run: bash native/build-qpdf-native-crypto.sh
+
+      - name: Build harfbuzz without GLib (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        # Rebuild libharfbuzz with all language bindings disabled to drop
+        # libglib-2.0.so.0 (~1.4 MB) — apt's libharfbuzz0b pulls glib for
+        # hb-glib bindings we don't use.
+        run: bash native/build-harfbuzz-no-glib.sh
 
       - run: bash native/build-real.sh
 
@@ -120,11 +172,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         # Strips ~25 MB of unused ICU data (locales, currencies, collations,
         # RBNF, ...) and repackages libicudata.so. The bundler step will then
-        # pick up the trimmed lib via ldd on the bridge. No-op on macOS
-        # (data embedded) and Windows (TBD).
+        # pick up the trimmed lib via ldd on the bridge.
         run: bash native/build-minimal-icu.sh
 
-      - name: Stage binaries
+      - name: Stage binaries (bridge + PDFium siblings)
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
           find native/build-real -maxdepth 3 -type f \( \
@@ -143,9 +194,26 @@ jobs:
                ! -name 'vccorlib*.dll' \
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
+
+      - name: Override icudt78.dll with trimmed copy (Windows only)
+        # Run AFTER the PDFium-siblings find above (which would copy PDFium's
+        # 33 MB icudt78.dll) and BEFORE the bundler so the small trimmed copy
+        # wins. download-artifact@v4 extracts on top, overwriting the larger
+        # one.
+        if: matrix.platform == 'windows-x64'
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing artifact -> stay with PDFium's full 33 MB icudt78.dll
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/
+
+      - name: Bundle runtime deps + strip
+        run: |
           # Bridge runtime deps — walk the bridge's import table and copy
           # only what's actually referenced, skipping system libs. Also
-          # strips debug symbols from the bridge.
+          # strips debug symbols from the bridge. Bundler's "skip if dest
+          # exists" guard preserves any pre-staged trimmed files (Linux
+          # libicudata.so.74 / Windows icudt78.dll).
           bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
