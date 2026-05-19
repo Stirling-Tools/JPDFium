@@ -152,9 +152,21 @@ icupkg -l "$DAT_FILE" > "$WORK/all.lst"
 TOTAL=$(wc -l < "$WORK/all.lst")
 echo "Total items in source : $TOTAL"
 
-# Compute keep/remove sets
+# Extract every item to loose files. icupkg -x '*' extracts everything that
+# matches the glob; -d sets the destination directory. This gives us a tree
+# like $EXTRACT/uchar.icu, $EXTRACT/nfc.nrm, $EXTRACT/brkitr/sent.brk, etc.
+EXTRACT="$WORK/extract"
+mkdir -p "$EXTRACT"
+icupkg -x '*' -d "$EXTRACT" "$DAT_FILE" \
+    || { echo "build-minimal-icu.sh: icupkg extract failed; skipping" >&2; exit 0; }
+
+# Compute the keep list (item names, no path prefix — relative to EXTRACT).
+# pkgdata wants line-separated items. Add pool.res implicitly because the
+# locale .res files reference it and icupkg warns when it's missing.
 > "$WORK/keep.lst"
-> "$WORK/remove.lst"
+declare -A SEEN_KEEP=()
+echo "pool.res" >> "$WORK/keep.lst"
+SEEN_KEEP[pool.res]=1
 while IFS= read -r item; do
     matched=0
     for pat in "${KEEP[@]}"; do
@@ -162,26 +174,18 @@ while IFS= read -r item; do
             matched=1; break
         fi
     done
-    if [ "$matched" = 1 ]; then
+    if [ "$matched" = 1 ] && [ -z "${SEEN_KEEP[$item]:-}" ]; then
         echo "$item" >> "$WORK/keep.lst"
-    else
-        echo "$item" >> "$WORK/remove.lst"
+        SEEN_KEEP[$item]=1
     fi
 done < "$WORK/all.lst"
 
 KEPT=$(wc -l < "$WORK/keep.lst")
-REMOVED=$(wc -l < "$WORK/remove.lst")
-echo "Keeping  : $KEPT items"
-echo "Removing : $REMOVED items"
+echo "Keeping  : $KEPT items (out of $TOTAL)"
 
-# Stage and trim. icupkg --remove takes a file list; pkgdata wants the same.
-cp "$DAT_FILE" "$WORK/icudt${ICU_VER}l.dat"
-icupkg --remove "$WORK/remove.lst" "$WORK/icudt${ICU_VER}l.dat"
-echo "Trimmed size : $(du -h "$WORK/icudt${ICU_VER}l.dat" | cut -f1)"
-
-# Now repackage the trimmed .dat into a shared library. pkgdata needs the
-# pkgdata.inc / Makefile.inc that ships with libicu-dev. Ubuntu installs it
-# under /usr/lib/<triplet>/icu/<ver>/ as pkgdata.inc (or a "current" symlink).
+# Build the shared library DIRECTLY from the keep list. pkgdata reads the
+# item names from the list file, sources each file from -s <sourcedir>, then
+# emits a .dat (internally) wrapped in libicudata.so via genccode + ld.
 ICUPKG_INC=$(find /usr/lib /usr/share -maxdepth 6 -type f \
               \( -name "pkgdata.inc" -o -name "icupkg.inc" -o -name "Makefile.inc" \) \
               2>/dev/null | grep -iE '/icu(/|$)' | head -1)
@@ -191,14 +195,15 @@ if [ -z "$ICUPKG_INC" ]; then
 fi
 echo "pkgdata inc  : $ICUPKG_INC"
 
-# Build the shared library
 OUT_DIR="$WORK/out"
 mkdir -p "$OUT_DIR"
 pkgdata -m dll -p icudata -e "icudt${ICU_VER}_dat" \
         -O "$ICUPKG_INC" \
         -T "$WORK/pkg-tmp" \
         -d "$OUT_DIR" \
-        "$WORK/icudt${ICU_VER}l.dat"
+        -s "$EXTRACT" \
+        "$WORK/keep.lst" \
+    || { echo "build-minimal-icu.sh: pkgdata build failed; skipping" >&2; exit 0; }
 
 # pkgdata's exact output name varies — find what was produced.
 NEW_LIB=$(find "$OUT_DIR" -maxdepth 2 -name "libicudata.so*" -type f | head -1)
