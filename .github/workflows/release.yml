@@ -34,8 +34,11 @@ jobs:
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             shell: bash
-          # TODO: darwin-x64 dropped — macos-13 free runner queues for 24h+.
-          # Restore once cross-compile from macos-14 is set up.
+          # darwin-x64 cross-compiles from macos-14 (arm64) under Rosetta
+          # with a second Homebrew installed at /usr/local for x86_64 deps.
+          - platform: darwin-x64
+            runner: macos-14
+            shell: bash
           - platform: darwin-arm64
             runner: macos-14
             shell: bash
@@ -64,13 +67,29 @@ jobs:
             libqpdf-dev libpugixml-dev libunibreak-dev \
             patchelf
 
-      - name: Install build deps (macOS)
-        if: startsWith(matrix.platform, 'darwin-')
+      - name: Install build deps (macOS, native arm64)
+        if: matrix.platform == 'darwin-arm64'
         run: |
           brew install cmake ninja \
             pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
             pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install build deps (macOS, x86_64 cross-compile)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          if [ ! -x /usr/local/bin/brew ]; then
+            arch -x86_64 /bin/bash -c \
+              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+          fi
+          arch -x86_64 /usr/local/bin/brew install \
+            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG=/usr/local/bin/pkg-config"
+            echo "CMAKE_OSX_ARCHITECTURES=x86_64"
+          } >> "$GITHUB_ENV"
 
       - name: Install build deps (Windows)
         if: matrix.platform == 'windows-x64'

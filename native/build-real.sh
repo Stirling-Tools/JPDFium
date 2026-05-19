@@ -18,11 +18,20 @@ bash "${SCRIPT_DIR}/build-rust.sh"
 
 echo ""
 echo "Building libjpdfium.so with real PDFium..."
-cmake -B "${SCRIPT_DIR}/build-real" \
-      -S "${SCRIPT_DIR}" \
-      -DJPDFIUM_USE_PDFIUM=ON \
-      -DPDFIUM_DIR="${PDFIUM_DIR}" \
-      -DCMAKE_BUILD_TYPE=Release
+CMAKE_ARGS=(
+    -B "${SCRIPT_DIR}/build-real"
+    -S "${SCRIPT_DIR}"
+    -DJPDFIUM_USE_PDFIUM=ON
+    -DPDFIUM_DIR="${PDFIUM_DIR}"
+    -DCMAKE_BUILD_TYPE=Release
+)
+# darwin-x64 cross-compile from arm64 host: CMAKE_OSX_ARCHITECTURES is set
+# by the publish workflow's macOS x86_64 install step. Forward to cmake.
+if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
+    CMAKE_ARGS+=(-DCMAKE_OSX_ARCHITECTURES="${CMAKE_OSX_ARCHITECTURES}")
+    echo "  Cross-compile arch: ${CMAKE_OSX_ARCHITECTURES}"
+fi
+cmake "${CMAKE_ARGS[@]}"
 
 # --config Release is required for multi-config generators (Visual Studio on
 # Windows). Single-config generators (Ninja, Make) honor CMAKE_BUILD_TYPE
