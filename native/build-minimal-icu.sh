@@ -95,18 +95,24 @@ DAT_FILE="$WORK/icudt${ICU_VER}l.dat"
 # File offset = section file offset + (sym vaddr - section vaddr).
 # Extract via Python (way faster than dd bs=1 for 30 MB) and sanity-check
 # the ICU header magic (bytes 2..3 = 0xda 0x27) before proceeding.
+#
+# Address columns from readelf -W are hex without a "0x" prefix (literal
+# hex VMA strings like "0000000000043000"). The Size column on binutils
+# 2.42+ is decimal *or* "0x"-prefixed hex depending on build config — use
+# Python's int(s, 0) auto-detect.
 python3 - <<EOF || { echo "build-minimal-icu.sh: extraction failed; skipping" >&2; exit 0; }
 import sys
 sec_foff  = int("${SEC_FOFF_HEX}", 16)
 sec_vaddr = int("${SEC_VADDR_HEX}", 16)
 sym_vaddr = int("${SYM_VADDR_HEX}", 16)
-size      = int("${SYM_SIZE}")
+size_str  = "${SYM_SIZE}".strip()
+size      = int(size_str, 0) if size_str.startswith(("0x", "0X")) else int(size_str)
 offset    = sec_foff + (sym_vaddr - sec_vaddr)
 with open("${ORIG_LIB}", "rb") as f:
     f.seek(offset)
     blob = f.read(size)
 if len(blob) != size or blob[2:4] != b"\xda\x27":
-    sys.exit(f"bad ICU magic at offset {offset}: got {blob[:4].hex()}, size {len(blob)}")
+    sys.exit(f"bad ICU magic at offset {offset}: got {blob[:4].hex()}, size {len(blob)} (want {size})")
 with open("${DAT_FILE}", "wb") as f:
     f.write(blob)
 print(f"extracted {len(blob)} bytes -> ${DAT_FILE}")
