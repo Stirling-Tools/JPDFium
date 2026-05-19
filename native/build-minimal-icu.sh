@@ -243,17 +243,23 @@ case "$HOST_ARCH" in
 esac
 
 # objcopy turns the raw .dat into an .o with auto-generated
-# `_binary_<name>_{start,end,size}` symbols. We rename _start to the symbol
-# ICU's runtime expects (icudt<MAJ>_dat) and bump the section to 16-byte
+# `_binary_<name>_{start,end,size}` symbols. The symbol name is derived from
+# the source file PATH passed to objcopy with non-alphanumeric chars replaced
+# by underscores — so `/tmp/work/out/icudata.dat` becomes
+# `_binary__tmp_work_out_icudata_dat_start`. To keep that predictable, run
+# objcopy from the file's directory with a relative basename: that gives
+# `_binary_icudata_dat_start`. Then --redefine-sym renames it to the symbol
+# ICU's runtime expects (icudt<MAJ>_dat). We also bump the section to 16-byte
 # alignment which ICU requires for the data header.
 DAT_BASENAME=$(basename "$TRIMMED_DAT")
-DAT_SYM_BASE="_binary_${DAT_BASENAME//./_}_start"
+DAT_DIR=$(dirname "$TRIMMED_DAT")
 OBJ_FILE="$WORK/icudata_dat.o"
-objcopy -I binary -O "$OBJCOPY_OUTPUT" -B "$OBJCOPY_TARGET" \
-        --redefine-sym "${DAT_SYM_BASE}=icudt${ICU_VER}_dat" \
-        --rename-section .data=.rodata,alloc,load,readonly,data,contents \
-        --set-section-alignment .rodata=16 \
-        "$TRIMMED_DAT" "$OBJ_FILE" \
+( cd "$DAT_DIR" && \
+  objcopy -I binary -O "$OBJCOPY_OUTPUT" -B "$OBJCOPY_TARGET" \
+          --redefine-sym "_binary_${DAT_BASENAME//./_}_start=icudt${ICU_VER}_dat" \
+          --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+          --set-section-alignment .rodata=16 \
+          "$DAT_BASENAME" "$OBJ_FILE" ) \
     || { echo "build-minimal-icu.sh: objcopy failed; skipping" >&2; exit 0; }
 
 # Match the original lib's full versioning so the SONAME chain is consistent
@@ -261,12 +267,28 @@ objcopy -I binary -O "$OBJCOPY_OUTPUT" -B "$OBJCOPY_TARGET" \
 ICU_MINOR=$(basename "$ORIG_LIB" | sed -n "s/^libicudata\\.so\\.${ICU_VER}\\.\\(.*\\)$/\\1/p")
 ICU_MINOR=${ICU_MINOR:-2}
 NEW_LIB="$OUT_DIR/libicudata.so.${ICU_VER}.${ICU_MINOR}"
-gcc -shared -fPIC -nostartfiles \
+gcc -shared -fPIC \
     -Wl,-soname,libicudata.so.${ICU_VER} \
     -o "$NEW_LIB" \
     "$OBJ_FILE" \
     || { echo "build-minimal-icu.sh: gcc -shared failed; skipping" >&2; exit 0; }
 echo "Built        : $NEW_LIB ($(du -h "$NEW_LIB" | cut -f1))"
+
+# Sanity check the new .so:
+#   1. file says it's an ELF shared object (not a stripped archive or junk)
+#   2. readelf -d reports our SONAME (so the loader's NEEDED matches)
+#   3. nm -D reports icudt<MAJ>_dat as an exported global object
+#   4. ldd doesn't error out (sanity-loads the dyn linker would do)
+echo "--- new lib sanity check ---"
+file "$NEW_LIB"
+readelf -d "$NEW_LIB" 2>/dev/null | grep -E "SONAME|NEEDED" || true
+echo "--- exported icudt symbol ---"
+if ! nm -D "$NEW_LIB" 2>/dev/null | grep -E "icudt${ICU_VER}_dat" ; then
+    echo "build-minimal-icu.sh: icudt${ICU_VER}_dat not exported by new .so; skipping replace" >&2
+    exit 0
+fi
+echo "--- ldd ---"
+ldd "$NEW_LIB" 2>&1 | head -5
 
 # Publish a copy under native/build-real/ as a fallback the bundler can find
 # even if /usr/lib was read-only.
