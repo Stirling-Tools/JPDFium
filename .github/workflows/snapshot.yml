@@ -39,10 +39,18 @@ jobs:
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
-        # ports.ubuntu.com on the arm64 runner has occasional network outages
-        # (seen May 2026 — Connection failed [IP: 91.189.91.10x]). Retry up to
-        # 3 times before failing so a single bad fetch doesn't kill the build.
+        # ports.ubuntu.com (the arm64 mirror) has multi-hour network outages
+        # ~weekly (seen May 2026 — Connection failed [IP: 91.189.91.10x] across
+        # 30+ min). Switch to the Azure mirror which is network-adjacent to GH
+        # runners. azure.ports.ubuntu.com proxies ports.ubuntu.com; same for
+        # archive.ubuntu.com -> azure.archive.ubuntu.com on x64.
+        # Also retry 3x in case the Azure mirror has its own glitch.
         run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
           for attempt in 1 2 3; do
             sudo apt-get update && sudo apt-get install -y \
               build-essential cmake ninja-build pkg-config \

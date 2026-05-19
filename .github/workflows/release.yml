@@ -59,9 +59,15 @@ jobs:
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
-        # Retry up to 3x — ports.ubuntu.com on the arm64 runner has occasional
-        # transient outages that kill the apt fetch.
+        # Switch apt to the Azure mirror — ports.ubuntu.com (arm64 mirror) has
+        # multi-hour outages periodically. Azure mirror is network-adjacent to
+        # GH runners. Retry 3x for any residual glitches.
         run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
           for attempt in 1 2 3; do
             sudo apt-get update && sudo apt-get install -y \
               build-essential cmake ninja-build pkg-config \
