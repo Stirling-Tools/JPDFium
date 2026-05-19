@@ -16,17 +16,28 @@
 #
 # Usage: build-minimal-icu.sh        # Linux only; macOS embeds data; Windows TBD
 
-set -euo pipefail
+# Best-effort: never break the build because of ICU trimming. The bundle step
+# falls back to the full apt-installed data if we skip out here.
+echo "build-minimal-icu.sh: start  ($(uname -s) $(uname -m))"
 
-# Only do this on Linux
 case "$(uname -s)" in
     Linux*) ;;
     *) echo "build-minimal-icu.sh: skipping on $(uname -s)"; exit 0;;
 esac
 
+# From here on, use set -u (unset vars are errors) but DO NOT use set -e:
+# any individual command failure should produce a helpful message and exit 0,
+# not exit-1-with-no-output (which we've hit at least once on CI under
+# `bash --noprofile --norc -e -o pipefail`).
+set -u
+
 if ! command -v icupkg >/dev/null 2>&1; then
     echo "build-minimal-icu.sh: icupkg not found (apt install icu-devtools)" >&2
-    exit 0  # not fatal — bundling step will just use the full data
+    exit 0
+fi
+if ! command -v pkgdata >/dev/null 2>&1; then
+    echo "build-minimal-icu.sh: pkgdata not found (apt install icu-devtools)" >&2
+    exit 0
 fi
 
 # Auto-detect ICU major version (74 on Ubuntu 24.04).

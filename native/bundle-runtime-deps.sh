@@ -175,6 +175,13 @@ bundle_windows() {
 
     # Windows DLLs we never need to ship — they're always present on a
     # Windows installation, signed and version-managed by the OS.
+    #
+    # We intentionally DO NOT skip msvcp140 / vcruntime140 / ucrtbase here:
+    # the bridge is built with MSVC default /MD (dynamic CRT), so these are
+    # real link-time deps. A pure-Java user who installs Java but not the VS
+    # Redistributable would otherwise see "msvcp140.dll not found" at JNI
+    # load. The proper fix to drop them is paired with /MT + vcpkg
+    # x64-windows-static — tracked as a follow-up.
     is_system_dll() {
         local lc
         lc=$(echo "$1" | tr 'A-Z' 'a-z')
