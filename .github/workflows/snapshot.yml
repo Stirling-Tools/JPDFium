@@ -89,6 +89,15 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
+      - name: Build qpdf with native crypto (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        # Rebuild libqpdf with --with-crypto=native to drop the GNUTLS
+        # transitive chain (libgnutls + libnettle + libgmp + libp11-kit +
+        # libidn2 + libunistring + libtasn1 + libbrotli* + libglib ~ 8-9 MB).
+        # Must run BEFORE build-real.sh so the bridge links against the new
+        # /usr/local libqpdf.
+        run: bash native/build-qpdf-native-crypto.sh
+
       - run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
