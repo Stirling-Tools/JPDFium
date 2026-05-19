@@ -8,8 +8,12 @@ resolver = "2"
 # drops the debug + name tables we don't need at runtime. Roughly ~15-25%
 # size reduction on libjpdfium_rust.a (and so on the embedded portion of
 # libjpdfium.so).
+#
+# Deliberately NOT setting panic = "abort": lopdf / oxipng can panic on
+# malformed PDF / PNG input, and the bridge catches those panics at the C
+# ABI boundary to return error codes to the JVM. panic=abort would crash
+# the entire JVM instead.
 [profile.release]
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
-panic = "abort"
