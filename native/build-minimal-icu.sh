@@ -183,34 +183,89 @@ done < "$WORK/all.lst"
 KEPT=$(wc -l < "$WORK/keep.lst")
 echo "Keeping  : $KEPT items (out of $TOTAL)"
 
-# Build the shared library DIRECTLY from the keep list. pkgdata reads the
-# item names from the list file, sources each file from -s <sourcedir>, then
-# emits a .dat (internally) wrapped in libicudata.so via genccode + ld.
+# Two-step build:
+#   (1) `pkgdata -m archive` assembles the kept items into a single trimmed
+#       .dat — no compiler/linker invocations, just data shuffling.
+#   (2) `objcopy -I binary` wraps that .dat in an ELF object exporting the
+#       icudt<MAJ>_dat symbol, then `gcc -shared` links it into a .so.
+#
+# We avoid `pkgdata -m dll` because it reads CC/LD/LDFLAGS/etc out of
+# pkgdata.inc, and Ubuntu's installed inc files don't set those (they're
+# only meaningful at libicu build time, not at install time). Net result on
+# `-m dll`: "sh: 1: oma.c: not found" + empty compile/link commands.
+
 ICUPKG_INC=$(find /usr/lib /usr/share -maxdepth 6 -type f \
               \( -name "pkgdata.inc" -o -name "icupkg.inc" -o -name "Makefile.inc" \) \
               2>/dev/null | grep -iE '/icu(/|$)' | head -1)
 if [ -z "$ICUPKG_INC" ]; then
-    echo "build-minimal-icu.sh: pkgdata config not found (pkgdata.inc); skipping repackage" >&2
+    echo "build-minimal-icu.sh: pkgdata config not found (pkgdata.inc); skipping" >&2
     exit 0
 fi
 echo "pkgdata inc  : $ICUPKG_INC"
 
 OUT_DIR="$WORK/out"
 mkdir -p "$OUT_DIR" "$WORK/pkg-tmp"
-pkgdata -m dll -p icudata -e "icudt${ICU_VER}_dat" \
+pkgdata -m archive -p icudata -e "icudt${ICU_VER}_dat" \
         -O "$ICUPKG_INC" \
         -T "$WORK/pkg-tmp" \
         -d "$OUT_DIR" \
         -s "$EXTRACT" \
         "$WORK/keep.lst" \
-    || { echo "build-minimal-icu.sh: pkgdata build failed; skipping" >&2; exit 0; }
+    || { echo "build-minimal-icu.sh: pkgdata archive failed; skipping" >&2; exit 0; }
 
-# pkgdata's exact output name varies — find what was produced.
-NEW_LIB=$(find "$OUT_DIR" -maxdepth 2 -name "libicudata.so*" -type f | head -1)
-if [ -z "$NEW_LIB" ]; then
-    echo "build-minimal-icu.sh: pkgdata didn't produce a libicudata.so; skipping" >&2
+TRIMMED_DAT="$OUT_DIR/icudata.dat"
+if [ ! -f "$TRIMMED_DAT" ]; then
+    # pkgdata names the output icudt<MAJ>l.dat or icudata.dat depending on
+    # version; check both.
+    TRIMMED_DAT=$(find "$OUT_DIR" -maxdepth 2 -name "*.dat" -type f | head -1)
+fi
+if [ -z "$TRIMMED_DAT" ] || [ ! -f "$TRIMMED_DAT" ]; then
+    echo "build-minimal-icu.sh: no trimmed .dat produced; skipping" >&2
     exit 0
 fi
+echo "Trimmed .dat : $TRIMMED_DAT ($(du -h "$TRIMMED_DAT" | cut -f1))"
+
+# Wrap the .dat in a shared library by hand.
+HOST_ARCH=$(uname -m)
+case "$HOST_ARCH" in
+    x86_64)
+        OBJCOPY_OUTPUT="elf64-x86-64"
+        OBJCOPY_TARGET="i386:x86-64"
+        ;;
+    aarch64|arm64)
+        OBJCOPY_OUTPUT="elf64-littleaarch64"
+        OBJCOPY_TARGET="aarch64"
+        ;;
+    *)
+        echo "build-minimal-icu.sh: unsupported arch $HOST_ARCH; skipping" >&2
+        exit 0
+        ;;
+esac
+
+# objcopy turns the raw .dat into an .o with auto-generated
+# `_binary_<name>_{start,end,size}` symbols. We rename _start to the symbol
+# ICU's runtime expects (icudt<MAJ>_dat) and bump the section to 16-byte
+# alignment which ICU requires for the data header.
+DAT_BASENAME=$(basename "$TRIMMED_DAT")
+DAT_SYM_BASE="_binary_${DAT_BASENAME//./_}_start"
+OBJ_FILE="$WORK/icudata_dat.o"
+objcopy -I binary -O "$OBJCOPY_OUTPUT" -B "$OBJCOPY_TARGET" \
+        --redefine-sym "${DAT_SYM_BASE}=icudt${ICU_VER}_dat" \
+        --rename-section .data=.rodata,alloc,load,readonly,data,contents \
+        --set-section-alignment .rodata=16 \
+        "$TRIMMED_DAT" "$OBJ_FILE" \
+    || { echo "build-minimal-icu.sh: objcopy failed; skipping" >&2; exit 0; }
+
+# Match the original lib's full versioning so the SONAME chain is consistent
+# (libicudata.so -> libicudata.so.74 -> libicudata.so.74.2).
+ICU_MINOR=$(basename "$ORIG_LIB" | sed -n "s/^libicudata\\.so\\.${ICU_VER}\\.\\(.*\\)$/\\1/p")
+ICU_MINOR=${ICU_MINOR:-2}
+NEW_LIB="$OUT_DIR/libicudata.so.${ICU_VER}.${ICU_MINOR}"
+gcc -shared -fPIC -nostartfiles \
+    -Wl,-soname,libicudata.so.${ICU_VER} \
+    -o "$NEW_LIB" \
+    "$OBJ_FILE" \
+    || { echo "build-minimal-icu.sh: gcc -shared failed; skipping" >&2; exit 0; }
 echo "Built        : $NEW_LIB ($(du -h "$NEW_LIB" | cut -f1))"
 
 # Publish a copy under native/build-real/ as a fallback the bundler can find
