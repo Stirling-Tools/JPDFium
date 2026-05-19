@@ -47,71 +47,51 @@ done
 
 ICU_VER=78
 ICU_MINOR=1
-ICU_TAG="release-${ICU_VER}-${ICU_MINOR}"
+# ICU's release-tag and asset-name conventions vary across ICU major
+# versions: ICU 74 uses release-74-2 + icu4c-74_2-..., ICU 78 uses
+# release-78.1 + icu4c-78.1-.... Try the newer format first, fall back
+# to the legacy one if the modern asset 404s.
+ICU_TAG_NEW="release-${ICU_VER}.${ICU_MINOR}"
+ICU_TAG_OLD="release-${ICU_VER}-${ICU_MINOR}"
 WORK=$(mktemp -d)
 trap "rm -rf '$WORK'" EXIT
 
-# Step 1: Download upstream ICU 78 Win64 prebuilt and extract icudt78.dll.
-# Try a few MSVC asset names since the release pages name them inconsistently
-# across versions (MSVC2019 / MSVC2022).
-echo "Downloading ICU $ICU_VER.$ICU_MINOR Win64 prebuilt..."
-ZIP="$WORK/icu-win64.zip"
-for asset in icu4c-${ICU_VER}_${ICU_MINOR}-Win64-MSVC2022.zip icu4c-${ICU_VER}_${ICU_MINOR}-Win64-MSVC2019.zip; do
-    if curl -fsSL "https://github.com/unicode-org/icu/releases/download/${ICU_TAG}/${asset}" -o "$ZIP" 2>/dev/null; then
-        echo "  got $asset"
+# Step 1: Download upstream ICU's pre-assembled little-endian .dat. This is
+# the SAME byte sequence that ends up baked into icudt<MAJ>.dll on Windows,
+# packaged as a loose .dat by the ICU release process, so we don't have to
+# parse PE format to extract it.
+echo "Downloading ICU $ICU_VER.$ICU_MINOR data-bin-l..."
+ZIP="$WORK/icu-data-bin-l.zip"
+candidates=(
+    "${ICU_TAG_NEW}/icu4c-${ICU_VER}.${ICU_MINOR}-data-bin-l.zip"
+    "${ICU_TAG_OLD}/icu4c-${ICU_VER}_${ICU_MINOR}-data-bin-l.zip"
+)
+for path in "${candidates[@]}"; do
+    URL="https://github.com/unicode-org/icu/releases/download/${path}"
+    if curl -fsSL "$URL" -o "$ZIP" 2>/dev/null; then
+        echo "  got $URL"
         break
     fi
 done
 if [ ! -s "$ZIP" ]; then
-    echo "build-minimal-icu-windows.sh: couldn't fetch upstream ICU $ICU_VER Win64 zip; skipping" >&2
+    echo "build-minimal-icu-windows.sh: couldn't fetch upstream ICU $ICU_VER data-bin-l zip; skipping" >&2
     exit 0
 fi
 
-unzip -q "$ZIP" -d "$WORK/win64-extract"
-ICUDT_DLL=$(find "$WORK/win64-extract" -name "icudt${ICU_VER}.dll" -type f 2>/dev/null | head -1)
-if [ -z "$ICUDT_DLL" ] || [ ! -f "$ICUDT_DLL" ]; then
-    echo "build-minimal-icu-windows.sh: icudt${ICU_VER}.dll not found in upstream zip; skipping" >&2
+unzip -q "$ZIP" -d "$WORK/data-bin-extract"
+DAT_FILE=$(find "$WORK/data-bin-extract" -name "icudt${ICU_VER}l.dat" -type f 2>/dev/null | head -1)
+if [ -z "$DAT_FILE" ] || [ ! -f "$DAT_FILE" ]; then
+    echo "build-minimal-icu-windows.sh: icudt${ICU_VER}l.dat not found in upstream zip; skipping" >&2
     exit 0
 fi
-echo "Source DLL : $ICUDT_DLL ($(du -h "$ICUDT_DLL" | cut -f1))"
 
-# Step 2: Extract .rdata as the .dat. Verify ICU header magic (bytes 2..3
-# = 0xda 0x27). objcopy --dump-section emits the section bytes raw, which
-# for a data-only PE matches the icudt<MAJ>_dat symbol start exactly.
-DAT_FILE="$WORK/icudt${ICU_VER}l.dat"
-x86_64-w64-mingw32-objcopy --dump-section .rdata="$DAT_FILE" "$ICUDT_DLL" 2>/dev/null \
-    || { echo "build-minimal-icu-windows.sh: objcopy --dump-section failed; skipping" >&2; exit 0; }
-
+# Sanity-check ICU header magic (bytes 2..3 = 0xda 0x27).
 MAGIC=$(xxd -p -l 4 "$DAT_FILE" 2>/dev/null)
 if [[ ! "$MAGIC" =~ ....da27$ ]]; then
-    # PE .rdata may have minor leading padding (page alignment / pdata trampolines).
-    # Scan the first 256 bytes for the ICU header magic and re-extract from there.
-    HEADER_OFFSET=$(python3 -c "
-import sys
-with open('${DAT_FILE}', 'rb') as f:
-    buf = f.read(4096)
-# ICU header: uint16 headerSize, uint8 0xda, uint8 0x27
-for i in range(0, len(buf)-4, 2):
-    if buf[i+2] == 0xda and buf[i+3] == 0x27:
-        size = int.from_bytes(buf[i:i+2], 'little')
-        if 32 <= size <= 256:  # sane UDataHeader sizes
-            print(i)
-            sys.exit(0)
-print(-1)
-" 2>/dev/null)
-    if [ "${HEADER_OFFSET:-0}" -gt 0 ] 2>/dev/null; then
-        echo "ICU header found at offset $HEADER_OFFSET in .rdata; re-slicing"
-        python3 -c "
-buf = open('${DAT_FILE}', 'rb').read()
-open('${DAT_FILE}', 'wb').write(buf[${HEADER_OFFSET}:])"
-        MAGIC=$(xxd -p -l 4 "$DAT_FILE" 2>/dev/null)
-    fi
-fi
-if [[ ! "$MAGIC" =~ ....da27$ ]]; then
-    echo "build-minimal-icu-windows.sh: extracted blob magic check failed (got $MAGIC); skipping" >&2
+    echo "build-minimal-icu-windows.sh: .dat magic check failed (got $MAGIC); skipping" >&2
     exit 0
 fi
-echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
+echo "Source .dat : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
 
 # Step 3: Extract items. ICU 74's icupkg can read ICU 78 .dat because the
 # archive format itself has been stable since ICU 4.x — only the items
