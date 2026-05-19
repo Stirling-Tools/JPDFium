@@ -196,7 +196,7 @@ fi
 echo "pkgdata inc  : $ICUPKG_INC"
 
 OUT_DIR="$WORK/out"
-mkdir -p "$OUT_DIR"
+mkdir -p "$OUT_DIR" "$WORK/pkg-tmp"
 pkgdata -m dll -p icudata -e "icudt${ICU_VER}_dat" \
         -O "$ICUPKG_INC" \
         -T "$WORK/pkg-tmp" \
