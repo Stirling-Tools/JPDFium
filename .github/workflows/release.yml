@@ -59,13 +59,20 @@ jobs:
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
+        # Retry up to 3x — ports.ubuntu.com on the arm64 runner has occasional
+        # transient outages that kill the apt fetch.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake ninja-build pkg-config \
-            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
-            libqpdf-dev libpugixml-dev libunibreak-dev \
-            patchelf
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential cmake ninja-build pkg-config \
+              libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
+              libqpdf-dev libpugixml-dev libunibreak-dev \
+              patchelf && exit 0
+            echo "apt install attempt $attempt failed; retrying in 30s..." >&2
+            sleep 30
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Install build deps (macOS, native arm64)
         if: matrix.platform == 'darwin-arm64'

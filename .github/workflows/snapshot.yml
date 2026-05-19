@@ -39,13 +39,21 @@ jobs:
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
+        # ports.ubuntu.com on the arm64 runner has occasional network outages
+        # (seen May 2026 — Connection failed [IP: 91.189.91.10x]). Retry up to
+        # 3 times before failing so a single bad fetch doesn't kill the build.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake ninja-build pkg-config \
-            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
-            libqpdf-dev libpugixml-dev libunibreak-dev \
-            patchelf
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential cmake ninja-build pkg-config \
+              libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
+              libqpdf-dev libpugixml-dev libunibreak-dev \
+              patchelf && exit 0
+            echo "apt install attempt $attempt failed; retrying in 30s..." >&2
+            sleep 30
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
 
       - name: Install build deps (macOS, native arm64)
         if: matrix.platform == 'darwin-arm64'
