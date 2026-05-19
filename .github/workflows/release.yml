@@ -63,7 +63,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
-            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
             libqpdf-dev libpugixml-dev libunibreak-dev \
             patchelf
 
@@ -111,6 +111,14 @@ jobs:
 
       - name: Build native bridge
         run: bash native/build-real.sh
+
+      - name: Build minimal ICU data (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        # Strips ~25 MB of unused ICU data (locales, currencies, collations,
+        # RBNF, ...) and repackages libicudata.so. The bundler step will then
+        # pick up the trimmed lib via ldd on the bridge. No-op on macOS
+        # (data embedded) and Windows (TBD).
+        run: bash native/build-minimal-icu.sh
 
       - name: Stage binaries for publish
         run: |
