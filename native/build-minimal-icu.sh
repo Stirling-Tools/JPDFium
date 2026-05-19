@@ -49,36 +49,12 @@ echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 
 # The Ubuntu binary packages (libicu-dev, icu-devtools) DO NOT ship the
 # source icudt<MAJ>l.dat file — it's baked into libicudata.so.<MAJ>.<MIN> at
-# build time via genccode. So we either extract it from the .so (fragile)
-# or download the upstream ICU data archive (clean). We do the latter.
+# build time via genccode. The upstream icu4c-*-data.zip contains the loose
+# source items (.icu, .nrm) but no pre-assembled .dat either. So we extract
+# the data straight out of the system .so by reading the icudt<MAJ>_dat ELF
+# symbol's bytes — that symbol IS the .dat file, byte-for-byte.
 WORK=$(mktemp -d)
-# trap is registered later, after WORK is committed, to avoid removing it
-# under us if mktemp fails.
 trap "rm -rf '$WORK'" EXIT
-
-# First try the system's loose .dat (older Debians sometimes ship it).
-DAT_FILE=$(find /usr/share/icu /usr/lib -maxdepth 5 -name "icudt${ICU_VER}l.dat" -type f 2>/dev/null | head -1)
-if [ -z "$DAT_FILE" ] || [ ! -f "$DAT_FILE" ]; then
-    # Map MAJ.MIN to release tag, e.g. 74.2 -> release-74-2.
-    REL_TAG="release-${ICU_FULL_VER//./-}"
-    DATA_URL="https://github.com/unicode-org/icu/releases/download/${REL_TAG}/icu4c-${ICU_FULL_VER//./_}-data.zip"
-    echo "Downloading  : $DATA_URL"
-    if ! curl -fsSL "$DATA_URL" -o "$WORK/icu-data.zip"; then
-        echo "build-minimal-icu.sh: failed to download upstream ICU data; skipping" >&2
-        exit 0
-    fi
-    # Archive layout: data/in/icudt74l.dat
-    if ! command -v unzip >/dev/null 2>&1; then
-        echo "build-minimal-icu.sh: unzip not installed; skipping" >&2
-        exit 0
-    fi
-    unzip -q -o "$WORK/icu-data.zip" -d "$WORK/icu-data-extract"
-    DAT_FILE=$(find "$WORK/icu-data-extract" -name "icudt${ICU_VER}l.dat" -type f 2>/dev/null | head -1)
-    if [ -z "$DAT_FILE" ] || [ ! -f "$DAT_FILE" ]; then
-        echo "build-minimal-icu.sh: upstream zip didn't contain icudt${ICU_VER}l.dat; skipping" >&2
-        exit 0
-    fi
-fi
 
 # Find the *real* libicudata.so.<MAJ>.<MIN> file (not the SONAME symlink) so
 # `cp` later actually overwrites the data carrier. Group the -name predicates
@@ -86,8 +62,56 @@ fi
 ORIG_LIB=$(find /usr/lib /lib -maxdepth 4 -type f \
             \( -name "libicudata.so.${ICU_VER}.*" -o -name "libicudata.so.${ICU_VER}" \) \
             2>/dev/null | head -1)
-echo "Source data : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
-echo "Source lib  : ${ORIG_LIB:-<not found>} ($(du -h "${ORIG_LIB:-/dev/null}" 2>/dev/null | cut -f1))"
+if [ -z "$ORIG_LIB" ] || [ ! -f "$ORIG_LIB" ]; then
+    echo "build-minimal-icu.sh: libicudata.so not found under /usr/lib; skipping" >&2
+    exit 0
+fi
+echo "Source lib  : $ORIG_LIB ($(du -h "$ORIG_LIB" | cut -f1))"
+
+# Extract the embedded .dat. readelf -s prints lines like:
+#   "    11: 0000000000043000 31543216 OBJECT  GLOBAL DEFAULT   13 icudt74_dat"
+# Columns: Num  Value  Size  Type  Bind  Vis  Ndx  Name
+SYM_LINE=$(readelf -W -s "$ORIG_LIB" 2>/dev/null | awk -v sym="icudt${ICU_VER}_dat" '$NF==sym' | head -1)
+if [ -z "$SYM_LINE" ]; then
+    echo "build-minimal-icu.sh: icudt${ICU_VER}_dat symbol not found in $ORIG_LIB; skipping" >&2
+    exit 0
+fi
+SYM_VADDR_HEX=$(echo "$SYM_LINE" | awk '{print $2}')
+SYM_SIZE=$(echo "$SYM_LINE" | awk '{print $3}')
+SYM_SECTION_IDX=$(echo "$SYM_LINE" | awk '{print $7}')
+
+# readelf -S prints sections like:
+#   "  [13] .rodata           PROGBITS         0000000000041280  00041280  ..."
+# Columns: [Idx] Name  Type  Addr  Off  Size  ...
+SEC_LINE=$(readelf -W -S "$ORIG_LIB" 2>/dev/null | awk -v idx="[${SYM_SECTION_IDX}]" '$1==idx' | head -1)
+if [ -z "$SEC_LINE" ]; then
+    echo "build-minimal-icu.sh: couldn't find section [${SYM_SECTION_IDX}]; skipping" >&2
+    exit 0
+fi
+SEC_VADDR_HEX=$(echo "$SEC_LINE" | awk '{print $4}')
+SEC_FOFF_HEX=$(echo "$SEC_LINE" | awk '{print $5}')
+
+DAT_FILE="$WORK/icudt${ICU_VER}l.dat"
+# File offset = section file offset + (sym vaddr - section vaddr).
+# Extract via Python (way faster than dd bs=1 for 30 MB) and sanity-check
+# the ICU header magic (bytes 2..3 = 0xda 0x27) before proceeding.
+python3 - <<EOF || { echo "build-minimal-icu.sh: extraction failed; skipping" >&2; exit 0; }
+import sys
+sec_foff  = int("${SEC_FOFF_HEX}", 16)
+sec_vaddr = int("${SEC_VADDR_HEX}", 16)
+sym_vaddr = int("${SYM_VADDR_HEX}", 16)
+size      = int("${SYM_SIZE}")
+offset    = sec_foff + (sym_vaddr - sec_vaddr)
+with open("${ORIG_LIB}", "rb") as f:
+    f.seek(offset)
+    blob = f.read(size)
+if len(blob) != size or blob[2:4] != b"\xda\x27":
+    sys.exit(f"bad ICU magic at offset {offset}: got {blob[:4].hex()}, size {len(blob)}")
+with open("${DAT_FILE}", "wb") as f:
+    f.write(blob)
+print(f"extracted {len(blob)} bytes -> ${DAT_FILE}")
+EOF
+echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_VER}_dat symbol"
 
 # Items to KEEP — patterns matching item names in the .dat.
 # icupkg item names look like:
