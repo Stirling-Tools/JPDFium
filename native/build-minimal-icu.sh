@@ -287,8 +287,10 @@ if ! nm -D "$NEW_LIB" 2>/dev/null | grep -E "icudt${ICU_VER}_dat" ; then
     echo "build-minimal-icu.sh: icudt${ICU_VER}_dat not exported by new .so; skipping replace" >&2
     exit 0
 fi
-echo "--- ldd ---"
+echo "--- ldd new ---"
 ldd "$NEW_LIB" 2>&1 | head -5
+echo "--- ldd system ---"
+ldd "$ORIG_LIB" 2>&1 | head -5
 
 # Publish a copy under native/build-real/ as a fallback the bundler can find
 # even if /usr/lib was read-only.
@@ -296,10 +298,39 @@ PUBLISH_DIR="$(dirname "$0")/build-real/minimal-icu"
 mkdir -p "$PUBLISH_DIR"
 cp -v "$NEW_LIB" "$PUBLISH_DIR/"
 
+# Back up the original so we can restore on failure.
+BACKUP="${ORIG_LIB}.jpdfium-backup"
+if [ -n "$ORIG_LIB" ] && [ -f "$ORIG_LIB" ] && [ ! -f "$BACKUP" ]; then
+    sudo cp "$ORIG_LIB" "$BACKUP"
+fi
+
 # Replace the system one. The bundling step copies whatever the linker
 # resolves against, so swapping the file under /usr/lib means the bundle
 # picks up the small one.
 if [ -n "$ORIG_LIB" ] && [ -f "$ORIG_LIB" ]; then
     sudo cp "$NEW_LIB" "$ORIG_LIB"
     echo "Replaced     : $ORIG_LIB ($(du -h "$ORIG_LIB" | cut -f1))"
+
+    # After replacement, sanity-test the full ldd chain that bundle-runtime-
+    # deps.sh will walk: bridge -> libicuuc -> libicudata. If THIS ldd fails,
+    # the bundler will too — and we'd rather catch it here and restore than
+    # ship a broken jar.
+    BRIDGE_SO=$(find "$(dirname "$0")/build-real" -maxdepth 3 -name 'libjpdfium.so' -type f 2>/dev/null | head -1)
+    if [ -n "$BRIDGE_SO" ]; then
+        echo "--- ldd bridge (post-replace) ---"
+        if ! ldd "$BRIDGE_SO" >/dev/null 2>&1; then
+            echo "WARN: ldd on bridge failed after replacing libicudata; restoring backup" >&2
+            sudo cp "$BACKUP" "$ORIG_LIB"
+            exit 0
+        fi
+        ldd "$BRIDGE_SO" 2>&1 | grep -E "libicudata|libicuuc|libjpdfium" | head -5
+        # Also do the more expensive load-test that LD_TRACE_LOADED_OBJECTS=1
+        # produces — actual symbol resolution.
+        if ! LD_BIND_NOW=1 ldd -r "$BRIDGE_SO" >/dev/null 2>&1; then
+            echo "WARN: ldd -r on bridge failed (symbol resolution); restoring backup" >&2
+            sudo cp "$BACKUP" "$ORIG_LIB"
+            exit 0
+        fi
+        echo "OK: bridge ldd chain still resolves with trimmed libicudata"
+    fi
 fi
