@@ -51,7 +51,6 @@ meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
     -Dgraphite=disabled \
     -Dcoretext=disabled \
     -Ddirectwrite=disabled \
-    -Duniscribe=disabled \
     -Dgdi=disabled \
     -Dintrospection=disabled \
     -Ddocs=disabled \
