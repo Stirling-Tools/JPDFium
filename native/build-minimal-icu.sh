@@ -40,15 +40,44 @@ if ! command -v pkgdata >/dev/null 2>&1; then
     exit 0
 fi
 
-# Auto-detect ICU major version (74 on Ubuntu 24.04).
-ICU_VER=$(icupkg --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
-ICU_VER=${ICU_VER:-74}
+# Auto-detect ICU major.minor version. icupkg --version prints e.g.
+# "icupkg version 74.2 ..." so we grab the first M.N.
+ICU_FULL_VER=$(icupkg --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+ICU_FULL_VER=${ICU_FULL_VER:-74.2}
+ICU_VER=$(echo "$ICU_FULL_VER" | cut -d. -f1)
+echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 
-# Locate the source .dat. Ubuntu installs it under /usr/share/icu/<MAJ>.<MIN>/.
-DAT_FILE=$(find /usr/share/icu -name "icudt${ICU_VER}l.dat" 2>/dev/null | head -1)
+# The Ubuntu binary packages (libicu-dev, icu-devtools) DO NOT ship the
+# source icudt<MAJ>l.dat file — it's baked into libicudata.so.<MAJ>.<MIN> at
+# build time via genccode. So we either extract it from the .so (fragile)
+# or download the upstream ICU data archive (clean). We do the latter.
+WORK=$(mktemp -d)
+# trap is registered later, after WORK is committed, to avoid removing it
+# under us if mktemp fails.
+trap "rm -rf '$WORK'" EXIT
+
+# First try the system's loose .dat (older Debians sometimes ship it).
+DAT_FILE=$(find /usr/share/icu /usr/lib -maxdepth 5 -name "icudt${ICU_VER}l.dat" -type f 2>/dev/null | head -1)
 if [ -z "$DAT_FILE" ] || [ ! -f "$DAT_FILE" ]; then
-    echo "build-minimal-icu.sh: source icudt${ICU_VER}l.dat not found under /usr/share/icu; skipping" >&2
-    exit 0
+    # Map MAJ.MIN to release tag, e.g. 74.2 -> release-74-2.
+    REL_TAG="release-${ICU_FULL_VER//./-}"
+    DATA_URL="https://github.com/unicode-org/icu/releases/download/${REL_TAG}/icu4c-${ICU_FULL_VER//./_}-data.zip"
+    echo "Downloading  : $DATA_URL"
+    if ! curl -fsSL "$DATA_URL" -o "$WORK/icu-data.zip"; then
+        echo "build-minimal-icu.sh: failed to download upstream ICU data; skipping" >&2
+        exit 0
+    fi
+    # Archive layout: data/in/icudt74l.dat
+    if ! command -v unzip >/dev/null 2>&1; then
+        echo "build-minimal-icu.sh: unzip not installed; skipping" >&2
+        exit 0
+    fi
+    unzip -q -o "$WORK/icu-data.zip" -d "$WORK/icu-data-extract"
+    DAT_FILE=$(find "$WORK/icu-data-extract" -name "icudt${ICU_VER}l.dat" -type f 2>/dev/null | head -1)
+    if [ -z "$DAT_FILE" ] || [ ! -f "$DAT_FILE" ]; then
+        echo "build-minimal-icu.sh: upstream zip didn't contain icudt${ICU_VER}l.dat; skipping" >&2
+        exit 0
+    fi
 fi
 
 # Find the *real* libicudata.so.<MAJ>.<MIN> file (not the SONAME symlink) so
@@ -59,9 +88,6 @@ ORIG_LIB=$(find /usr/lib /lib -maxdepth 4 -type f \
             2>/dev/null | head -1)
 echo "Source data : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
 echo "Source lib  : ${ORIG_LIB:-<not found>} ($(du -h "${ORIG_LIB:-/dev/null}" 2>/dev/null | cut -f1))"
-
-WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
 
 # Items to KEEP — patterns matching item names in the .dat.
 # icupkg item names look like:
