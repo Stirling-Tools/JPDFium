@@ -141,13 +141,15 @@ bundle_macos() {
         done <<<"$deps"
     done
 
-    # Codesign-adhoc each bundled dylib so macOS' loader doesn't reject them
-    # in hardened-runtime / notarized contexts. Adhoc is enough; downstream
-    # bundlers (Tauri) can re-sign with their own identity at packaging time.
-    for f in "$DIST_DIR"/*.dylib; do
-        [ -e "$f" ] || continue
-        codesign --force --sign - "$f" 2>/dev/null || true
-    done
+    # Deliberately NOT codesign-adhoc here. Adhoc signatures in dylibs
+    # nested inside the Spring Boot bootJar fail Tauri's codesign walk of
+    # the .app bundle:
+    #   "The signature of the binary is invalid."
+    #   "The signature does not include a secure timestamp."
+    # Tauri's macOS bundler re-signs every binary in the .app at packaging
+    # time using the build's Developer ID identity; ad-hoc here just
+    # produces a sig that fails verification before Tauri can overwrite it.
+    # Bridge and bundled dylibs ship unsigned; downstream bundlers sign.
 }
 
 bundle_windows() {
