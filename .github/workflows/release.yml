@@ -117,16 +117,23 @@ jobs:
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
-      - name: Fetch prebuilt PDFium (pinned, static archive)
+      - name: Fetch prebuilt PDFium (pinned)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # Release builds use the pdf_is_complete_lib variant — a single
-          # libpdfium.a per platform that the bridge whole-archive-links
-          # into libjpdfium.{so,dylib,dll}. Drops ~16 MB across the
-          # 5-platform release-time natives bundle vs the snapshot's
-          # component path.
-          JPDFIUM_BUILD_MODE: static
+          # Release stays on component mode — verified empirically that the
+          # `static` variant (pdf_is_complete_lib=true) is BIGGER, not
+          # smaller, because --whole-archive linking + the FPDF_* dlsym
+          # export contract means the linker can't dead-strip anything in
+          # libpdfium.a (which already contains all bundled deps as their
+          # own .o files). linux-x64 raw artifact: 28 MB (component) ->
+          # 31 MB (static); linux-arm64: 28 MB -> 30 MB; windows-x64
+          # static doesn't even link (libc++ __Cr symbol mismatch). The
+          # dual-mode infrastructure is kept in place so we can iterate on
+          # gc-sections / function-sections later without redoing the
+          # prebuild plumbing, but the value isn't there with the obvious
+          # whole-archive approach. Set JPDFIUM_BUILD_MODE=static manually
+          # via workflow_dispatch if you want to experiment.
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: Build qpdf with native crypto (Linux)
