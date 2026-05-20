@@ -22,8 +22,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── Prep: cross-build trimmed ICU 78 data once on Linux ──────────────────
+  # Used by windows-x64 (downloads icudt78.dll) and both darwin-* jobs
+  # (download the bare icudt78l.dat + wrap on macOS via clang). brew icu4c@78
+  # on macOS doesn't ship icupkg/pkgdata so we can't trim there; vcpkg's icu
+  # port skips the tools dir on Windows; Linux's apt icu-devtools has both,
+  # and the .dat archive format is OS-agnostic. Mirrors snapshot.yml's
+  # prep-windows-icu but covers macOS too.
+  prep-icu-data:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps (Linux + mingw-w64)
+        run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential icu-devtools libicu-dev \
+              mingw-w64 binutils-mingw-w64 \
+              curl unzip && exit 0
+            sleep 30
+          done
+          exit 1
+      - name: Cross-build minimal Windows icudt78.dll + bare trimmed .dat
+        run: bash native/build-minimal-icu-windows.sh
+      - name: Upload trimmed Windows icudt78.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/icudt78.dll
+          if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
+          retention-days: 1
+      - name: Upload bare trimmed ICU .dat (for macOS wrap step)
+        uses: actions/upload-artifact@v4
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/icudt*l.dat
+          if-no-files-found: warn  # macOS jobs fall back to brew's 33 MB libicudata
+          retention-days: 1
+
   # ── Fan out: build native libraries on each platform ──────────────────────
   build-natives:
+    needs: prep-icu-data
+    if: always()  # build even if prep failed; matrix jobs fall back to untrimmed ICU
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +199,14 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         run: bash native/build-minimal-icu.sh
 
+      - name: Download bare trimmed ICU .dat (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/
+
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
         run: bash native/build-minimal-icu-macos.sh
@@ -179,6 +235,18 @@ jobs:
           bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           echo "--- staged ---"
           ls -la native/dist/${{ matrix.platform }}/
+
+      - name: Override icudt78.dll with trimmed copy (Windows only)
+        # Runs AFTER staging (which would have copied PDFium's full 33 MB
+        # icudt78.dll from vcpkg) and BEFORE upload, so the small trimmed
+        # copy from prep-icu-data wins. download-artifact@v4 extracts on
+        # top, overwriting the larger one.
+        if: matrix.platform == 'windows-x64'
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/
 
       - name: Sanity check
         run: |
