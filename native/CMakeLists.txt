@@ -67,13 +67,41 @@ if(JPDFIUM_USE_PDFIUM)
     set(PDFIUM_INCLUDE_DIR "${PDFIUM_DIR}/include")
     set(PDFIUM_LIB_DIR     "${PDFIUM_DIR}/lib")
 
-    # Try static first, then shared
-    find_library(PDFIUM_LIB
-        NAMES pdfium
-        PATHS "${PDFIUM_LIB_DIR}"
-        NO_DEFAULT_PATH)
-    if(NOT PDFIUM_LIB)
-        message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
+    # Detect which prebuild variant we're consuming. setup-pdfium.sh's two
+    # modes drop different artifacts here:
+    #   component mode: libpdfium.{so,dylib} + sibling component .sos
+    #                   (Linux/macOS) / pdfium.dll + sibling .dlls (Windows)
+    #   static mode:    libpdfium.a (POSIX) / pdfium.lib (Windows) — a
+    #                   single archive with PDFium + every bundled dep.
+    #
+    # We probe for the static archive first; if found, force whole-archive
+    # linking so all the FPDF/EPDF symbols (and the bundled-dep code the
+    # bridge transitively pulls) survive into the final libjpdfium.so.
+    set(PDFIUM_STATIC_LIB "")
+    if(WIN32)
+        if(EXISTS "${PDFIUM_LIB_DIR}/pdfium.lib")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/pdfium.lib")
+        endif()
+    else()
+        if(EXISTS "${PDFIUM_LIB_DIR}/libpdfium.a")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/libpdfium.a")
+        endif()
+    endif()
+
+    if(PDFIUM_STATIC_LIB)
+        set(PDFIUM_LINK_MODE "static")
+        set(PDFIUM_LIB "${PDFIUM_STATIC_LIB}")
+        message(STATUS "PDFium link mode: static (${PDFIUM_LIB})")
+    else()
+        find_library(PDFIUM_LIB
+            NAMES pdfium
+            PATHS "${PDFIUM_LIB_DIR}"
+            NO_DEFAULT_PATH)
+        if(NOT PDFIUM_LIB)
+            message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
+        endif()
+        set(PDFIUM_LINK_MODE "component")
+        message(STATUS "PDFium link mode: component (${PDFIUM_LIB})")
     endif()
 
     add_library(jpdfium SHARED
@@ -91,7 +119,36 @@ if(JPDFIUM_USE_PDFIUM)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
-    target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+
+    if(PDFIUM_LINK_MODE STREQUAL "static")
+        # Whole-archive: pull every symbol from libpdfium.a (FPDF/EPDF exports
+        # plus the bundled deps' code paths used transitively) into the final
+        # libjpdfium.so. Without --whole-archive the linker would dead-strip
+        # any pdfium-internal symbol not directly referenced by the bridge,
+        # including FPDF_* exports the JVM resolves via dlsym at runtime.
+        if(APPLE)
+            target_link_options(jpdfium PRIVATE "-Wl,-force_load,${PDFIUM_LIB}")
+        elseif(MSVC)
+            target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${PDFIUM_LIB}")
+            target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+        else()
+            target_link_options(jpdfium PRIVATE
+                "-Wl,--whole-archive" "${PDFIUM_LIB}" "-Wl,--no-whole-archive")
+        endif()
+        # PDFium static archives reference platform libs that we'd otherwise
+        # get transitively via libpdfium.so's NEEDED entries.
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(jpdfium PRIVATE pthread dl m)
+        endif()
+        if(APPLE)
+            target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
+                                                  "-framework CoreGraphics"
+                                                  "-framework CoreText"
+                                                  "-framework AppKit")
+        endif()
+    else()
+        target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+    endif()
 
     # ── Rust integration (required for real PDFium build) ────────────────────
     find_program(CARGO_CMD cargo)

@@ -116,10 +116,16 @@ jobs:
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
-      - name: Fetch prebuilt PDFium (pinned)
+      - name: Fetch prebuilt PDFium (pinned, static archive)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Release builds use the pdf_is_complete_lib variant — a single
+          # libpdfium.a per platform that the bridge whole-archive-links
+          # into libjpdfium.{so,dylib,dll}. Drops ~16 MB across the
+          # 5-platform release-time natives bundle vs the snapshot's
+          # component path.
+          JPDFIUM_BUILD_MODE: static
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: Build qpdf with native crypto (Linux)

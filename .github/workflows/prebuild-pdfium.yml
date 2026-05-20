@@ -92,8 +92,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Cross product of platform × build_mode. component = current path
+        # (libpdfium.so + sibling shared libs, consumed by snapshot.yml /
+        # publish-github-packages.yml). static = pdf_is_complete_lib=true
+        # path (single libpdfium.a containing PDFium + bundled deps, consumed
+        # by release.yml). Two variants per platform doubles prebuild
+        # runtime but the workflow runs rarely (weekly cron + on PDFium pin
+        # bumps), and trims ~16 MB across the 5-platform release-time bundle.
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64   }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: component }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: static    }
           # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
           # an "Exec format error" because Chromium's bundled clang for arm64
           # hosts isn't usable in this PDFium revision — the binary in
@@ -101,12 +109,16 @@ jobs:
           # Cross-compiling from x64 with target_cpu=arm64 uses the x64 clang
           # binary with --target=aarch64-linux-gnu, which works. This is also
           # how bblanchon/pdfium-binaries handles linux-arm64.
-          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64 }
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
           # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
-          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64   }
-          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64 }
-          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64   }
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: static    }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: component }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: static    }
+          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: component }
+          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: static    }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -145,26 +157,37 @@ jobs:
         env:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           TARGET_CPU: ${{ matrix.target_cpu }}
+          JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
         run: |
           # Override the branch pointer used by setup-pdfium.sh so every
           # matrix job builds the exact same commit even if embedpdf/main
           # moves while the matrix is running.
           export EMBEDPDF_PIN_SHA="$PINNED_SHA"
           export TARGET_CPU="$TARGET_CPU"
+          export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
 
       - name: Package artifacts
+        # component mode keeps the historical tarball name
+        # (`pdfium-<platform>.tar.gz`) for backward compatibility with the
+        # existing fetch-prebuilt-pdfium.sh / pdfium.version pin path.
+        # static mode adds a `-static` suffix so both variants can live
+        # side-by-side in the same release.
         run: |
           mkdir -p .prebuild
-          # Tar the include/ + lib/ trees produced by setup-pdfium.sh.
-          tar -czf ".prebuild/pdfium-${{ matrix.platform }}.tar.gz" \
+          if [ "${{ matrix.mode }}" = "static" ]; then
+            SUFFIX="-static"
+          else
+            SUFFIX=""
+          fi
+          tar -czf ".prebuild/pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz" \
             -C native/pdfium include lib
           ls -lh .prebuild/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pdfium-${{ matrix.platform }}
-          path: .prebuild/pdfium-${{ matrix.platform }}.tar.gz
+          name: pdfium-${{ matrix.platform }}-${{ matrix.mode }}
+          path: .prebuild/pdfium-*.tar.gz
           if-no-files-found: error
           retention-days: 3
 
@@ -184,8 +207,12 @@ jobs:
       - name: Sanity check
         run: |
           ls -lh .prebuild/
+          # Both variants must be present for every platform: component
+          # (no suffix, consumed by snapshot.yml) and static (-static suffix,
+          # consumed by release.yml).
           for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
-            test -f ".prebuild/pdfium-$p.tar.gz" || { echo "MISSING: $p"; exit 1; }
+            test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
           done
 
       - name: Create GitHub Release
@@ -206,13 +233,21 @@ jobs:
           - Consumers pin this via \`native/pdfium.version\`.
 
           ### Assets
-          | Platform      | Tarball                          |
-          |---------------|----------------------------------|
-          | linux-x64     | pdfium-linux-x64.tar.gz          |
-          | linux-arm64   | pdfium-linux-arm64.tar.gz        |
-          | darwin-x64    | pdfium-darwin-x64.tar.gz         |
-          | darwin-arm64  | pdfium-darwin-arm64.tar.gz       |
-          | windows-x64   | pdfium-windows-x64.tar.gz        |
+          Each platform has two variants:
+
+          | Platform      | Component build (snapshot CI)    | Static archive (release CI)             |
+          |---------------|----------------------------------|------------------------------------------|
+          | linux-x64     | pdfium-linux-x64.tar.gz          | pdfium-linux-x64-static.tar.gz           |
+          | linux-arm64   | pdfium-linux-arm64.tar.gz        | pdfium-linux-arm64-static.tar.gz         |
+          | darwin-x64    | pdfium-darwin-x64.tar.gz         | pdfium-darwin-x64-static.tar.gz          |
+          | darwin-arm64  | pdfium-darwin-arm64.tar.gz       | pdfium-darwin-arm64-static.tar.gz        |
+          | windows-x64   | pdfium-windows-x64.tar.gz        | pdfium-windows-x64-static.tar.gz         |
+
+          Component tarballs hold libpdfium.{so,dylib,dll} + sibling component
+          shared libs (abseil, partition_alloc, etc.); easier to iterate against
+          but bigger. Static tarballs hold a single libpdfium.{a,lib} containing
+          PDFium + every bundled dep — picked up by release.yml so the final
+          natives jars dead-strip aggressively across PDFium internals.
 
           Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
           EOF

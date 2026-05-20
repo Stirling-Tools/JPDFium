@@ -40,8 +40,23 @@ if [ -z "$TAG" ]; then
     exit 1
 fi
 
-ASSET="pdfium-${PLATFORM}.tar.gz"
-echo "Fetching $ASSET from release $TAG ($REPO)..."
+# Pick the prebuilt variant based on JPDFIUM_BUILD_MODE:
+#   "component" (default): pdfium-<platform>.tar.gz — multiple .so/.dylib/.dll
+#       files, consumed by snapshot.yml / publish-github-packages.yml / ci.yml.
+#   "static": pdfium-<platform>-static.tar.gz — single libpdfium.{a,lib},
+#       consumed by release.yml. Picked up by build-real.sh + CMakeLists.txt
+#       which whole-archive-link the .a into libjpdfium.so.
+JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
+case "$JPDFIUM_BUILD_MODE" in
+    component) SUFFIX="" ;;
+    static)    SUFFIX="-static" ;;
+    *)
+        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
+        exit 1
+        ;;
+esac
+ASSET="pdfium-${PLATFORM}${SUFFIX}.tar.gz"
+echo "Fetching $ASSET (mode=$JPDFIUM_BUILD_MODE) from release $TAG ($REPO)..."
 
 mkdir -p "$TARGET_DIR"
 TMP="$(mktemp -d)"

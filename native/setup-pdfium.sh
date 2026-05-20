@@ -324,14 +324,48 @@ fi
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"
 
-# Component build (is_component_build=true) produces libpdfium.so directly
-# via SOLINK. This sets COMPONENT_BUILD + FPDF_IMPLEMENTATION defines, which
-# gives FPDF_EXPORT symbols visibility("default") automatically.
+# Two build flavors selected by ${JPDFIUM_BUILD_MODE:-component}:
 #
-# use_allocator_shim=false is critical: without this, PartitionAlloc replaces
-# the system allocator (malloc/free), which crashes when loaded into a JVM
-# that already manages its own heap.
-GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+#   "component" (default, used by snapshot.yml / publish-github-packages.yml /
+#       ci.yml — iteration-friendly path):
+#         is_component_build=true → SOLINK each PDFium subcomponent into its
+#         own .so. Output: libpdfium.so + ~15 sibling .so files (abseil,
+#         partition_alloc, libchrome_zlib, icuuc, libpng, freetype, …) that
+#         the bridge links against at the consumer end. Build is fast and
+#         per-component, debugging is easier.
+#
+#   "static" (release-only, used by release.yml — release-size-optimized
+#       path):
+#         is_component_build=false + pdf_is_complete_lib=true → roll all of
+#         PDFium and its bundled deps (abseil, partition_alloc, zlib, libpng,
+#         freetype, harfbuzz, icu, etc.) into a single libpdfium.a static
+#         archive. Bridge then links it into libjpdfium.so with
+#         -Wl,--whole-archive so the LTO can dead-strip cross-module unused
+#         code, dropping ~16 MB across the 5-platform natives bundle vs
+#         component mode.
+#
+# Both modes share the rest of the args:
+#   use_allocator_shim=false: without this, PartitionAlloc replaces the
+#       system allocator (malloc/free), which crashes when loaded into a
+#       JVM that already manages its own heap.
+#   COMPONENT_BUILD + FPDF_IMPLEMENTATION defines (set automatically by
+#   is_component_build=true) give FPDF_EXPORT symbols
+#   visibility("default") — in static mode we instead pass these via
+#   compile flags below.
+JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
+case "$JPDFIUM_BUILD_MODE" in
+    component)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    static)
+        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    *)
+        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
+        exit 1
+        ;;
+esac
+echo "  Build mode : ${JPDFIUM_BUILD_MODE}"
 
 # Honor TARGET_CPU for cross-compile builds (e.g. darwin-x64 from macos-14
 # arm64 runner, or linux-arm64 from ubuntu-latest x64 runner). Defaults to
@@ -397,21 +431,30 @@ ninja -C "${OUT_DIR}" pdfium -j "${NPROC}"
 echo "[7/7] Installing to ${TARGET_DIR}..."
 mkdir -p "${TARGET_DIR}/include" "${TARGET_DIR}/lib"
 
-# Component build produces a main library plus its dependencies. Extensions
-# differ by OS: .so on Linux, .dylib on macOS, .dll on Windows. Filenames
-# differ too: Linux/macOS use the lib prefix, Windows does not.
+# Output filenames + extensions differ by OS AND by build mode:
+#
+#   component mode: a SOLINK'd shared library (libpdfium.so / .dylib /
+#       pdfium.dll) plus per-component sibling shared libs.
+#   static mode:    a single static archive (libpdfium.a on POSIX,
+#       pdfium.lib on Windows) containing PDFium + every bundled dep.
 case "$(uname -s)" in
     Linux*)
         LIB_EXT="so"
-        MAIN_LIB="libpdfium.so"
+        STATIC_EXT="a"
+        MAIN_LIB_COMPONENT="libpdfium.so"
+        MAIN_LIB_STATIC="libpdfium.a"
         ;;
     Darwin*)
         LIB_EXT="dylib"
-        MAIN_LIB="libpdfium.dylib"
+        STATIC_EXT="a"
+        MAIN_LIB_COMPONENT="libpdfium.dylib"
+        MAIN_LIB_STATIC="libpdfium.a"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         LIB_EXT="dll"
-        MAIN_LIB="pdfium.dll"
+        STATIC_EXT="lib"
+        MAIN_LIB_COMPONENT="pdfium.dll"
+        MAIN_LIB_STATIC="pdfium.lib"
         ;;
     *)
         echo "ERROR: Unsupported OS for install step: $(uname -s)" >&2
@@ -419,17 +462,33 @@ case "$(uname -s)" in
         ;;
 esac
 
-# Copy all shared libraries from the output directory.
-if [ "${LIB_EXT}" = "dll" ]; then
-    # Windows: pdfium.dll plus dependency DLLs and their import libraries.
-    cp "${OUT_DIR}"/*.dll "${TARGET_DIR}/lib/"
-    cp "${OUT_DIR}"/*.dll.lib "${TARGET_DIR}/lib/" 2>/dev/null || true
-    LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"*.dll 2>/dev/null | wc -l)"
+if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
+    MAIN_LIB="$MAIN_LIB_STATIC"
+    # gn places static archives under out/Release/obj/<target>.<ext> on
+    # POSIX targets and out/Release/<target>.<ext> on Windows. Find the
+    # archive wherever ninja put it.
+    SRC=$(find "${OUT_DIR}" -maxdepth 3 -type f -name "${MAIN_LIB}" 2>/dev/null | head -1)
+    if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
+        echo "  ERROR: ${MAIN_LIB} not produced — check pdf_is_complete_lib args" >&2
+        exit 1
+    fi
+    cp "$SRC" "${TARGET_DIR}/lib/${MAIN_LIB}"
+    LIB_COUNT=1
+    echo "  Copied static archive: ${SRC} ($(du -h "$SRC" | cut -f1)) -> ${TARGET_DIR}/lib/"
 else
-    cp "${OUT_DIR}"/lib*."${LIB_EXT}" "${TARGET_DIR}/lib/"
-    LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"lib*."${LIB_EXT}" 2>/dev/null | wc -l)"
+    MAIN_LIB="$MAIN_LIB_COMPONENT"
+    # Component build: copy all shared libraries from the output directory.
+    if [ "${LIB_EXT}" = "dll" ]; then
+        # Windows: pdfium.dll plus dependency DLLs and their import libraries.
+        cp "${OUT_DIR}"/*.dll "${TARGET_DIR}/lib/"
+        cp "${OUT_DIR}"/*.dll.lib "${TARGET_DIR}/lib/" 2>/dev/null || true
+        LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"*.dll 2>/dev/null | wc -l)"
+    else
+        cp "${OUT_DIR}"/lib*."${LIB_EXT}" "${TARGET_DIR}/lib/"
+        LIB_COUNT="$(ls -1 "${TARGET_DIR}/lib/"lib*."${LIB_EXT}" 2>/dev/null | wc -l)"
+    fi
+    echo "  Copied ${LIB_COUNT} shared libraries -> ${TARGET_DIR}/lib/"
 fi
-echo "  Copied ${LIB_COUNT} shared libraries -> ${TARGET_DIR}/lib/"
 
 # Copy public headers
 cp public/*.h "${TARGET_DIR}/include/"
@@ -443,18 +502,27 @@ if [ ! -f "${MAIN_LIB_PATH}" ]; then
 fi
 echo "  Main library: ${MAIN_LIB_PATH}"
 
-# Verify EPDF symbols are exported. nm flags differ by OS:
-#   Linux: nm -D (dynamic symbols)
-#   macOS: nm -gU (external defined symbols; macOS prefixes underscores)
-#   Windows: dumpbin /exports (if available) — skip otherwise.
+# Verify EPDF symbols are exported. nm flags differ by OS AND by whether
+# we built a .so/.dylib (dynamic symbols, -D / -gU) or a .a (defined
+# symbols, plain -g).
 case "$(uname -s)" in
     Linux*)
-        EPDF_COUNT="$(nm -D "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*EPDF' || true)"
-        FPDF_COUNT="$(nm -D "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*FPDF' || true)"
+        if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
+            NM_FLAGS="-g --defined-only"
+        else
+            NM_FLAGS="-D"
+        fi
+        EPDF_COUNT="$(nm ${NM_FLAGS} "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*EPDF' || true)"
+        FPDF_COUNT="$(nm ${NM_FLAGS} "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T.*FPDF' || true)"
         ;;
     Darwin*)
-        EPDF_COUNT="$(nm -gU "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}EPDF' || true)"
-        FPDF_COUNT="$(nm -gU "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}FPDF' || true)"
+        if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
+            NM_FLAGS="-gU"   # works for .a too
+        else
+            NM_FLAGS="-gU"
+        fi
+        EPDF_COUNT="$(nm ${NM_FLAGS} "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}EPDF' || true)"
+        FPDF_COUNT="$(nm ${NM_FLAGS} "${MAIN_LIB_PATH}" 2>/dev/null | grep -c ' T _\{0,1\}FPDF' || true)"
         ;;
     *)
         EPDF_COUNT="(skipped on $(uname -s))"
