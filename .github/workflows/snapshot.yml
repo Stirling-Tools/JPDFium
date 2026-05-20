@@ -160,13 +160,17 @@ jobs:
           JPDFIUM_BUILD_MODE: ${{ inputs.build_mode || 'component' }}
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
-      - name: Build qpdf with native crypto (Linux)
-        if: startsWith(matrix.platform, 'linux-')
-        # Rebuild libqpdf with --with-crypto=native to drop the GNUTLS
-        # transitive chain (libgnutls + libnettle + libgmp + libp11-kit +
-        # libidn2 + libunistring + libtasn1 + libbrotli* ~ 7-8 MB).
+      - name: Build qpdf with native crypto (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        # Rebuild libqpdf with --with-crypto=native to drop the crypto
+        # transitive chain:
+        #   Linux   apt libqpdf-dev is GNUTLS-built — drops libgnutls +
+        #           libnettle + libgmp + libp11-kit + libidn2 + libunistring +
+        #           libtasn1 + libbrotli* ≈ 7-8 MB.
+        #   macOS   brew libqpdf is OpenSSL-built — drops libcrypto.3.dylib
+        #           ≈ 4.85 MB.
         # Must run BEFORE build-real.sh so the bridge links against the new
-        # /usr/local libqpdf.
+        # /usr/local (Linux) or $(brew --prefix) (macOS) libqpdf.
         run: bash native/build-qpdf-native-crypto.sh
 
       - name: Build harfbuzz without GLib (Linux + macOS)

@@ -136,8 +136,8 @@ jobs:
           # via workflow_dispatch if you want to experiment.
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
-      - name: Build qpdf with native crypto (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+      - name: Build qpdf with native crypto (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         run: bash native/build-qpdf-native-crypto.sh
 
       - name: Build harfbuzz without GLib (Linux + macOS)
