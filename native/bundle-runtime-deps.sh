@@ -102,11 +102,17 @@ bundle_macos() {
     # /usr/local. Our qpdf-native and harfbuzz-no-glib builds install to
     # the brew prefix on both archs. /usr/local stays as a fallback for
     # Intel hosts.
+    #
+    # Keg-only formulas (icu4c@78, openssl@3, libgcrypt, gnutls, etc.) live
+    # at <prefix>/opt/<formula>/lib/ — not symlinked into <prefix>/lib/. We
+    # add a glob fallback below so any keg-only formula's libs are found
+    # without having to enumerate them by name.
     local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
+    local rpath_globs=(/opt/homebrew/opt/*/lib /usr/local/opt/*/lib)
 
     # Resolve a dep that came back as @rpath/foo.dylib or @loader_path/foo.dylib
-    # by basename-searching through rpath_dirs. echoes the absolute path or
-    # empty if nothing matches.
+    # by basename-searching through rpath_dirs (fixed list) then rpath_globs
+    # (keg-only formulas). echoes the absolute path or empty if nothing matches.
     _resolve_rpath_dep() {
         local d="$1"
         local base
@@ -117,6 +123,18 @@ bundle_macos() {
                 echo "$dir/$base"
                 return 0
             fi
+        done
+        # Glob expansion runs at function-call time, picking up whatever
+        # keg-only formulas brew has installed. Quote the basename test to
+        # tolerate dirs that don't exist (the glob can return its literal).
+        for dir in "${rpath_globs[@]}"; do
+            for d2 in $dir; do
+                [ -d "$d2" ] || continue
+                if [ -f "$d2/$base" ]; then
+                    echo "$d2/$base"
+                    return 0
+                fi
+            done
         done
         return 1
     }
