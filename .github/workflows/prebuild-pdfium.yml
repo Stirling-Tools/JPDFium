@@ -173,6 +173,7 @@ jobs:
         # existing fetch-prebuilt-pdfium.sh / pdfium.version pin path.
         # static mode adds a `-static` suffix so both variants can live
         # side-by-side in the same release.
+        id: pkg
         run: |
           mkdir -p .prebuild
           if [ "${{ matrix.mode }}" = "static" ]; then
@@ -180,14 +181,18 @@ jobs:
           else
             SUFFIX=""
           fi
-          tar -czf ".prebuild/pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz" \
-            -C native/pdfium include lib
+          ASSET="pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz"
+          tar -czf ".prebuild/${ASSET}" -C native/pdfium include lib
           ls -lh .prebuild/
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
         with:
           name: pdfium-${{ matrix.platform }}-${{ matrix.mode }}
-          path: .prebuild/pdfium-*.tar.gz
+          # Use the exact filename produced above; upload-artifact's path
+          # globbing doesn't reliably match files in subdirs that start with
+          # a leading dot (`.prebuild/`).
+          path: .prebuild/${{ steps.pkg.outputs.asset }}
           if-no-files-found: error
           retention-days: 3
 
