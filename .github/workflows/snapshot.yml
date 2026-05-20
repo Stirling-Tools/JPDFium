@@ -169,11 +169,12 @@ jobs:
         # /usr/local libqpdf.
         run: bash native/build-qpdf-native-crypto.sh
 
-      - name: Build harfbuzz without GLib (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+      - name: Build harfbuzz without GLib (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         # Rebuild libharfbuzz with all language bindings disabled to drop
-        # libglib-2.0.so.0 (~1.4 MB) — apt's libharfbuzz0b pulls glib for
-        # hb-glib bindings we don't use.
+        # libglib (~1.4 MB on Linux, ~1.25 MB + libintl ~230 KB on macOS).
+        # apt's libharfbuzz0b and brew's harfbuzz both link glib for the
+        # hb-glib bindings we don't use; the bridge calls plain hb_*.
         run: bash native/build-harfbuzz-no-glib.sh
 
       - run: bash native/build-real.sh

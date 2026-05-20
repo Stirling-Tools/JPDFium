@@ -1,33 +1,65 @@
 #!/usr/bin/env bash
-# Rebuild libharfbuzz without GLib to drop libglib-2.0.so.0 (1.4 MB) from
-# the Linux bundle. Ubuntu's apt libharfbuzz0b links against libglib for
-# the hb-glib bindings (icu / coretext bindings too, but we don't pull
-# those). We don't use hb-glib from the bridge — PDFium has its own
-# embedded harfbuzz, and the bridge's HarfBuzz usage is plain hb_*.
+# Rebuild libharfbuzz without GLib to drop libglib-2.0.{so.0,0.dylib} from
+# the Linux + macOS bundles. Ubuntu's apt libharfbuzz0b and brew's
+# harfbuzz both link against libglib for the hb-glib bindings (and icu /
+# coretext bindings on macOS) we don't use — the bridge calls plain hb_*
+# C APIs and PDFium has its own embedded harfbuzz, so the system one is
+# only ever used for the bridge's font-shaping needs.
 #
-# Output: /usr/local/lib/libharfbuzz.so.* — pkg-config picks this up
-# ahead of /usr/lib via the default search order. Moves apt's harfbuzz
-# .so aside afterwards so ldd resolves /usr/local.
+# Output:
+#   Linux  - /usr/local/lib/libharfbuzz.so.*           (pkg-config picks
+#                                                      this up ahead of
+#                                                      /usr/lib)
+#   macOS  - $(brew --prefix)/lib/libharfbuzz.*.dylib  (replaces brew's
+#                                                      installed copy)
 #
-# Usage: build-harfbuzz-no-glib.sh        # Linux only
+# Both platforms then move the original (apt/brew) harfbuzz libraries
+# aside so the bundler's ldd/otool walk resolves to /usr/local or brew's
+# refreshed copy.
+#
+# Skips silently with exit 0 if anything fails — bundle falls back to
+# the original glib-linked harfbuzz.
 
 echo "build-harfbuzz-no-glib.sh: start  ($(uname -s) $(uname -m))"
 
-case "$(uname -s)" in
-    Linux*) ;;
-    *) echo "build-harfbuzz-no-glib.sh: skipping on $(uname -s)"; exit 0;;
-esac
-
 set -u
+
+case "$(uname -s)" in
+    Linux*)
+        OS=linux
+        PREFIX=/usr/local
+        ;;
+    Darwin*)
+        OS=darwin
+        if command -v brew >/dev/null 2>&1; then
+            PREFIX=$(brew --prefix)
+        else
+            echo "build-harfbuzz-no-glib.sh: brew not on PATH on macOS; skipping" >&2
+            exit 0
+        fi
+        ;;
+    *)
+        echo "build-harfbuzz-no-glib.sh: skipping on $(uname -s)"
+        exit 0
+        ;;
+esac
 
 HB_TAG="${HB_TAG:-8.3.0}"   # match the 8.3.x series Ubuntu Noble ships
 HB_REPO=https://github.com/harfbuzz/harfbuzz
 
-# Build prereqs already installed by the main apt step.
+# Build prereqs.
 for tool in meson ninja pkg-config; do
     if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "build-harfbuzz-no-glib.sh: $tool not found (apt install meson ninja-build)" >&2
-        exit 0
+        if [ "$OS" = "darwin" ]; then
+            echo "build-harfbuzz-no-glib.sh: $tool missing — brew install $tool" >&2
+            brew install "$tool" 2>&1 | tail -3 || {
+                echo "build-harfbuzz-no-glib.sh: brew install $tool failed; skipping" >&2
+                exit 0
+            }
+        else
+            echo "build-harfbuzz-no-glib.sh: $tool not found (apt install meson ninja-build)" >&2
+            exit 0
+        fi
     fi
 done
 
@@ -42,7 +74,7 @@ fi
 
 # Configure with all binding options OFF — pure hb_* C API only.
 meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
-    --prefix=/usr/local \
+    --prefix="$PREFIX" \
     --buildtype=release \
     --default-library=shared \
     -Dglib=disabled \
@@ -63,26 +95,52 @@ meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
 ninja -C "$WORK/harfbuzz/build" \
   || { echo "build-harfbuzz-no-glib.sh: ninja build failed; skipping" >&2; exit 0; }
 
-sudo ninja -C "$WORK/harfbuzz/build" install \
-  || { echo "build-harfbuzz-no-glib.sh: ninja install failed; skipping" >&2; exit 0; }
-sudo ldconfig 2>/dev/null || true
+# Linux uses sudo (GH runner). macOS owns brew prefix as the runner user,
+# so plain `ninja install` works there (and `sudo` would prompt).
+if [ "$OS" = "linux" ]; then
+    sudo ninja -C "$WORK/harfbuzz/build" install \
+      || { echo "build-harfbuzz-no-glib.sh: ninja install failed; skipping" >&2; exit 0; }
+    sudo ldconfig 2>/dev/null || true
+else
+    ninja -C "$WORK/harfbuzz/build" install \
+      || { echo "build-harfbuzz-no-glib.sh: ninja install failed; skipping" >&2; exit 0; }
+fi
 
 # Diagnostics — confirm no libglib in the new libharfbuzz.
-NEW_HB=$(find /usr/local/lib -maxdepth 1 -name "libharfbuzz.so.*" -type f 2>/dev/null | head -1)
-if [ -n "$NEW_HB" ]; then
-    echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
-    echo "ldd:"
-    ldd "$NEW_HB" | sed 's/^/  /'
-    if ldd "$NEW_HB" | grep -q 'libglib'; then
-        echo "WARNING: new harfbuzz still links libglib — bindings flag wasn't honored?" >&2
+if [ "$OS" = "linux" ]; then
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.so.*" -type f 2>/dev/null | head -1)
+    if [ -n "$NEW_HB" ]; then
+        echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
+        echo "ldd:"
+        ldd "$NEW_HB" | sed 's/^/  /'
+        if ldd "$NEW_HB" | grep -q 'libglib'; then
+            echo "WARNING: new harfbuzz still links libglib — bindings flag wasn't honored?" >&2
+        fi
+    fi
+else
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.0.dylib" -type f 2>/dev/null | head -1)
+    if [ -n "$NEW_HB" ]; then
+        echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
+        echo "otool -L:"
+        otool -L "$NEW_HB" | sed 's/^/  /'
+        if otool -L "$NEW_HB" | grep -q 'libglib'; then
+            echo "WARNING: new harfbuzz still links libglib — bindings flag wasn't honored?" >&2
+        fi
     fi
 fi
 
-# Move apt's harfbuzz .so files aside so the bundler picks up /usr/local first.
-for old in /usr/lib/x86_64-linux-gnu/libharfbuzz.so* \
-           /usr/lib/x86_64-linux-gnu/libharfbuzz-subset.so* \
-           /usr/lib/aarch64-linux-gnu/libharfbuzz.so* \
-           /usr/lib/aarch64-linux-gnu/libharfbuzz-subset.so*; do
-    [ -e "$old" ] || continue
-    sudo mv "$old" "${old}.disabled" 2>/dev/null || true
-done
+# Move the original harfbuzz aside so the bundler picks up our build.
+# Linux: apt's libs under /usr/lib/<triplet>/. macOS: brew's libs under
+# $(brew --prefix)/Cellar/harfbuzz/<version>/lib/ AND the brewed
+# canonical names under $(brew --prefix)/lib/. We just-installed over
+# the latter; only the Cellar copies remain and they aren't on the
+# pkg-config search path so they don't get picked up.
+if [ "$OS" = "linux" ]; then
+    for old in /usr/lib/x86_64-linux-gnu/libharfbuzz.so* \
+               /usr/lib/x86_64-linux-gnu/libharfbuzz-subset.so* \
+               /usr/lib/aarch64-linux-gnu/libharfbuzz.so* \
+               /usr/lib/aarch64-linux-gnu/libharfbuzz-subset.so*; do
+        [ -e "$old" ] || continue
+        sudo mv "$old" "${old}.disabled" 2>/dev/null || true
+    done
+fi

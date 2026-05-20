@@ -140,8 +140,8 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         run: bash native/build-qpdf-native-crypto.sh
 
-      - name: Build harfbuzz without GLib (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+      - name: Build harfbuzz without GLib (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         run: bash native/build-harfbuzz-no-glib.sh
 
       - name: Build native bridge
