@@ -85,8 +85,36 @@ if ! git clone --depth 1 -b "$HB_TAG" "$HB_REPO" "$WORK/harfbuzz" 2>&1 | tail -3
     exit 0
 fi
 
+# When cross-compiling on macos-14 (arm64 host -> x86_64 target), meson
+# doesn't honor CMAKE_OSX_ARCHITECTURES (cmake-only env var). It defaults
+# to the host arch, then fails at link time because deps from /usr/local
+# are x86_64 but the build is producing arm64. Write a meson cross-file
+# that tells meson to invoke clang with -arch x86_64 and resolve deps via
+# /usr/local/bin/pkg-config.
+MESON_CROSS_FLAGS=()
+if [ "$OS" = "darwin" ] && [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+    cat >"$WORK/macos-x64-cross.ini" <<'CROSS'
+[binaries]
+c = ['clang', '-arch', 'x86_64']
+cpp = ['clang++', '-arch', 'x86_64']
+objc = ['clang', '-arch', 'x86_64']
+objcpp = ['clang++', '-arch', 'x86_64']
+ar = 'ar'
+strip = 'strip'
+pkg-config = '/usr/local/bin/pkg-config'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+CROSS
+    MESON_CROSS_FLAGS=(--cross-file "$WORK/macos-x64-cross.ini")
+fi
+
 # Configure with all binding options OFF — pure hb_* C API only.
 meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
+    "${MESON_CROSS_FLAGS[@]}" \
     --prefix="$PREFIX" \
     --buildtype=release \
     --default-library=shared \
