@@ -132,6 +132,15 @@ if(JPDFIUM_USE_PDFIUM)
             target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${PDFIUM_LIB}")
             target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
         else()
+            # On Linux, force the LLVM linker (lld) when consuming a PDFium
+            # static archive built by Chromium's bundled clang. GNU binutils
+            # ld 2.42 rejects the bundled-clang .eh_frame sections with
+            # "error in libpdfium.a(*.o)(.eh_frame); no .eh_frame_hdr table"
+            # plus "unknown architecture of input file is incompatible with
+            # i386:x86-64 output" on strerror.o / errorcode.o / safe_strerror.o
+            # / pngerror.o / jerror.o. lld parses the chromium-flavored object
+            # format correctly. apt-install lld on the runner side.
+            target_link_options(jpdfium PRIVATE "-fuse-ld=lld")
             target_link_options(jpdfium PRIVATE
                 "-Wl,--whole-archive" "${PDFIUM_LIB}" "-Wl,--no-whole-archive")
         endif()

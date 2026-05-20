@@ -73,6 +73,7 @@ jobs:
               libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
               libqpdf-dev libpugixml-dev libunibreak-dev \
               mingw-w64 binutils-mingw-w64 \
+              lld \
               patchelf && exit 0
             echo "apt install attempt $attempt failed; retrying in 30s..." >&2
             sleep 30
