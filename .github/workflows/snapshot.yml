@@ -3,7 +3,13 @@ name: Snapshot to Central Portal
 on:
   push:
     branches: [main, publishing-setup]   # publishing-setup temporary, for bring-up testing
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'PDFium build mode (default: component, fast iteration; static: matches release.yml, smaller jars)'
+        type: choice
+        options: [component, static]
+        default: component
 
 permissions:
   contents: read
@@ -148,6 +154,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Default to component (fast PR iteration). Manual workflow_dispatch
+          # can override to "static" to sanity-check the release.yml path.
+          JPDFIUM_BUILD_MODE: ${{ inputs.build_mode || 'component' }}
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: Build qpdf with native crypto (Linux)
