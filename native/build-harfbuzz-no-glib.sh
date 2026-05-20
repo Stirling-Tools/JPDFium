@@ -31,11 +31,24 @@ case "$(uname -s)" in
         ;;
     Darwin*)
         OS=darwin
-        if command -v brew >/dev/null 2>&1; then
-            PREFIX=$(brew --prefix)
+        # macos-14 matrix runs both darwin-arm64 (native, brew at
+        # /opt/homebrew) and darwin-x64 (Rosetta cross-compile, brew at
+        # /usr/local). Match the workflow's CMAKE_OSX_ARCHITECTURES /
+        # PKG_CONFIG_PATH choice so meson finds x86_64 deps under
+        # /usr/local for the cross-compile build instead of arm64 deps
+        # at /opt/homebrew.
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            PREFIX=/usr/local
+            if [ ! -x /usr/local/bin/brew ]; then
+                echo "build-harfbuzz-no-glib.sh: x86_64 brew (Rosetta) not installed; skipping" >&2
+                exit 0
+            fi
         else
-            echo "build-harfbuzz-no-glib.sh: brew not on PATH on macOS; skipping" >&2
-            exit 0
+            if ! command -v brew >/dev/null 2>&1; then
+                echo "build-harfbuzz-no-glib.sh: brew not on PATH on macOS; skipping" >&2
+                exit 0
+            fi
+            PREFIX=$(brew --prefix)
         fi
         ;;
     *)

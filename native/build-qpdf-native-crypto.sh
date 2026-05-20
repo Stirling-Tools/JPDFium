@@ -37,11 +37,34 @@ case "$(uname -s)" in
         ;;
     Darwin*)
         OS=darwin
-        if command -v brew >/dev/null 2>&1; then
-            PREFIX=$(brew --prefix)
+        # On macos-14 the matrix has TWO macOS jobs:
+        #   darwin-arm64  - native, uses the host's arm64 brew at
+        #                   /opt/homebrew (default `brew --prefix`)
+        #   darwin-x64    - Rosetta cross-compile, uses a SECOND brew
+        #                   installed at /usr/local (the x64 default).
+        #                   CMAKE_OSX_ARCHITECTURES=x86_64 is set by the
+        #                   workflow's deps step; PKG_CONFIG points at
+        #                   /usr/local/bin/pkg-config; etc.
+        # Pick the right brew + ARCH-prefix the build accordingly so we
+        # produce a same-arch dylib that the bridge's pkg_check_modules
+        # will actually resolve to.
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            # Cross-compile from arm64 host. CMAKE_OSX_ARCHITECTURES=x86_64
+            # already set by the workflow makes clang emit x86_64 code; we
+            # just need to use the matching brew prefix at /usr/local so
+            # the build resolves x86_64 deps (zlib / jpeg / etc) instead
+            # of accidentally picking up arm64 ones from /opt/homebrew.
+            PREFIX=/usr/local
+            if [ ! -x /usr/local/bin/brew ]; then
+                echo "build-qpdf-native-crypto.sh: x86_64 brew (Rosetta) not installed; skipping" >&2
+                exit 0
+            fi
         else
-            echo "build-qpdf-native-crypto.sh: brew not on PATH on macOS; skipping" >&2
-            exit 0
+            if ! command -v brew >/dev/null 2>&1; then
+                echo "build-qpdf-native-crypto.sh: brew not on PATH on macOS; skipping" >&2
+                exit 0
+            fi
+            PREFIX=$(brew --prefix)
         fi
         # macOS runner owns brew prefix as the runner user, so no sudo.
         SUDO=
