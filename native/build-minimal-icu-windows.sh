@@ -105,12 +105,14 @@ icupkg -l "$DAT_FILE" > "$WORK/all.lst"
 TOTAL=$(wc -l < "$WORK/all.lst")
 echo "Total items in source : $TOTAL"
 
-# Step 4: Build keep list — same patterns as the Linux trim.
+# Step 4: Build keep list — same patterns as the Linux trim. See
+# build-minimal-icu.sh for the full rationale; bridge doesn't use
+# unames/uemoji/nfkc/nfkc_cf/en_US so they're dropped.
 KEEP=(
-    '^cnvalias\.icu$' '^uchar\.icu$' '^ubidi\.icu$' '^unames\.icu$'
-    '^ulayout\.icu$' '^ucase\.icu$' '^uemoji\.icu$'
-    '^nfc\.nrm$' '^nfkc\.nrm$' '^nfkc_cf\.nrm$'
-    '^brkitr/' '^root\.res$' '^en\.res$' '^en_US\.res$'
+    '^cnvalias\.icu$' '^uchar\.icu$' '^ubidi\.icu$'
+    '^ulayout\.icu$' '^ucase\.icu$'
+    '^nfc\.nrm$'
+    '^brkitr/' '^root\.res$' '^en\.res$'
 )
 
 > "$WORK/keep.lst"

@@ -120,31 +120,35 @@ EOF
 echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_VER}_dat symbol"
 
 # Items to KEEP — patterns matching item names in the .dat.
-# icupkg item names look like:
-#   - uchar.icu, ubidi.icu, unames.icu, ulayout.icu, ucase.icu
-#   - nfc.nrm, nfkc.nrm, nfkc_cf.nrm
-#   - brkitr/sent.brk, brkitr/word.brk, brkitr/line.brk, brkitr/char.brk
-#   - cnvalias.icu
-#   - root.res, en.res, ...
-#   - LOTS more we don't need (coll/, curr/, lang/, region/, rbnf/, ...)
+# What the JPDFium bridge actually uses (verified by grep over
+# native/bridge/src/):
+#   u_strFromUTF8           → cnvalias.icu (converter alias table)
+#   icu::Normalizer NFC     → nfc.nrm  (NFC normalization data — bridge
+#                                       only uses UNORM_NFC at
+#                                       jpdfium_advanced.cpp:828)
+#   icu::BreakIterator      → brkitr/* (sentence/word/line/char boundaries)
+#   ubidi_*                 → ubidi.icu + ucase.icu + uchar.icu (BiDi
+#                                       + case folding + character props)
+#   icu::Locale::getDefault → root.res + en.res (default locale fallback)
+#
+# Deliberately NOT included (verified unused by bridge AND not loaded
+# eagerly by libicuuc on init — ICU data loading is lazy):
+#   unames.icu      ~300 KB — u_charName / u_charFromName, bridge doesn't
+#   uemoji.icu      ~200 KB — UCHAR_EMOJI property, bridge doesn't
+#   nfkc.nrm         ~50 KB — NFKC normalization, bridge uses only NFC
+#   nfkc_cf.nrm      ~50 KB — NFKC casefold, same
+#   en_US.res        ~50 KB — bridge has no US-specific locale need;
+#                             root + en cover the default chain
 KEEP=(
     '^cnvalias\.icu$'
     '^uchar\.icu$'
     '^ubidi\.icu$'
-    '^unames\.icu$'
     '^ulayout\.icu$'
     '^ucase\.icu$'
-    '^uemoji\.icu$'
     '^nfc\.nrm$'
-    '^nfkc\.nrm$'
-    '^nfkc_cf\.nrm$'
     '^brkitr/'
-    # Minimum locale data — root provides defaults, en for English-language pdfs.
-    # Without ANY locale data, ICU's Locale("en") falls back to root which works
-    # for our usage (we never display localized strings to users).
     '^root\.res$'
     '^en\.res$'
-    '^en_US\.res$'
 )
 
 # List all items in the source .dat
