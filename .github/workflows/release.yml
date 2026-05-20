@@ -151,6 +151,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         run: bash native/build-minimal-icu.sh
 
+      - name: Build minimal ICU data (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: bash native/build-minimal-icu-macos.sh
+
       - name: Stage binaries for publish
         run: |
           mkdir -p native/dist/${{ matrix.platform }}

@@ -190,6 +190,16 @@ jobs:
         # pick up the trimmed lib via ldd on the bridge.
         run: bash native/build-minimal-icu.sh
 
+      - name: Build minimal ICU data (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        # Mach-O equivalent of build-minimal-icu.sh — extract icudt78_dat
+        # from brew's libicudata.78.dylib, trim, repack into a new dylib via
+        # clang. Pre-stages into native/dist/<platform>/ so the bundler picks
+        # it up instead of brew's full 33 MB copy. Also fixes a latent gap
+        # on darwin-arm64 where bundle_macos couldn't resolve libicudata
+        # through brew's keg-only icu4c@78 path.
+        run: bash native/build-minimal-icu-macos.sh
+
       - name: Stage binaries (bridge + PDFium siblings)
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
