@@ -55,6 +55,13 @@ jobs:
           path: native/dist/windows-x64/icudt78.dll
           if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
           retention-days: 1
+      - name: Upload bare trimmed ICU .dat (for macOS wrap step)
+        uses: actions/upload-artifact@v4
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/icudt*l.dat
+          if-no-files-found: warn  # macOS jobs fall back to brew's 33 MB libicudata
+          retention-days: 1
 
   build-natives:
     needs: prep-windows-icu
@@ -190,14 +197,25 @@ jobs:
         # pick up the trimmed lib via ldd on the bridge.
         run: bash native/build-minimal-icu.sh
 
+      - name: Download bare trimmed ICU .dat (macOS)
+        # brew icu4c@78 doesn't ship icupkg/pkgdata, so we don't trim
+        # locally; we download the pre-trimmed .dat produced once on Linux
+        # by the prep-windows-icu job and wrap it on macOS via clang. The
+        # .dat is platform-agnostic.
+        if: startsWith(matrix.platform, 'darwin-')
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/
+
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        # Mach-O equivalent of build-minimal-icu.sh — extract icudt78_dat
-        # from brew's libicudata.78.dylib, trim, repack into a new dylib via
-        # clang. Pre-stages into native/dist/<platform>/ so the bundler picks
-        # it up instead of brew's full 33 MB copy. Also fixes a latent gap
-        # on darwin-arm64 where bundle_macos couldn't resolve libicudata
-        # through brew's keg-only icu4c@78 path.
+        # Wraps the downloaded icudt78l.dat into a libicudata.<MAJ>.dylib
+        # via a clang .incbin asm stub. Pre-stages into native/dist/<platform>/
+        # so the bundler picks it up instead of brew's full 33 MB copy. Also
+        # fixes a latent gap on darwin-arm64 where bundle_macos couldn't
+        # resolve libicudata through brew's keg-only icu4c@78 path.
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Stage binaries (bridge + PDFium siblings)

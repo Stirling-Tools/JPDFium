@@ -202,3 +202,15 @@ PLATFORM_DIST="$(dirname "$0")/dist/windows-x64"
 mkdir -p "$PLATFORM_DIST"
 cp -v "$NEW_DLL" "$PLATFORM_DIST/icudt${ICU_VER}.dll"
 echo "Pre-staged  : $PLATFORM_DIST/icudt${ICU_VER}.dll"
+
+# Also pre-stage the bare trimmed .dat into a shared dir so the macOS jobs
+# can grab it via download-artifact and wrap it with clang into a
+# libicudata.<MAJ>.dylib. brew's icu4c@78 keg doesn't ship icupkg/pkgdata
+# on macOS, so we do the trim once on Linux (this job already has both
+# apt's icu-devtools binaries AND the matching upstream ICU 78 source
+# data) and let the macOS jobs do the platform-specific wrapping. The .dat
+# is byte-identical across OSes — only the binary wrapper differs.
+SHARED_DIST="$(dirname "$0")/dist/icu-data"
+mkdir -p "$SHARED_DIST"
+cp -v "$TRIMMED_DAT" "$SHARED_DIST/icudt${ICU_VER}l.dat"
+echo "Pre-staged  : $SHARED_DIST/icudt${ICU_VER}l.dat ($(du -h "$SHARED_DIST/icudt${ICU_VER}l.dat" | cut -f1))"
