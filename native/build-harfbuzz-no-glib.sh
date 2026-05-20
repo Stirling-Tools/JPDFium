@@ -113,8 +113,11 @@ CROSS
 fi
 
 # Configure with all binding options OFF — pure hb_* C API only.
+# ${ARRAY[@]+...} guard: macOS bash 3.2 expands "${MESON_CROSS_FLAGS[@]}"
+# under `set -u` as unbound when the array is empty (no-cross-file branch).
+# The +alternate form expands to the array contents only when ARRAY is set.
 meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
-    "${MESON_CROSS_FLAGS[@]}" \
+    ${MESON_CROSS_FLAGS[@]+"${MESON_CROSS_FLAGS[@]}"} \
     --prefix="$PREFIX" \
     --buildtype=release \
     --default-library=shared \
