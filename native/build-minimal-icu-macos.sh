@@ -58,27 +58,46 @@ if [ -z "$ICU_PREFIX" ] || [ ! -d "$ICU_PREFIX/lib" ]; then
     exit 0
 fi
 
-# Resolve the real libicudata.<MAJ>.dylib (not the unversioned symlink).
-ORIG_LIB=""
+# Find the SONAME-style filename libicudata.<MAJ>.dylib — that's what
+# libicuuc's LC_LOAD_DYLIB references and what the bundler resolves at
+# install time. brew typically ships this as a symlink to the actual
+# libicudata.<MAJ>.<m>.dylib (or libicudata.dylib for some versions); we
+# extract the MAJOR from the symlink name (it's the only numeric segment
+# in the SONAME) and then resolve through the symlink chain for the bytes.
+SONAME=""
 for cand in "$ICU_PREFIX/lib/"libicudata.*.dylib; do
-    [ -L "$cand" ] && continue
-    [ -f "$cand" ] || continue
-    ORIG_LIB="$cand"
-    break
+    base=$(basename "$cand")
+    # Match exactly libicudata.<digits>.dylib (no extra dotted segments).
+    if echo "$base" | grep -qE '^libicudata\.[0-9]+\.dylib$'; then
+        SONAME="$cand"
+        break
+    fi
 done
-if [ -z "$ORIG_LIB" ]; then
-    echo "build-minimal-icu-macos.sh: no real libicudata.*.dylib under $ICU_PREFIX/lib; skipping" >&2
+if [ -z "$SONAME" ]; then
+    echo "build-minimal-icu-macos.sh: no libicudata.<MAJ>.dylib under $ICU_PREFIX/lib; skipping" >&2
+    ls -la "$ICU_PREFIX/lib/"libicudata* 2>/dev/null >&2 || true
     exit 0
 fi
 
-# Parse "libicudata.<MAJ>.dylib" → MAJ.
-ORIG_BASE=$(basename "$ORIG_LIB")
-ICU_VER=$(echo "$ORIG_BASE" | sed -n 's/^libicudata\.\([0-9][0-9]*\)\.dylib$/\1/p')
+ICU_VER=$(basename "$SONAME" | sed -n 's/^libicudata\.\([0-9][0-9]*\)\.dylib$/\1/p')
 if [ -z "$ICU_VER" ]; then
-    echo "build-minimal-icu-macos.sh: can't parse ICU version from $ORIG_BASE; skipping" >&2
+    echo "build-minimal-icu-macos.sh: can't parse MAJOR from $SONAME; skipping" >&2
+    exit 0
+fi
+
+# Resolve any symlink chain to the actual file with the bytes we need to
+# extract. BSD readlink lacks -f, so fall back to python3 realpath.
+if ORIG_LIB=$(readlink -f "$SONAME" 2>/dev/null) && [ -n "$ORIG_LIB" ]; then
+    :
+else
+    ORIG_LIB=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$SONAME" 2>/dev/null || echo "$SONAME")
+fi
+if [ ! -f "$ORIG_LIB" ]; then
+    echo "build-minimal-icu-macos.sh: resolved path $ORIG_LIB doesn't exist; skipping" >&2
     exit 0
 fi
 echo "Source lib    : $ORIG_LIB ($(du -h "$ORIG_LIB" | cut -f1)) [ICU $ICU_VER, $TARGET_ARCH]"
+echo "  SONAME      : $SONAME"
 
 ICUPKG="$ICU_PREFIX/bin/icupkg"
 PKGDATA="$ICU_PREFIX/bin/pkgdata"
