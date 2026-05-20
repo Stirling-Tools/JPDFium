@@ -84,6 +84,21 @@ fi
 
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
+CMAKE_EXTRA_ARGS=()
+if [ "$OS" = "darwin" ]; then
+    # On macOS, force install_name to be the absolute /opt/homebrew/lib path
+    # (default would be @rpath/libqpdf.<v>.dylib). bundle-runtime-deps.sh's
+    # bundle_macos walks otool -L and SKIPS @-prefixed deps (it assumes they
+    # are already-relativized references that some earlier step handled),
+    # so an @rpath install_name causes the bundler to silently drop libqpdf
+    # from the natives jar — the bridge then fails to dlopen libqpdf at
+    # runtime. Absolute install_name keeps the dep visible to otool and the
+    # bundler picks it up like any other lib; install_name_tool rewrites it
+    # to @loader_path/libqpdf.<v>.dylib at bundle time.
+    CMAKE_EXTRA_ARGS+=("-DCMAKE_INSTALL_NAME_DIR=$PREFIX/lib")
+    CMAKE_EXTRA_ARGS+=("-DCMAKE_MACOSX_RPATH=OFF")
+fi
+
 cmake -S "$WORK/qpdf" -B "$WORK/qpdf/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -97,6 +112,7 @@ cmake -S "$WORK/qpdf" -B "$WORK/qpdf/build" \
     -DBUILD_DOC=OFF -DBUILD_DOC_HTML=OFF -DBUILD_DOC_PDF=OFF \
     -DBUILD_DOC_DIST=OFF \
     -DCI_MODE=ON \
+    "${CMAKE_EXTRA_ARGS[@]}" \
   || { echo "build-qpdf-native-crypto.sh: cmake configure failed; skipping" >&2; exit 0; }
 
 cmake --build "$WORK/qpdf/build" --target libqpdf -j"$NPROC" \

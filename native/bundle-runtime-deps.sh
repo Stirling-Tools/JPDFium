@@ -97,6 +97,30 @@ bundle_macos() {
     local bridge="$DIST_DIR/libjpdfium.dylib"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib to bundle for"; return 0; }
 
+    # Known macOS install prefixes for searching @rpath/@loader_path deps.
+    # Brew on Apple Silicon installs to /opt/homebrew; brew on Intel to
+    # /usr/local. Our qpdf-native and harfbuzz-no-glib builds install to
+    # the brew prefix on both archs. /usr/local stays as a fallback for
+    # Intel hosts.
+    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
+
+    # Resolve a dep that came back as @rpath/foo.dylib or @loader_path/foo.dylib
+    # by basename-searching through rpath_dirs. echoes the absolute path or
+    # empty if nothing matches.
+    _resolve_rpath_dep() {
+        local d="$1"
+        local base
+        base=$(basename "$d")
+        local dir
+        for dir in "${rpath_dirs[@]}"; do
+            if [ -f "$dir/$base" ]; then
+                echo "$dir/$base"
+                return 0
+            fi
+        done
+        return 1
+    }
+
     # Use file existence in DIST_DIR as the "seen" marker — works under macOS'
     # bash 3.2 (which lacks declare -A) without needing brewed bash on PATH.
     local queue=("$bridge")
@@ -115,7 +139,26 @@ bundle_macos() {
             [ -z "$dep" ] && continue
             case "$dep" in
                 /System/*|/usr/lib/*) continue;;  # always present, signed
-                @*) continue;;                    # already relative
+            esac
+
+            # The raw dep string we'll rewrite later — preserve so
+            # install_name_tool -change matches what's actually in the
+            # binary's load commands.
+            local orig_dep="$dep"
+
+            case "$dep" in
+                @rpath/*|@loader_path/*|@executable_path/*)
+                    # Resolve through known install prefixes. If we can't,
+                    # the dep is something we didn't build (or it lives in
+                    # an unexpected location) — skip and let dyld fail at
+                    # runtime instead of silently shipping a half-bundle.
+                    local resolved
+                    if ! resolved=$(_resolve_rpath_dep "$dep"); then
+                        echo "  (bundle_macos: can't resolve $dep — skipping)" >&2
+                        continue
+                    fi
+                    dep="$resolved"
+                    ;;
             esac
             [ -f "$dep" ] || continue
 
@@ -136,8 +179,11 @@ bundle_macos() {
                 install_name_tool -id "@loader_path/$base" "$dest" 2>/dev/null || true
                 queue+=("$dest")
             fi
-            # Rewrite the consumer (target)'s dep reference to the bundled copy.
-            install_name_tool -change "$dep" "@loader_path/$base" "$target" 2>/dev/null || true
+            # Rewrite the consumer (target)'s dep reference to the bundled
+            # copy. Use $orig_dep (what's literally in the load command)
+            # not $dep (the resolved absolute path) — install_name_tool
+            # -change has to match exactly.
+            install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
         done <<<"$deps"
     done
 
