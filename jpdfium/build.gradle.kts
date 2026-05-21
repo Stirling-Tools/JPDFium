@@ -14,7 +14,9 @@ val jextractBin: String = run {
     val home = findProperty("jpdfium.jextractHome")?.toString()
         ?: System.getenv("JEXTRACT_HOME")
         ?: "${System.getProperty("user.home")}/Downloads/jextract-25"
-    "$home/bin/jextract"
+    val isWindows = System.getProperty("os.name").lowercase().contains("win")
+    val ext = if (isWindows) ".bat" else ""
+    "$home/bin/jextract$ext"
 }
 
 val jpdfiumFunctions = listOf(
