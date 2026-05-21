@@ -6,7 +6,7 @@ gradle-app.setting
 .gradletasknamecache
 local.properties
 
-gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.properties
 
 .idea/
@@ -51,6 +51,9 @@ compile_commands.json
 *.exp
 
 jpdfium-natives/**/src/main/resources/natives/
+
+# CI-staged per-platform native binaries (populated by release/snapshot workflows)
+native/dist/
 
 native/pdfium/
 native/pdfium-*/

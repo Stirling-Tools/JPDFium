@@ -1,0 +1,318 @@
+name: Prebuild PDFium
+
+# Builds the EmbedPDF PDFium fork on 5 host platforms, uploads the resulting
+# include/ + lib/ tree as a per-platform tarball attached to a GitHub Release,
+# and opens a PR bumping native/pdfium.version to the new release tag.
+#
+# Consumers (release.yml, snapshot.yml, publish-github-packages.yml, ci.yml)
+# read that pin and skip the expensive source build entirely — they just
+# `gh release download` and move on.
+#
+# Triggers:
+#   - Manual (workflow_dispatch) for bootstrap and ad-hoc rebuilds
+#   - Weekly cron: Monday 03:00 UTC, picks up latest embedpdf/main HEAD
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Specific EmbedPDF commit SHA to build (default: embedpdf/main HEAD)'
+        required: false
+      dry-run:
+        description: 'Build but do not create a release or PR'
+        type: boolean
+        required: false
+        default: false
+      force:
+        description: 'Force rebuild even if the release for the resolved SHA already exists'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '0 3 * * 1'
+  # Auto-run on the test branch so pushes there self-bootstrap.
+  # Guarded by a "release already exists" check so repeat pushes are ~5-second no-ops.
+  push:
+    branches: [publishing-setup]
+
+permissions:
+  contents: write         # create releases, push the pin-bump branch
+  pull-requests: write    # open the auto-PR
+
+concurrency:
+  group: prebuild-pdfium
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the PDFium SHA once so every matrix job builds the same commit.
+  resolve-sha:
+    runs-on: ubuntu-latest
+    outputs:
+      sha:   ${{ steps.r.outputs.sha }}
+      short: ${{ steps.r.outputs.short }}
+      tag:   ${{ steps.r.outputs.tag }}
+      skip:  ${{ steps.r.outputs.skip }}
+    steps:
+      - name: Resolve EmbedPDF HEAD
+        id: r
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ -n "${{ inputs.sha }}" ]; then
+            SHA="${{ inputs.sha }}"
+          else
+            SHA=$(git ls-remote https://github.com/embedpdf/pdfium.git refs/heads/embedpdf/main | awk '{print $1}')
+          fi
+          if [ -z "$SHA" ]; then
+            echo "ERROR: could not resolve PDFium SHA" >&2
+            exit 1
+          fi
+          SHORT="${SHA:0:7}"
+          TAG="pdfium-$(date -u +%Y%m%d)-${SHORT}"
+
+          # Skip the whole matrix if we've already built & released this tag.
+          SKIP="false"
+          if [ "$FORCE" != "true" ] && gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            SKIP="true"
+            echo "Release $TAG already exists — skipping build. Pass force=true to rebuild."
+          fi
+
+          echo "sha=$SHA"     >> "$GITHUB_OUTPUT"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"     >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP"   >> "$GITHUB_OUTPUT"
+          echo "SHA  : $SHA"
+          echo "Tag  : $TAG"
+          echo "Skip : $SKIP"
+
+  build:
+    needs: resolve-sha
+    if: needs.resolve-sha.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # Cross product of platform × build_mode. component = current path
+        # (libpdfium.so + sibling shared libs, consumed by snapshot.yml /
+        # publish-github-packages.yml). static = pdf_is_complete_lib=true
+        # path (single libpdfium.a containing PDFium + bundled deps, consumed
+        # by release.yml). Two variants per platform doubles prebuild
+        # runtime but the workflow runs rarely (weekly cron + on PDFium pin
+        # bumps), and trims ~16 MB across the 5-platform release-time bundle.
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: component }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: static    }
+          # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
+          # an "Exec format error" because Chromium's bundled clang for arm64
+          # hosts isn't usable in this PDFium revision — the binary in
+          # third_party/llvm-build/.../bin/clang is x86_64 even on arm64 runners.
+          # Cross-compiling from x64 with target_cpu=arm64 uses the x64 clang
+          # binary with --target=aarch64-linux-gnu, which works. This is also
+          # how bblanchon/pdfium-binaries handles linux-arm64.
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
+          # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
+          # free runner is constrained to the point of 24h queue timeouts.
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: static    }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: component }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: static    }
+          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: component }
+          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: static    }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git
+
+      - name: Install build deps (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: brew install cmake ninja
+
+      - name: Install build deps (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: choco install -y cmake ninja python3
+
+      - name: Configure Windows depot_tools environment
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          # depot_tools git_cache.py shells out via Python subprocess. Python's
+          # CreateProcess on Windows can't resolve .bat shims without shell=True,
+          # so the real Git-for-Windows git.exe must precede depot_tools' git.bat
+          # on PATH. setup-pdfium.sh handles PATH ordering internally, but
+          # GITHUB_PATH needs git.exe up front for actions before the script.
+          echo "C:\\Program Files\\Git\\cmd" >> "$GITHUB_PATH"
+          # Avoid depot_tools trying to pull Google's internal VS toolchain.
+          echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> "$GITHUB_ENV"
+
+      - name: Build PDFium at pinned SHA
+        env:
+          PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
+          TARGET_CPU: ${{ matrix.target_cpu }}
+          JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
+        run: |
+          # Override the branch pointer used by setup-pdfium.sh so every
+          # matrix job builds the exact same commit even if embedpdf/main
+          # moves while the matrix is running.
+          export EMBEDPDF_PIN_SHA="$PINNED_SHA"
+          export TARGET_CPU="$TARGET_CPU"
+          export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
+          bash native/setup-pdfium.sh
+
+      - name: Package artifacts
+        # component mode keeps the historical tarball name
+        # (`pdfium-<platform>.tar.gz`) for backward compatibility with the
+        # existing fetch-prebuilt-pdfium.sh / pdfium.version pin path.
+        # static mode adds a `-static` suffix so both variants can live
+        # side-by-side in the same release.
+        id: pkg
+        run: |
+          mkdir -p .prebuild
+          if [ "${{ matrix.mode }}" = "static" ]; then
+            SUFFIX="-static"
+          else
+            SUFFIX=""
+          fi
+          ASSET="pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz"
+          tar -czf ".prebuild/${ASSET}" -C native/pdfium include lib
+          ls -lh .prebuild/
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfium-${{ matrix.platform }}-${{ matrix.mode }}
+          # Use the exact filename produced above; upload-artifact's path
+          # globbing doesn't reliably match files in subdirs that start with
+          # a leading dot (`.prebuild/`).
+          path: .prebuild/${{ steps.pkg.outputs.asset }}
+          if-no-files-found: error
+          retention-days: 3
+
+  release:
+    needs: [resolve-sha, build]
+    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: .prebuild
+          pattern: pdfium-*
+          merge-multiple: true
+
+      - name: Sanity check
+        run: |
+          ls -lh .prebuild/
+          # Both variants must be present for every platform: component
+          # (no suffix, consumed by snapshot.yml) and static (-static suffix,
+          # consumed by release.yml).
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+            test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
+          done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:   ${{ needs.resolve-sha.outputs.tag }}
+          SHA:   ${{ needs.resolve-sha.outputs.sha }}
+          SHORT: ${{ needs.resolve-sha.outputs.short }}
+        run: |
+          NOTES=$(cat <<EOF
+          **PDFium prebuild** — build inputs for JPDFium publishing workflows.
+
+          This is an **infrastructure release**, not a user-facing library release.
+          See regular \`v*.*.*\` tags for JPDFium library versions on Maven Central.
+
+          - EmbedPDF fork SHA: \`$SHA\`
+          - Source: <https://github.com/embedpdf/pdfium/commit/$SHA>
+          - Consumers pin this via \`native/pdfium.version\`.
+
+          ### Assets
+          Each platform has two variants:
+
+          | Platform      | Component build (snapshot CI)    | Static archive (release CI)             |
+          |---------------|----------------------------------|------------------------------------------|
+          | linux-x64     | pdfium-linux-x64.tar.gz          | pdfium-linux-x64-static.tar.gz           |
+          | linux-arm64   | pdfium-linux-arm64.tar.gz        | pdfium-linux-arm64-static.tar.gz         |
+          | darwin-x64    | pdfium-darwin-x64.tar.gz         | pdfium-darwin-x64-static.tar.gz          |
+          | darwin-arm64  | pdfium-darwin-arm64.tar.gz       | pdfium-darwin-arm64-static.tar.gz        |
+          | windows-x64   | pdfium-windows-x64.tar.gz        | pdfium-windows-x64-static.tar.gz         |
+
+          Component tarballs hold libpdfium.{so,dylib,dll} + sibling component
+          shared libs (abseil, partition_alloc, etc.); easier to iterate against
+          but bigger. Static tarballs hold a single libpdfium.{a,lib} containing
+          PDFium + every bundled dep — picked up by release.yml so the final
+          natives jars dead-strip aggressively across PDFium internals.
+
+          Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
+          EOF
+          )
+          gh release create "$TAG" \
+            --title "PDFium prebuild $TAG" \
+            --notes "$NOTES" \
+            --prerelease \
+            .prebuild/pdfium-*.tar.gz
+
+      - name: Update the pin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ needs.resolve-sha.outputs.tag }}
+          SHA:      ${{ needs.resolve-sha.outputs.sha }}
+          SRC_REF:  ${{ github.ref_name }}
+        run: |
+          # If the pin already matches (e.g. manual re-run of the same SHA), nothing to do.
+          CURRENT=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
+          if [ "$CURRENT" = "$TAG" ]; then
+            echo "Pin already at $TAG — nothing to commit."
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Rewrite pin file: preserve comments, append new tag.
+          {
+            grep '^#' native/pdfium.version || true
+            echo ""
+            echo "$TAG"
+          } > native/pdfium.version.new
+          mv native/pdfium.version.new native/pdfium.version
+
+          # On the test branch, push the bump directly so the next push triggers
+          # publish workflows with a valid pin. On main / any other branch,
+          # open an auto-PR for human review.
+          if [ "$SRC_REF" = "publishing-setup" ]; then
+            git fetch origin "$SRC_REF"
+            git checkout "$SRC_REF"
+            git add native/pdfium.version
+            git commit -m "Bump PDFium pin to $TAG [skip ci]"
+            git push origin "$SRC_REF"
+            echo "Pushed pin bump directly to $SRC_REF."
+          else
+            BRANCH="pdfium-pin-bump/$TAG"
+            git checkout -b "$BRANCH"
+            git add native/pdfium.version
+            git commit -m "Bump PDFium pin to $TAG"
+            git push -u origin "$BRANCH"
+            gh pr create \
+              --base "$SRC_REF" \
+              --head "$BRANCH" \
+              --title "Bump PDFium pin to $TAG" \
+              --body "Automated bump from prebuild-pdfium workflow.
+
+          - New tag: [$TAG](../../releases/tag/$TAG)
+          - EmbedPDF SHA: [\`$SHA\`](https://github.com/embedpdf/pdfium/commit/$SHA)
+
+          Merging this PR will make all subsequent JPDFium publishes consume this prebuild.
+          Previous pins remain as GitHub Releases — safe to revert if needed."
+          fi

@@ -743,7 +743,7 @@ int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
         int count = 0;
         std::set<int> processed;  // object IDs of shared resource dicts already stripped
 
-        for (auto& page : pdf.getAllPages()) {
+        for (auto page : pdf.getAllPages()) {  // copy; hasKey/getKey are non-const in libqpdf on Ubuntu 24.04 (qpdf < 11.9 in apt)
             if (!page.hasKey("/Resources")) continue;
             QPDFObjectHandle resources = page.getKey("/Resources");
             if (!resources.isDictionary()) continue;

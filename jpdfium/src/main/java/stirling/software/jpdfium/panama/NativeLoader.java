@@ -71,7 +71,25 @@ public final class NativeLoader {
                 extractToDir(resourceBase + pdfiumName, tmpDir);
             }
 
-            // Load pdfium first (triggers loading of its component dependencies via RUNPATH)
+            // On Linux/macOS, RUNPATH=$ORIGIN in pdfium.so/.dylib makes the
+            // dynamic linker find its sibling component libs in the same dir.
+            // Windows has no equivalent — LoadLibrary doesn't search the
+            // loaded DLL's own directory. So pre-load every dependency by
+            // absolute path here. Once a DLL is loaded by name, subsequent
+            // references by name (from pdfium.dll's import table) resolve
+            // against the already-loaded module instead of re-searching disk.
+            //
+            // Multi-pass: deps have their own inter-dependencies and we don't
+            // know the topological order at runtime. Keep retrying failed
+            // loads until either all succeed or a pass makes no progress.
+            boolean isWindows =
+                    System.getProperty("os.name").toLowerCase().contains("win");
+            if (isWindows && !libs.isEmpty()) {
+                preloadWindowsDeps(tmpDir, libs, pdfiumName, bridgeName);
+            }
+
+            // Load pdfium (Linux/macOS: triggers RUNPATH resolution of its
+            // deps; Windows: deps already pre-loaded above).
             Path pdfiumPath = tmpDir.resolve(pdfiumName);
             if (Files.exists(pdfiumPath)) {
                 System.load(pdfiumPath.toAbsolutePath().toString());
@@ -114,6 +132,35 @@ public final class NativeLoader {
             Path target = dir.resolve(resource.substring(resource.lastIndexOf('/') + 1));
             Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);
             target.toFile().deleteOnExit();
+        }
+    }
+
+    private static void preloadWindowsDeps(
+            Path tmpDir, List<String> libs, String pdfiumName, String bridgeName) {
+        List<String> remaining = new ArrayList<>();
+        for (String lib : libs) {
+            if (lib.equals(pdfiumName) || lib.equals(bridgeName)) continue;
+            Path p = tmpDir.resolve(lib);
+            if (Files.exists(p)) remaining.add(lib);
+        }
+
+        int maxPasses = 8;
+        while (maxPasses-- > 0 && !remaining.isEmpty()) {
+            List<String> failed = new ArrayList<>();
+            for (String lib : remaining) {
+                try {
+                    System.load(tmpDir.resolve(lib).toAbsolutePath().toString());
+                } catch (UnsatisfiedLinkError e) {
+                    failed.add(lib);
+                }
+            }
+            if (failed.size() == remaining.size()) {
+                // No progress this pass — remaining libs likely depend on
+                // something not in the manifest (e.g. a system DLL we can't
+                // help with). Let pdfium.dll's load surface the real error.
+                break;
+            }
+            remaining = failed;
         }
     }
 

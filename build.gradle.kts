@@ -1,5 +1,5 @@
 allprojects {
-    group = "stirling.software"
+    group = "com.stirling"
     version = findProperty("jpdfium.version")?.toString() ?: "1.0.0-SNAPSHOT"
 
     repositories {
@@ -258,7 +258,7 @@ tasks.register("finalizePortalDeployment") {
     description = "POST to the OSSRH Staging API to push the deployment to the Central Portal"
 
     doLast {
-        val namespace = project.group.toString()  // e.g. "stirling.software"
+        val namespace = project.group.toString()  // e.g. "com.stirling"
         val autoRelease = (findProperty("autoRelease")?.toString() ?: "false").toBoolean()
         val publishingType = if (autoRelease) "automatic" else "user_managed"
         val url = "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/$namespace?publishing_type=$publishingType"

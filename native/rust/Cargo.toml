@@ -1,3 +1,19 @@
 [workspace]
 members = ["jpdfium-impl"]
 resolver = "2"
+
+# Smaller-binary release profile applied to the rust static lib that ends up
+# baked into libjpdfium.so. `lto = "fat"` + `codegen-units = 1` lets the
+# linker dead-strip aggressively across crate boundaries; `strip = "symbols"`
+# drops the debug + name tables we don't need at runtime. Roughly ~15-25%
+# size reduction on libjpdfium_rust.a (and so on the embedded portion of
+# libjpdfium.so).
+#
+# Deliberately NOT setting panic = "abort": lopdf / oxipng can panic on
+# malformed PDF / PNG input, and the bridge catches those panics at the C
+# ABI boundary to return error codes to the JVM. panic=abort would crash
+# the entire JVM instead.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

@@ -67,13 +67,41 @@ if(JPDFIUM_USE_PDFIUM)
     set(PDFIUM_INCLUDE_DIR "${PDFIUM_DIR}/include")
     set(PDFIUM_LIB_DIR     "${PDFIUM_DIR}/lib")
 
-    # Try static first, then shared
-    find_library(PDFIUM_LIB
-        NAMES pdfium
-        PATHS "${PDFIUM_LIB_DIR}"
-        NO_DEFAULT_PATH)
-    if(NOT PDFIUM_LIB)
-        message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
+    # Detect which prebuild variant we're consuming. setup-pdfium.sh's two
+    # modes drop different artifacts here:
+    #   component mode: libpdfium.{so,dylib} + sibling component .sos
+    #                   (Linux/macOS) / pdfium.dll + sibling .dlls (Windows)
+    #   static mode:    libpdfium.a (POSIX) / pdfium.lib (Windows) — a
+    #                   single archive with PDFium + every bundled dep.
+    #
+    # We probe for the static archive first; if found, force whole-archive
+    # linking so all the FPDF/EPDF symbols (and the bundled-dep code the
+    # bridge transitively pulls) survive into the final libjpdfium.so.
+    set(PDFIUM_STATIC_LIB "")
+    if(WIN32)
+        if(EXISTS "${PDFIUM_LIB_DIR}/pdfium.lib")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/pdfium.lib")
+        endif()
+    else()
+        if(EXISTS "${PDFIUM_LIB_DIR}/libpdfium.a")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/libpdfium.a")
+        endif()
+    endif()
+
+    if(PDFIUM_STATIC_LIB)
+        set(PDFIUM_LINK_MODE "static")
+        set(PDFIUM_LIB "${PDFIUM_STATIC_LIB}")
+        message(STATUS "PDFium link mode: static (${PDFIUM_LIB})")
+    else()
+        find_library(PDFIUM_LIB
+            NAMES pdfium
+            PATHS "${PDFIUM_LIB_DIR}"
+            NO_DEFAULT_PATH)
+        if(NOT PDFIUM_LIB)
+            message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
+        endif()
+        set(PDFIUM_LINK_MODE "component")
+        message(STATUS "PDFium link mode: component (${PDFIUM_LIB})")
     endif()
 
     add_library(jpdfium SHARED
@@ -91,7 +119,45 @@ if(JPDFIUM_USE_PDFIUM)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
-    target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+
+    if(PDFIUM_LINK_MODE STREQUAL "static")
+        # Whole-archive: pull every symbol from libpdfium.a (FPDF/EPDF exports
+        # plus the bundled deps' code paths used transitively) into the final
+        # libjpdfium.so. Without --whole-archive the linker would dead-strip
+        # any pdfium-internal symbol not directly referenced by the bridge,
+        # including FPDF_* exports the JVM resolves via dlsym at runtime.
+        if(APPLE)
+            target_link_options(jpdfium PRIVATE "-Wl,-force_load,${PDFIUM_LIB}")
+        elseif(MSVC)
+            target_link_options(jpdfium PRIVATE "/WHOLEARCHIVE:${PDFIUM_LIB}")
+            target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+        else()
+            # On Linux, force the LLVM linker (lld) when consuming a PDFium
+            # static archive built by Chromium's bundled clang. GNU binutils
+            # ld 2.42 rejects the bundled-clang .eh_frame sections with
+            # "error in libpdfium.a(*.o)(.eh_frame); no .eh_frame_hdr table"
+            # plus "unknown architecture of input file is incompatible with
+            # i386:x86-64 output" on strerror.o / errorcode.o / safe_strerror.o
+            # / pngerror.o / jerror.o. lld parses the chromium-flavored object
+            # format correctly. apt-install lld on the runner side.
+            target_link_options(jpdfium PRIVATE "-fuse-ld=lld")
+            target_link_options(jpdfium PRIVATE
+                "-Wl,--whole-archive" "${PDFIUM_LIB}" "-Wl,--no-whole-archive")
+        endif()
+        # PDFium static archives reference platform libs that we'd otherwise
+        # get transitively via libpdfium.so's NEEDED entries.
+        if(UNIX AND NOT APPLE)
+            target_link_libraries(jpdfium PRIVATE pthread dl m)
+        endif()
+        if(APPLE)
+            target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
+                                                  "-framework CoreGraphics"
+                                                  "-framework CoreText"
+                                                  "-framework AppKit")
+        endif()
+    else()
+        target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+    endif()
 
     # ── Rust integration (required for real PDFium build) ────────────────────
     find_program(CARGO_CMD cargo)
@@ -102,9 +168,15 @@ if(JPDFIUM_USE_PDFIUM)
             "or run: bash native/build-rust.sh")
     endif()
 
-    # Build the Rust static library. If the .a already exists, skip the build
-    # (build-real.sh runs cargo build --release before invoking cmake).
-    set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/libjpdfium_rust.a")
+    # Build the Rust static library. If the staticlib already exists, skip
+    # the build (build-real.sh runs cargo build --release before invoking
+    # cmake). Cargo's output name differs by toolchain: GNU-style targets
+    # produce libjpdfium_rust.a, MSVC produces jpdfium_rust.lib.
+    if(MSVC)
+        set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/jpdfium_rust.lib")
+    else()
+        set(RUST_LIB "${CMAKE_SOURCE_DIR}/rust/target/release/libjpdfium_rust.a")
+    endif()
     if(NOT EXISTS "${RUST_LIB}")
         message(STATUS "Building Rust static library...")
         execute_process(
@@ -118,13 +190,54 @@ if(JPDFIUM_USE_PDFIUM)
         endif()
     endif()
 
-    # Link the static library with --whole-archive so Rust #[no_mangle] symbols
-    # are preserved (they are called from Java/FFM, not from C++ code).
-    target_link_libraries(jpdfium PRIVATE
-        -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
-    # On Linux, Rust staticlibs need these system libraries.
+    # Link the static library with whole-archive semantics so Rust #[no_mangle]
+    # symbols are preserved (they are called from Java/FFM, not from C++ code).
+    # GNU ld and lld use --whole-archive/--no-whole-archive bracketing; Apple's
+    # ld64 uses -force_load <path> (no bracketing — applies per-archive); MSVC
+    # link.exe uses /WHOLEARCHIVE:<file>.
+    if(APPLE)
+        target_link_libraries(jpdfium PRIVATE
+            -Wl,-force_load,"${RUST_LIB}")
+    elseif(MSVC)
+        # target_link_libraries treats /WHOLEARCHIVE: as a path and CMake
+        # mangles it into a file lookup. target_link_options passes raw
+        # flags to link.exe — use that instead and link the .lib normally.
+        # /FORCE:MULTIPLE silences LNK2005 for duplicate import descriptors:
+        # Rust's staticlib bundles its own kernel32/bcryptprimitives import
+        # stubs, and MSVC's auto-link adds them too. Both copies are
+        # functionally identical metadata; the linker just needs permission
+        # to keep one. (CRT MSVCRT also collides, which is unavoidable when
+        # Rust ships its own runtime alongside the MSVC runtime.)
+        target_link_libraries(jpdfium PRIVATE "${RUST_LIB}")
+        target_link_options(jpdfium PRIVATE
+            "/WHOLEARCHIVE:${RUST_LIB}"
+            "/FORCE:MULTIPLE"
+            "/IGNORE:4006"
+            "/IGNORE:4088")
+    else()
+        target_link_libraries(jpdfium PRIVATE
+            -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
+    endif()
+    # Rust staticlibs don't carry their own platform system-lib dependencies —
+    # the consuming target has to supply them.
     if(JPDFIUM_OS STREQUAL "linux")
         target_link_libraries(jpdfium PRIVATE dl pthread m)
+    elseif(APPLE)
+        # CoreFoundation: iana-time-zone calls CFRelease / CFCopyTimeZone etc.
+        # Security + SystemConfiguration: pulled by common TLS/network crates.
+        find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+        find_library(SECURITY_FRAMEWORK Security)
+        find_library(SYSTEMCONFIGURATION_FRAMEWORK SystemConfiguration)
+        target_link_libraries(jpdfium PRIVATE
+            ${COREFOUNDATION_FRAMEWORK}
+            ${SECURITY_FRAMEWORK}
+            ${SYSTEMCONFIGURATION_FRAMEWORK})
+    elseif(WIN32)
+        # Rust crates link these via #[link] / #pragma comment, but staticlibs
+        # need them at the consumer level. ws2_32 (sockets), userenv (env vars),
+        # bcrypt + ncrypt (crypto), advapi32 (registry), ntdll (low-level).
+        target_link_libraries(jpdfium PRIVATE
+            ws2_32 userenv bcrypt ncrypt advapi32 ntdll)
     endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_RUST)
     message(STATUS "Rust integration: lopdf + zopfli + oxipng + fast_image_resize")
@@ -163,12 +276,52 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::PUGIXML)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PUGIXML)
 
-    # libunibreak - grapheme cluster boundaries
-    pkg_check_modules(UNIBREAK REQUIRED IMPORTED_TARGET libunibreak)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::UNIBREAK)
+    # libunibreak - grapheme cluster boundaries. vcpkg's port ships a CMake
+    # config but not a .pc file, so on Windows the pkg_check_modules lookup
+    # fails. Fall back to find_library / find_path when pkg-config can't
+    # locate it.
+    pkg_check_modules(UNIBREAK IMPORTED_TARGET libunibreak)
+    if(UNIBREAK_FOUND)
+        target_link_libraries(jpdfium PRIVATE PkgConfig::UNIBREAK)
+    else()
+        find_library(UNIBREAK_LIB NAMES unibreak libunibreak REQUIRED)
+        find_path(UNIBREAK_INCLUDE_DIR NAMES unibreakdef.h linebreak.h REQUIRED)
+        target_link_libraries(jpdfium PRIVATE "${UNIBREAK_LIB}")
+        target_include_directories(jpdfium PRIVATE "${UNIBREAK_INCLUDE_DIR}")
+        message(STATUS "  libunibreak (find_library fallback): ${UNIBREAK_LIB}")
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_UNIBREAK)
 
     message(STATUS "JPDFium native libraries: PCRE2, FreeType, HarfBuzz, ICU4C, qpdf, pugixml, libunibreak")
+
+    if(WIN32)
+        # windows.h defines min and max as macros, which clobber std::min /
+        # std::max in jpdfium_redact.cpp (overlapRatio) and probably other
+        # call sites. NOMINMAX suppresses those macros so the std:: versions
+        # work as expected. WIN32_LEAN_AND_MEAN also trims unneeded headers.
+        target_compile_definitions(jpdfium PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+
+    # Hermetic natives jar: the publish workflows bundle each third-party
+    # dynamic dependency (pcre2, freetype, harfbuzz, icu, qpdf, pugixml,
+    # libunibreak — and their transitive deps) next to libjpdfium.* in the
+    # platform's natives jar so downstream users don't need apt/brew installs.
+    # The bridge needs to look in its own directory FIRST for those deps:
+    if(APPLE)
+        # macOS dyld: @loader_path resolves to the dir of the loading binary.
+        set_target_properties(jpdfium PROPERTIES
+            INSTALL_RPATH "@loader_path"
+            BUILD_RPATH "@loader_path")
+    elseif(UNIX)
+        # Linux ld.so: $ORIGIN is the dir of the loading binary. -z origin
+        # enables it; the literal $ORIGIN must reach the linker unexpanded.
+        set_target_properties(jpdfium PROPERTIES
+            INSTALL_RPATH "\$ORIGIN"
+            BUILD_RPATH "\$ORIGIN")
+        target_link_options(jpdfium PRIVATE "-Wl,-rpath,\$ORIGIN" "-Wl,-z,origin")
+    endif()
+    # Windows has no RUNPATH equivalent — the NativeLoader pre-loads each
+    # dep by absolute path on Windows specifically (see Java side).
 
     set_target_properties(jpdfium PROPERTIES
         OUTPUT_NAME "jpdfium"

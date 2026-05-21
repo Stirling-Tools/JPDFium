@@ -1,0 +1,334 @@
+name: Release to Central Portal
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 1.0.0). If omitted on tag push, derived from the tag.'
+        required: false
+      autoRelease:
+        description: 'Auto-release to Maven Central without manual Publish click'
+        required: false
+        default: 'false'
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Prep: cross-build trimmed ICU 78 data once on Linux ──────────────────
+  # Used by windows-x64 (downloads icudt78.dll) and both darwin-* jobs
+  # (download the bare icudt78l.dat + wrap on macOS via clang). brew icu4c@78
+  # on macOS doesn't ship icupkg/pkgdata so we can't trim there; vcpkg's icu
+  # port skips the tools dir on Windows; Linux's apt icu-devtools has both,
+  # and the .dat archive format is OS-agnostic. Mirrors snapshot.yml's
+  # prep-windows-icu but covers macOS too.
+  prep-icu-data:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps (Linux + mingw-w64)
+        run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential icu-devtools libicu-dev \
+              mingw-w64 binutils-mingw-w64 \
+              curl unzip && exit 0
+            sleep 30
+          done
+          exit 1
+      - name: Cross-build minimal Windows icudt78.dll + bare trimmed .dat
+        run: bash native/build-minimal-icu-windows.sh
+      - name: Upload trimmed Windows icudt78.dll
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/icudt78.dll
+          if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
+          retention-days: 1
+      - name: Upload bare trimmed ICU .dat (for macOS wrap step)
+        uses: actions/upload-artifact@v4
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/icudt*l.dat
+          if-no-files-found: warn  # macOS jobs fall back to brew's 33 MB libicudata
+          retention-days: 1
+
+  # ── Fan out: build native libraries on each platform ──────────────────────
+  build-natives:
+    needs: prep-icu-data
+    if: always()  # build even if prep failed; matrix jobs fall back to untrimmed ICU
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+            shell: bash
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            shell: bash
+          # darwin-x64 cross-compiles from macos-14 (arm64) under Rosetta
+          # with a second Homebrew installed at /usr/local for x86_64 deps.
+          - platform: darwin-x64
+            runner: macos-14
+            shell: bash
+          - platform: darwin-arm64
+            runner: macos-14
+            shell: bash
+          - platform: windows-x64
+            runner: windows-latest
+            shell: 'bash'  # git-bash provided by actions/checkout
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Install build deps (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        # Azure apt mirror + 3x retry + mingw-w64 (for Windows ICU cross-build)
+        # + meson (for harfbuzz-no-glib rebuild).
+        run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential cmake ninja-build pkg-config meson \
+              libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
+              libqpdf-dev libpugixml-dev libunibreak-dev \
+              mingw-w64 binutils-mingw-w64 \
+              lld \
+              patchelf && exit 0
+            echo "apt install attempt $attempt failed; retrying in 30s..." >&2
+            sleep 30
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
+
+      - name: Install build deps (macOS, native arm64)
+        if: matrix.platform == 'darwin-arm64'
+        run: |
+          brew install cmake ninja \
+            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
+            pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Install build deps (macOS, x86_64 cross-compile)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          if [ ! -x /usr/local/bin/brew ]; then
+            arch -x86_64 /bin/bash -c \
+              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+          fi
+          arch -x86_64 /usr/local/bin/brew install \
+            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
+          {
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG=/usr/local/bin/pkg-config"
+            echo "CMAKE_OSX_ARCHITECTURES=x86_64"
+          } >> "$GITHUB_ENV"
+
+      - name: Install build deps (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: |
+          choco install -y cmake ninja pkgconfiglite
+          vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
+                        icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
+                        libunibreak:x64-windows
+          {
+            echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch prebuilt PDFium (pinned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Release stays on component mode — verified empirically that the
+          # `static` variant (pdf_is_complete_lib=true) is BIGGER, not
+          # smaller, because --whole-archive linking + the FPDF_* dlsym
+          # export contract means the linker can't dead-strip anything in
+          # libpdfium.a (which already contains all bundled deps as their
+          # own .o files). linux-x64 raw artifact: 28 MB (component) ->
+          # 31 MB (static); linux-arm64: 28 MB -> 30 MB; windows-x64
+          # static doesn't even link (libc++ __Cr symbol mismatch). The
+          # dual-mode infrastructure is kept in place so we can iterate on
+          # gc-sections / function-sections later without redoing the
+          # prebuild plumbing, but the value isn't there with the obvious
+          # whole-archive approach. Set JPDFIUM_BUILD_MODE=static manually
+          # via workflow_dispatch if you want to experiment.
+        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+
+      - name: Build qpdf with native crypto (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        run: bash native/build-qpdf-native-crypto.sh
+
+      - name: Build harfbuzz without GLib (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        run: bash native/build-harfbuzz-no-glib.sh
+
+      - name: Build native bridge
+        run: bash native/build-real.sh
+
+      - name: Build minimal ICU data (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: bash native/build-minimal-icu.sh
+
+      - name: Download bare trimmed ICU .dat (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/
+
+      - name: Build minimal ICU data (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        run: bash native/build-minimal-icu-macos.sh
+
+      - name: Stage binaries for publish
+        run: |
+          mkdir -p native/dist/${{ matrix.platform }}
+          # build-real.sh writes libjpdfium.* / jpdfium.dll into native/build-real/.
+          find native/build-real -maxdepth 3 -type f \( \
+                -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
+             \) -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
+          # Component-built PDFium siblings — filter out Windows debug helpers
+          # picked up from MSVC install (dbghelp/msdia/symsrv/dbgcore/vccorlib).
+          if [ -d native/pdfium/lib ]; then
+            find native/pdfium/lib -maxdepth 1 -type f \( \
+                  -name '*.dll' -o -name 'lib*.so' -o -name 'lib*.so.*' -o -name 'lib*.dylib' \
+               \) \
+               ! -name 'dbghelp.dll' ! -name 'dbgcore.dll' \
+               ! -name 'msdia*.dll'   ! -name 'symsrv.dll' \
+               ! -name 'vccorlib*.dll' \
+               -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
+          fi
+          # Bridge runtime deps — walk the bridge's import table per-platform
+          # and copy only referenced libs, skipping system libs. Also strips
+          # debug symbols.
+          bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
+          echo "--- staged ---"
+          ls -la native/dist/${{ matrix.platform }}/
+
+      - name: Override icudt78.dll with trimmed copy (Windows only)
+        # Runs AFTER staging (which would have copied PDFium's full 33 MB
+        # icudt78.dll from vcpkg) and BEFORE upload, so the small trimmed
+        # copy from prep-icu-data wins. download-artifact@v4 extracts on
+        # top, overwriting the larger one.
+        if: matrix.platform == 'windows-x64'
+        uses: actions/download-artifact@v4
+        continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/
+
+      - name: Sanity check
+        run: |
+          test -n "$(ls -A native/dist/${{ matrix.platform }}/)" || {
+            echo "ERROR: no native binaries staged for ${{ matrix.platform }}"
+            exit 1
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Fan in: assemble, sign, publish everything from one runner ────────────
+  publish:
+    needs: build-natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+          pattern: natives-*
+
+      - name: Flatten into native/dist/<platform>/
+        run: |
+          mkdir -p native/dist
+          for d in .artifacts/natives-*; do
+            plat="${d##*natives-}"
+            mkdir -p "native/dist/$plat"
+            cp -v "$d"/* "native/dist/$plat/"
+          done
+          echo "--- final layout ---"
+          find native/dist -type f | sort
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            VERSION="${REF#v}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not resolve version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Publish to Central Portal
+        env:
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+          GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
+          GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
+        run: |
+          ARGS=(publishAllToCentralPortal -Pjpdfium.version=${{ steps.v.outputs.version }})
+          if [ "${{ inputs.autoRelease }}" = "true" ]; then
+            ARGS+=(-PautoRelease=true)
+          fi
+          ./gradlew "${ARGS[@]}" --no-daemon --stacktrace
+
+      - name: Summary
+        run: |
+          echo "### Published com.stirling:*:${{ steps.v.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.autoRelease }}" = "true" ]; then
+            echo "Auto-release enabled — artifacts will land on Maven Central in 10–30 min." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> $GITHUB_STEP_SUMMARY
+          fi

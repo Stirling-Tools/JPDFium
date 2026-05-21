@@ -67,6 +67,19 @@ publishing {
                     ?: System.getenv("OSSRH_PASSWORD") ?: ""
             }
         }
+        maven {
+            name = "githubPackages"
+            val targetRepo = (findProperty("githubPackagesRepo")?.toString()
+                ?: System.getenv("GITHUB_REPOSITORY")
+                ?: "Stirling-Tools/JPDFium")
+            url = uri("https://maven.pkg.github.com/$targetRepo")
+            credentials {
+                username = findProperty("githubActor")?.toString()
+                    ?: System.getenv("GITHUB_ACTOR") ?: ""
+                password = findProperty("githubToken")?.toString()
+                    ?: System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
     }
 }
 

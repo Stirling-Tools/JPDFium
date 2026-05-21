@@ -85,6 +85,21 @@ publishing {
                     ?: System.getenv("OSSRH_PASSWORD") ?: ""
             }
         }
+        // GitHub Packages — fast path (no GPG, no namespace verification required).
+        // Override the target repo with -PgithubPackagesRepo=owner/repo if the fork lives elsewhere.
+        maven {
+            name = "githubPackages"
+            val targetRepo = (findProperty("githubPackagesRepo")?.toString()
+                ?: System.getenv("GITHUB_REPOSITORY")
+                ?: "Stirling-Tools/JPDFium")
+            url = uri("https://maven.pkg.github.com/$targetRepo")
+            credentials {
+                username = findProperty("githubActor")?.toString()
+                    ?: System.getenv("GITHUB_ACTOR") ?: ""
+                password = findProperty("githubToken")?.toString()
+                    ?: System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
     }
 }
 

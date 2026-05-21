@@ -14,7 +14,9 @@ val jextractBin: String = run {
     val home = findProperty("jpdfium.jextractHome")?.toString()
         ?: System.getenv("JEXTRACT_HOME")
         ?: "${System.getProperty("user.home")}/Downloads/jextract-25"
-    "$home/bin/jextract"
+    val isWindows = System.getProperty("os.name").lowercase().contains("win")
+    val ext = if (isWindows) ".bat" else ""
+    "$home/bin/jextract$ext"
 }
 
 val jpdfiumFunctions = listOf(
@@ -103,7 +105,48 @@ val generateBindings by tasks.registering(Exec::class) {
     }
 }
 
-sourceSets.main.get().java.srcDir(generateBindings.map {
+// jextract on Linux emits `JpdfiumH$shared` with `C_LONG` typed as
+// `ValueLayout.OfLong` and initialized from `Linker.nativeLinker()
+// .canonicalLayouts().get("long")`. On Windows that returns `OfInt`
+// (LLP64: C long is 4 bytes), so the OfLong cast throws ClassCastException
+// during class init the first time anything in the panama/ package is touched.
+// C_LONG is not actually referenced by any binding generated for jpdfium.h
+// (the C bridge uses fixed-size int/int64_t types throughout), so the safest
+// fix is to neutralize the platform-specific init. Patch the generated
+// source between jextract and compileJava so the published jar works on
+// both LP64 (Linux/macOS) and LLP64 (Windows) hosts.
+val patchBindingsForCrossPlatform by tasks.registering {
+    description = "Make JpdfiumH\$shared.C_LONG init Windows-safe (OfInt vs OfLong)"
+    dependsOn(generateBindings)
+    val outputDir = layout.buildDirectory.dir("generated/jextract/java")
+    outputs.dir(outputDir)
+    doLast {
+        val sharedFile = outputDir.get().asFile.resolve(
+            "stirling/software/jpdfium/panama/JpdfiumH\$shared.java")
+        if (!sharedFile.exists()) {
+            logger.info("JpdfiumH\$shared.java not present — generateBindings skipped, nothing to patch.")
+            return@doLast
+        }
+        val original = sharedFile.readText()
+        // Match any `public static final ValueLayout.OfLong C_LONG = ...;`
+        // (jextract sometimes prefixes with fully-qualified names; tolerate both).
+        val pattern = Regex(
+            """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
+        val patched = pattern.replace(original,
+            "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
+            "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
+            "this constant is unused by any jpdfium binding so a placeholder is fine */")
+        if (patched != original) {
+            sharedFile.writeText(patched)
+            logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+        } else {
+            logger.warn("JpdfiumH\$shared.java did not contain the expected C_LONG pattern — " +
+                "jextract output format may have changed.")
+        }
+    }
+}
+
+sourceSets.main.get().java.srcDir(patchBindingsForCrossPlatform.map {
     layout.buildDirectory.dir("generated/jextract/java").get()
 })
 
