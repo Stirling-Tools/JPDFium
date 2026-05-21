@@ -804,6 +804,47 @@ merged.save(Path.of("merged.pdf"));
 merged.close();
 ```
 
+**Note on bookmarks.** PDFium's underlying `FPDF_ImportPagesByIndex`
+carries pages, not the outline tree, so source bookmarks from inputs
+2..N are dropped during the merge (the first input's outline survives
+because PDFium uses it as the merged document's outline base). To
+preserve bookmarks across all inputs, capture each source's bookmarks
+(with the running page offset) before the merge and inject the combined
+tree via `PdfBookmarkEditor.setBookmarks(merged, tree, outputPath)`:
+
+```java
+import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.PdfBookmarkEditor;
+import stirling.software.jpdfium.doc.PdfBookmarkEditor.BookmarkTree;
+
+List<Path> inputs = List.of(Path.of("a.pdf"), Path.of("b.pdf"));
+List<PdfDocument> docs = new ArrayList<>();
+BookmarkTree.Builder builder = BookmarkTree.builder();
+int pageOffset = 0;
+try {
+    for (Path p : inputs) {
+        PdfDocument d = PdfDocument.open(p);
+        docs.add(d);
+        // Capture this source's bookmarks BEFORE merge while it's open.
+        for (Bookmark bm : d.bookmarks()) {
+            collectFlat(builder, bm, pageOffset);
+        }
+        pageOffset += d.pageCount();
+    }
+    try (PdfDocument merged = PdfMerge.merge(docs)) {
+        PdfBookmarkEditor.setBookmarks(merged, builder.build(), Path.of("merged.pdf"));
+    }
+} finally {
+    docs.forEach(PdfDocument::close);
+}
+
+// helper — flatten the source tree into top-level entries
+static void collectFlat(BookmarkTree.Builder b, Bookmark bm, int offset) {
+    if (bm.isInternal()) b.add(bm.title(), offset + bm.pageIndex());
+    if (bm.hasChildren()) bm.children().forEach(c -> collectFlat(b, c, offset));
+}
+```
+
 ### PdfSplit
 ```java
 // Split every N pages
@@ -1092,26 +1133,36 @@ byte[] pdf = NUpLayout.from(doc).grid(2, 2).a4Landscape().build().toBytes();
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor.BookmarkTree;
 
-// Manual bookmark creation
+// Manual bookmark creation. BookmarkTree.Builder is currently flat —
+// every entry becomes a top-level outline item. Nested chapter/section
+// hierarchy is a planned follow-up.
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     BookmarkTree tree = BookmarkTree.builder()
         .add("Introduction", 0)
-        .add("Chapter 1", 1)
-            .addChild("Section 1.1", 1)
-            .addChild("Section 1.2", 3)
-            .parent()
-        .add("Chapter 2", 5)
+        .add("Chapter 1",    1)
+        .add("Chapter 2",    5)
+        .add("References",  15)
         .build();
 
+    // Streaming variant — O(KB) heap regardless of document size.
+    // Writes the doc to outputPath then appends the outline objects as
+    // an incremental update. Recommended for any PDF over a few MB.
+    PdfBookmarkEditor.setBookmarks(doc, tree, Path.of("output.pdf"));
+}
+
+// byte[] overload still available for callers that want the result in
+// memory — internally calls the Path variant then reads the file back,
+// so heap peaks at file-size for the duration of readAllBytes.
+try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
+    BookmarkTree tree = BookmarkTree.builder().add("Cover", 0).build();
     byte[] result = PdfBookmarkEditor.setBookmarks(doc, tree);
     Files.write(Path.of("output.pdf"), result);
 }
 
-// Auto-generate bookmarks from headings
+// Auto-generate bookmarks from headings (font-size heuristic).
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     BookmarkTree headings = PdfBookmarkEditor.fromHeadings(doc);
-    byte[] result = PdfBookmarkEditor.setBookmarks(doc, headings);
-    Files.write(Path.of("output.pdf"), result);
+    PdfBookmarkEditor.setBookmarks(doc, headings, Path.of("output.pdf"));
 }
 ```
 

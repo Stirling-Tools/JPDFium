@@ -46,6 +46,42 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install -y cmake ninja
 
+      # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java
+      # (FFM bindings) from native/bridge/include/jpdfium.h. Without it,
+      # compileJava fails on `cannot find symbol JpdfiumH`. Download the
+      # OpenJDK 25 jextract early-access build for the runner's OS.
+      - name: Install jextract (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - name: Install jextract (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "arm64" ]; then
+            JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_macos-aarch64_bin.tar.gz"
+          else
+            JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_macos-x64_bin.tar.gz"
+          fi
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - name: Install jextract (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_windows-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          # build.gradle.kts uses ".bat" suffix on Windows via os.name check.
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
       - name: Build stub bridge (no PDFium required)
         run: bash native/build-stub.sh
 
@@ -63,6 +99,14 @@ jobs:
           java-version: '25'
 
       - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
       - name: publishToMavenLocal
         run: ./gradlew publishToMavenLocal -Pjpdfium.version=0.0.0-ci --no-daemon --stacktrace
