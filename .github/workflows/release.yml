@@ -277,6 +277,20 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Install jextract
+        # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java
+        # FFM bindings from native/bridge/include/jpdfium.h. Without it the
+        # publish job fails on compileJava with `cannot find symbol JpdfiumH`
+        # — the natives jars (built earlier in this run) ship fine but the
+        # main jpdfium.jar can't be built without bindings. Mirrors the
+        # snapshot.yml + publish-github-packages.yml jextract install step.
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
       - name: Download all native artifacts
         uses: actions/download-artifact@v4
         with:
