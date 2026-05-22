@@ -2,7 +2,10 @@ package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,15 +44,8 @@ public final class PdfMerge {
         if (documents.isEmpty()) {
             throw new IllegalArgumentException("At least one document is required");
         }
-        if (documents.size() == 1) {
-            // Single doc: import all pages into a fresh document
-            PdfDocument src = documents.getFirst();
-            return PdfDocument.open(src.saveBytes());
-        }
-
-        // Use first document as base, import remaining
         PdfDocument first = documents.getFirst();
-        PdfDocument dest = PdfDocument.open(first.saveBytes());
+        PdfDocument dest = reopenViaTempFile(first);
 
         for (int i = 1; i < documents.size(); i++) {
             PdfDocument src = documents.get(i);
@@ -76,24 +72,33 @@ public final class PdfMerge {
             throw new IllegalArgumentException("At least one file path is required");
         }
 
-        // All source documents must stay open during the entire merge.
-        // PDFium's page import may retain internal references to source objects;
-        // closing a source before the merge completes causes dangling pointers.
+        // Sources must stay open during the merge (PDFium may retain refs).
         List<PdfDocument> docs = new ArrayList<>();
         try {
             for (Path p : paths) {
                 docs.add(PdfDocument.open(p));
             }
             PdfDocument merged = merge(docs);
-            // Materialize to a self-contained byte stream before closing sources,
-            // since the merged document may hold internal refs to source objects.
-            byte[] bytes = merged.saveBytes();
+            // Detach from sources via temp file (off-heap) before closing them.
+            PdfDocument detached = reopenViaTempFile(merged);
             merged.close();
-            return PdfDocument.open(bytes);
+            return detached;
         } finally {
             for (PdfDocument doc : docs) {
                 doc.close();
             }
         }
+    }
+
+    private static PdfDocument reopenViaTempFile(PdfDocument source) {
+        Path tmp;
+        try {
+            tmp = Files.createTempFile("jpdfium-merge-", ".pdf");
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to create temp file for merge seed", e);
+        }
+        tmp.toFile().deleteOnExit();
+        source.save(tmp);
+        return PdfDocument.open(tmp);
     }
 }

@@ -1,6 +1,6 @@
 allprojects {
     group = "com.stirling"
-    version = findProperty("jpdfium.version")?.toString() ?: "1.0.0-SNAPSHOT"
+    version = findProperty("jpdfium.version")?.toString() ?: "1.0.1-SNAPSHOT"
 
     repositories {
         mavenCentral()

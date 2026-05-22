@@ -167,6 +167,11 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.integration", "true")
+    // Forward -Djpdfium.bench.* from gradle invocation to the test JVM.
+    System.getProperties().forEach { k, v ->
+        val key = k.toString()
+        if (key.startsWith("jpdfium.bench")) systemProperty(key, v.toString())
+    }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
-    maxHeapSize = "2g"
+    maxHeapSize = System.getProperty("jpdfium.bench.xmx", "2g")
 }
