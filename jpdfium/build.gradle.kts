@@ -6,14 +6,6 @@ dependencies {
     implementation(libs.imageio.webp)
     implementation(libs.imageio.tiff)
     testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-linux-x64"))
-    // Local Windows/macOS test runtime: pull published natives from Maven Central
-    // since the per-OS native build only runs on CI runners.
-    if (System.getProperty("os.name").lowercase().contains("win")) {
-        testRuntimeOnly("com.stirling:jpdfium-natives-windows-x64:1.0.0")
-    } else if (System.getProperty("os.name").lowercase().contains("mac")) {
-        val archKey = if (System.getProperty("os.arch") == "aarch64") "arm64" else "x64"
-        testRuntimeOnly("com.stirling:jpdfium-natives-darwin-$archKey:1.0.0")
-    }
     testImplementation(libs.pdfbox)
 }
 
