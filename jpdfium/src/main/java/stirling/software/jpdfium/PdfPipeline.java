@@ -194,12 +194,23 @@ public final class PdfPipeline {
 
             // Periodic flush: save and reopen to release PDFium internal caches.
             if ((i + 1) % flushInterval == 0 && (i + 1) < pages) {
-                byte[] snapshot = doc.saveBytes();
-                doc.close();
-                doc = PdfDocument.open(snapshot);
+                doc = flushViaTempFile(doc);
             }
         }
         return doc;
+    }
+
+    private static PdfDocument flushViaTempFile(PdfDocument doc) {
+        Path tmp;
+        try {
+            tmp = Files.createTempFile("jpdfium-pipeline-", ".pdf");
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to create pipeline flush temp file", e);
+        }
+        tmp.toFile().deleteOnExit();
+        doc.save(tmp);
+        doc.close();
+        return PdfDocument.open(tmp);
     }
 
     private static PdfDocument processParallel(byte[] sourceBytes, ProcessingMode mode, PageOperation op) {
@@ -317,11 +328,8 @@ public final class PdfPipeline {
                 op.apply(doc, i);
 
                 if (streaming && (i + 1) % flushInterval == 0 && (i + 1) < pages) {
-                    byte[] flushed;
                     synchronized (PDFIUM_LOCK) {
-                        flushed = doc.saveBytes();
-                        doc.close();
-                        doc = PdfDocument.open(flushed);
+                        doc = flushViaTempFile(doc);
                     }
                 }
             }

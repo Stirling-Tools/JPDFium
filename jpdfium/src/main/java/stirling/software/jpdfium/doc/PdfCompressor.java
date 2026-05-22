@@ -53,7 +53,24 @@ public final class PdfCompressor {
      */
     public static CompressResultWithBytes compress(PdfDocument doc, CompressOptions opts) {
         List<String> actions = new ArrayList<>();
-        long originalSize = doc.saveBytes().length;
+        Path originalProbe;
+        try {
+            originalProbe = Files.createTempFile("jpdfium-compress-probe-", ".pdf");
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException("Failed to create original-size probe", e);
+        }
+        doc.save(originalProbe);
+        long originalSize;
+        try {
+            originalSize = Files.size(originalProbe);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException("Failed to read probe size", e);
+        } finally {
+            try {
+                Files.deleteIfExists(originalProbe);
+            } catch (IOException ignored) {
+            }
+        }
         int metadataRemoved = 0;
         int imagesOptimized = 0;
 
