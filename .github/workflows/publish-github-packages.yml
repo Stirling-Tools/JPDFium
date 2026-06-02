@@ -141,6 +141,13 @@ jobs:
         if: startsWith(matrix.platform, 'linux-')
         run: bash native/build-minimal-icu.sh
 
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: bash native/import-macos-cert.sh
+
       - name: Stage binaries
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
