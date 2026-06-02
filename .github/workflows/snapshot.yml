@@ -218,6 +218,14 @@ jobs:
         # resolve libicudata through brew's keg-only icu4c@78 path.
         run: bash native/build-minimal-icu-macos.sh
 
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: bash native/import-macos-cert.sh
+
       - name: Stage binaries (bridge + PDFium siblings)
         run: |
           mkdir -p native/dist/${{ matrix.platform }}

@@ -204,16 +204,53 @@ bundle_macos() {
             install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
         done <<<"$deps"
     done
+}
 
-    # Deliberately NOT codesign-adhoc here. Adhoc signatures in dylibs
-    # nested inside the Spring Boot bootJar fail Tauri's codesign walk of
-    # the .app bundle:
+sign_macos() {
+    # On Apple Silicon the kernel refuses to load UNSIGNED arm64 code. When a
+    # Developer ID identity is available (CI sets MACOS_SIGN_IDENTITY after
+    # importing the cert via native/import-macos-cert.sh) we sign the bridge
+    # and every bundled dylib with a real, securely-timestamped Developer ID
+    # signature.
+    #
+    # A genuine Developer ID signature WITH a secure timestamp also satisfies
+    # the downstream Tauri bundler's pre-sign verification walk of the .app.
+    # The earlier ad-hoc signature failed that walk:
     #   "The signature of the binary is invalid."
     #   "The signature does not include a secure timestamp."
-    # Tauri's macOS bundler re-signs every binary in the .app at packaging
-    # time using the build's Developer ID identity; ad-hoc here just
-    # produces a sig that fails verification before Tauri can overwrite it.
-    # Bridge and bundled dylibs ship unsigned; downstream bundlers sign.
+    # Tauri can still force-re-sign each binary in the .app with its own
+    # Developer ID over the top of ours, so this stays compatible with it.
+    #
+    # Signing is MANDATORY: unsigned macOS dylibs are not a supported output.
+    # If no identity is available we fail the build rather than silently
+    # shipping libs that won't load on Apple Silicon. Set up the keychain via
+    # native/import-macos-cert.sh (CI) before running this.
+    local identity="${MACOS_SIGN_IDENTITY:-}"
+    if [ -z "$identity" ]; then
+        echo "ERROR: MACOS_SIGN_IDENTITY not set — refusing to ship unsigned" \
+             "macOS dylibs. Import a Developer ID cert first" \
+             "(native/import-macos-cert.sh)." >&2
+        exit 1
+    fi
+
+    local keychain_args=()
+    if [ -n "${MACOS_KEYCHAIN_PATH:-}" ]; then
+        keychain_args=(--keychain "$MACOS_KEYCHAIN_PATH")
+    fi
+
+    echo "Code-signing dylibs with identity: $identity"
+    local f
+    for f in "$DIST_DIR"/*.dylib; do
+        [ -L "$f" ] && continue   # skip version symlinks
+        [ -e "$f" ] || continue
+        # --options runtime keeps these notarization-ready; harmless for a
+        # dylib loaded into the JVM (library validation is governed by the
+        # host java executable, not by us).
+        codesign --force --timestamp --options runtime \
+                 --sign "$identity" "${keychain_args[@]}" "$f"
+        codesign --verify --strict --verbose=2 "$f"
+    done
+    echo "Signed $(ls -1 "$DIST_DIR"/*.dylib 2>/dev/null | wc -l | tr -d ' ') dylib(s)."
 }
 
 bundle_windows() {
@@ -339,6 +376,7 @@ case "$PLATFORM" in
                 strip -S "$f" 2>/dev/null || true
             done
         fi
+        sign_macos
         ;;
     windows-*)
         bundle_windows
