@@ -10,6 +10,10 @@ on:
         type: choice
         options: [component, static]
         default: component
+      skip_publish:
+        description: 'Dry run: build + sign + upload artifacts but do NOT publish to Central Portal (use to verify signing without shipping)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -276,6 +280,9 @@ jobs:
 
   publish-snapshot:
     needs: build-natives
+    # Skipped on a dry run (workflow_dispatch with skip_publish=true) so the
+    # build+sign job can be exercised without shipping a snapshot publicly.
+    if: ${{ inputs.skip_publish != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
