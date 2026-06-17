@@ -18,6 +18,7 @@ public final class NativeLoader {
 
     private static volatile boolean loaded = false;
     private static volatile Throwable loadError = null;
+    private static volatile Boolean muslLibc = null;
 
     private NativeLoader() {}
 
@@ -176,8 +177,49 @@ public final class NativeLoader {
 
     public static String detectPlatform() {
         String os = System.getProperty("os.name").toLowerCase();
-        String osKey = os.contains("win") ? "windows" : os.contains("mac") ? "darwin" : "linux";
-        return osKey + "-" + Architecture.detect().key();
+        if (os.contains("win")) return "windows-" + Architecture.detect().key();
+        if (os.contains("mac")) return "darwin-" + Architecture.detect().key();
+        // Linux natives are libc-specific: musl (Alpine) cannot load glibc binaries.
+        String libc = isMuslLibc() ? "musl-" : "";
+        return "linux-" + libc + Architecture.detect().key();
+    }
+
+    static boolean isMuslLibc() {
+        Boolean cached = muslLibc;
+        if (cached != null) return cached;
+        boolean result = detectMuslLibc();
+        muslLibc = result;
+        return result;
+    }
+
+    private static boolean detectMuslLibc() {
+        // Primary signal: musl ships its loader as /lib/ld-musl-<arch>.so.1.
+        try (var dir = Files.newDirectoryStream(Path.of("/lib"), "ld-musl-*")) {
+            if (dir.iterator().hasNext()) return true;
+        } catch (IOException | RuntimeException ignored) {
+            // /lib missing or unreadable; fall through to the ldd probe
+        }
+        // Fallback: `ldd --version` reports "musl" on Alpine, "glibc" elsewhere.
+        try {
+            Process p = new ProcessBuilder("ldd", "--version")
+                    .redirectErrorStream(true).start();
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.toLowerCase().contains("musl")) {
+                        p.waitFor();
+                        return true;
+                    }
+                }
+            }
+            p.waitFor();
+        } catch (IOException ignored) {
+            // ldd absent; assume glibc
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        return false;
     }
 
     static String nativeFilename(String lib) {

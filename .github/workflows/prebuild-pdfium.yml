@@ -111,6 +111,16 @@ jobs:
           # how bblanchon/pdfium-binaries handles linux-arm64.
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
+          # musl / Alpine (linux-musl-*). Built natively inside a matching-arch
+          # Alpine container so the system toolchain + libc are musl (no cross,
+          # no sysroot). PDFium/Chromium has no official musl support, so this is
+          # the CI-proving part and may need EmbedPDF fork patches — see the
+          # JPDFIUM_LIBC branch in setup-pdfium.sh. arm64 uses a native arm64
+          # runner to avoid musl cross-compile.
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: component, libc: musl, container: 'alpine:3.21' }
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: static,    libc: musl, container: 'alpine:3.21' }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: component, libc: musl, container: 'alpine:3.21' }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: static,    libc: musl, container: 'alpine:3.21' }
           # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
@@ -120,14 +130,26 @@ jobs:
           - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: component }
           - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: static    }
     runs-on: ${{ matrix.runner }}
+    # musl rows set matrix.container to an Alpine image; all others leave it unset
+    # (empty -> runs directly on the host runner).
+    container: ${{ matrix.container }}
     defaults:
       run:
         shell: bash
     steps:
+      # Alpine images have no bash/coreutils; bootstrap them (with sh) before any
+      # bash step runs. gcompat lets Chromium's glibc-built bundled clang run.
+      - name: Bootstrap Alpine (musl)
+        if: matrix.libc == 'musl'
+        shell: sh
+        run: |
+          apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
+            python3 git curl tar xz gcompat libstdc++ linux-headers
+
       - uses: actions/checkout@v4
 
       - name: Install build deps (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git
@@ -158,6 +180,7 @@ jobs:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           TARGET_CPU: ${{ matrix.target_cpu }}
           JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
+          JPDFIUM_LIBC: ${{ matrix.libc }}
         run: |
           # Override the branch pointer used by setup-pdfium.sh so every
           # matrix job builds the exact same commit even if embedpdf/main
@@ -198,7 +221,10 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true'
+    # always() so an unproven musl leg failing (matrix fail-fast is off) does not
+    # block the glibc/darwin/windows release. The sanity check below still hard-
+    # requires every non-musl platform; musl is warn-only until it goes green.
+    if: always() && inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true' && needs.resolve-sha.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -218,6 +244,12 @@ jobs:
           for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
             test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
             test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
+          done
+          # musl is experimental — warn but don't block the release if the Alpine
+          # PDFium build is not green yet. Once it is, promote these to hard fails.
+          for p in linux-musl-x64 linux-musl-arm64; do
+            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) — musl build not green yet";
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) — musl build not green yet";
           done
 
       - name: Create GitHub Release

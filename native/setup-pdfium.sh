@@ -404,6 +404,20 @@ if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
     fi
 fi
 
+# musl / Alpine target. Set JPDFIUM_LIBC=musl (the linux-musl-* prebuild rows
+# run inside an Alpine container so the system toolchain + libc are musl).
+# PDFium/Chromium has no official musl support, so this is the CI-proving part:
+#   - Chromium's bundled clang is a glibc binary; in Alpine it needs `apk add
+#     gcompat` to run, or the build must point at Alpine's system clang.
+#   - use_custom_libcxx=true: Alpine ships libstdc++, not libc++, so let Chromium
+#     build/export its own libc++ (same reasoning as the Windows branch below).
+#   - use_sysroot=false: link against the container's musl system libraries.
+# Expect EmbedPDF fork patches may be needed; iterate via the Prebuild PDFium CI.
+if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
+    GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
+    echo "  musl/Alpine target: use_custom_libcxx=true, use_sysroot=false"
+fi
+
 # Windows has no system libc++, so use_custom_libcxx=false produces broken
 # component builds — abseil-cpp.dll fails to link with undefined symbols on
 # std::__Cr::basic_string template instantiations because the libc++ DLL
