@@ -3,6 +3,10 @@ name: Snapshot to Central Portal
 on:
   push:
     branches: [main, publishing-setup]   # publishing-setup temporary, for bring-up testing
+  # On PRs we build the real natives per platform and run the functional smoke
+  # (load + open a PDF), but never publish — so every PR is verified against the
+  # actual artifact, not just a compile.
+  pull_request: {}
   workflow_dispatch:
     inputs:
       build_mode:
@@ -223,7 +227,9 @@ jobs:
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
-        if: startsWith(matrix.platform, 'darwin-')
+        # Signing is a publish concern; skip on PRs (the smoke loads the
+        # freshly-built unsigned dylib on the same runner just fine).
+        if: startsWith(matrix.platform, 'darwin-') && github.event_name != 'pull_request'
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -302,9 +308,9 @@ jobs:
 
   publish-snapshot:
     needs: build-natives
-    # Skipped on a dry run (workflow_dispatch with skip_publish=true) so the
-    # build+sign job can be exercised without shipping a snapshot publicly.
-    if: ${{ inputs.skip_publish != true }}
+    # Skipped on a dry run (workflow_dispatch with skip_publish=true) and never
+    # runs on pull_request — PRs build + smoke-test the natives but must not ship.
+    if: ${{ inputs.skip_publish != true && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
