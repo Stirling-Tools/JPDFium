@@ -190,6 +190,19 @@ jobs:
           export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
 
+      # Real musl validation: the freshly-built PDFium must actually LOAD and RUN
+      # on Alpine/musl, not just compile. dlopen the .so and exercise the core
+      # FPDF API (init -> open a PDF -> page count). Component mode only (needs
+      # the shared lib). This is what proves musl support beyond the cheap
+      # detectPlatform() check in ci.yml.
+      - name: Smoke test musl PDFium (load + open a PDF)
+        if: matrix.libc == 'musl' && matrix.mode == 'component'
+        run: |
+          cc native/ci/pdfium_smoke.c -ldl -o /tmp/pdfium_smoke
+          LD_LIBRARY_PATH=native/pdfium/lib /tmp/pdfium_smoke \
+            native/pdfium/lib/libpdfium.so \
+            jpdfium/src/test/resources/pdfs/redact/redact-test-empty.pdf
+
       - name: Package artifacts
         # component mode keeps the historical tarball name
         # (`pdfium-<platform>.tar.gz`) for backward compatibility with the
