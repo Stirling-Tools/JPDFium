@@ -99,6 +99,31 @@ jobs:
       - name: Compile main + test sources
         run: ./gradlew :jpdfium:compileJava :jpdfium:compileTestJava :jpdfium:processResources --no-daemon --stacktrace
 
+  # Validate NativeLoader picks linux-musl-* on a real musl system. Runs the
+  # loader on a JDK inside Alpine (no jextract/native needed — detectPlatform is
+  # pure logic), so PRs catch musl-detection regressions even though the musl
+  # PDFium native itself is built/proven separately in prebuild-pdfium.yml.
+  musl-detection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: detectPlatform() must return linux-musl-* on Alpine
+        run: |
+          docker run --rm -i -v "$PWD":/src -w /src eclipse-temurin:25-jdk-alpine sh -s <<'INNER'
+          set -e
+          mkdir -p /tmp/m
+          javac -d /tmp/m \
+            jpdfium/src/main/java/stirling/software/jpdfium/panama/NativeLoader.java \
+            jpdfium/src/main/java/stirling/software/jpdfium/panama/Architecture.java \
+            jpdfium/src/main/java/stirling/software/jpdfium/exception/*.java
+          OUT=$(echo 'System.out.println(stirling.software.jpdfium.panama.NativeLoader.detectPlatform());' \
+            | jshell -q --class-path /tmp/m -)
+          echo "detectPlatform() on Alpine => $OUT"
+          echo "$OUT" | grep -q 'linux-musl-' || { echo "FAIL: expected linux-musl-*, got: $OUT"; exit 1; }
+          echo "OK: musl detection works"
+          INNER
+
   publish-dry-run:
     runs-on: ubuntu-latest
     steps:
