@@ -185,6 +185,28 @@ jobs:
             exit 1
           }
 
+      # Beyond "a file exists": load the freshly-built native via the production
+      # NativeLoader and open a PDF. Skipped for darwin-x64 (cross-compiled on an
+      # arm64 host, so the x64 native can't run here); other platforms build on
+      # their own arch.
+      - name: Install jextract (for smoke build)
+        if: matrix.platform != 'darwin-x64'
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz ;;
+            macOS)   if [ "$(uname -m)" = arm64 ]; then JX=openjdk-25-jextract+2-4_macos-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_macos-x64_bin.tar.gz; fi ;;
+            Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
+          esac
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
+          tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - name: Functional smoke test (load native + open a PDF)
+        if: matrix.platform != 'darwin-x64'
+        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: natives-${{ matrix.platform }}

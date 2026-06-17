@@ -3,6 +3,10 @@ name: Snapshot to Central Portal
 on:
   push:
     branches: [main, publishing-setup]   # publishing-setup temporary, for bring-up testing
+  # On PRs we build the real natives per platform and run the functional smoke
+  # (load + open a PDF), but never publish — so every PR is verified against the
+  # actual artifact, not just a compile.
+  pull_request: {}
   workflow_dispatch:
     inputs:
       build_mode:
@@ -223,7 +227,9 @@ jobs:
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
-        if: startsWith(matrix.platform, 'darwin-')
+        # Signing is a publish concern; skip on PRs (the smoke loads the
+        # freshly-built unsigned dylib on the same runner just fine).
+        if: startsWith(matrix.platform, 'darwin-') && github.event_name != 'pull_request'
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -271,6 +277,30 @@ jobs:
           bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
+      # Functionally verify the freshly-built native instead of trusting that a
+      # file was produced: load it via the production NativeLoader and open a
+      # PDF. Skips: darwin-x64 (cross-compiled on an arm64 host, can't run here),
+      # and all darwin on PRs (macOS rejects the unsigned dylib — signing only
+      # runs on push/release). Linux + Windows don't need signing, so they smoke
+      # on every PR.
+      - name: Install jextract (for smoke build)
+        if: matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz ;;
+            macOS)   if [ "$(uname -m)" = arm64 ]; then JX=openjdk-25-jextract+2-4_macos-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_macos-x64_bin.tar.gz; fi ;;
+            Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
+          esac
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
+          tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - name: Functional smoke test (load native + open a PDF)
+        if: matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: natives-${{ matrix.platform }}
@@ -280,9 +310,9 @@ jobs:
 
   publish-snapshot:
     needs: build-natives
-    # Skipped on a dry run (workflow_dispatch with skip_publish=true) so the
-    # build+sign job can be exercised without shipping a snapshot publicly.
-    if: ${{ inputs.skip_publish != true }}
+    # Skipped on a dry run (workflow_dispatch with skip_publish=true) and never
+    # runs on pull_request — PRs build + smoke-test the natives but must not ship.
+    if: ${{ inputs.skip_publish != true && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -5,7 +5,11 @@ plugins {
 dependencies {
     implementation(libs.imageio.webp)
     implementation(libs.imageio.tiff)
-    testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-linux-x64"))
+    // Which platform's native jar lands on the test classpath. Defaults to
+    // linux-x64 for local dev; CI overrides per matrix job with
+    // -Pjpdfium.testNatives=<platform> so the smoke loads the native it built.
+    val testNatives = (findProperty("jpdfium.testNatives") ?: "linux-x64").toString()
+    testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
 }
 
@@ -174,4 +178,19 @@ tasks.register<Test>("integrationTest") {
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = System.getProperty("jpdfium.bench.xmx", "2g")
+}
+
+// Run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=<platform>
+// Fast per-platform functional check: load the bundled native via the
+// production NativeLoader path and open a PDF. Used by CI to verify each
+// freshly-built native actually runs (not just that a file was produced).
+tasks.register<Test>("nativeSmokeTest") {
+    group       = "verification"
+    description = "Load the bundled native and open a PDF (per-platform CI smoke)"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath       = sourceSets.test.get().runtimeClasspath
+    systemProperty("jpdfium.smoke", "true")
+    filter { includeTestsMatching("*NativeSmokeTest") }
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
