@@ -117,8 +117,18 @@ jobs:
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: static    }
           - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: component }
           - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: static    }
-          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: component }
-          - { platform: windows-x64,  runner: windows-latest,    target_cpu: x64,   mode: static    }
+          # windows: pinned to windows-2022. The windows-latest (windows-2025)
+          # image dropped VS 2022 in its 2026-06 update; Chromium's
+          # vs_toolchain.py only accepts VS 2017/2019/2022 and fails GN gen
+          # with "No supported Visual Studio can be found" on VS 2026.
+          - { platform: windows-x64,  runner: windows-2022,      target_cpu: x64,   mode: component }
+          - { platform: windows-x64,  runner: windows-2022,      target_cpu: x64,   mode: static    }
+          # windows-arm64 cross-compiles from the x64 host with target_cpu=arm64
+          # (same pattern as linux-arm64 above). Chromium's Windows toolchain
+          # supports arm64 targets out of the box; the runner image ships the
+          # MSVC ARM64 build tools + SDK libs.
+          - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: component }
+          - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: static    }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -137,11 +147,11 @@ jobs:
         run: brew install cmake ninja
 
       - name: Install build deps (Windows)
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         run: choco install -y cmake ninja python3
 
       - name: Configure Windows depot_tools environment
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         shell: bash
         run: |
           # depot_tools git_cache.py shells out via Python subprocess. Python's
@@ -198,7 +208,10 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    if: inputs.dry-run != true && needs.resolve-sha.outputs.skip != 'true'
+    # always(): a failed windows-arm64 leg (warn-only, unproven) must not skip
+    # the release. The sanity check still hard-fails on missing established
+    # platforms, so a real breakage cannot slip through.
+    if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -218,6 +231,12 @@ jobs:
           for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
             test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
             test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
+          done
+          # windows-arm64 is warn-only until the cross-compile leg is proven -
+          # a failure there must not block the established-platform prebuild.
+          for p in windows-arm64; do
+            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARN missing: $p (component)"
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARN missing: $p (static)"
           done
 
       - name: Create GitHub Release
@@ -247,6 +266,7 @@ jobs:
           | darwin-x64    | pdfium-darwin-x64.tar.gz         | pdfium-darwin-x64-static.tar.gz          |
           | darwin-arm64  | pdfium-darwin-arm64.tar.gz       | pdfium-darwin-arm64-static.tar.gz        |
           | windows-x64   | pdfium-windows-x64.tar.gz        | pdfium-windows-x64-static.tar.gz         |
+          | windows-arm64 | pdfium-windows-arm64.tar.gz      | pdfium-windows-arm64-static.tar.gz       |
 
           Component tarballs hold libpdfium.{so,dylib,dll} + sibling component
           shared libs (abseil, partition_alloc, etc.); easier to iterate against
