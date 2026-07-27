@@ -87,6 +87,12 @@ bundle_linux() {
             [ -e "$f" ] || continue
             [ -L "$f" ] && continue  # symlinks don't carry RUNPATH; their target does
             patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+            # No bundled lib may demand an executable stack - LXC/hardened
+            # kernels refuse to load those (#6869).
+            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+                patchelf --clear-execstack "$f" 2>/dev/null \
+                    || echo "WARNING: $f demands executable stack and patchelf could not clear it" >&2
+            fi
         done
     else
         echo "WARNING: patchelf not installed — transitive deps may not resolve at runtime" >&2
