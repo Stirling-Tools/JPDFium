@@ -76,6 +76,13 @@ sourceSets.named("main") {
     resources.srcDir(stagedRoot)
 }
 
+// Gradle 9 sees the staged natives twice (srcDir scan + stageNatives task
+// outputs) and hard-fails processResources/jar on the duplicate entries.
+// They are the same physical files - keep the first occurrence.
+tasks.withType<AbstractCopyTask>().configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 tasks.named("processResources") {
     dependsOn(writeNativeManifest)
 }

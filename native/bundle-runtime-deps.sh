@@ -233,6 +233,12 @@ sign_macos() {
     # native/import-macos-cert.sh (CI) before running this.
     local identity="${MACOS_SIGN_IDENTITY:-}"
     if [ -z "$identity" ]; then
+        # PR builds have no signing cert and never publish - allow unsigned
+        # there so the bridge build/bundle still gets CI coverage.
+        if [ "${MACOS_ALLOW_UNSIGNED:-}" = "1" ]; then
+            echo "WARNING: MACOS_SIGN_IDENTITY not set - skipping code-signing (MACOS_ALLOW_UNSIGNED=1). These dylibs must not ship." >&2
+            return 0
+        fi
         echo "ERROR: MACOS_SIGN_IDENTITY not set — refusing to ship unsigned" \
              "macOS dylibs. Import a Developer ID cert first" \
              "(native/import-macos-cert.sh)." >&2
