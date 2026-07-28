@@ -72,8 +72,12 @@ val writeNativeManifest by tasks.registering {
 }
 
 sourceSets.named("main") {
-    // stagedRoot contains natives/<platform>/..., so jar entries become natives/<platform>/<file>
-    resources.srcDir(stagedRoot)
+    // stagedRoot contains natives/<platform>/..., so jar entries become natives/<platform>/<file>.
+    // Listed FIRST deliberately: the CMake build also drops the bridge + a partial
+    // native-libs.txt into src/main/resources, and with duplicatesStrategy EXCLUDE
+    // the complete staged set (full dependency manifest) must win that collision -
+    // a partial manifest skips dependency preloading and breaks Windows loading.
+    resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
 }
 
 // Gradle 9 sees the staged natives twice (srcDir scan + stageNatives task
