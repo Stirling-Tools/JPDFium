@@ -292,7 +292,7 @@ jobs:
         shell: bash
         run: |
           case "$RUNNER_OS" in
-            Linux)   JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz ;;
+            Linux)   if [ "$(uname -m)" = aarch64 ]; then JX=openjdk-25-jextract+2-4_linux-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz; fi ;;
             macOS)   if [ "$(uname -m)" = arm64 ]; then JX=openjdk-25-jextract+2-4_macos-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_macos-x64_bin.tar.gz; fi ;;
             Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
           esac
