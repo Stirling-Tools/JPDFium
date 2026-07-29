@@ -193,4 +193,11 @@ tasks.register<Test>("nativeSmokeTest") {
     systemProperty("jpdfium.smoke", "true")
     filter { includeTestsMatching("*NativeSmokeTest") }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    // CI has no access to the HTML report; a load failure must name the
+    // missing library in the console.
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStackTraces = true
+        showCauses = true
+    }
 }

@@ -8,5 +8,6 @@ include(
     "jpdfium-natives:jpdfium-natives-linux-arm64",
     "jpdfium-natives:jpdfium-natives-darwin-x64",
     "jpdfium-natives:jpdfium-natives-darwin-arm64",
-    "jpdfium-natives:jpdfium-natives-windows-x64"
+    "jpdfium-natives:jpdfium-natives-windows-x64",
+    "jpdfium-natives:jpdfium-natives-windows-arm64"
 )

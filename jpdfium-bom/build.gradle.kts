@@ -13,6 +13,7 @@ dependencies {
         api(project(":jpdfium-natives:jpdfium-natives-darwin-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-darwin-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-windows-x64"))
+        api(project(":jpdfium-natives:jpdfium-natives-windows-arm64"))
     }
 }
 

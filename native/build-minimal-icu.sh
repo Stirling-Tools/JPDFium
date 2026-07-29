@@ -271,8 +271,11 @@ OBJ_FILE="$WORK/icudata_dat.o"
 ICU_MINOR=$(basename "$ORIG_LIB" | sed -n "s/^libicudata\\.so\\.${ICU_VER}\\.\\(.*\\)$/\\1/p")
 ICU_MINOR=${ICU_MINOR:-2}
 NEW_LIB="$OUT_DIR/libicudata.so.${ICU_VER}.${ICU_MINOR}"
+# -z noexecstack: the objcopy-built .o has no .note.GNU-stack section, so the
+# linker would mark GNU_STACK RWE - unloadable in LXC/hardened kernels (#6869).
 gcc -shared -fPIC \
     -Wl,-soname,libicudata.so.${ICU_VER} \
+    -Wl,-z,noexecstack \
     -o "$NEW_LIB" \
     "$OBJ_FILE" \
     || { echo "build-minimal-icu.sh: gcc -shared failed; skipping" >&2; exit 0; }
@@ -286,6 +289,11 @@ echo "Built        : $NEW_LIB ($(du -h "$NEW_LIB" | cut -f1))"
 echo "--- new lib sanity check ---"
 file "$NEW_LIB"
 readelf -d "$NEW_LIB" 2>/dev/null | grep -E "SONAME|NEEDED" || true
+# Executable stack would make the lib unloadable in LXC (#6869) - hard-fail here.
+if readelf -lW "$NEW_LIB" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+    echo "build-minimal-icu.sh: new lib demands executable stack; skipping replace" >&2
+    exit 0
+fi
 echo "--- exported icudt symbol ---"
 if ! nm -D "$NEW_LIB" 2>/dev/null | grep -E "icudt${ICU_VER}_dat" ; then
     echo "build-minimal-icu.sh: icudt${ICU_VER}_dat not exported by new .so; skipping replace" >&2
