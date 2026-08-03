@@ -24,31 +24,51 @@ public final class Pcre2Lib {
     private Pcre2Lib() {}
 
     public static long compile(String pattern, int flags) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_compile(a.allocateFrom(pattern), flags, hSeg), "pcre2Compile");
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_compile(a.allocateFrom(pattern), flags, hSeg), "pcre2Compile");
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static String matchAll(long patternHandle, String text) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_match_all(patternHandle, a.allocateFrom(text), ptrSeg), "pcre2MatchAll");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_match_all(patternHandle, a.allocateFrom(text), ptrSeg), "pcre2MatchAll");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void free(long patternHandle) {
-        JpdfiumH.jpdfium_pcre2_free(patternHandle);
+        NativeGuard.acquire();
+        try {
+            JpdfiumH.jpdfium_pcre2_free(patternHandle);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static boolean luhnValidate(String number) {
-        try (Arena a = Arena.ofConfined()) {
-            return JpdfiumH.jpdfium_luhn_validate(a.allocateFrom(number)) == 1;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                return JpdfiumH.jpdfium_luhn_validate(a.allocateFrom(number)) == 1;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 }

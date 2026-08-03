@@ -73,7 +73,7 @@ public final class RustBridgeBindings {
         if (sym.isEmpty()) {
             return null;
         }
-        return LINKER.downcallHandle(sym.get(), desc);
+        return NativeGuard.guard(LINKER.downcallHandle(sym.get(), desc));
     }
 
     /** {@code int32_t jpdfium_rust_compress_pdf(input, input_len, out_ptr, out_len, iters)} */

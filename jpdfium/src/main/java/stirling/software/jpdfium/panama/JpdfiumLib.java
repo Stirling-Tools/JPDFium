@@ -15,8 +15,10 @@ import static java.lang.foreign.ValueLayout.*;
  * Handles NativeLoader bootstrap, Arena lifecycle, String/MemorySegment conversion,
  * and result-code to exception translation.
  *
- * <p>All public methods are thread-safe with respect to independent documents,
- * but a single document handle must not be accessed concurrently.
+ * <p>PDFium keeps process-wide mutable state, so it is not thread-safe even across
+ * independent documents. Every method here serialises on {@link NativeGuard}, which
+ * makes concurrent calls safe. A single document handle must still not be accessed
+ * concurrently - the guard prevents native corruption, not logical interleaving.
  *
  * <p>Advanced feature bindings are split into focused companion classes:
  * {@link Pcre2Lib}, {@link FlashTextLib}, {@link FontLib},
@@ -45,7 +47,9 @@ public final class JpdfiumLib {
         NativeLoader.ensureLoaded();
         int rc = JpdfiumH.jpdfium_init();
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
-        Runtime.getRuntime().addShutdownHook(new Thread(JpdfiumH::jpdfium_destroy));
+        // Wait for any in-flight native call before tearing the library down;
+        // FPDF_DestroyLibrary while another thread is inside PDFium segfaults.
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> NativeGuard.run(JpdfiumH::jpdfium_destroy)));
     }
 
     private JpdfiumLib() {}
@@ -62,184 +66,289 @@ public final class JpdfiumLib {
     }
 
     public static long docOpen(String path) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_doc_open(a.allocateFrom(path), hSeg), "docOpen: " + path);
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_doc_open(a.allocateFrom(path), hSeg), "docOpen: " + path);
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static long docOpenBytes(byte[] data) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            // The bridge copies the data - the arena is freed on return.
-            check(JpdfiumH.jpdfium_doc_open_bytes(a.allocateFrom(JAVA_BYTE, data), data.length, hSeg), "docOpenBytes");
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                // The bridge copies the data - the arena is freed on return.
+                check(JpdfiumH.jpdfium_doc_open_bytes(a.allocateFrom(JAVA_BYTE, data), data.length, hSeg), "docOpenBytes");
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static long docOpenProtected(String path, String password) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_doc_open_protected(a.allocateFrom(path), a.allocateFrom(password), hSeg), "docOpenProtected: " + path);
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_doc_open_protected(a.allocateFrom(path), a.allocateFrom(password), hSeg), "docOpenProtected: " + path);
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static int docPageCount(long doc) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment cSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_doc_page_count(doc, cSeg), "docPageCount");
-            return cSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_doc_page_count(doc, cSeg), "docPageCount");
+                return cSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void docSave(long doc, String path) {
-        try (Arena a = Arena.ofConfined()) {
-            check(JpdfiumH.jpdfium_doc_save(doc, a.allocateFrom(path)), "docSave: " + path);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                check(JpdfiumH.jpdfium_doc_save(doc, a.allocateFrom(path)), "docSave: " + path);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static byte[] docSaveBytes(long doc) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            MemorySegment lenSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_doc_save_bytes(doc, ptrSeg, lenSeg), "docSaveBytes");
-            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment lenSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_doc_save_bytes(doc, ptrSeg, lenSeg), "docSaveBytes");
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void docClose(long doc) {
-        JpdfiumH.jpdfium_doc_close(doc);
+        NativeGuard.acquire();
+        try {
+            JpdfiumH.jpdfium_doc_close(doc);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static long pageOpen(long doc, int idx) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_page_open(doc, idx, hSeg), "pageOpen: " + idx);
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_page_open(doc, idx, hSeg), "pageOpen: " + idx);
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static float pageWidth(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment s = a.allocate(JAVA_FLOAT);
-            check(JpdfiumH.jpdfium_page_width(page, s), "pageWidth");
-            return s.get(JAVA_FLOAT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment s = a.allocate(JAVA_FLOAT);
+                check(JpdfiumH.jpdfium_page_width(page, s), "pageWidth");
+                return s.get(JAVA_FLOAT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static float pageHeight(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment s = a.allocate(JAVA_FLOAT);
-            check(JpdfiumH.jpdfium_page_height(page, s), "pageHeight");
-            return s.get(JAVA_FLOAT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment s = a.allocate(JAVA_FLOAT);
+                check(JpdfiumH.jpdfium_page_height(page, s), "pageHeight");
+                return s.get(JAVA_FLOAT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void pageClose(long page) {
-        JpdfiumH.jpdfium_page_close(page);
+        NativeGuard.acquire();
+        try {
+            JpdfiumH.jpdfium_page_close(page);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static RenderResult renderPage(long page, int dpi) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            MemorySegment wSeg   = a.allocate(JAVA_INT);
-            MemorySegment hSeg   = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_render_page(page, dpi, ptrSeg, wSeg, hSeg), "renderPage");
-            int w = wSeg.get(JAVA_INT, 0);
-            int h = hSeg.get(JAVA_INT, 0);
-            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return new RenderResult(w, h, rgba);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment wSeg   = a.allocate(JAVA_INT);
+                MemorySegment hSeg   = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_render_page(page, dpi, ptrSeg, wSeg, hSeg), "renderPage");
+                int w = wSeg.get(JAVA_INT, 0);
+                int h = hSeg.get(JAVA_INT, 0);
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return new RenderResult(w, h, rgba);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static String textGetChars(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            check(JpdfiumH.jpdfium_text_get_chars(page, ptrSeg), "textGetChars");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                check(JpdfiumH.jpdfium_text_get_chars(page, ptrSeg), "textGetChars");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static String textFind(long page, String query) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            check(JpdfiumH.jpdfium_text_find(page, a.allocateFrom(query), ptrSeg), "textFind");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                check(JpdfiumH.jpdfium_text_find(page, a.allocateFrom(query), ptrSeg), "textFind");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void redactRegion(long page, float x, float y, float w, float h, int argb, boolean removeContent) {
-        check(JpdfiumH.jpdfium_redact_region(page, x, y, w, h, argb, removeContent ? 1 : 0), "redactRegion");
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_redact_region(page, x, y, w, h, argb, removeContent ? 1 : 0), "redactRegion");
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static void redactPattern(long page, String pattern, int argb, boolean removeContent) {
-        try (Arena a = Arena.ofConfined()) {
-            check(JpdfiumH.jpdfium_redact_pattern(page, a.allocateFrom(pattern), argb, removeContent ? 1 : 0), "redactPattern");
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                check(JpdfiumH.jpdfium_redact_pattern(page, a.allocateFrom(pattern), argb, removeContent ? 1 : 0), "redactPattern");
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void redactWords(long page, String[] words, int argb, float padding,
                                     boolean wholeWord, boolean useRegex, boolean removeContent) {
-        if (words == null || words.length == 0) return;
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                MemorySegment s = a.allocateFrom(words[i]);
-                ptrs.setAtIndex(ADDRESS, i, s);
+        NativeGuard.acquire();
+        try {
+            if (words == null || words.length == 0) return;
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrs = a.allocate(ADDRESS, words.length);
+                for (int i = 0; i < words.length; i++) {
+                    MemorySegment s = a.allocateFrom(words[i]);
+                    ptrs.setAtIndex(ADDRESS, i, s);
+                }
+                check(JpdfiumH.jpdfium_redact_words(page, ptrs, words.length, argb, padding,
+                        wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0), "redactWords");
             }
-            check(JpdfiumH.jpdfium_redact_words(page, ptrs, words.length, argb, padding,
-                    wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0), "redactWords");
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static int redactWordsEx(long page, String[] words, int argb, float padding,
                                      boolean wholeWord, boolean useRegex, boolean removeContent,
                                      boolean caseSensitive) {
-        if (words == null || words.length == 0) return 0;
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                MemorySegment s = a.allocateFrom(words[i]);
-                ptrs.setAtIndex(ADDRESS, i, s);
+        NativeGuard.acquire();
+        try {
+            if (words == null || words.length == 0) return 0;
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrs = a.allocate(ADDRESS, words.length);
+                for (int i = 0; i < words.length; i++) {
+                    MemorySegment s = a.allocateFrom(words[i]);
+                    ptrs.setAtIndex(ADDRESS, i, s);
+                }
+                MemorySegment countSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_redact_words_ex(page, ptrs, words.length, argb, padding,
+                        wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
+                        caseSensitive ? 1 : 0, countSeg), "redactWordsEx");
+                return countSeg.get(JAVA_INT, 0);
             }
-            MemorySegment countSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_redact_words_ex(page, ptrs, words.length, argb, padding,
-                    wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
-                    caseSensitive ? 1 : 0, countSeg), "redactWordsEx");
-            return countSeg.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void pageFlatten(long page) {
-        check(JpdfiumH.jpdfium_page_flatten(page), "pageFlatten");
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_page_flatten(page), "pageFlatten");
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static String textGetCharPositions(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            check(JpdfiumH.jpdfium_text_get_char_positions(page, ptrSeg), "textGetCharPositions");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                check(JpdfiumH.jpdfium_text_get_char_positions(page, ptrSeg), "textGetCharPositions");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static void pageToImage(long doc, int pageIndex, int dpi) {
-        check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /**
@@ -249,10 +358,15 @@ public final class JpdfiumLib {
      * @return the annotation index within the page's annotation array
      */
     public static int annotCreateRedact(long page, float x, float y, float w, float h, int argb) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment idxSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, idxSeg), "annotCreateRedact");
-            return idxSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment idxSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, idxSeg), "annotCreateRedact");
+                return idxSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -265,49 +379,74 @@ public final class JpdfiumLib {
     public static int redactMarkWords(long page, String[] words, float padding,
                                        boolean wholeWord, boolean useRegex,
                                        boolean caseSensitive, int argb) {
-        if (words == null || words.length == 0) return 0;
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
+        NativeGuard.acquire();
+        try {
+            if (words == null || words.length == 0) return 0;
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrs = a.allocate(ADDRESS, words.length);
+                for (int i = 0; i < words.length; i++) {
+                    ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
+                }
+                MemorySegment countSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_redact_mark_words(page, ptrs, words.length, padding,
+                        wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
+                        argb, countSeg), "redactMarkWords");
+                return countSeg.get(JAVA_INT, 0);
             }
-            MemorySegment countSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_redact_mark_words(page, ptrs, words.length, padding,
-                    wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
-                    argb, countSeg), "redactMarkWords");
-            return countSeg.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
         }
     }
 
     /** Returns the number of pending REDACT annotations on the page. */
     public static int annotCountRedacts(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment cSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_annot_count_redacts(page, cSeg), "annotCountRedacts");
-            return cSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_annot_count_redacts(page, cSeg), "annotCountRedacts");
+                return cSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     /** Returns JSON array of all REDACT annotation rects. */
     public static String annotGetRedactsJson(long page) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            check(JpdfiumH.jpdfium_annot_get_redacts_json(page, ptrSeg), "annotGetRedactsJson");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                check(JpdfiumH.jpdfium_annot_get_redacts_json(page, ptrSeg), "annotGetRedactsJson");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     /** Remove a specific REDACT annotation by its index. */
     public static void annotRemoveRedact(long page, int annotIndex) {
-        check(JpdfiumH.jpdfium_annot_remove_redact(page, annotIndex), "annotRemoveRedact");
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_annot_remove_redact(page, annotIndex), "annotRemoveRedact");
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /** Remove all REDACT annotations from the page (undo all marks). */
     public static void annotClearRedacts(long page) {
-        check(JpdfiumH.jpdfium_annot_clear_redacts(page), "annotClearRedacts");
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_annot_clear_redacts(page), "annotClearRedacts");
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /**
@@ -318,10 +457,15 @@ public final class JpdfiumLib {
      * @return the number of REDACT annotations that were committed
      */
     public static int redactCommit(long page, int argb, boolean removeContent) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment countSeg = a.allocate(JAVA_INT);
-            check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, countSeg), "redactCommit");
-            return countSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment countSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, countSeg), "redactCommit");
+                return countSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -330,14 +474,19 @@ public final class JpdfiumLib {
      * The document handle remains valid after this call.
      */
     public static byte[] docSaveIncremental(long doc) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            MemorySegment lenSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_doc_save_incremental(doc, ptrSeg, lenSeg), "docSaveIncremental");
-            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment lenSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_doc_save_incremental(doc, ptrSeg, lenSeg), "docSaveIncremental");
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -346,27 +495,42 @@ public final class JpdfiumLib {
      * This enables direct FFM calls to PDFium functions not covered by the bridge.
      */
     public static MemorySegment docRawHandle(long doc) {
-        long raw = JpdfiumH.jpdfium_doc_raw_handle(doc);
-        if (raw == 0) throw new JPDFiumException("Invalid document handle");
-        return FfmHelper.ptrToSegment(raw);
+        NativeGuard.acquire();
+        try {
+            long raw = JpdfiumH.jpdfium_doc_raw_handle(doc);
+            if (raw == 0) throw new JPDFiumException("Invalid document handle");
+            return FfmHelper.ptrToSegment(raw);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /**
      * Returns the raw FPDF_PAGE pointer (as a MemorySegment) from a bridge handle.
      */
     public static MemorySegment pageRawHandle(long page) {
-        long raw = JpdfiumH.jpdfium_page_raw_handle(page);
-        if (raw == 0) throw new JPDFiumException("Invalid page handle");
-        return FfmHelper.ptrToSegment(raw);
+        NativeGuard.acquire();
+        try {
+            long raw = JpdfiumH.jpdfium_page_raw_handle(page);
+            if (raw == 0) throw new JPDFiumException("Invalid page handle");
+            return FfmHelper.ptrToSegment(raw);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /**
      * Returns the raw FPDF_DOCUMENT pointer for the document that owns a page.
      */
     public static MemorySegment pageDocRawHandle(long page) {
-        long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
-        if (raw == 0) throw new JPDFiumException("Invalid page handle");
-        return FfmHelper.ptrToSegment(raw);
+        NativeGuard.acquire();
+        try {
+            long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
+            if (raw == 0) throw new JPDFiumException("Invalid page handle");
+            return FfmHelper.ptrToSegment(raw);
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     /**
@@ -382,12 +546,17 @@ public final class JpdfiumLib {
      */
     public static long imageToPdf(byte[] imageData, float pageWidth, float pageHeight,
                                    float margin, int position, int imageFormat) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment hSeg = a.allocate(JAVA_LONG);
-            check(JpdfiumH.jpdfium_image_to_pdf(
-                    a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
-                    pageWidth, pageHeight, margin, position, imageFormat, hSeg), "imageToPdf");
-            return hSeg.get(JAVA_LONG, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_image_to_pdf(
+                        a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
+                        pageWidth, pageHeight, margin, position, imageFormat, hSeg), "imageToPdf");
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -405,11 +574,16 @@ public final class JpdfiumLib {
      */
     public static void docAddImagePage(long doc, byte[] imageData, float pageWidth, float pageHeight,
                                         float margin, int position, int imageFormat, int insertAtIndex) {
-        try (Arena a = Arena.ofConfined()) {
-            check(JpdfiumH.jpdfium_doc_add_image_page(
-                    doc, a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
-                    pageWidth, pageHeight, margin, position, imageFormat, insertAtIndex),
-                    "docAddImagePage");
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                check(JpdfiumH.jpdfium_doc_add_image_page(
+                        doc, a.allocateFrom(JAVA_BYTE, imageData), imageData.length,
+                        pageWidth, pageHeight, margin, position, imageFormat, insertAtIndex),
+                        "docAddImagePage");
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 }

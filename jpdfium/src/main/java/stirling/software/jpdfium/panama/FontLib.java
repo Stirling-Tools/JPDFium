@@ -16,63 +16,89 @@ public final class FontLib {
 
     static { NativeLoader.ensureLoaded(); }
 
-    private static final MethodHandle jpdfium_strip_fonts = Linker.nativeLinker().downcallHandle(
-            SymbolLookup.loaderLookup()
-                    .find("jpdfium_strip_fonts")
-                    .orElseThrow(() -> new UnsatisfiedLinkError("jpdfium_strip_fonts not found")),
-            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+    private static final MethodHandle jpdfium_strip_fonts = NativeGuard.guard(
+            Linker.nativeLinker().downcallHandle(
+                    SymbolLookup.loaderLookup()
+                            .find("jpdfium_strip_fonts")
+                            .orElseThrow(() -> new UnsatisfiedLinkError("jpdfium_strip_fonts not found")),
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)));
 
     private FontLib() {}
 
     public static byte[] getData(long page, int fontIndex) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            MemorySegment lenSeg = a.allocate(JAVA_LONG);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_get_data(page, fontIndex, ptrSeg, lenSeg), "fontGetData");
-            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            long len = lenSeg.get(JAVA_LONG, 0);
-            byte[] result = nativePtr.reinterpret(len).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment lenSeg = a.allocate(JAVA_LONG);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_get_data(page, fontIndex, ptrSeg, lenSeg), "fontGetData");
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                long len = lenSeg.get(JAVA_LONG, 0);
+                byte[] result = nativePtr.reinterpret(len).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static String classify(byte[] fontData) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_classify(
-                    a.allocateFrom(JAVA_BYTE, fontData), fontData.length, ptrSeg), "fontClassify");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_classify(
+                        a.allocateFrom(JAVA_BYTE, fontData), fontData.length, ptrSeg), "fontClassify");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static int fixToUnicode(long doc, int pageIndex) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment cSeg = a.allocate(JAVA_INT);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_fix_tounicode(doc, pageIndex, cSeg), "fontFixToUnicode");
-            return cSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cSeg = a.allocate(JAVA_INT);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_fix_tounicode(doc, pageIndex, cSeg), "fontFixToUnicode");
+                return cSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static int repairWidths(long doc, int pageIndex) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment cSeg = a.allocate(JAVA_INT);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_repair_widths(doc, pageIndex, cSeg), "fontRepairWidths");
-            return cSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cSeg = a.allocate(JAVA_INT);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_repair_widths(doc, pageIndex, cSeg), "fontRepairWidths");
+                return cSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static String normalizePage(long doc, int pageIndex) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_normalize_page(doc, pageIndex, ptrSeg), "fontNormalizePage");
-            MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_normalize_page(doc, pageIndex, ptrSeg), "fontNormalizePage");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -83,31 +109,41 @@ public final class FontLib {
      * @return number of font entries removed
      */
     public static int stripFonts(long doc) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment cSeg = a.allocate(JAVA_INT);
-            int rc;
-            try {
-                rc = (int) jpdfium_strip_fonts.invokeExact(doc, cSeg);
-            } catch (Throwable t) { throw new RuntimeException("jpdfium_strip_fonts failed", t); }
-            JpdfiumLib.check(rc, "stripFonts");
-            return cSeg.get(JAVA_INT, 0);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cSeg = a.allocate(JAVA_INT);
+                int rc;
+                try {
+                    rc = (int) jpdfium_strip_fonts.invokeExact(doc, cSeg);
+                } catch (Throwable t) { throw new RuntimeException("jpdfium_strip_fonts failed", t); }
+                JpdfiumLib.check(rc, "stripFonts");
+                return cSeg.get(JAVA_INT, 0);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
     public static byte[] subset(byte[] fontData, int[] codepoints, boolean retainGids) {
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrSeg = a.allocate(ADDRESS);
-            MemorySegment lenSeg = a.allocate(JAVA_LONG);
-            JpdfiumLib.check(JpdfiumH.jpdfium_font_subset(
-                    a.allocateFrom(JAVA_BYTE, fontData), fontData.length,
-                    a.allocateFrom(JAVA_INT, codepoints), codepoints.length,
-                    retainGids ? 1 : 0,
-                    ptrSeg, lenSeg), "fontSubset");
-            MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-            long len = lenSeg.get(JAVA_LONG, 0);
-            byte[] result = nativePtr.reinterpret(len).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment lenSeg = a.allocate(JAVA_LONG);
+                JpdfiumLib.check(JpdfiumH.jpdfium_font_subset(
+                        a.allocateFrom(JAVA_BYTE, fontData), fontData.length,
+                        a.allocateFrom(JAVA_INT, codepoints), codepoints.length,
+                        retainGids ? 1 : 0,
+                        ptrSeg, lenSeg), "fontSubset");
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                long len = lenSeg.get(JAVA_LONG, 0);
+                byte[] result = nativePtr.reinterpret(len).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 }

@@ -20,7 +20,8 @@ import java.util.Optional;
 public final class PdfPage implements AutoCloseable {
 
     private final long handle;
-    private volatile boolean closed = false;
+    private final java.util.concurrent.atomic.AtomicBoolean closed =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     private PdfPage(long handle) {
         this.handle = handle;
@@ -305,13 +306,14 @@ public final class PdfPage implements AutoCloseable {
     }
 
     private void ensureOpen() {
-        if (closed) throw new IllegalStateException("PdfPage is already closed");
+        if (closed.get()) throw new IllegalStateException("PdfPage is already closed");
     }
 
     @Override
     public void close() {
-        if (closed) return;
-        closed = true;
+        // compareAndSet, not check-then-set: a lost race here closes the same
+        // native page twice and corrupts the heap.
+        if (!closed.compareAndSet(false, true)) return;
         JpdfiumLib.pageClose(handle);
     }
 }
