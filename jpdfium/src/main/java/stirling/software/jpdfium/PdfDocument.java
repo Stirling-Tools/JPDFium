@@ -15,12 +15,18 @@ import java.util.Optional;
  *
  * <p><strong>Thread safety:</strong> A single {@code PdfDocument} instance (and any
  * {@link PdfPage} handles obtained from it) must be confined to one thread at a time.
- * Multiple independent {@code PdfDocument} instances on separate threads are safe.
+ *
+ * <p>Independent {@code PdfDocument} instances may be used from separate threads:
+ * PDFium itself is not thread-safe even across independent documents, so every
+ * native call is serialised by {@link stirling.software.jpdfium.panama.NativeGuard}.
+ * That makes concurrent use safe, but PDFium work does not run in parallel - the
+ * throughput ceiling is roughly one thread's worth of PDFium time.
  */
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
-    private volatile boolean closed = false;
+    private final java.util.concurrent.atomic.AtomicBoolean closed =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;
@@ -227,13 +233,14 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     private void ensureOpen() {
-        if (closed) throw new IllegalStateException("PdfDocument is already closed");
+        if (closed.get()) throw new IllegalStateException("PdfDocument is already closed");
     }
 
     @Override
     public void close() {
-        if (closed) return;
-        closed = true;
+        // compareAndSet, not check-then-set: a lost race here frees the same
+        // native document twice and corrupts the heap.
+        if (!closed.compareAndSet(false, true)) return;
         JpdfiumLib.docClose(handle);
     }
 }

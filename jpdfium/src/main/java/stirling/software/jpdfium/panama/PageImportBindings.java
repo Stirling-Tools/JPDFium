@@ -18,9 +18,9 @@ public final class PageImportBindings {
     private PageImportBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return LINKER.downcallHandle(
+        return NativeGuard.guard(LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc);
+                desc));
     }
 
     public static final MethodHandle FPDF_ImportPages = downcall("FPDF_ImportPages",

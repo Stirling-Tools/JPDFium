@@ -21,15 +21,15 @@ public final class PageEditBindings {
     private PageEditBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return LINKER.downcallHandle(
+        return NativeGuard.guard(LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc);
+                desc));
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return LINKER.downcallHandle(
+        return NativeGuard.guard(LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc, Linker.Option.critical(false));
+                desc, Linker.Option.critical(false)));
     }
 
     public static final MethodHandle FPDF_CreateNewDocument = downcall("FPDF_CreateNewDocument",
@@ -288,7 +288,7 @@ public final class PageEditBindings {
 
     private static MethodHandle optionalDowncall(String name, MethodHandle fallback) {
         return LOOKUP.find(name)
-                .map(addr -> LINKER.downcallHandle(addr, FunctionDescriptor.ofVoid(ADDRESS, ADDRESS)))
+                .map(addr -> NativeGuard.guard(LINKER.downcallHandle(addr, FunctionDescriptor.ofVoid(ADDRESS, ADDRESS))))
                 .orElse(fallback);
     }
 }

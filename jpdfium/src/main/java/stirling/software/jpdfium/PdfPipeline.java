@@ -33,8 +33,10 @@ import java.util.function.BiConsumer;
  * <h3>Thread Safety &amp; PDFium</h3>
  * <p>PDFium's internal state (font renderer, document loader, page parser) is
  * <b>not thread-safe</b> - even across independent document instances. All
- * PDFium native calls must be serialized. The pipeline handles this via
- * {@link #PDFIUM_LOCK}.
+ * PDFium native calls must be serialized. Since 1.0.4 the library does this
+ * for you: every native call goes through
+ * {@link stirling.software.jpdfium.panama.NativeGuard}, so no caller-side
+ * locking is required anywhere.
  *
  * <p>Parallel speedup comes from overlapping Java-side work (hashing, NLP,
  * image processing, I/O) across threads while PDFium calls are pipelined
@@ -85,14 +87,14 @@ public final class PdfPipeline {
      * (font renderer, document loader, page parser) is <b>not thread-safe</b>
      * - even across independent document instances.
      *
-     * <p>In parallel mode, wrap all PDFium calls (page open/close, text
-     * extraction, rendering, annotation CRUD) with
-     * {@code synchronized(PdfPipeline.PDFIUM_LOCK)}. Java-side processing
-     * between PDFium calls runs in parallel without the lock.
-     *
-     * <p>In sequential and streaming modes, the lock is unnecessary because
-     * only one thread accesses PDFium.
+     * @deprecated since 1.0.4 - callers no longer need this. Every native call
+     *     is serialised internally by
+     *     {@link stirling.software.jpdfium.panama.NativeGuard}, so PDFium calls
+     *     are safe from any thread without caller-side locking. The field is
+     *     retained so existing {@code synchronized(PDFIUM_LOCK)} blocks keep
+     *     compiling; they are now redundant but harmless.
      */
+    @Deprecated(since = "1.0.4")
     public static final Object PDFIUM_LOCK = new Object();
 
     /**

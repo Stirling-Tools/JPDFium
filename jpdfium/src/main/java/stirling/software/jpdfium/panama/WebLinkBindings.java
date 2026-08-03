@@ -18,15 +18,15 @@ public final class WebLinkBindings {
     private WebLinkBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return LINKER.downcallHandle(
+        return NativeGuard.guard(LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc);
+                desc));
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return LINKER.downcallHandle(
+        return NativeGuard.guard(LINKER.downcallHandle(
                 LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc, Linker.Option.critical(false));
+                desc, Linker.Option.critical(false)));
     }
 
     /** Load web links from a text page handle. Returns FPDF_PAGELINK handle. */

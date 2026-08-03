@@ -42,39 +42,44 @@ public final class RepairLib {
      * @return repair result with status, output bytes, and diagnostics
      */
     public static RepairResult repair(byte[] input, int flags) {
-        if (input == null || input.length == 0) {
-            return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
-        }
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
-            MemorySegment outputPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outputLenSeg = arena.allocate(JAVA_LONG);
-
-            int rc = JpdfiumH.jpdfium_repair_pdf(
-                    inputSeg, input.length,
-                    outputPtrSeg, outputLenSeg,
-                    flags);
-
-            RepairResult.Status status = switch (rc) {
-                case REPAIR_CLEAN -> RepairResult.Status.CLEAN;
-                case REPAIR_FIXED -> RepairResult.Status.FIXED;
-                case REPAIR_PARTIAL -> RepairResult.Status.PARTIAL;
-                default -> RepairResult.Status.FAILED;
-            };
-
-            byte[] outputBytes = null;
-            if (status != RepairResult.Status.FAILED) {
-                MemorySegment outPtr = outputPtrSeg.get(ADDRESS, 0);
-                long outLen = outputLenSeg.get(JAVA_LONG, 0);
-                if (outLen > 0) {
-                    outputBytes = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-                    JpdfiumH.jpdfium_free_buffer(outPtr);
-                }
+        NativeGuard.acquire();
+        try {
+            if (input == null || input.length == 0) {
+                return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
             }
 
-            String diagnostics = inspect(input);
-            return new RepairResult(status, outputBytes, diagnostics);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
+                MemorySegment outputPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outputLenSeg = arena.allocate(JAVA_LONG);
+
+                int rc = JpdfiumH.jpdfium_repair_pdf(
+                        inputSeg, input.length,
+                        outputPtrSeg, outputLenSeg,
+                        flags);
+
+                RepairResult.Status status = switch (rc) {
+                    case REPAIR_CLEAN -> RepairResult.Status.CLEAN;
+                    case REPAIR_FIXED -> RepairResult.Status.FIXED;
+                    case REPAIR_PARTIAL -> RepairResult.Status.PARTIAL;
+                    default -> RepairResult.Status.FAILED;
+                };
+
+                byte[] outputBytes = null;
+                if (status != RepairResult.Status.FAILED) {
+                    MemorySegment outPtr = outputPtrSeg.get(ADDRESS, 0);
+                    long outLen = outputLenSeg.get(JAVA_LONG, 0);
+                    if (outLen > 0) {
+                        outputBytes = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                        JpdfiumH.jpdfium_free_buffer(outPtr);
+                    }
+                }
+
+                String diagnostics = inspect(input);
+                return new RepairResult(status, outputBytes, diagnostics);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -85,22 +90,27 @@ public final class RepairLib {
      * @return JSON diagnostic report
      */
     public static String inspect(byte[] input) {
-        if (input == null || input.length == 0) {
-            return "{\"error\":\"empty input\"}";
-        }
+        NativeGuard.acquire();
+        try {
+            if (input == null || input.length == 0) {
+                return "{\"error\":\"empty input\"}";
+            }
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
-            MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
+                MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
-            JpdfiumH.jpdfium_repair_inspect(
-                    inputSeg, input.length,
-                    jsonPtrSeg);
+                JpdfiumH.jpdfium_repair_inspect(
+                        inputSeg, input.length,
+                        jsonPtrSeg);
 
-            MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+                MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -114,29 +124,34 @@ public final class RepairLib {
      *         fails
      */
     public static byte[] brotliDecode(byte[] compressed) {
-        if (compressed == null || compressed.length == 0)
-            return null;
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, compressed);
-            MemorySegment outPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
-
-            int rc = JpdfiumH.jpdfium_brotli_decode(
-                    inputSeg, compressed.length,
-                    outPtrSeg, outLenSeg);
-
-            if (rc != 0)
-                return null; // ERR_NATIVE or decompress failure
-
-            MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
-            long outLen = outLenSeg.get(JAVA_LONG, 0);
-            if (outLen <= 0)
+        NativeGuard.acquire();
+        try {
+            if (compressed == null || compressed.length == 0)
                 return null;
 
-            byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(outPtr);
-            return result;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, compressed);
+                MemorySegment outPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
+
+                int rc = JpdfiumH.jpdfium_brotli_decode(
+                        inputSeg, compressed.length,
+                        outPtrSeg, outLenSeg);
+
+                if (rc != 0)
+                    return null; // ERR_NATIVE or decompress failure
+
+                MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
+                long outLen = outLenSeg.get(JAVA_LONG, 0);
+                if (outLen <= 0)
+                    return null;
+
+                byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(outPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -147,29 +162,34 @@ public final class RepairLib {
      * @return FlateDecode-compressed bytes, or null if unavailable
      */
     public static byte[] brotliToFlate(byte[] compressed) {
-        if (compressed == null || compressed.length == 0)
-            return null;
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, compressed);
-            MemorySegment outPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
-
-            int rc = JpdfiumH.jpdfium_brotli_to_flate(
-                    inputSeg, compressed.length,
-                    outPtrSeg, outLenSeg);
-
-            if (rc != 0)
+        NativeGuard.acquire();
+        try {
+            if (compressed == null || compressed.length == 0)
                 return null;
 
-            MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
-            long outLen = outLenSeg.get(JAVA_LONG, 0);
-            if (outLen <= 0)
-                return null;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, compressed);
+                MemorySegment outPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
 
-            byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(outPtr);
-            return result;
+                int rc = JpdfiumH.jpdfium_brotli_to_flate(
+                        inputSeg, compressed.length,
+                        outPtrSeg, outLenSeg);
+
+                if (rc != 0)
+                    return null;
+
+                MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
+                long outLen = outLenSeg.get(JAVA_LONG, 0);
+                if (outLen <= 0)
+                    return null;
+
+                byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(outPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -182,45 +202,50 @@ public final class RepairLib {
      * @return repair result with pages recovered
      */
     public static RepairResult pdfioRepair(byte[] input) {
-        if (input == null || input.length == 0) {
-            return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
-        }
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
-            MemorySegment outPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
-            MemorySegment pagesSeg = arena.allocate(JAVA_INT);
-
-            int rc = JpdfiumH.jpdfium_pdfio_try_repair(
-                    inputSeg, input.length,
-                    outPtrSeg, outLenSeg, pagesSeg);
-
-            if (rc == ERR_NATIVE) {
-                return new RepairResult(RepairResult.Status.FAILED, null,
-                        "{\"status\":\"unavailable\",\"message\":\"PDFio not linked\"}");
+        NativeGuard.acquire();
+        try {
+            if (input == null || input.length == 0) {
+                return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
             }
 
-            RepairResult.Status status = switch (rc) {
-                case REPAIR_CLEAN -> RepairResult.Status.CLEAN;
-                case REPAIR_FIXED -> RepairResult.Status.FIXED;
-                case REPAIR_PARTIAL -> RepairResult.Status.PARTIAL;
-                default -> RepairResult.Status.FAILED;
-            };
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
+                MemorySegment outPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
+                MemorySegment pagesSeg = arena.allocate(JAVA_INT);
 
-            byte[] outputBytes = null;
-            if (status != RepairResult.Status.FAILED) {
-                MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
-                long outLen = outLenSeg.get(JAVA_LONG, 0);
-                if (outLen > 0) {
-                    outputBytes = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-                    JpdfiumH.jpdfium_free_buffer(outPtr);
+                int rc = JpdfiumH.jpdfium_pdfio_try_repair(
+                        inputSeg, input.length,
+                        outPtrSeg, outLenSeg, pagesSeg);
+
+                if (rc == ERR_NATIVE) {
+                    return new RepairResult(RepairResult.Status.FAILED, null,
+                            "{\"status\":\"unavailable\",\"message\":\"PDFio not linked\"}");
                 }
-            }
 
-            int pagesRecovered = pagesSeg.get(JAVA_INT, 0);
-            String diag = "{\"source\":\"pdfio\",\"pages_recovered\":" + pagesRecovered + "}";
-            return new RepairResult(status, outputBytes, diag);
+                RepairResult.Status status = switch (rc) {
+                    case REPAIR_CLEAN -> RepairResult.Status.CLEAN;
+                    case REPAIR_FIXED -> RepairResult.Status.FIXED;
+                    case REPAIR_PARTIAL -> RepairResult.Status.PARTIAL;
+                    default -> RepairResult.Status.FAILED;
+                };
+
+                byte[] outputBytes = null;
+                if (status != RepairResult.Status.FAILED) {
+                    MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
+                    long outLen = outLenSeg.get(JAVA_LONG, 0);
+                    if (outLen > 0) {
+                        outputBytes = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                        JpdfiumH.jpdfium_free_buffer(outPtr);
+                    }
+                }
+
+                int pagesRecovered = pagesSeg.get(JAVA_INT, 0);
+                String diag = "{\"source\":\"pdfio\",\"pages_recovered\":" + pagesRecovered + "}";
+                return new RepairResult(status, outputBytes, diag);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -234,21 +259,26 @@ public final class RepairLib {
      * @return JSON validation result, or null if lcms2 is unavailable
      */
     public static String validateIccProfile(byte[] profileData, int expectedComponents) {
-        if (profileData == null || profileData.length == 0)
-            return null;
+        NativeGuard.acquire();
+        try {
+            if (profileData == null || profileData.length == 0)
+                return null;
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, profileData);
-            MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, profileData);
+                MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
-            int rc = JpdfiumH.jpdfium_validate_icc_profile(
-                    dataSeg, profileData.length,
-                    expectedComponents, jsonPtrSeg);
+                int rc = JpdfiumH.jpdfium_validate_icc_profile(
+                        dataSeg, profileData.length,
+                        expectedComponents, jsonPtrSeg);
 
-            MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+                MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -259,24 +289,29 @@ public final class RepairLib {
      * @return profile bytes, or null if lcms2 is unavailable
      */
     public static byte[] generateReplacementIcc(int numComponents) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment outPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
+        NativeGuard.acquire();
+        try {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment outPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
 
-            int rc = JpdfiumH.jpdfium_generate_replacement_icc(
-                    numComponents, outPtrSeg, outLenSeg);
+                int rc = JpdfiumH.jpdfium_generate_replacement_icc(
+                        numComponents, outPtrSeg, outLenSeg);
 
-            if (rc != 0)
-                return null;
+                if (rc != 0)
+                    return null;
 
-            MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
-            long outLen = outLenSeg.get(JAVA_LONG, 0);
-            if (outLen <= 0)
-                return null;
+                MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
+                long outLen = outLenSeg.get(JAVA_LONG, 0);
+                if (outLen <= 0)
+                    return null;
 
-            byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(outPtr);
-            return result;
+                byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(outPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -287,20 +322,25 @@ public final class RepairLib {
      * @return JSON validation result, or null if OpenJPEG is unavailable
      */
     public static String validateJpxStream(byte[] jpxData) {
-        if (jpxData == null || jpxData.length == 0)
-            return null;
+        NativeGuard.acquire();
+        try {
+            if (jpxData == null || jpxData.length == 0)
+                return null;
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, jpxData);
-            MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, jpxData);
+                MemorySegment jsonPtrSeg = arena.allocate(ADDRESS);
 
-            int rc = JpdfiumH.jpdfium_validate_jpx_stream(
-                    dataSeg, jpxData.length, jsonPtrSeg);
+                int rc = JpdfiumH.jpdfium_validate_jpx_stream(
+                        dataSeg, jpxData.length, jsonPtrSeg);
 
-            MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-            String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return result;
+                MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -324,18 +364,23 @@ public final class RepairLib {
      *         success
      */
     public static RepairResult rustRepair(byte[] input) {
-        if (input == null || input.length == 0) {
-            return new RepairResult(RepairResult.Status.FAILED, null,
-                    "{\"error\":\"empty input\"}");
-        }
+        NativeGuard.acquire();
+        try {
+            if (input == null || input.length == 0) {
+                return new RepairResult(RepairResult.Status.FAILED, null,
+                        "{\"error\":\"empty input\"}");
+            }
 
-        byte[] repaired = RustBridgeBindings.rustRepairLopdf(input);
-        if (repaired != null && repaired.length > 0) {
-            String diag = "{\"source\":\"rust-lopdf\",\"status\":\"fixed\"}";
-            return new RepairResult(RepairResult.Status.FIXED, repaired, diag);
+            byte[] repaired = RustBridgeBindings.rustRepairLopdf(input);
+            if (repaired != null && repaired.length > 0) {
+                String diag = "{\"source\":\"rust-lopdf\",\"status\":\"fixed\"}";
+                return new RepairResult(RepairResult.Status.FIXED, repaired, diag);
+            }
+            return new RepairResult(RepairResult.Status.FAILED, null,
+                    "{\"source\":\"rust-lopdf\",\"status\":\"failed\"}");
+        } finally {
+            NativeGuard.release();
         }
-        return new RepairResult(RepairResult.Status.FAILED, null,
-                "{\"source\":\"rust-lopdf\",\"status\":\"failed\"}");
     }
 
     /**
@@ -345,32 +390,37 @@ public final class RepairLib {
      * @return raw pixel bytes (interleaved RGB/Gray/CMYK), or null on failure
      */
     public static byte[] jpxToRaw(byte[] jpxData) {
-        if (jpxData == null || jpxData.length == 0)
-            return null;
-
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, jpxData);
-            MemorySegment outPtrSeg = arena.allocate(ADDRESS);
-            MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
-            MemorySegment wSeg = arena.allocate(JAVA_INT);
-            MemorySegment hSeg = arena.allocate(JAVA_INT);
-            MemorySegment cSeg = arena.allocate(JAVA_INT);
-
-            int rc = JpdfiumH.jpdfium_jpx_to_raw(
-                    dataSeg, jpxData.length,
-                    outPtrSeg, outLenSeg, wSeg, hSeg, cSeg);
-
-            if (rc != 0)
+        NativeGuard.acquire();
+        try {
+            if (jpxData == null || jpxData.length == 0)
                 return null;
 
-            MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
-            long outLen = outLenSeg.get(JAVA_LONG, 0);
-            if (outLen <= 0)
-                return null;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment dataSeg = arena.allocateFrom(JAVA_BYTE, jpxData);
+                MemorySegment outPtrSeg = arena.allocate(ADDRESS);
+                MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
+                MemorySegment wSeg = arena.allocate(JAVA_INT);
+                MemorySegment hSeg = arena.allocate(JAVA_INT);
+                MemorySegment cSeg = arena.allocate(JAVA_INT);
 
-            byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(outPtr);
-            return result;
+                int rc = JpdfiumH.jpdfium_jpx_to_raw(
+                        dataSeg, jpxData.length,
+                        outPtrSeg, outLenSeg, wSeg, hSeg, cSeg);
+
+                if (rc != 0)
+                    return null;
+
+                MemorySegment outPtr = outPtrSeg.get(ADDRESS, 0);
+                long outLen = outLenSeg.get(JAVA_LONG, 0);
+                if (outLen <= 0)
+                    return null;
+
+                byte[] result = outPtr.reinterpret(outLen).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(outPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 }

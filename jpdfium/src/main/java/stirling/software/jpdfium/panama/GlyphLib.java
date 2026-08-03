@@ -24,21 +24,26 @@ public final class GlyphLib {
 
     public static GlyphRedactResult redactGlyphAware(long page, String[] words,
                                                       int argb, float padding, int flags) {
-        if (words == null || words.length == 0) return new GlyphRedactResult(0, "[]");
-        try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
+        NativeGuard.acquire();
+        try {
+            if (words == null || words.length == 0) return new GlyphRedactResult(0, "[]");
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrs = a.allocate(ADDRESS, words.length);
+                for (int i = 0; i < words.length; i++) {
+                    ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
+                }
+                MemorySegment countSeg = a.allocate(JAVA_INT);
+                MemorySegment jsonSeg  = a.allocate(ADDRESS);
+                JpdfiumLib.check(JpdfiumH.jpdfium_redact_glyph_aware(page, ptrs, words.length,
+                        argb, padding, flags, countSeg, jsonSeg), "redactGlyphAware");
+                int count = countSeg.get(JAVA_INT, 0);
+                MemorySegment strPtr = jsonSeg.get(ADDRESS, 0);
+                String json = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return new GlyphRedactResult(count, json);
             }
-            MemorySegment countSeg = a.allocate(JAVA_INT);
-            MemorySegment jsonSeg  = a.allocate(ADDRESS);
-            JpdfiumLib.check(JpdfiumH.jpdfium_redact_glyph_aware(page, ptrs, words.length,
-                    argb, padding, flags, countSeg, jsonSeg), "redactGlyphAware");
-            int count = countSeg.get(JAVA_INT, 0);
-            MemorySegment strPtr = jsonSeg.get(ADDRESS, 0);
-            String json = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
-            JpdfiumH.jpdfium_free_string(strPtr);
-            return new GlyphRedactResult(count, json);
+        } finally {
+            NativeGuard.release();
         }
     }
 }
