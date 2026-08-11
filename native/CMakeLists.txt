@@ -148,7 +148,7 @@ if(JPDFIUM_USE_PDFIUM)
     if(MSVC)
         target_compile_options(jpdfium PRIVATE /W4)
     else()
-        target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Wno-ignored-qualifiers)
     endif()
 
     if(PDFIUM_LINK_MODE STREQUAL "static")
