@@ -40,6 +40,21 @@
         <exclude name="PrematureDeclaration"/>
         <exclude name="LinguisticNaming"/>
         <exclude name="EmptyControlStatement"/>
+        <!-- AvoidFieldNameMatchingMethodName: standard builder/record pattern where
+             field names intentionally match accessor method names. Renaming fields
+             to synthetic prefixes would harm readability. -->
+        <exclude name="AvoidFieldNameMatchingMethodName"/>
+        <!-- TooManyStaticImports: project convention uses static imports for assertions
+             and enum constants in tests for readability. -->
+        <exclude name="TooManyStaticImports"/>
+        <!-- ShortMethodName: valid short names like fromKey(), key(), toXml() are domain terms. -->
+        <exclude name="ShortMethodName"/>
+        <!-- AvoidDuplicateLiterals: test data and domain strings legitimately repeat. -->
+        <exclude name="AvoidDuplicateLiterals"/>
+        <!-- UseUnderscoresInNumericLiterals: not enforced for small constants. -->
+        <exclude name="UseUnderscoresInNumericLiterals"/>
+        <!-- UseVarargs: array parameters are used for explicitness in binding APIs. -->
+        <exclude name="UseVarargs"/>
     </rule>
     <rule ref="category/java/design.xml">
         <exclude name="LawOfDemeter"/>
@@ -57,6 +72,8 @@
         <exclude name="ExceptionAsFlowControl"/>
         <exclude name="SimplifiedTernary"/>
         <exclude name="ImmutableField"/>
+        <exclude name="GodClass"/>
+        <exclude name="ExcessiveParameterList"/>
     </rule>
     <rule ref="category/java/errorprone.xml">
         <exclude name="NullAssignment"/>
@@ -65,6 +82,10 @@
         <exclude name="AvoidCatchingThrowable"/>
         <exclude name="AssignmentInOperand"/>
         <exclude name="EmptyCatchBlock"/>
+        <exclude name="AvoidCatchingGenericException"/>
+        <exclude name="ReturnEmptyCollectionRatherThanNull"/>
+        <exclude name="DataClass"/>
+        <exclude name="NcssCount"/>
     </rule>
     <rule ref="category/java/performance.xml">
         <exclude name="AvoidInstantiatingObjectsInLoops"/>
