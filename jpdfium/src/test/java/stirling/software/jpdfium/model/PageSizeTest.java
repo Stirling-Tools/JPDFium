@@ -2,7 +2,9 @@ package stirling.software.jpdfium.model;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for {@link PageSize} record (pure Java, no native dependency). */
 class PageSizeTest {

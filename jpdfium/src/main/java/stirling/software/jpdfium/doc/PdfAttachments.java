@@ -33,6 +33,9 @@ public final class PdfAttachments {
      * Returns the number of attachments in the document.
      */
     public static int count(MemorySegment doc) {
+        if (AttachmentBindings.FPDFDoc_GetAttachmentCount == null) {
+            return 0;
+        }
         try {
             return (int) AttachmentBindings.FPDFDoc_GetAttachmentCount.invokeExact(doc);
         } catch (Throwable t) { throw new RuntimeException("FPDFDoc_GetAttachmentCount failed", t); }

@@ -1,13 +1,15 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.StructLayout;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for PDFium page creation, object manipulation, fonts, rotation,
@@ -15,21 +17,14 @@ import static java.lang.foreign.ValueLayout.*;
  */
 public final class PageEditBindings {
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-
     private PageEditBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc));
+        return Symbols.downcall(name, desc);
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc, Linker.Option.critical(false)));
+        return Symbols.downcallCritical(name, desc);
     }
 
     public static final MethodHandle FPDF_CreateNewDocument = downcall("FPDF_CreateNewDocument",
@@ -287,8 +282,7 @@ public final class PageEditBindings {
             "FPDFPage_InsertObject", null); // use InsertObject; index not yet in PDFium
 
     private static MethodHandle optionalDowncall(String name, MethodHandle fallback) {
-        return LOOKUP.find(name)
-                .map(addr -> NativeGuard.guard(LINKER.downcallHandle(addr, FunctionDescriptor.ofVoid(ADDRESS, ADDRESS))))
-                .orElse(fallback);
+        MethodHandle h = Symbols.downcall(name, FunctionDescriptor.ofVoid(ADDRESS, ADDRESS));
+        return h != null ? h : fallback;
     }
 }

@@ -6,6 +6,7 @@ import stirling.software.jpdfium.doc.FormFieldType;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FormFillBindings;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -42,7 +43,7 @@ public class DebugFormRead {
 
             // Call FORM_OnAfterLoadPage to initialize form overlay
             try {
-                stirling.software.jpdfium.panama.FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, formHandle);
+                FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, formHandle);
                 System.out.println("FORM_OnAfterLoadPage: OK");
             } catch (Throwable t) {
                 System.out.println("FORM_OnAfterLoadPage: " + t);
@@ -66,7 +67,7 @@ public class DebugFormRead {
                     FormFieldType ft = FormFieldType.fromCode(typeCode);
 
                     // Try reading name with explicit error handling
-                    long nameNeeded = 0;
+                    long nameNeeded;
                     try {
                         nameNeeded = (long) AnnotationBindings.FPDFAnnot_GetFormFieldName.invokeExact(
                                 formHandle, annot, MemorySegment.NULL, 0L);
@@ -183,7 +184,7 @@ public class DebugFormRead {
                                 float bottom = rect.get(ValueLayout.JAVA_FLOAT, 12);
                                 double cx = (left + right) / 2.0;
                                 double cy = (top + bottom) / 2.0;
-                                System.out.printf(" rect=[%.1f,%.1f,%.1f,%.1f] centre=(%.1f,%.1f)", 
+                                System.out.printf(" rect=[%.1f,%.1f,%.1f,%.1f] centre=(%.1f,%.1f)",
                                     left, top, right, bottom, cx, cy);
                             }
                         }

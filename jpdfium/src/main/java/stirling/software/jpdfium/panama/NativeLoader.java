@@ -73,7 +73,7 @@ public final class NativeLoader {
 
             // On Linux/macOS, RUNPATH=$ORIGIN in pdfium.so/.dylib makes the
             // dynamic linker find its sibling component libs in the same dir.
-            // Windows has no equivalent — LoadLibrary doesn't search the
+            // Windows has no equivalent - LoadLibrary doesn't search the
             // loaded DLL's own directory. So pre-load every dependency by
             // absolute path here. Once a DLL is loaded by name, subsequent
             // references by name (from pdfium.dll's import table) resolve
@@ -145,7 +145,8 @@ public final class NativeLoader {
         }
 
         int maxPasses = 8;
-        while (maxPasses-- > 0 && !remaining.isEmpty()) {
+        while (maxPasses > 0 && !remaining.isEmpty()) {
+            maxPasses--;
             List<String> failed = new ArrayList<>();
             for (String lib : remaining) {
                 try {
@@ -155,13 +156,14 @@ public final class NativeLoader {
                 }
             }
             if (failed.size() == remaining.size()) {
-                // No progress this pass — remaining libs likely depend on
+                // No progress this pass - remaining libs likely depend on
                 // something not in the manifest (e.g. a system DLL we can't
                 // help with). Let pdfium.dll's load surface the real error.
                 break;
             }
             remaining = failed;
         }
+        maxPasses--;
     }
 
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {

@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.RenderBindings;
 
 import java.lang.foreign.MemorySegment;
 
@@ -149,7 +150,7 @@ public final class PdfImageReplacer {
         // FPDFBitmap format: 2=BGR, 3=BGRx, 4=BGRA
         MemorySegment bitmap;
         try {
-            bitmap = (MemorySegment) new Object() {
+            bitmap = new Object() {
                 MemorySegment create() throws Throwable {
                     return (MemorySegment) PageEditBindings.FPDFBitmap_CreateEx.invokeExact(
                             width, height, 3, MemorySegment.NULL, 0);
@@ -158,7 +159,7 @@ public final class PdfImageReplacer {
         } catch (Throwable t) {
             // Fallback: use FPDFBitmap_Create from RenderBindings
             try {
-                bitmap = (MemorySegment) stirling.software.jpdfium.panama.RenderBindings.FPDFBitmap_Create.invokeExact(
+                bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(
                         width, height, 0);
             } catch (Throwable t2) { return false; }
         }
@@ -169,7 +170,7 @@ public final class PdfImageReplacer {
             // Fill with color (ARGB format for FillRect)
             long color = 0xFF000000L | ((long) rgb & 0xFFFFFFL);
             try {
-                stirling.software.jpdfium.panama.RenderBindings.FPDFBitmap_FillRect.invokeExact(
+                RenderBindings.FPDFBitmap_FillRect.invokeExact(
                         bitmap, 0, 0, width, height, color);
             } catch (Throwable t) { return false; }
 
@@ -188,7 +189,7 @@ public final class PdfImageReplacer {
             return true;
         } finally {
             try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 }

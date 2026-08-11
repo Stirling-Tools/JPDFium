@@ -164,7 +164,7 @@ public final class PdfSearchHighlighter {
                         }
                     } finally {
                         try { TextPageBindings.FPDFText_FindClose.invokeExact(searchHandle); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
 
@@ -172,7 +172,7 @@ public final class PdfSearchHighlighter {
                         Collections.unmodifiableList(matchRects));
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }

@@ -1,0 +1,78 @@
+%PDF-1.4
+1 0 obj
+<</Type/Catalog/Pages 2 0 R>>
+endobj
+2 0 obj
+<</Type/Pages/Kids[3 0 R 4 0 R 5 0 R]/Count 3>>
+endobj
+3 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 6 0 R/Resources<</Font<</F1 9 0 R>>>>>>
+endobj
+4 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 7 0 R/Resources<</Font<</F1 9 0 R>>>>>>
+endobj
+5 0 obj
+<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 8 0 R/Resources<</Font<</F1 9 0 R>>>>>>
+endobj
+6 0 obj
+<</Length 185>>
+stream
+BT
+/F1 12 Tf
+72 750 Td
+(Page 1 - Hello World 123-45-6789) Tj
+0 -20 Td
+(The quick brown fox jumps over the lazy dog.) Tj
+0 -20 Td
+(Redaction test: SSN 123-45-6789 and 987-65-4321.) Tj
+ET
+endstream
+endobj
+7 0 obj
+<</Length 185>>
+stream
+BT
+/F1 12 Tf
+72 750 Td
+(Page 2 - Hello World 123-45-6789) Tj
+0 -20 Td
+(The quick brown fox jumps over the lazy dog.) Tj
+0 -20 Td
+(Redaction test: SSN 123-45-6789 and 987-65-4321.) Tj
+ET
+endstream
+endobj
+8 0 obj
+<</Length 185>>
+stream
+BT
+/F1 12 Tf
+72 750 Td
+(Page 3 - Hello World 123-45-6789) Tj
+0 -20 Td
+(The quick brown fox jumps over the lazy dog.) Tj
+0 -20 Td
+(Redaction test: SSN 123-45-6789 and 987-65-4321.) Tj
+ET
+endstream
+endobj
+9 0 obj
+<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Encoding/WinAnsiEncoding>>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000054 00000 n 
+0000000117 00000 n 
+0000000229 00000 n 
+0000000341 00000 n 
+0000000453 00000 n 
+0000000687 00000 n 
+0000000921 00000 n 
+0000001155 00000 n 
+trailer
+<</Size 10/Root 1 0 R>>
+startxref
+1243
+%%EOF

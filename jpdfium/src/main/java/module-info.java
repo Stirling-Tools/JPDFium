@@ -22,8 +22,10 @@ module stirling.software.jpdfium {
     // Internal: FFM bindings and advanced PDF API - exported for Spring Boot and advanced consumers
     exports stirling.software.jpdfium.panama;
     exports stirling.software.jpdfium.doc;
+    // Returned by public panama API (renderPageView) - exported so consumers can use the result
+    exports stirling.software.jpdfium.internal;
 
     // Standard library requirements
-    requires java.desktop;      // java.awt.image.BufferedImage
+    requires transitive java.desktop;      // java.awt.image.BufferedImage surfaces in the public API
     requires java.net.http;     // java.net.http.HttpClient for link validation
 }

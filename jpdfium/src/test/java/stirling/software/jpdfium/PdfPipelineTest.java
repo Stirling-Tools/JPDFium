@@ -6,7 +6,8 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import java.net.URL;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfPipelineTest {

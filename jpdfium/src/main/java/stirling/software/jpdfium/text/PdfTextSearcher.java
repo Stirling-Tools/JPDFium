@@ -59,33 +59,54 @@ public final class PdfTextSearcher {
     /**
      * Parse match results from the native JSON format.
      * Format: [{"start":0,"len":3}, ...]
+     *
+     * <p>Single index-based sweep: no {@code String.split} or per-field substring
+     * allocation beyond the value span handed to {@code Integer.parseInt}.
      */
     static List<SearchMatch> parseMatchesJson(String json, int pageIndex) {
         List<SearchMatch> matches = new ArrayList<>();
-        if (json == null || json.equals("[]")) return matches;
-
-        int pos = 0;
-        while (pos < json.length()) {
-            int objStart = json.indexOf('{', pos);
+        if (json == null || json.isEmpty() || json.equals("[]")) return matches;
+        final int n = json.length();
+        int p = 0;
+        while (true) {
+            int objStart = json.indexOf('{', p);
             if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
-            if (objEnd < 0) break;
-
-            String obj = json.substring(objStart + 1, objEnd);
-            pos = objEnd + 1;
-
+            int i = objStart + 1;
             int start = 0, len = 0;
-            for (String pair : obj.split(",")) {
-                int colon = pair.indexOf(':');
-                if (colon < 0) continue;
-                String key = pair.substring(0, colon).replace("\"", "").trim();
-                String val = pair.substring(colon + 1).trim();
-                switch (key) {
-                    case "start" -> start = Integer.parseInt(val);
-                    case "len" -> len = Integer.parseInt(val);
+            boolean complete = false;
+            try {
+                while (i < n) {
+                    char c = json.charAt(i);
+                    if (c == '}') { i++; complete = true; break; }
+                    if (c == ',' || Character.isWhitespace(c)) { i++; continue; }
+                    if (c != '"') break;                  // malformed field
+                    int k1 = json.indexOf('"', i + 1);
+                    if (k1 < 0) break;
+                    int colon = json.indexOf(':', k1 + 1);
+                    if (colon < 0) break;
+                    char k0 = json.charAt(i + 1);          // first char of key
+                    int v0 = colon + 1;
+                    while (v0 < n && Character.isWhitespace(json.charAt(v0))) v0++;
+                    if (v0 >= n) break;
+                    int v1 = v0;
+                    while (v1 < n) {
+                        char d = json.charAt(v1);
+                        if (d == ',' || d == '}') break;
+                        v1++;
+                    }
+                    String val = json.substring(v0, v1);
+                    switch (k0) {
+                        case 's' -> start = Integer.parseInt(val);  // "start"
+                        case 'l' -> len = Integer.parseInt(val);    // "len"
+                        default -> { }
+                    }
+                    i = v1;
                 }
+                if (complete) matches.add(new SearchMatch(pageIndex, start, len));
+            } catch (NumberFormatException skip) {
+                // malformed entry, skip
             }
-            matches.add(new SearchMatch(pageIndex, start, len));
+            p = i;
         }
         return matches;
     }

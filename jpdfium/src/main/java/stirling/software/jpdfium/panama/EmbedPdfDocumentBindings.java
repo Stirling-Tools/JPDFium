@@ -1,10 +1,10 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the EmbedPDF fork's document-level APIs.
@@ -14,21 +14,14 @@ import static java.lang.foreign.ValueLayout.*;
  */
 public final class EmbedPdfDocumentBindings {
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-
     private EmbedPdfDocumentBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("EmbedPDF symbol not found: " + name)),
-                desc));
+        return Symbols.downcall(name, desc);
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("EmbedPDF symbol not found: " + name)),
-                desc, Linker.Option.critical(false)));
+        return Symbols.downcallCritical(name, desc);
     }
 
     /** Bit 3: Print document. */

@@ -117,7 +117,7 @@ public final class PdfDeskew {
                 return findSkewAngle(binary, bmpW, bmpH, maxAngle, accuracy);
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }
@@ -280,13 +280,13 @@ public final class PdfDeskew {
                 try {
                     PageEditBindings.FPDFPageObj_Transform.invokeExact(
                             obj, cos, sin, -sin, cos, e, f);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             // Regenerate content
             try {
                 PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
     }
 }

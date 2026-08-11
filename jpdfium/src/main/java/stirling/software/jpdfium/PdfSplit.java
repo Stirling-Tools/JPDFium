@@ -1,11 +1,15 @@
 package stirling.software.jpdfium;
 
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
-
-import java.nio.charset.StandardCharsets;
-import java.util.*;
 
 /**
  * Split a PDF document by various strategies.
@@ -100,15 +104,13 @@ public final class PdfSplit {
     /**
      * Creates an empty PDF document that can receive imported pages.
      *
-     * <p>Opens a properly-formed minimal PDF, round-trips through save/reopen
-     * (ensuring valid PDFium internal state), then deletes the blank page.
+     * <p>Opens a properly-formed minimal PDF and deletes the single blank page.
+     * No intermediate {@code saveBytes} copy is needed - the minimal PDF is
+     * already well-formed with correct xref offsets, and {@code FPDF_ImportPages}
+     * works directly against the live document.
      */
     private static PdfDocument createEmptyDocument() {
         PdfDocument dest = PdfDocument.open(MINIMAL_PDF_BYTES);
-        // Round-trip to ensure clean internal PDFium state
-        byte[] bytes = dest.saveBytes();
-        dest.close();
-        dest = PdfDocument.open(bytes);
         PdfPageEditor.deletePage(dest.rawHandle(), 0);
         return dest;
     }

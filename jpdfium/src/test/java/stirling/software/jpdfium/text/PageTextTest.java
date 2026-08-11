@@ -2,9 +2,12 @@ package stirling.software.jpdfium.text;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Tests for {@link PageText} record (pure Java, no native dependency). */
 class PageTextTest {
@@ -19,7 +22,7 @@ class PageTextTest {
     }
 
     private static TextLine line(String... words) {
-        var wordList = java.util.Arrays.stream(words).map(PageTextTest::word).toList();
+        var wordList = Arrays.stream(words).map(PageTextTest::word).toList();
         return new TextLine(wordList, 0, 0, 200, 14);
     }
 
@@ -50,7 +53,7 @@ class PageTextTest {
                 List.of());
         var words = page.allWords();
         assertEquals(3, words.size());
-        assertEquals("A", words.get(0).text());
+        assertEquals("A", words.getFirst().text());
         assertEquals("B", words.get(1).text());
         assertEquals("C", words.get(2).text());
     }
@@ -68,13 +71,13 @@ class PageTextTest {
 
     @Test
     void linesAreUnmodifiable() {
-        var page = new PageText(0, new java.util.ArrayList<>(List.of(line("X"))), List.of());
+        var page = new PageText(0, new ArrayList<>(List.of(line("X"))), List.of());
         assertThrows(UnsupportedOperationException.class, () -> page.lines().add(line("Y")));
     }
 
     @Test
     void charsAreUnmodifiable() {
-        var page = new PageText(0, List.of(), new java.util.ArrayList<>(List.of(ch(0, 'A'))));
+        var page = new PageText(0, List.of(), new ArrayList<>(List.of(ch(0, 'A'))));
         assertThrows(UnsupportedOperationException.class, () -> page.chars().add(ch(1, 'B')));
     }
 }

@@ -2,15 +2,20 @@ package stirling.software.jpdfium.panama;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NativeLoaderTest {
+
+    private static final Pattern PATTERN = Pattern.compile("(linux|darwin|windows)-(x64|arm64)");
 
     @Test
     void detectsPlatformCorrectly() {
         String platform = NativeLoader.detectPlatform();
         assertTrue(
-                platform.matches("(linux|darwin|windows)-(x64|arm64)"),
+                PATTERN.matcher(platform).matches(),
                 "Unexpected platform string: " + platform);
     }
 

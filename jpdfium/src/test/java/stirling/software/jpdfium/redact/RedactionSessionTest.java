@@ -5,8 +5,14 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.model.Rect;
 
 import java.nio.file.Path;
+import java.util.Objects;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for the two-phase {@link RedactionSession} API.
@@ -21,7 +27,7 @@ class RedactionSessionTest {
     }
 
     private static byte[] pdfBytes() throws Exception {
-        return RedactionSessionTest.class.getResourceAsStream("/pdfs/general/minimal.pdf").readAllBytes();
+        return Objects.requireNonNull(RedactionSessionTest.class.getResourceAsStream("/pdfs/general/minimal.pdf")).readAllBytes();
     }
 
     @Test

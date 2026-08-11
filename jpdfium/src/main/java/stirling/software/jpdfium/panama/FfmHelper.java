@@ -87,6 +87,7 @@ public final class FfmHelper {
         } catch (RuntimeException re) {
             throw re;
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             throw new RuntimeException("FFM call failed", t);
         }
     }
@@ -104,6 +105,7 @@ public final class FfmHelper {
             int result = (int) mh.invokeExact(args);
             return result != 0 ? defaultValue : result;
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return defaultValue;
         }
     }

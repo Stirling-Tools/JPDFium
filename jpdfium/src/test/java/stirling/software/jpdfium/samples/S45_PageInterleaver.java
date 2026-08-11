@@ -32,7 +32,7 @@ public class S45_PageInterleaver {
         Path outDir = SampleBase.out("S45_page-interleaver");
 
         // Interleave the first two PDFs
-        Path pdf1 = inputs.get(0);
+        Path pdf1 = inputs.getFirst();
         Path pdf2 = inputs.get(1);
         String stem1 = SampleBase.stem(pdf1);
         String stem2 = SampleBase.stem(pdf2);

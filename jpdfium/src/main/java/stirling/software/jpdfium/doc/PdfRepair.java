@@ -57,8 +57,6 @@ public final class PdfRepair {
     private final boolean usePdfioFallback;
     private final boolean useLopdfFallback;
     private final boolean transcodeBrotli;
-    private final boolean validateIcc;
-    private final boolean validateJpx;
     private final boolean writeDiagnostics;
     private final boolean sanitize;
 
@@ -72,8 +70,6 @@ public final class PdfRepair {
         this.usePdfioFallback = usePdfioFallback;
         this.useLopdfFallback = useLopdfFallback;
         this.transcodeBrotli = transcodeBrotli;
-        this.validateIcc = validateIcc;
-        this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
         this.sanitize = sanitize;
     }
@@ -129,11 +125,13 @@ public final class PdfRepair {
 
         if (sanitize && coreResult.isUsable()) {
             byte[] repairedBytes = coreResult.repairedPdf();
-            try (PdfDocument doc = PdfDocument.open(repairedBytes)) {
-                PdfSecurity.sanitize(doc);
-                repairedBytes = doc.saveBytes();
-                coreResult = new RepairResult(coreResult.status(), repairedBytes,
-                        coreResult.diagnosticJson());
+            if (repairedBytes != null) {
+                try (PdfDocument doc = PdfDocument.open(repairedBytes)) {
+                    PdfSecurity.sanitize(doc);
+                    repairedBytes = doc.saveBytes();
+                    coreResult = new RepairResult(coreResult.status(), repairedBytes,
+                            coreResult.diagnosticJson());
+                }
             }
         }
 

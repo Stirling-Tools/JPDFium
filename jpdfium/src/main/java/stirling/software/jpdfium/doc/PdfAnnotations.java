@@ -36,6 +36,9 @@ public final class PdfAnnotations {
      * Returns the count of annotations on a page.
      */
     public static int count(MemorySegment page) {
+        if (AnnotationBindings.FPDFPage_GetAnnotCount == null) {
+            return 0;
+        }
         try {
             return (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(page);
         } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetAnnotCount failed", t); }

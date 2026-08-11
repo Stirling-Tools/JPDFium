@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 /**
  * Serialises every native call into PDFium.
@@ -63,7 +64,7 @@ public final class NativeGuard {
     }
 
     /** Calls the supplier with the PDFium lock held. */
-    public static <T> T call(java.util.function.Supplier<T> action) {
+    public static <T> T call(Supplier<T> action) {
         LOCK.lock();
         try {
             return action.get();

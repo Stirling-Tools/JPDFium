@@ -13,7 +13,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 import java.util.regex.Pattern;
 
 /**
@@ -41,6 +44,8 @@ import java.util.regex.Pattern;
  */
 public final class PdfBookmarkEditor {
 
+    private static final Pattern PATTERN = Pattern.compile("\\s+");
+
     private PdfBookmarkEditor() {}
 
     /**
@@ -48,7 +53,7 @@ public final class PdfBookmarkEditor {
      *
      * <p>This is the heap-friendly variant. The merged document is saved to
      * {@code output} as a single streaming pass, then the outline objects are
-     * appended via an incremental update directly on the file — we never hold
+     * appended via an incremental update directly on the file - we never hold
      * the full PDF in heap, which matters when the document is hundreds of MB.
      *
      * <p>Old behaviour (preserved by the {@link #setBookmarks(PdfDocument,
@@ -63,7 +68,7 @@ public final class PdfBookmarkEditor {
     public static void setBookmarks(PdfDocument doc, BookmarkTree tree, Path output)
             throws IOException {
         // 1. Stream the source PDF to disk. PDFium writes directly through
-        //    the OS — no Java heap intermediate.
+        //    the OS - no Java heap intermediate.
         doc.save(output);
 
         if (tree.entries().isEmpty()) {
@@ -75,7 +80,7 @@ public final class PdfBookmarkEditor {
         //    /Root object number, and the Catalog dictionary bytes.
         OutlineMeta meta = readOutlineMeta(output);
 
-        // 3. Build the appendix (~few KB) — new Catalog override with
+        // 3. Build the appendix (~few KB) - new Catalog override with
         //    /Outlines added, the Outlines dict, the bookmark entries, and
         //    a fresh xref subsection + trailer.
         long appendOffset = Files.size(output);
@@ -95,7 +100,7 @@ public final class PdfBookmarkEditor {
      * <p>This overload still materialises the full PDF in heap because the
      * caller asked for bytes. Prefer
      * {@link #setBookmarks(PdfDocument, BookmarkTree, Path)} when you can
-     * sink to a file — it costs O(KB) heap instead of O(file size).
+     * sink to a file - it costs O(KB) heap instead of O(file size).
      *
      * @param doc  the source document
      * @param tree the bookmark tree to set
@@ -104,13 +109,17 @@ public final class PdfBookmarkEditor {
     public static byte[] setBookmarks(PdfDocument doc, BookmarkTree tree) {
         Path tmp = null;
         try {
-            tmp = Files.createTempFile("jpdfium-bm-", ".pdf");
+            tmp = Files.createTempFile("jpdfium-bookmarks-", ".pdf");
             setBookmarks(doc, tree, tmp);
             return Files.readAllBytes(tmp);
         } catch (IOException e) {
-            throw new RuntimeException("Bookmark creation failed", e);
+            throw new RuntimeException("Failed to write temporary PDF with bookmarks", e);
         } finally {
-            deleteQuietly(tmp);
+            if (tmp != null) {
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {}
+            }
         }
     }
 
@@ -135,7 +144,7 @@ public final class PdfBookmarkEditor {
                 for (TextChar ch : pt.chars()) {
                     if (ch.fontSize() > maxFontSeen) maxFontSeen = ch.fontSize();
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception _) {}
         }
 
         if (maxFontSeen <= 0) return builder.build();
@@ -148,7 +157,7 @@ public final class PdfBookmarkEditor {
                 for (HeadingCandidate h : headings) {
                     builder.add(h.text(), h.pageIndex());
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception _) {}
         }
 
         return builder.build();
@@ -171,14 +180,14 @@ public final class PdfBookmarkEditor {
 
     /**
      * Read the trailer/xref/Root region of a PDF on disk. Cost: O(KB) for
-     * typical PDFs — three small window reads (tail, xref table, root object).
+     * typical PDFs - three small window reads (tail, xref table, root object).
      */
     private static OutlineMeta readOutlineMeta(Path file) throws IOException {
         long fileSize = Files.size(file);
         // Most PDFs end with: ...trailer << /Size N /Root M 0 R ... >>
         // startxref <offset>
         // %%EOF
-        // — all within the last few KB. Read 8 KB which is plenty for that.
+        // - all within the last few KB. Read 8 KB which is plenty for that.
         int tailLen = (int) Math.min(fileSize, 8192L);
         String tail = readWindow(file, fileSize - tailLen, tailLen);
 
@@ -193,7 +202,7 @@ public final class PdfBookmarkEditor {
         long rootOffset = readXrefEntryOffset(file, prevXrefStart, rootObjNum);
         String rootDict;
         if (rootOffset < 0) {
-            // Couldn't find Root via xref — fall back to a default catalog
+            // Couldn't find Root via xref - fall back to a default catalog
             // dict. setBookmarks still works; just preserves no existing
             // Catalog keys.
             rootDict = "<< /Type /Catalog >>";
@@ -238,7 +247,7 @@ public final class PdfBookmarkEditor {
         String chunk = readWindow(file, xrefStart, firstChunkLen);
         if (!chunk.startsWith("xref")) {
             // Probably an xref stream. We don't try to decode object streams
-            // here — caller falls back to default Catalog.
+            // here - caller falls back to default Catalog.
             return -1;
         }
         // Skip "xref" and the following whitespace.
@@ -257,7 +266,7 @@ public final class PdfBookmarkEditor {
             int eol = chunk.indexOf('\n', pos);
             if (eol < 0) break;
             String header = chunk.substring(pos, eol).trim();
-            String[] parts = header.split("\\s+");
+            String[] parts = PATTERN.split(header);
             if (parts.length < 2) break;
             int startObj;
             int count;
@@ -271,7 +280,7 @@ public final class PdfBookmarkEditor {
             // Each entry is exactly 20 bytes including the trailing newline.
             int needed = count * 20;
             if (pos + needed > chunk.length()) {
-                // Subsection spills past our 64 KB window — re-read the
+                // Subsection spills past our 64 KB window - re-read the
                 // entire subsection region. For very large PDFs this can
                 // grow but stays bounded by the xref table size.
                 long subStart = xrefStart + pos;
@@ -284,7 +293,6 @@ public final class PdfBookmarkEditor {
                 if (entryStart + 20 > chunk.length()) return -1;
                 String entry = chunk.substring(entryStart, entryStart + 20);
                 // 10-digit offset, space, 5-digit gen, space, n|f
-                if (entry.length() < 18) return -1;
                 if (entry.charAt(17) == 'f') return -1; // free object
                 try {
                     return Long.parseLong(entry.substring(0, 10).trim());
@@ -370,7 +378,7 @@ public final class PdfBookmarkEditor {
             appendix.append(thisObj).append(" 0 obj\n");
             appendix.append("<< /Title ").append(pdfString(entry.title()));
             appendix.append(" /Parent ").append(outlinesObjNum).append(" 0 R");
-            int targetPage = Math.max(0, Math.min(entry.pageIndex(), pageCount - 1));
+            int targetPage = Math.clamp(entry.pageIndex(), 0, pageCount - 1);
             appendix.append(" /Dest [").append(targetPage).append(" /Fit]");
             if (i > 0) {
                 appendix.append(" /Prev ").append(firstEntryObj + i - 1).append(" 0 R");

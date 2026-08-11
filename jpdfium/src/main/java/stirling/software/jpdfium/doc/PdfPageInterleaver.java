@@ -2,6 +2,8 @@ package stirling.software.jpdfium.doc;
 
 import java.lang.foreign.MemorySegment;
 
+import stirling.software.jpdfium.panama.DocBindings;
+
 /**
  * Interleave pages from two PDF documents (e.g., for front/back scanning).
  *
@@ -54,7 +56,7 @@ public final class PdfPageInterleaver {
 
     private static int getPageCount(MemorySegment rawDoc) {
         try {
-            return (int) stirling.software.jpdfium.panama.DocBindings.FPDF_GetPageCount.invokeExact(rawDoc);
+            return (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDoc);
         } catch (Throwable t) { return 0; }
     }
 

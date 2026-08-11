@@ -97,6 +97,9 @@ public final class PdfAnnotationBuilder {
      */
     public int build() {
         if (rect == null) throw new IllegalStateException("rect is required");
+        if (AnnotationBindings.FPDFPage_CreateAnnot == null) {
+            return 0;
+        }
 
         MemorySegment annot;
         try {
@@ -119,13 +122,13 @@ public final class PdfAnnotationBuilder {
                     // from quad points in some PDFium builds; annotation still persists.
                     @SuppressWarnings("unused")
                     int rectOk = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             try {
                 @SuppressWarnings("unused")
                 int colorOk = (int) AnnotationBindings.FPDFAnnot_SetColor.invokeExact(annot, 0, r, g, b, a);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             if (contents != null) {
                 try (Arena arena = Arena.ofConfined()) {
@@ -133,20 +136,20 @@ public final class PdfAnnotationBuilder {
                     MemorySegment value = FfmHelper.toWideString(arena, contents);
                     @SuppressWarnings("unused")
                     int svOk = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, key, value);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             try {
                 @SuppressWarnings("unused")
                 int borderOk = (int) AnnotationBindings.FPDFAnnot_SetBorder.invokeExact(annot, 0f, 0f, borderWidth);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             if (uri != null) {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment uriSeg = arena.allocateFrom(uri);
                     @SuppressWarnings("unused")
                     int uriOk = (int) AnnotationBindings.FPDFAnnot_SetURI.invokeExact(annot, uriSeg);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             if (type == AnnotationType.HIGHLIGHT || type == AnnotationType.UNDERLINE
@@ -163,51 +166,51 @@ public final class PdfAnnotationBuilder {
                     qp.set(ValueLayout.JAVA_FLOAT, 24, right); qp.set(ValueLayout.JAVA_FLOAT, 28, bottom);
                     @SuppressWarnings("unused")
                     int qpOk = (int) AnnotationBindings.FPDFAnnot_AppendAttachmentPoints.invokeExact(annot, qp);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             if (opacity >= 0) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (!Float.isNaN(rotation)) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetRotate.invokeExact(annot, rotation);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (overlayText != null && type == AnnotationType.REDACT) {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment textSeg = FfmHelper.toWideString(arena, overlayText);
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOverlayText.invokeExact(annot, textSeg);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (borderStyle >= 0) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetBorderStyle.invokeExact(annot, borderStyle, borderWidth);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (textAlignment >= 0) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetTextAlignment.invokeExact(annot, textAlignment);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (icon >= 0) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
             if (generateAppearance) {
                 try {
                     @SuppressWarnings("unused")
                     int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GenerateAppearance.invokeExact(annot);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             try {
@@ -215,7 +218,7 @@ public final class PdfAnnotationBuilder {
             } catch (Throwable t) { return -1; }
         } finally {
             try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 }

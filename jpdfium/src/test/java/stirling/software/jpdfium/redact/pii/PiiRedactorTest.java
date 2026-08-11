@@ -8,8 +8,12 @@ import stirling.software.jpdfium.redact.RedactResult;
 
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.Objects;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Integration tests for the unified redaction pipeline with PII features.
@@ -68,8 +72,8 @@ class PiiRedactorTest {
 
     @Test
     void fromBytesWorks() throws Exception {
-        byte[] bytes = PiiRedactorTest.class
-                .getResourceAsStream("/pdfs/general/minimal.pdf").readAllBytes();
+        byte[] bytes = Objects.requireNonNull(PiiRedactorTest.class
+                .getResourceAsStream("/pdfs/general/minimal.pdf")).readAllBytes();
 
         RedactOptions opts = RedactOptions.builder()
                 .addWord("test")

@@ -7,7 +7,9 @@ import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Visual regression test for Object Fission redaction.
@@ -120,10 +122,10 @@ class VisualRedactTest {
         // Clamp to image bounds.
         int imgW = imgBefore.getWidth();
         int imgH = imgBefore.getHeight();
-        roiX = Math.max(0, Math.min(roiX, imgW));
-        roiY = Math.max(0, Math.min(roiY, imgH));
-        roiW = Math.max(0, Math.min(roiW, imgW - roiX));
-        roiH = Math.max(0, Math.min(roiH, imgH - roiY));
+        roiX = Math.clamp(roiX, 0, imgW);
+        roiY = Math.clamp(roiY, 0, imgH);
+        roiW = Math.clamp(roiW, 0, imgW - roiX);
+        roiH = Math.clamp(roiH, 0, imgH - roiY);
 
         // Diff the two images.
         VisualDiff.DiffResult diff = VisualDiff.compare(imgBefore, imgAfter);

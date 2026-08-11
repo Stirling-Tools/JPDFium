@@ -47,7 +47,7 @@ public final class PdfMarginAdjuster {
             float newH = srcH + top + bottom;
 
             try (Arena arena = Arena.ofConfined()) {
-                // Identity scale, translate by (left, bottom) 
+                // Identity scale, translate by (left, bottom)
                 MemorySegment matrix = arena.allocate(PageEditBindings.FS_MATRIX_LAYOUT);
                 matrix.set(ValueLayout.JAVA_FLOAT, 0, 1f);        // a
                 matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);        // b

@@ -5,7 +5,10 @@ import stirling.software.jpdfium.doc.RepairResult;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 // RustBridgeBindings is loaded lazily - the static reference is only resolved
 // when rustRepair() is first called.

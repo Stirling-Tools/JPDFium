@@ -3,6 +3,7 @@ package stirling.software.jpdfium.text;
 import stirling.software.jpdfium.PdfDocument;
 
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -100,7 +101,7 @@ public class TextExample {
         try (PdfDocument doc = PdfDocument.open(input)) {
             PageText page0 = PdfTextExtractor.extractPage(doc, 0);
 
-            var freq = new java.util.LinkedHashMap<String, Integer>();
+            var freq = new LinkedHashMap<String, Integer>();
             for (TextWord word : page0.allWords()) {
                 String w = word.text().toLowerCase();
                 freq.merge(w, 1, Integer::sum);

@@ -116,7 +116,7 @@ public final class PdfAutoCrop {
                 return new Rect(minLeft, minBottom, maxRight - minLeft, maxTop - minBottom);
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }
@@ -234,7 +234,7 @@ public final class PdfAutoCrop {
                 return new Rect(pdfLeft, pdfBottom, pdfRight - pdfLeft, pdfTop - pdfBottom);
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }

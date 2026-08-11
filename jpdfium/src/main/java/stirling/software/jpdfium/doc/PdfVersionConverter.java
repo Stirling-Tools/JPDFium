@@ -4,14 +4,23 @@ import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.panama.DocBindings;
 
 import java.io.ByteArrayOutputStream;
-import java.lang.foreign.*;
+import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.StructLayout;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Save a PDF document with a specific version number.
@@ -51,7 +60,7 @@ public final class PdfVersionConverter {
             if (ok != 0) {
                 return PdfVersion.fromCode(versionSeg.get(JAVA_INT, 0));
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
         return PdfVersion.V1_7;
     }
 
@@ -66,7 +75,7 @@ public final class PdfVersionConverter {
         byte[] bytes = saveWithVersionToBytes(rawDoc, version);
         try {
             Files.write(path, bytes);
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             throw new RuntimeException("Failed to write PDF to " + path, e);
         }
     }

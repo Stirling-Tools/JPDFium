@@ -66,7 +66,7 @@ public final class PdfSelectiveFlatten {
                 }
             } finally {
                 try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
 
@@ -74,7 +74,7 @@ public final class PdfSelectiveFlatten {
         if (flattened > 0) {
             try {
                 PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
 
         return flattened;

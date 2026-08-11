@@ -99,7 +99,7 @@ public final class PdfBackground {
                 if (obj != null && !obj.equals(MemorySegment.NULL)) {
                     try {
                         PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, obj);
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable _) {}
                 }
             }
 

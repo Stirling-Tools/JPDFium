@@ -1,13 +1,20 @@
 package stirling.software.jpdfium.redact;
 
-import org.apache.pdfbox.pdmodel.*;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.*;
+import org.apache.pdfbox.pdmodel.font.PDFont;
+import org.apache.pdfbox.pdmodel.font.PDType0Font;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
-
-import java.io.*;
-import java.nio.file.*;
 
 /**
  * Generates every test PDF required by {@link ObjectFissionCoordinateTest}.
@@ -126,7 +133,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Helpers
-    
+
     private static void save(PDDocument doc, String name) throws IOException {
         doc.save(OUT_DIR.resolve(name).toFile());
         doc.close();
@@ -137,7 +144,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Type 1 WinAnsi (standard 2-page layout)
-    
+
     private static void generateType1WinAnsi(String name, PDType1Font font,
                                               String label) throws Exception {
         try (var doc = new PDDocument()) {
@@ -184,7 +191,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Mixed fonts
-    
+
     private static void generateMixedFonts() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -210,7 +217,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Multiline
-    
+
     private static void generateMultiline() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -252,7 +259,7 @@ public class RedactTestPdfGenerator {
     }
 
         // TrueType (embedded)
-    
+
     private static void generateTrueType(String name, boolean embed) throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -280,7 +287,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Pattern position tests
-    
+
     private static void generatePatternAtStart() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -372,7 +379,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Text operators
-    
+
     private static void generateKerning() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -476,7 +483,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Font sizes
-    
+
     private static void generateFontSizes() throws Exception {
         double[] sizes = {4, 6, 8, 10, 12, 24, 48, 72, 144};
         for (double sz : sizes) {
@@ -496,7 +503,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Rotated / scaled / skewed / mirrored text
-    
+
     private static void generateRotatedText(double degrees, String name) throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -563,7 +570,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Overlapping / adjacent / nested
-    
+
     private static void generateOverlapping() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -652,7 +659,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Unicode / i18n (WinAnsi-encodable)
-    
+
     private static void generateAccented() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -700,7 +707,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Page structure
-    
+
     private static void generatePageRotations() throws Exception {
         for (int rot : new int[]{0, 90, 180, 270}) {
             try (var doc = new PDDocument()) {
@@ -847,7 +854,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Multi-PII
-    
+
     private static void generateMultiPii() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -894,7 +901,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Pattern-specific PDFs
-    
+
     private static void generateEmail() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -971,7 +978,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Rendering modes
-    
+
     private static void generateRenderingMode(int mode) throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -989,7 +996,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Color
-    
+
     private static void generateColored() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -1065,7 +1072,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Stress
-    
+
     private static void generate100Pages() throws Exception {
         try (var doc = new PDDocument()) {
             for (int i = 0; i < 100; i++) {
@@ -1121,7 +1128,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Regression
-    
+
     private static void generateWidthFidelity() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -1138,7 +1145,7 @@ public class RedactTestPdfGenerator {
     }
 
         // Complex structures
-    
+
     private static void generateMultiColumn() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();

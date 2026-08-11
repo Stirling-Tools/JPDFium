@@ -13,9 +13,15 @@ import stirling.software.jpdfium.panama.PageEditBindings;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Programmatic form filling for PDF AcroForms. Supports text fields, checkboxes,
@@ -508,8 +514,7 @@ public final class PdfFormFiller {
                                 setAnnotString(arena, annot, AnnotationKeys.AS, "Off");
                             }
                         }
-                    } catch (Throwable ignored) {
-                    } finally {
+                    } catch (Throwable _) {} finally {
                         safeSilent0(AnnotationBindings.FPDFPage_CloseAnnot, annot);
                     }
                 }
@@ -519,8 +524,7 @@ public final class PdfFormFiller {
                     flattenedPages[0]++;
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formHandle);
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable _) {}
         }
         return anyFilled;
     }
@@ -605,7 +609,7 @@ public final class PdfFormFiller {
         } catch (Throwable t) { return null; }
     }
 
-    static String readWideString(java.lang.invoke.MethodHandle mh, MemorySegment arg1, MemorySegment arg2) {
+    static String readWideString(MethodHandle mh, MemorySegment arg1, MemorySegment arg2) {
         try (Arena arena = Arena.ofConfined()) {
             long needed = (long) mh.invokeExact(arg1, arg2, MemorySegment.NULL, 0L);
             if (needed <= 2) return "";
@@ -637,55 +641,55 @@ public final class PdfFormFiller {
             MemorySegment valueSeg = FfmHelper.toWideString(arena, value);
             @SuppressWarnings("unused")
             int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, keyBuf, valueSeg);
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
     }
 
     // Typed invokers
 
     /** Invoke void(ADDRESS, ADDRESS) - throws FormFillException on error. */
-    private static void safeVoid(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b) {
+    private static void safeVoid(MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { mh.invokeExact(a, b); }
         catch (Throwable t) { throw new FormFillException("FFM call failed", t); }
     }
 
     /** Invoke void(ADDRESS) silently. */
-    private static void safeSilent0(java.lang.invoke.MethodHandle mh, MemorySegment a) {
-        try { mh.invokeExact(a); } catch (Throwable ignored) {}
+    private static void safeSilent0(MethodHandle mh, MemorySegment a) {
+        try { mh.invokeExact(a); } catch (Throwable _) {}
     }
 
     /** Invoke void(ADDRESS, ADDRESS) silently. */
     @SuppressWarnings("unused")
-    private static void safeSilent0b(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b) {
-        try { mh.invokeExact(a, b); } catch (Throwable ignored) {}
+    private static void safeSilent0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
+        try { mh.invokeExact(a, b); } catch (Throwable _) {}
     }
 
     /** Invoke int(ADDRESS) -> 0 on error. */
-    private static int safeInt0(java.lang.invoke.MethodHandle mh, MemorySegment a) {
+    private static int safeInt0(MethodHandle mh, MemorySegment a) {
         try { return (int) mh.invokeExact(a); } catch (Throwable t) { return 0; }
     }
 
     /** Invoke int(ADDRESS, ADDRESS) -> 0 on error. */
-    private static int safeInt0b(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b) {
+    private static int safeInt0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { return (int) mh.invokeExact(a, b); } catch (Throwable t) { return 0; }
     }
 
     /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
-    private static void safeSilentInt2(java.lang.invoke.MethodHandle mh, MemorySegment a, int b) {
-        try { mh.invokeExact(a, b); } catch (Throwable ignored) {}
+    private static void safeSilentInt2(MethodHandle mh, MemorySegment a, int b) {
+        try { mh.invokeExact(a, b); } catch (Throwable _) {}
     }
 
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
-    private static int safeInt4(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
+    private static int safeInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
         try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) { return 0; }
     }
 
     /** Invoke void(ADDRESS, ADDRESS, int, int) silently. */
-    private static void safeSilentInt4(java.lang.invoke.MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
-        try { mh.invokeExact(a, b, c, d); } catch (Throwable ignored) {}
+    private static void safeSilentInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
+        try { mh.invokeExact(a, b, c, d); } catch (Throwable _) {}
     }
 
     /** Invoke ADDRESS(ADDRESS, int) -> NULL on error. */
-    private static MemorySegment safeSegment(java.lang.invoke.MethodHandle mh, MemorySegment a, int b) {
+    private static MemorySegment safeSegment(MethodHandle mh, MemorySegment a, int b) {
         try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) { return MemorySegment.NULL; }
     }
 

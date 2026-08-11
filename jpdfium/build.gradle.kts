@@ -1,16 +1,64 @@
 plugins {
     id("jpdfium.library-conventions")
+    alias(libs.plugins.graalvm.native)
+    alias(libs.plugins.jmh)
+    application
+}
+
+application {
+    mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
+}
+
+graalvmNative {
+    metadataRepository {
+        enabled.set(false)
+    }
+    binaries {
+        named("main") {
+            imageName.set("jpdfium-native-smoke")
+            mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
+            sharedLibrary.set(false)
+            buildArgs.add("--enable-native-access=ALL-UNNAMED")
+        }
+    }
 }
 
 dependencies {
     implementation(libs.imageio.webp)
     implementation(libs.imageio.tiff)
-    // Which platform's native jar lands on the test classpath. Defaults to
-    // linux-x64 for local dev; CI overrides per matrix job with
+    // Which platform's native jar lands on the classpath. Auto-detects host OS
+    // and arch by default; CI overrides per matrix job with
     // -Pjpdfium.testNatives=<platform> so the smoke loads the native it built.
-    val testNatives = (findProperty("jpdfium.testNatives") ?: "linux-x64").toString()
-    testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
+    val defaultPlatform = run {
+        val os = System.getProperty("os.name").lowercase()
+        val arch = System.getProperty("os.arch").lowercase()
+        val isArm = arch == "aarch64" || arch == "arm64"
+        when {
+            os.contains("mac") || os.contains("darwin") -> if (isArm) "darwin-arm64" else "darwin-x64"
+            os.contains("win") -> if (isArm) "windows-arm64" else "windows-x64"
+            else -> if (isArm) "linux-arm64" else "linux-x64"
+        }
+    }
+    val testNatives = (findProperty("jpdfium.testNatives") ?: defaultPlatform).toString()
+    runtimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
+    jmhImplementation(libs.jmh.core)
+    jmhAnnotationProcessor(libs.jmh.annproc)
+}
+
+jmh {
+    // Run each benchmark for a brief warmup + 3 measurement forks so CI
+    // finishes in reasonable time. Developers can override on the command line:
+    //   ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=5 -Pjmh.iterations=5
+    warmupIterations.set((findProperty("jmh.warmupIterations") as String? ?: "2").toInt())
+    iterations.set((findProperty("jmh.iterations") as String? ?: "3").toInt())
+    fork.set(1)
+    timeUnit.set("ms")
+    resultFormat.set("JSON")
+    resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
+    jvmArgsAppend.add("--enable-native-access=ALL-UNNAMED")
+    // Include only benchmarks in the jpdfium bench package.
+    includes.add("stirling.software.jpdfium.bench.*")
 }
 
 // Set jpdfium.jextractHome in ~/.gradle/gradle.properties or JEXTRACT_HOME env var.
@@ -97,12 +145,22 @@ val generateBindings by tasks.registering(Exec::class) {
 
     commandLine(args)
 
-    // Skip gracefully when jextract is not installed
-    isIgnoreExitValue = false
+    val javaHome = System.getenv("JAVA_HOME") ?: System.getProperty("java.home")
+    if (!javaHome.isNullOrEmpty()) {
+        environment("JAVA_HOME", javaHome)
+        val os = System.getProperty("os.name").lowercase()
+        if (!os.contains("win") && !os.contains("mac")) {
+            val ldPath = System.getenv("LD_LIBRARY_PATH") ?: ""
+            environment("LD_LIBRARY_PATH", "$javaHome/lib:$javaHome/lib/server:$ldPath")
+        }
+    }
+
+    // Skip gracefully when jextract is not installed or fails due to EA runtime image
+    isIgnoreExitValue = true
     onlyIf {
         val jextract = file(jextractBin)
         if (!jextract.exists()) {
-            logger.warn("jextract not found at $jextractBin — skipping binding generation. " +
+            logger.warn("jextract not found at $jextractBin - skipping binding generation. " +
                 "Set JEXTRACT_HOME or jpdfium.jextractHome to the jextract installation directory.")
         }
         jextract.exists()
@@ -125,37 +183,34 @@ val patchBindingsForCrossPlatform by tasks.registering {
     val outputDir = layout.buildDirectory.dir("generated/jextract/java")
     outputs.dir(outputDir)
     doLast {
-        val sharedFile = outputDir.get().asFile.resolve(
-            "stirling/software/jpdfium/panama/JpdfiumH\$shared.java")
-        if (!sharedFile.exists()) {
-            logger.info("JpdfiumH\$shared.java not present — generateBindings skipped, nothing to patch.")
-            return@doLast
+        val genMain = outputDir.get().asFile.resolve("stirling/software/jpdfium/panama/JpdfiumH.java")
+        val genShared = outputDir.get().asFile.resolve("stirling/software/jpdfium/panama/JpdfiumH\$shared.java")
+        val committedDir = file("src/main/java/stirling/software/jpdfium/panama")
+
+        if (genMain.exists() && genShared.exists()) {
+            genMain.copyTo(committedDir.resolve("JpdfiumH.java"), overwrite = true)
+            genShared.copyTo(committedDir.resolve("JpdfiumH\$shared.java"), overwrite = true)
+            logger.lifecycle("Updated committed JpdfiumH bindings from jextract generation.")
         }
-        val original = sharedFile.readText()
-        // Match any `public static final ValueLayout.OfLong C_LONG = ...;`
-        // (jextract sometimes prefixes with fully-qualified names; tolerate both).
-        val pattern = Regex(
-            """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
-        val patched = pattern.replace(original,
-            "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
-            "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
-            "this constant is unused by any jpdfium binding so a placeholder is fine */")
-        if (patched != original) {
-            sharedFile.writeText(patched)
-            logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
-        } else {
-            logger.warn("JpdfiumH\$shared.java did not contain the expected C_LONG pattern — " +
-                "jextract output format may have changed.")
+
+        val targetShared = committedDir.resolve("JpdfiumH\$shared.java")
+        if (targetShared.exists()) {
+            val original = targetShared.readText()
+            val pattern = Regex(
+                """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
+            val patched = pattern.replace(original,
+                "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
+                "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
+                "this constant is unused by any jpdfium binding so a placeholder is fine */")
+            if (patched != original) {
+                targetShared.writeText(patched)
+                logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+            }
         }
     }
 }
 
-sourceSets.main.get().java.srcDir(patchBindingsForCrossPlatform.map {
-    layout.buildDirectory.dir("generated/jextract/java").get()
-})
-
-// Run: ./gradlew :jpdfium:run -PmainClass=com.example.Main
-tasks.register<JavaExec>("run") {
+tasks.named<JavaExec>("run") {
     group       = "application"
     description = "Run a main class from the test classpath"
     if (project.hasProperty("mainClass")) mainClass.set(project.property("mainClass").toString())
@@ -200,4 +255,13 @@ tasks.register<Test>("nativeSmokeTest") {
         showStackTraces = true
         showCauses = true
     }
+}
+
+// Run: ./gradlew :jpdfium:graalvmNativeSmokeTest -Pjpdfium.testNatives=<platform>
+tasks.register<Exec>("graalvmNativeSmokeTest") {
+    group       = "verification"
+    description = "Compile and execute GraalVM Native Image smoke test binary"
+    dependsOn("nativeCompile")
+    val binaryFile = layout.buildDirectory.file("native/nativeCompile/jpdfium-native-smoke")
+    executable(binaryFile.get().asFile.absolutePath)
 }

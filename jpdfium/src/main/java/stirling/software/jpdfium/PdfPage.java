@@ -1,15 +1,22 @@
 package stirling.software.jpdfium;
 
-import stirling.software.jpdfium.doc.*;
-import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.doc.Annotation;
+import stirling.software.jpdfium.doc.PdfAnnotations;
+import stirling.software.jpdfium.doc.PdfLink;
+import stirling.software.jpdfium.doc.PdfLinks;
+import stirling.software.jpdfium.doc.PdfStructureTree;
+import stirling.software.jpdfium.doc.PdfThumbnails;
+import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.awt.image.BufferedImage;
 import java.lang.foreign.MemorySegment;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Represents an open page within a {@link PdfDocument}.
@@ -20,8 +27,7 @@ import java.util.Optional;
 public final class PdfPage implements AutoCloseable {
 
     private final long handle;
-    private final java.util.concurrent.atomic.AtomicBoolean closed =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private PdfPage(long handle) {
         this.handle = handle;

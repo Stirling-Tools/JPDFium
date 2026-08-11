@@ -1,12 +1,13 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.StructLayout;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the EmbedPDF fork's annotation APIs ({@code EPDF*} functions).
@@ -20,21 +21,14 @@ import static java.lang.foreign.ValueLayout.*;
  */
 public final class EmbedPdfAnnotationBindings {
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-
     private EmbedPdfAnnotationBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("EmbedPDF symbol not found: " + name)),
-                desc));
+        return Symbols.downcall(name, desc);
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("EmbedPDF symbol not found: " + name)),
-                desc, Linker.Option.critical(false)));
+        return Symbols.downcallCritical(name, desc);
     }
 
     // FS_MATRIX layout: { float a, b, c, d, e, f }
@@ -248,7 +242,7 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetUnrotatedRect = downcall("EPDFAnnot_GetUnrotatedRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
-    /** Get normalized annotation rect (left<=right, bottom<=top). */
+    /** Get normalized annotation rect (left &lt;= right, bottom &lt;= top). */
     public static final MethodHandle EPDFAnnot_GetRect = downcall("EPDFAnnot_GetRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 

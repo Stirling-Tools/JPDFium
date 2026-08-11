@@ -7,21 +7,25 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the font normalization pipeline (FreeType + HarfBuzz + qpdf).
  */
 public final class FontLib {
 
-    static { NativeLoader.ensureLoaded(); }
+    private static final MethodHandle jpdfium_strip_fonts;
 
-    private static final MethodHandle jpdfium_strip_fonts = NativeGuard.guard(
-            Linker.nativeLinker().downcallHandle(
-                    SymbolLookup.loaderLookup()
-                            .find("jpdfium_strip_fonts")
-                            .orElseThrow(() -> new UnsatisfiedLinkError("jpdfium_strip_fonts not found")),
-                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)));
+    static {
+        NativeLoader.ensureLoaded();
+        var symbol = SymbolLookup.loaderLookup().find("jpdfium_strip_fonts").orElse(null);
+        jpdfium_strip_fonts = (symbol != null)
+                ? NativeGuard.guard(Linker.nativeLinker().downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)))
+                : null;
+    }
 
     private FontLib() {}
 
@@ -109,6 +113,9 @@ public final class FontLib {
      * @return number of font entries removed
      */
     public static int stripFonts(long doc) {
+        if (jpdfium_strip_fonts == null) {
+            return 0;
+        }
         NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {

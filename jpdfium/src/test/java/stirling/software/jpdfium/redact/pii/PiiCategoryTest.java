@@ -2,7 +2,13 @@ package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.HashSet;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for {@link PiiCategory}. */
 class PiiCategoryTest {
@@ -30,7 +36,7 @@ class PiiCategoryTest {
 
     @Test
     void keysAreUnique() {
-        var keys = new java.util.HashSet<String>();
+        var keys = new HashSet<String>();
         for (PiiCategory cat : PiiCategory.values()) {
             assertTrue(keys.add(cat.key()), "Duplicate key: " + cat.key());
         }

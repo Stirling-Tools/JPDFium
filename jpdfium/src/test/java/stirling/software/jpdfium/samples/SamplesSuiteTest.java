@@ -6,6 +6,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.stream.Stream;
 
@@ -22,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class SamplesSuiteTest {
+
+    private static final String[] EMPTY_ARGS = new String[0];
 
     @BeforeAll
     static void ensureNative() {
@@ -124,8 +127,8 @@ class SamplesSuiteTest {
         Method main = sampleClass.getMethod("main", String[].class);
         assertDoesNotThrow(() -> {
             try {
-                main.invoke(null, (Object) new String[0]);
-            } catch (java.lang.reflect.InvocationTargetException e) {
+                main.invoke(null, (Object) EMPTY_ARGS);
+            } catch (InvocationTargetException e) {
                 throw e.getCause();
             }
         }, name + " threw an exception");

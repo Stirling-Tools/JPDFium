@@ -117,7 +117,7 @@ public final class PdfLongImage {
                     }
                 } finally {
                     try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                    catch (Throwable ignored) {}
+                    catch (Throwable _) {}
                 }
             }
 
