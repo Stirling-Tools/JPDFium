@@ -64,6 +64,7 @@ public final class VipsEncoder {
             case WEBP -> image.webpsaveBuffer(options);
             case PNG -> image.pngsaveBuffer(options);
             case JPEG -> image.jpegsaveBuffer(options);
+            case TIFF -> image.tiffsaveBuffer(options);
         };
     }
 
@@ -79,6 +80,7 @@ public final class VipsEncoder {
             case WEBP -> image.webpsave(path, options);
             case PNG -> image.pngsave(path, options);
             case JPEG -> image.jpegsave(path, options);
+            case TIFF -> image.tiffsave(path, options);
         }
     }
 
@@ -89,6 +91,7 @@ public final class VipsEncoder {
             case WEBP -> buildWebpOptions(opts);
             case PNG -> buildPngOptions(opts);
             case JPEG -> buildJpegOptions(opts);
+            case TIFF -> buildTiffOptions(opts);
         };
     }
 
@@ -130,6 +133,13 @@ public final class VipsEncoder {
 
     private static VipsOption[] buildJpegOptions(VipsEncodeOptions opts) {
         return new VipsOption[]{VipsOption.Int("Q", opts.quality())};
+    }
+
+    private static VipsOption[] buildTiffOptions(VipsEncodeOptions opts) {
+        List<VipsOption> list = new ArrayList<>();
+        list.add(VipsOption.Int("Q", opts.quality()));
+        if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
+        return list.toArray(VipsOption[]::new);
     }
 
     private static VipsOption[] append(VipsOption[] base, VipsOption extra) {

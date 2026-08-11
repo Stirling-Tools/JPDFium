@@ -33,6 +33,7 @@ public final class VipsAvailability {
             case WEBP -> s.webpsave;
             case PNG -> s.pngsave;
             case JPEG -> s.jpegsave;
+            case TIFF -> s.tiffsave;
         };
     }
 
@@ -49,6 +50,7 @@ public final class VipsAvailability {
             case WEBP -> s.webpload;
             case PNG -> s.pngload;
             case JPEG -> s.jpegload;
+            case TIFF -> s.tiffload;
         };
     }
 
@@ -85,6 +87,7 @@ public final class VipsAvailability {
             boolean heifsave = probeOperation("heifsave");
             boolean jxlsave = probeOperation("jxlsave");
             boolean webpsave = probeOperation("webpsave");
+            boolean tiffsave = probeOperation("tiffsave");
 
             // Load ops (decoding)
             boolean heifload = probeOperation("heifload");
@@ -92,16 +95,17 @@ public final class VipsAvailability {
             boolean webpload = probeOperation("webpload");
             boolean pngload = probeOperation("pngload");
             boolean jpegload = probeOperation("jpegload");
+            boolean tiffload = probeOperation("tiffload");
 
             return new State(true, platform, version,
-                    heifsave, jxlsave, webpsave, true, true,
-                    heifload, jxlload, webpload, pngload, jpegload,
+                    heifsave, jxlsave, webpsave, true, true, tiffsave,
+                    heifload, jxlload, webpload, pngload, jpegload, tiffload,
                     null);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
             return new State(false, platform, null,
-                    false, false, false, false, false,
-                    false, false, false, false, false,
+                    false, false, false, false, false, false,
+                    false, false, false, false, false, false,
                     root);
         }
     }
@@ -150,6 +154,7 @@ public final class VipsAvailability {
             case HEIC, HEIF, AVIF -> "requires libheif with x265 (HEIC) or aom/rav1e (AVIF)";
             case JXL -> "requires libjxl";
             case WEBP -> "requires libwebp";
+            case TIFF -> "requires libtiff";
             default -> "requires libvips with " + format.operation() + " support";
         };
     }
@@ -163,10 +168,12 @@ public final class VipsAvailability {
             boolean webpsave,
             boolean pngsave,
             boolean jpegsave,
+            boolean tiffsave,
             boolean heifload,
             boolean jxlload,
             boolean webpload,
             boolean pngload,
             boolean jpegload,
+            boolean tiffload,
             Throwable error) {}
 }

@@ -14,7 +14,7 @@ publishing {
 
 dependencies {
     api(project(":jpdfium"))
-    implementation("app.photofox.vips-ffm:vips-ffm-core:1.9.8")
+    implementation(libs.vips.ffm)
 }
 
 tasks.withType<Test> {

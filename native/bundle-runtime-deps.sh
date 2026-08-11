@@ -358,7 +358,7 @@ bundle_windows() {
 }
 
 case "$PLATFORM" in
-    linux-*)
+    linux-*|vips-linux-*)
         bundle_linux
         # Strip debug symbols from the bridge to slash binary size. The
         # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
@@ -375,7 +375,7 @@ case "$PLATFORM" in
             done
         fi
         ;;
-    darwin-*)
+    darwin-*|vips-darwin-*)
         bundle_macos
         # macOS strip wants -S (debug symbols only) to keep the symbol table
         # the loader needs. -x would strip non-global symbols which can
@@ -390,7 +390,7 @@ case "$PLATFORM" in
         fi
         sign_macos
         ;;
-    windows-*)
+    windows-*|vips-windows-*)
         bundle_windows
         # The MSVC linker strips PE files in Release config already; no
         # equivalent `strip` step needed.

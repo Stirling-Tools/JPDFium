@@ -16,6 +16,11 @@
 # Usage: build-vips.sh <platform>   e.g. linux-x64, darwin-arm64, windows-x64
 set -euo pipefail
 
+# Vips natives are in bring-up (continue-on-error CI job, publishes nothing
+# yet), so allow unsigned macOS dylibs. When vips graduates to a publishing
+# workflow, set MACOS_SIGN_IDENTITY there instead.
+export MACOS_ALLOW_UNSIGNED="${MACOS_ALLOW_UNSIGNED:-1}"
+
 PLATFORM="${1:?platform required}"
 case "$PLATFORM" in
     linux-*)

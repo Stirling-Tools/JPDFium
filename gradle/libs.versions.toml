@@ -1,5 +1,5 @@
 [versions]
-junit = "6.0.3"
+junit = "5.11.0"
 pdfbox = "3.0.7"
 twelvemonkeys = "3.13.1"
 graalvm-buildtools = "0.10.6"
