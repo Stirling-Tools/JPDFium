@@ -49,7 +49,23 @@ jobs:
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
-      - name: Build C++ stub
+      - name: Install build deps (Linux, c-cpp)
+        if: matrix.language == 'c-cpp'
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
+            libqpdf-dev libpugixml-dev libunibreak-dev lld
+      - name: Fetch prebuilt PDFium (c-cpp)
+        if: matrix.language == 'c-cpp'
+        run: bash native/fetch-prebuilt-pdfium.sh linux-x64
+
+      - name: Build C++
+        if: matrix.language == 'c-cpp'
+        run: bash native/build-real.sh
+
+      - name: Build C++ stub (java-kotlin)
+        if: matrix.language == 'java-kotlin'
         run: bash native/build-stub.sh
 
       - name: Build Java

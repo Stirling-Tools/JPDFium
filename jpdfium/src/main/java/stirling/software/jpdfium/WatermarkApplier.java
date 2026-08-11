@@ -121,7 +121,7 @@ public final class WatermarkApplier {
         int w = withAlpha.getWidth();
         int h = withAlpha.getHeight();
 
-        float targetW = pageSize.width() * 0.3f;
+        float targetW = pageSize.width() * wm.scale();
         float scale = targetW / w;
         float targetH = h * scale;
 

@@ -59,6 +59,21 @@ public final class Symbols {
     }
 
     /**
+     * Create a guarded downcall handle for an optional symbol, or return {@code null}
+     * if the symbol is absent without throwing an exception even in FULL mode.
+     */
+    public static MethodHandle downcallOptional(String name, FunctionDescriptor desc, Linker.Option... options) {
+        Optional<MemorySegment> symbolOpt = find(name);
+        if (symbolOpt.isEmpty()) {
+            MISSING_SYMBOLS.add(name);
+            return null;
+        }
+        RESOLVED_SYMBOLS.add(name);
+        MethodHandle handle = LINKER.downcallHandle(symbolOpt.get(), desc, options);
+        return NativeGuard.guard(handle);
+    }
+
+    /**
      * Create a critical downcall method handle (skips Java/native thread state transitions).
      */
     public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
