@@ -60,6 +60,9 @@ public final class PdfRepair {
     private final boolean writeDiagnostics;
     private final boolean sanitize;
 
+    private final boolean validateIcc;
+    private final boolean validateJpx;
+
     private PdfRepair(byte[] inputBytes, int flags,
             boolean usePdfioFallback, boolean useLopdfFallback,
             boolean transcodeBrotli,
@@ -70,9 +73,14 @@ public final class PdfRepair {
         this.usePdfioFallback = usePdfioFallback;
         this.useLopdfFallback = useLopdfFallback;
         this.transcodeBrotli = transcodeBrotli;
+        this.validateIcc = validateIcc;
+        this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
         this.sanitize = sanitize;
     }
+
+    public boolean validateIcc() { return validateIcc; }
+    public boolean validateJpx() { return validateJpx; }
 
     /** Create a new repair builder. */
     public static Builder builder() {
@@ -147,16 +155,16 @@ public final class PdfRepair {
      */
     public static final class Builder {
         private byte[] inputBytes;
-        private boolean forceVersion14;
-        private boolean normalizeXref;
-        private boolean fixStartxref;
-        private boolean usePdfioFallback;
-        private boolean useLopdfFallback;
-        private boolean transcodeBrotli;
-        private boolean validateIcc;
-        private boolean validateJpx;
-        private boolean writeDiagnostics = true;
-        private boolean sanitize;
+        private boolean doForceVersion14;
+        private boolean doNormalizeXref;
+        private boolean doFixStartxref;
+        private boolean doUsePdfioFallback;
+        private boolean doUseLopdfFallback;
+        private boolean doTranscodeBrotli;
+        private boolean doValidateIcc;
+        private boolean doValidateJpx;
+        private boolean doWriteDiagnostics = true;
+        private boolean doSanitize;
 
         private Builder() {
         }
@@ -175,25 +183,25 @@ public final class PdfRepair {
 
         /** Force output PDF version to 1.4. */
         public Builder forceVersion14(boolean enable) {
-            this.forceVersion14 = enable;
+            this.doForceVersion14 = enable;
             return this;
         }
 
         /** Normalize xref format (force classic xref table). */
         public Builder normalizeXref(boolean enable) {
-            this.normalizeXref = enable;
+            this.doNormalizeXref = enable;
             return this;
         }
 
         /** Enable startxref offset brute-force correction. */
         public Builder fixStartxref(boolean enable) {
-            this.fixStartxref = enable;
+            this.doFixStartxref = enable;
             return this;
         }
 
         /** Enable PDFio third-opinion fallback (opt-in, requires libpdfio). */
         public Builder usePdfioFallback(boolean enable) {
-            this.usePdfioFallback = enable;
+            this.doUsePdfioFallback = enable;
             return this;
         }
 
@@ -210,19 +218,19 @@ public final class PdfRepair {
          * @param enable {@code true} to enable (default {@code false})
          */
         public Builder useLopdfFallback(boolean enable) {
-            this.useLopdfFallback = enable;
+            this.doUseLopdfFallback = enable;
             return this;
         }
 
         /** Enable Brotli-Flate pre-repair transcoding (opt-in, requires libbrotli). */
         public Builder transcodeBrotli(boolean enable) {
-            this.transcodeBrotli = enable;
+            this.doTranscodeBrotli = enable;
             return this;
         }
 
         /** Enable ICC profile validation post-pass (opt-in, requires liblcms2). */
         public Builder validateIcc(boolean enable) {
-            this.validateIcc = enable;
+            this.doValidateIcc = enable;
             return this;
         }
 
@@ -230,13 +238,13 @@ public final class PdfRepair {
          * Enable JPEG2000 stream validation post-pass (opt-in, requires libopenjp2).
          */
         public Builder validateJpx(boolean enable) {
-            this.validateJpx = enable;
+            this.doValidateJpx = enable;
             return this;
         }
 
         /** Include diagnostic JSON in the result (default: true). Set to false to skip diagnostics. */
         public Builder writeDiagnostics(boolean enable) {
-            this.writeDiagnostics = enable;
+            this.doWriteDiagnostics = enable;
             return this;
         }
 
@@ -245,21 +253,21 @@ public final class PdfRepair {
          * embedded files, and action annotations from the repaired PDF.
          */
         public Builder sanitize(boolean enable) {
-            this.sanitize = enable;
+            this.doSanitize = enable;
             return this;
         }
 
         /** Enable all core + Phase 2 repair strategies (including Rust lopdf + sanitize). */
         public Builder all() {
-            this.forceVersion14 = true;
-            this.normalizeXref = true;
-            this.fixStartxref = true;
-            this.usePdfioFallback = true;
-            this.useLopdfFallback = true;
-            this.transcodeBrotli = true;
-            this.validateIcc = true;
-            this.validateJpx = true;
-            this.sanitize = true;
+            this.doForceVersion14 = true;
+            this.doNormalizeXref = true;
+            this.doFixStartxref = true;
+            this.doUsePdfioFallback = true;
+            this.doUseLopdfFallback = true;
+            this.doTranscodeBrotli = true;
+            this.doValidateIcc = true;
+            this.doValidateJpx = true;
+            this.doSanitize = true;
             return this;
         }
 
@@ -274,16 +282,16 @@ public final class PdfRepair {
             }
 
             int flags = 0;
-            if (forceVersion14)
+            if (doForceVersion14)
                 flags |= FLAG_FORCE_V14;
-            if (normalizeXref)
+            if (doNormalizeXref)
                 flags |= FLAG_NORMALIZE_XREF;
-            if (fixStartxref)
+            if (doFixStartxref)
                 flags |= FLAG_FIX_STARTXREF;
 
             return new PdfRepair(inputBytes, flags,
-                    usePdfioFallback, useLopdfFallback, transcodeBrotli,
-                    validateIcc, validateJpx, writeDiagnostics, sanitize);
+                    doUsePdfioFallback, doUseLopdfFallback, doTranscodeBrotli,
+                    doValidateIcc, doValidateJpx, doWriteDiagnostics, doSanitize);
         }
     }
 }

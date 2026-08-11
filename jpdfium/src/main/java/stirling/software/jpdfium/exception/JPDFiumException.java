@@ -6,5 +6,6 @@ public class JPDFiumException extends RuntimeException {
     @Serial
     private static final long serialVersionUID = 1L;
     public JPDFiumException(String msg) { super(msg); }
+    public JPDFiumException(Throwable cause) { super(cause); }
     public JPDFiumException(String msg, Throwable cause) { super(msg, cause); }
 }

@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -160,7 +161,7 @@ public final class PdfLinkValidator {
         URI uri;
         try {
             uri = URI.create(url);
-            if (uri.getScheme() == null || (!uri.getScheme().equals("http") && !uri.getScheme().equals("https"))) {
+            if (uri.getScheme() == null || (!"http".equalsIgnoreCase(uri.getScheme()) && !"https".equalsIgnoreCase(uri.getScheme()))) {
                 return new LinkResult(pageIndex, url, LinkStatus.INVALID_URL, 0, null,
                         System.currentTimeMillis() - start);
             }
@@ -192,7 +193,11 @@ public final class PdfLinkValidator {
         } catch (java.net.http.HttpTimeoutException e) {
             return new LinkResult(pageIndex, url, LinkStatus.TIMEOUT, 0, null,
                     System.currentTimeMillis() - start);
-        } catch (Exception e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new LinkResult(pageIndex, url, LinkStatus.ERROR, 0, null,
+                    System.currentTimeMillis() - start);
+        } catch (IOException | RuntimeException e) {
             return new LinkResult(pageIndex, url, LinkStatus.ERROR, 0, null,
                     System.currentTimeMillis() - start);
         }

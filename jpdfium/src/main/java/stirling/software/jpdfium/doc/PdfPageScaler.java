@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -48,7 +49,8 @@ public final class PdfPageScaler {
             float tgtW = target.widthPt();
             float tgtH = target.heightPt();
 
-            float sx, sy;
+            float sx = 1f;
+            float sy = 1f;
             switch (mode) {
                 case FIT_WIDTH -> {
                     sx = tgtW / srcW;
@@ -66,7 +68,6 @@ public final class PdfPageScaler {
                     sx = tgtW / srcW;
                     sy = tgtH / srcH;
                 }
-                default -> throw new IllegalArgumentException("Unknown mode: " + mode);
             }
 
             // Center content within the target page
@@ -97,10 +98,10 @@ public final class PdfPageScaler {
                     ok = (int) PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(
                             rawPage, matrix, clip);
                 } catch (Throwable t) {
-                    throw new RuntimeException("FPDFPage_TransFormWithClip failed", t);
+                    throw new JPDFiumException("FPDFPage_TransFormWithClip failed", t);
                 }
                 if (ok == 0) {
-                    throw new RuntimeException("FPDFPage_TransFormWithClip returned 0");
+                    throw new JPDFiumException("FPDFPage_TransFormWithClip returned 0");
                 }
             }
 
@@ -109,7 +110,7 @@ public final class PdfPageScaler {
                 PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPage, 0f, 0f, tgtW, tgtH);
                 PageEditBindings.FPDFPage_SetCropBox.invokeExact(rawPage, 0f, 0f, tgtW, tgtH);
             } catch (Throwable t) {
-                throw new RuntimeException("Failed to set page boxes", t);
+                throw new JPDFiumException("Failed to set page boxes", t);
             }
         }
     }

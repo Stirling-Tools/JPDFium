@@ -5,6 +5,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.PageImportBindings;
@@ -50,7 +51,7 @@ public final class PdfPageImporter {
                 int ok = (int) PageImportBindings.FPDF_ImportPages.invokeExact(
                         dest, src, MemorySegment.NULL, insertAt);
                 return ok != 0;
-            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPages failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             finally { NativeGuard.release(); }
         }
         byte[] bytes = pageRange.getBytes(StandardCharsets.US_ASCII);
@@ -62,7 +63,7 @@ public final class PdfPageImporter {
                 rangeStr.set(ValueLayout.JAVA_BYTE, bytes.length, (byte) 0);
                 int ok = (int) PageImportBindings.FPDF_ImportPages.invokeExact(dest, src, rangeStr, insertAt);
                 return ok != 0;
-            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPages failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
         } finally {
             NativeGuard.release();
         }
@@ -91,7 +92,7 @@ public final class PdfPageImporter {
                 int ok = (int) PageImportBindings.FPDF_ImportPagesByIndex.invokeExact(dest, src,
                         indices, (long) pageIndices.length, insertAt);
                 return ok != 0;
-            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPagesByIndex failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_ImportPagesByIndex failed", t); }
         } finally {
             NativeGuard.release();
         }
@@ -110,7 +111,7 @@ public final class PdfPageImporter {
             try {
                 int ok = (int) PageImportBindings.FPDF_CopyViewerPreferences.invokeExact(dest, src);
                 return ok != 0;
-            } catch (Throwable t) { throw new RuntimeException("FPDF_CopyViewerPreferences failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_CopyViewerPreferences failed", t); }
         } finally {
             NativeGuard.release();
         }
@@ -139,7 +140,7 @@ public final class PdfPageImporter {
                 MemorySegment lenSeg = arena.allocate(JAVA_LONG);
                 int rc = JpdfiumH.jpdfium_import_n_pages_to_one(
                         srcDoc, outputWidth, outputHeight, cols, rows, ptrSeg, lenSeg);
-                if (rc != 0) throw new RuntimeException("jpdfium_import_n_pages_to_one failed: " + rc);
+                if (rc != 0) throw new JPDFiumException("jpdfium_import_n_pages_to_one failed: " + rc);
                 MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
                 byte[] result = nativePtr.reinterpret(lenSeg.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
                 JpdfiumH.jpdfium_free_buffer(nativePtr);

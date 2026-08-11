@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -53,7 +54,7 @@ public final class PdfPageMirror {
                 try {
                     PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
                 } catch (Throwable t) {
-                    throw new RuntimeException("FPDFPage_TransFormWithClip failed", t);
+                    throw new JPDFiumException("FPDFPage_TransFormWithClip failed", t);
                 }
             }
         }
@@ -87,7 +88,7 @@ public final class PdfPageMirror {
                 try {
                     PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
                 } catch (Throwable t) {
-                    throw new RuntimeException("FPDFPage_TransFormWithClip failed", t);
+                    throw new JPDFiumException("FPDFPage_TransFormWithClip failed", t);
                 }
             }
         }

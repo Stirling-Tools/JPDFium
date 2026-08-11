@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
@@ -30,8 +31,6 @@ import java.nio.charset.StandardCharsets;
  */
 public final class PdfPageEditor {
 
-    private PdfPageEditor() {}
-
     /** Page object type constants matching PDFium's FPDF_PAGEOBJ_* enum */
     public static final int PAGEOBJ_UNKNOWN = 0;
     public static final int PAGEOBJ_TEXT = 1;
@@ -40,17 +39,19 @@ public final class PdfPageEditor {
     public static final int PAGEOBJ_SHADING = 4;
     public static final int PAGEOBJ_FORM = 5;
 
+    private PdfPageEditor() {}
+
     /** Fill mode for path drawing */
     public enum FillMode {
         NONE(0),
         ALTERNATE(1),
         WINDING(2);
 
-        private final int value;
+        private final int modeValue;
 
-        FillMode(int value) { this.value = value; }
+        FillMode(int modeValue) { this.modeValue = modeValue; }
 
-        public int value() { return value; }
+        public int value() { return modeValue; }
     }
 
     /**
@@ -68,11 +69,11 @@ public final class PdfPageEditor {
             MemorySegment page = (MemorySegment) PageEditBindings.FPDFPage_New.invokeExact(
                     doc, pageIndex, width, height);
             if (page.equals(MemorySegment.NULL)) {
-                throw new RuntimeException("FPDFPage_New returned null");
+                throw new JPDFiumException("FPDFPage_New returned null");
             }
             return page;
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException("FPDFPage_New failed", t); }
+        } catch (JPDFiumException e) { throw e; }
+        catch (Throwable t) { throw new JPDFiumException("FPDFPage_New failed", t); }
     }
 
     /**
@@ -95,7 +96,7 @@ public final class PdfPageEditor {
     public static int countObjects(MemorySegment page) {
         try {
             return (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(page);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -108,7 +109,7 @@ public final class PdfPageEditor {
     public static MemorySegment getObject(MemorySegment page, int index) {
         try {
             return (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(page, index);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -119,7 +120,7 @@ public final class PdfPageEditor {
     public static int getObjectType(MemorySegment obj) {
         try {
             return (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -128,7 +129,7 @@ public final class PdfPageEditor {
     public static void insertObject(MemorySegment page, MemorySegment obj) {
         try {
             PageEditBindings.FPDFPage_InsertObject.invokeExact(page, obj);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -141,7 +142,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(page, obj);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -164,9 +165,9 @@ public final class PdfPageEditor {
             try {
                 obj = (MemorySegment) PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
                         doc, fontStr, fontSize);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (obj.equals(MemorySegment.NULL)) {
-                throw new RuntimeException("FPDFPageObj_NewTextObj returned null");
+                throw new JPDFiumException("FPDFPageObj_NewTextObj returned null");
             }
             return obj;
         }
@@ -185,7 +186,7 @@ public final class PdfPageEditor {
             int ok;
             try {
                 ok = (int) PageEditBindings.FPDFText_SetText.invokeExact(textObj, wideText);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return ok != 0;
         }
     }
@@ -199,7 +200,7 @@ public final class PdfPageEditor {
     public static MemorySegment createImageObject(MemorySegment doc) {
         try {
             return (MemorySegment) PageEditBindings.FPDFPageObj_NewImageObj.invokeExact(doc);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -215,7 +216,7 @@ public final class PdfPageEditor {
         try {
             return (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewRect.invokeExact(
                     x, y, width, height);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -228,7 +229,7 @@ public final class PdfPageEditor {
     public static MemorySegment createPath(float x, float y) {
         try {
             return (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewPath.invokeExact(x, y);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -239,7 +240,7 @@ public final class PdfPageEditor {
             int ok = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(
                     path, fillMode.value(), stroke ? 1 : 0);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /** Move to a point in a path object. */
@@ -247,7 +248,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPath_MoveTo.invokeExact(path, x, y);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /** Draw a line to a point in a path object. */
@@ -255,7 +256,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPath_LineTo.invokeExact(path, x, y);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /** Draw a cubic Bezier curve in a path object. */
@@ -266,7 +267,7 @@ public final class PdfPageEditor {
             int ok = (int) PageEditBindings.FPDFPath_BezierTo.invokeExact(
                     path, x1, y1, x2, y2, x3, y3);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /** Close the current path subpath. */
@@ -274,7 +275,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPath_Close.invokeExact(path);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -292,7 +293,7 @@ public final class PdfPageEditor {
                                   double c, double d, double e, double f) {
         try {
             PageEditBindings.FPDFPageObj_Transform.invokeExact(obj, a, b, c, d, e, f);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -312,7 +313,7 @@ public final class PdfPageEditor {
             try {
                 ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
                         obj, left, bottom, right, top);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (ok == 0) return null;
 
             return new float[]{
@@ -332,7 +333,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(obj, r, g, b, a);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -343,7 +344,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(obj, r, g, b, a);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
