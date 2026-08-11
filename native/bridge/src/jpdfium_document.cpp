@@ -1,24 +1,30 @@
 // jpdfium_document.cpp - Library lifecycle, document and page management.
 
-#include "jpdfium.h"
-#include "jpdfium_internal.h"
-
-#include <fpdfview.h>
-#include <fpdf_save.h>
 #include <fpdf_ppo.h>
+#include <fpdf_save.h>
+#include <fpdfview.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
 #include <string>
 #include <vector>
 
+#include "jpdfium.h"
+#include "jpdfium_internal.h"
+
 int32_t jpdfium_init() {
-    FPDF_LIBRARY_CONFIG cfg;
-    cfg.version          = 2;
+    FPDF_LIBRARY_CONFIG cfg{};
+    cfg.version = 4;
     cfg.m_pUserFontPaths = nullptr;
-    cfg.m_pIsolate       = nullptr;
+    cfg.m_pIsolate = nullptr;
     cfg.m_v8EmbedderSlot = 0;
+    cfg.m_pPlatform = nullptr;
+#ifdef PDF_USE_SKIA
+    cfg.m_RendererType = FPDF_RENDERERTYPE_SKIA;
+#else
+    cfg.m_RendererType = FPDF_RENDERERTYPE_AGG;
+#endif
     FPDF_InitLibraryWithConfig(&cfg);
     return JPDFIUM_OK;
 }
@@ -32,7 +38,7 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     if (!doc) return translatePdfiumError();
 
     auto* w = new DocWrapper();
-    w->doc  = doc;
+    w->doc = doc;
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }
@@ -43,13 +49,16 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     memcpy(copy, data, static_cast<size_t>(len));
 
     FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), nullptr);
-    if (!doc) { free(copy); return translatePdfiumError(); }
+    if (!doc) {
+        free(copy);
+        return translatePdfiumError();
+    }
 
-    auto* w  = new DocWrapper();
-    w->doc   = doc;
-    w->buf   = copy;
-    w->blen  = len;
-    *handle  = encodeHandle(w);
+    auto* w = new DocWrapper();
+    w->doc = doc;
+    w->buf = copy;
+    w->blen = len;
+    *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }
 
@@ -58,7 +67,7 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
     if (!doc) return translatePdfiumError();
 
     auto* w = new DocWrapper();
-    w->doc  = doc;
+    w->doc = doc;
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }
@@ -83,9 +92,9 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
             return fwrite(data, 1, size, static_cast<FileWriter*>(self)->fp) == size ? 1 : 0;
         }
     } fw;
-    fw.version    = 1;
+    fw.version = 1;
     fw.WriteBlock = FileWriter::Write;
-    fw.fp         = f;
+    fw.fp = f;
 
     int ok = FPDF_SaveAsCopy(w->doc, &fw, FPDF_NO_INCREMENTAL);
     fclose(f);
@@ -99,23 +108,23 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* bw  = static_cast<BufWriter*>(self);
+            auto* bw = static_cast<BufWriter*>(self);
             auto* src = static_cast<const uint8_t*>(data);
             bw->buf.insert(bw->buf.end(), src, src + size);
             return 1;
         }
     } bw;
-    bw.version    = 1;
+    bw.version = 1;
     bw.WriteBlock = BufWriter::Write;
 
     if (!FPDF_SaveAsCopy(w->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
-    size_t   sz  = bw.buf.size();
+    size_t sz = bw.buf.size();
     uint8_t* out = static_cast<uint8_t*>(malloc(sz));
     if (!out) return JPDFIUM_ERR_NATIVE;
     memcpy(out, bw.buf.data(), sz);
     *data = out;
-    *len  = static_cast<int64_t>(sz);
+    *len = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 
@@ -167,31 +176,27 @@ int64_t jpdfium_page_doc_raw_handle(int64_t page) {
     return pw && pw->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->doc)) : 0;
 }
 
-int32_t jpdfium_import_n_pages_to_one(void* srcDoc,
-                                       float outputWidth, float outputHeight,
-                                       int32_t cols, int32_t rows,
-                                       uint8_t** output, int64_t* outputLen) {
-    if (!srcDoc || !output || !outputLen || cols < 1 || rows < 1)
-        return JPDFIUM_ERR_INVALID;
+int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth, float outputHeight,
+                                      int32_t cols, int32_t rows, uint8_t** output,
+                                      int64_t* outputLen) {
+    if (!srcDoc || !output || !outputLen || cols < 1 || rows < 1) return JPDFIUM_ERR_INVALID;
 
-    FPDF_DOCUMENT nupDoc = FPDF_ImportNPagesToOne(
-        static_cast<FPDF_DOCUMENT>(srcDoc),
-        outputWidth, outputHeight,
-        static_cast<size_t>(cols),
-        static_cast<size_t>(rows));
+    FPDF_DOCUMENT nupDoc =
+        FPDF_ImportNPagesToOne(static_cast<FPDF_DOCUMENT>(srcDoc), outputWidth, outputHeight,
+                               static_cast<size_t>(cols), static_cast<size_t>(rows));
 
     if (!nupDoc) return JPDFIUM_ERR_NATIVE;
 
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* bw  = static_cast<BufWriter*>(self);
+            auto* bw = static_cast<BufWriter*>(self);
             auto* src = static_cast<const uint8_t*>(data);
             bw->buf.insert(bw->buf.end(), src, src + size);
             return 1;
         }
     } bw;
-    bw.version    = 1;
+    bw.version = 1;
     bw.WriteBlock = BufWriter::Write;
 
     int ok = FPDF_SaveAsCopy(nupDoc, &bw, FPDF_NO_INCREMENTAL);
@@ -199,11 +204,11 @@ int32_t jpdfium_import_n_pages_to_one(void* srcDoc,
 
     if (!ok) return JPDFIUM_ERR_IO;
 
-    size_t   sz  = bw.buf.size();
+    size_t sz = bw.buf.size();
     uint8_t* out = static_cast<uint8_t*>(malloc(sz));
     if (!out) return JPDFIUM_ERR_NATIVE;
     memcpy(out, bw.buf.data(), sz);
-    *output    = out;
+    *output = out;
     *outputLen = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }

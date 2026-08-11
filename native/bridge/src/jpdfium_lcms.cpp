@@ -3,12 +3,13 @@
 // Opt-in: requires JPDFIUM_HAS_LCMS2 at build time.
 // Validates /ICCBased profile streams and generates standard replacements.
 
-#include "jpdfium.h"
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
 #include <sstream>
 #include <string>
+
+#include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_LCMS2
 
@@ -22,7 +23,10 @@ static std::string json_escape_lcms(const std::string& s) {
     out.reserve(s.size());
     for (char c : s) {
         if (c == '"' || c == '\\') out += '\\';
-        if (c == '\n') { out += "\\n"; continue; }
+        if (c == '\n') {
+            out += "\\n";
+            continue;
+        }
         if (c == '\r') continue;
         out += c;
     }
@@ -31,23 +35,20 @@ static std::string json_escape_lcms(const std::string& s) {
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
-    const uint8_t* profileData, int64_t profileLen,
-    int32_t expectedComponents,
-    char** resultJson) {
-
-    if (!profileData || profileLen <= 0 || !resultJson)
-        return JPDFIUM_ERR_INVALID;
+JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(const uint8_t* profileData, int64_t profileLen,
+                                                    int32_t expectedComponents, char** resultJson) {
+    if (!profileData || profileLen <= 0 || !resultJson) return JPDFIUM_ERR_INVALID;
 
     cmsSetLogErrorHandler(lcms_error_handler);
 
-    cmsHPROFILE hProfile = cmsOpenProfileFromMem(
-        profileData, static_cast<cmsUInt32Number>(profileLen));
+    cmsHPROFILE hProfile =
+        cmsOpenProfileFromMem(profileData, static_cast<cmsUInt32Number>(profileLen));
 
     if (!hProfile) {
-        *resultJson = strdup("{\"status\":\"corrupt\",\"colorspace\":\"unknown\","
-                             "\"components\":0,\"expected_components\":0,"
-                             "\"description\":\"Failed to parse ICC profile\"}");
+        *resultJson = strdup(
+            "{\"status\":\"corrupt\",\"colorspace\":\"unknown\","
+            "\"components\":0,\"expected_components\":0,"
+            "\"description\":\"Failed to parse ICC profile\"}");
         return -1;
     }
 
@@ -56,16 +57,24 @@ JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
 
     const char* csName = "Other";
     switch (cs) {
-        case cmsSigRgbData:  csName = "RGB";  break;
-        case cmsSigCmykData: csName = "CMYK"; break;
-        case cmsSigGrayData: csName = "Gray"; break;
-        case cmsSigLabData:  csName = "Lab";  break;
-        default: break;
+        case cmsSigRgbData:
+            csName = "RGB";
+            break;
+        case cmsSigCmykData:
+            csName = "CMYK";
+            break;
+        case cmsSigGrayData:
+            csName = "Gray";
+            break;
+        case cmsSigLabData:
+            csName = "Lab";
+            break;
+        default:
+            break;
     }
 
     char desc[256] = {0};
-    cmsGetProfileInfoASCII(hProfile, cmsInfoDescription,
-        "en", "US", desc, sizeof(desc));
+    cmsGetProfileInfoASCII(hProfile, cmsInfoDescription, "en", "US", desc, sizeof(desc));
 
     int status = 0;
     const char* statusStr = "valid";
@@ -79,14 +88,13 @@ JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
     // Create a test transform to verify the profile is functional
     if (status == 0) {
         cmsHPROFILE hSRGB = cmsCreate_sRGBProfile();
-        cmsUInt32Number inFmt =
-            (actualComponents == 3) ? TYPE_RGB_8 :
-            (actualComponents == 4) ? TYPE_CMYK_8 :
-            (actualComponents == 1) ? TYPE_GRAY_8 : TYPE_RGB_8;
+        cmsUInt32Number inFmt = (actualComponents == 3)   ? TYPE_RGB_8
+                                : (actualComponents == 4) ? TYPE_CMYK_8
+                                : (actualComponents == 1) ? TYPE_GRAY_8
+                                                          : TYPE_RGB_8;
 
-        cmsHTRANSFORM hTransform = cmsCreateTransform(
-            hProfile, inFmt, hSRGB, TYPE_RGB_8,
-            INTENT_PERCEPTUAL, cmsFLAGS_NOOPTIMIZE);
+        cmsHTRANSFORM hTransform = cmsCreateTransform(hProfile, inFmt, hSRGB, TYPE_RGB_8,
+                                                      INTENT_PERCEPTUAL, cmsFLAGS_NOOPTIMIZE);
 
         if (!hTransform) {
             status = -1;
@@ -101,20 +109,19 @@ JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
     cmsCloseProfile(hProfile);
 
     std::ostringstream os;
-    os << "{\"status\":\"" << statusStr << "\""
-       << ",\"colorspace\":\"" << csName << "\""
-       << ",\"components\":" << actualComponents
-       << ",\"expected_components\":" << expectedComponents
-       << ",\"description\":\"" << json_escape_lcms(desc) << "\"}";
+    os << "{\"status\":\"" << statusStr << "\",";
+    os << "\"colorspace\":\"" << csName << "\",";
+    os << "\"components\":" << actualComponents << ",";
+    os << "\"expected_components\":" << expectedComponents << ",";
+    os << "\"description\":\"" << json_escape_lcms(desc) << "\"}";
 
     *resultJson = strdup(os.str().c_str());
     return status;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(
-    int32_t numComponents,
-    uint8_t** profileOutput, int64_t* profileLen) {
-
+JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(int32_t numComponents,
+                                                        uint8_t** profileOutput,
+                                                        int64_t* profileLen) {
     if (!profileOutput || !profileLen) return JPDFIUM_ERR_INVALID;
 
     cmsSetLogErrorHandler(lcms_error_handler);
@@ -150,23 +157,22 @@ JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(
     return JPDFIUM_OK;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#else // !JPDFIUM_HAS_LCMS2
+#else  // !JPDFIUM_HAS_LCMS2
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(
-    const uint8_t*, int64_t, int32_t, char** resultJson) {
+JPDFIUM_EXPORT int32_t jpdfium_validate_icc_profile(const uint8_t*, int64_t, int32_t,
+                                                    char** resultJson) {
     if (resultJson) *resultJson = strdup("{\"status\":\"unavailable\"}");
     return JPDFIUM_ERR_NATIVE;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(
-    int32_t, uint8_t**, int64_t*) {
+JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(int32_t, uint8_t**, int64_t*) {
     return JPDFIUM_ERR_NATIVE;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#endif // JPDFIUM_HAS_LCMS2
+#endif  // JPDFIUM_HAS_LCMS2

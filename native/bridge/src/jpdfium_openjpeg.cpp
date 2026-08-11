@@ -4,11 +4,12 @@
 // Validates /JPXDecode streams with non-strict mode for partial bitstream
 // recovery, and can re-encode partially decoded images as raw pixels.
 
-#include "jpdfium.h"
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <string>
+
+#include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_OPENJPEG
 
@@ -33,8 +34,10 @@ static OPJ_SIZE_T mem_read(void* buf, OPJ_SIZE_T bytes, void* userData) {
 static OPJ_OFF_T mem_skip(OPJ_OFF_T bytes, void* userData) {
     auto* ms = static_cast<MemStream*>(userData);
     if (bytes < 0) {
-        if (ms->pos < static_cast<size_t>(-bytes)) ms->pos = 0;
-        else ms->pos += bytes;
+        if (ms->pos < static_cast<size_t>(-bytes))
+            ms->pos = 0;
+        else
+            ms->pos += bytes;
     } else {
         ms->pos += static_cast<size_t>(bytes);
         if (ms->pos > ms->len) ms->pos = ms->len;
@@ -50,7 +53,10 @@ static OPJ_BOOL mem_seek(OPJ_OFF_T bytes, void* userData) {
 }
 
 // Error capture
-struct ErrorCtx { std::string msg; int count = 0; };
+struct ErrorCtx {
+    std::string msg;
+    int count = 0;
+};
 
 static void opj_error_cb(const char* msg, void* data) {
     auto* ctx = static_cast<ErrorCtx*>(data);
@@ -65,7 +71,10 @@ static std::string json_escape_opj(const std::string& s) {
     out.reserve(s.size());
     for (char c : s) {
         if (c == '"' || c == '\\') out += '\\';
-        if (c == '\n') { out += "\\n"; continue; }
+        if (c == '\n') {
+            out += "\\n";
+            continue;
+        }
         if (c == '\r') continue;
         out += c;
     }
@@ -73,11 +82,8 @@ static std::string json_escape_opj(const std::string& s) {
 }
 
 // Try to decode with a specific codec type
-static opj_image_t* try_decode(
-    const uint8_t* data, size_t len,
-    OPJ_CODEC_FORMAT fmt,
-    ErrorCtx& errCtx) {
-
+static opj_image_t* try_decode(const uint8_t* data, size_t len, OPJ_CODEC_FORMAT fmt,
+                               ErrorCtx& errCtx) {
     MemStream ms = {data, len, 0};
 
     opj_stream_t* stream = opj_stream_create(len, OPJ_TRUE);
@@ -90,7 +96,10 @@ static opj_image_t* try_decode(
     opj_stream_set_skip_function(stream, mem_skip);
 
     opj_codec_t* codec = opj_create_decompress(fmt);
-    if (!codec) { opj_stream_destroy(stream); return nullptr; }
+    if (!codec) {
+        opj_stream_destroy(stream);
+        return nullptr;
+    }
 
     opj_set_error_handler(codec, opj_error_cb, &errCtx);
     opj_set_warning_handler(codec, opj_warn_cb, nullptr);
@@ -122,12 +131,9 @@ static opj_image_t* try_decode(
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(
-    const uint8_t* jpxData, int64_t jpxLen,
-    char** resultJson) {
-
-    if (!jpxData || jpxLen <= 0 || !resultJson)
-        return JPDFIUM_ERR_INVALID;
+JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(const uint8_t* jpxData, int64_t jpxLen,
+                                                   char** resultJson) {
+    if (!jpxData || jpxLen <= 0 || !resultJson) return JPDFIUM_ERR_INVALID;
 
     ErrorCtx errCtx;
     size_t len = static_cast<size_t>(jpxLen);
@@ -141,9 +147,8 @@ JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(
 
     if (!image) {
         std::ostringstream os;
-        os << "{\"status\":\"unreadable\""
-           << ",\"width\":0,\"height\":0,\"components\":0"
-           << ",\"error\":\"" << json_escape_opj(errCtx.msg) << "\"}";
+        os << "{\"status\":\"unreadable\",\"width\":0,\"height\":0,\"components\":0,\"error\":\""
+           << json_escape_opj(errCtx.msg) << "\"}";
         *resultJson = strdup(os.str().c_str());
         return -1;
     }
@@ -156,23 +161,18 @@ JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(
     int rc = (errCtx.count > 0) ? 1 : 0;
 
     std::ostringstream os;
-    os << "{\"status\":\"" << status << "\""
-       << ",\"width\":" << w << ",\"height\":" << h
-       << ",\"components\":" << comps
-       << ",\"error\":\"" << json_escape_opj(errCtx.msg) << "\"}";
+    os << "{\"status\":\"" << status << "\",\"width\":" << w << ",\"height\":" << h
+       << ",\"components\":" << comps << ",\"error\":\"" << json_escape_opj(errCtx.msg) << "\"}";
 
     *resultJson = strdup(os.str().c_str());
     opj_image_destroy(image);
     return rc;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(
-    const uint8_t* jpxData, int64_t jpxLen,
-    uint8_t** rawPixels, int64_t* rawLen,
-    int32_t* width, int32_t* height, int32_t* components) {
-
-    if (!jpxData || jpxLen <= 0 || !rawPixels || !rawLen ||
-        !width || !height || !components)
+JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t* jpxData, int64_t jpxLen,
+                                          uint8_t** rawPixels, int64_t* rawLen, int32_t* width,
+                                          int32_t* height, int32_t* components) {
+    if (!jpxData || jpxLen <= 0 || !rawPixels || !rawLen || !width || !height || !components)
         return JPDFIUM_ERR_INVALID;
 
     ErrorCtx errCtx;
@@ -201,8 +201,7 @@ JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(
                 // Clamp to 8-bit
                 if (val < 0) val = 0;
                 if (val > 255) val = 255;
-                (*rawPixels)[(y * (*width) + x) * (*components) + c] =
-                    static_cast<uint8_t>(val);
+                (*rawPixels)[(y * (*width) + x) * (*components) + c] = static_cast<uint8_t>(val);
             }
         }
     }
@@ -212,24 +211,22 @@ JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(
     return JPDFIUM_OK;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#else // !JPDFIUM_HAS_OPENJPEG
+#else  // !JPDFIUM_HAS_OPENJPEG
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(
-    const uint8_t*, int64_t, char** resultJson) {
+JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(const uint8_t*, int64_t, char** resultJson) {
     if (resultJson) *resultJson = strdup("{\"status\":\"unavailable\"}");
     return JPDFIUM_ERR_NATIVE;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(
-    const uint8_t*, int64_t, uint8_t**, int64_t*,
-    int32_t*, int32_t*, int32_t*) {
+JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t*, int64_t, uint8_t**, int64_t*, int32_t*,
+                                          int32_t*, int32_t*) {
     return JPDFIUM_ERR_NATIVE;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#endif // JPDFIUM_HAS_OPENJPEG
+#endif  // JPDFIUM_HAS_OPENJPEG

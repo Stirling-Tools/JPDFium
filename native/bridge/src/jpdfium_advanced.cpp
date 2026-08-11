@@ -18,18 +18,20 @@
  * License: MIT
  */
 
+#include <fpdf_save.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
-#include <fpdf_save.h>
-#include <cstring>
-#include <cstdlib>
-#include <cstdio>
-#include <string>
-#include <vector>
-#include <set>
-#include <unordered_map>
-#include <memory>
-#include <sstream>
 
 // PCRE2 JIT Pattern Engine
 
@@ -46,17 +48,16 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
     if (!pattern || !handle) return JPDFIUM_ERR_INVALID;
 
     uint32_t pcre2_opts = 0;
-    if (flags & JPDFIUM_PCRE2_CASELESS)  pcre2_opts |= PCRE2_CASELESS;
+    if (flags & JPDFIUM_PCRE2_CASELESS) pcre2_opts |= PCRE2_CASELESS;
     if (flags & JPDFIUM_PCRE2_MULTILINE) pcre2_opts |= PCRE2_MULTILINE;
-    if (flags & JPDFIUM_PCRE2_DOTALL)    pcre2_opts |= PCRE2_DOTALL;
-    if (flags & JPDFIUM_PCRE2_UTF)       pcre2_opts |= PCRE2_UTF;
-    if (flags & JPDFIUM_PCRE2_UCP)       pcre2_opts |= PCRE2_UCP;
+    if (flags & JPDFIUM_PCRE2_DOTALL) pcre2_opts |= PCRE2_DOTALL;
+    if (flags & JPDFIUM_PCRE2_UTF) pcre2_opts |= PCRE2_UTF;
+    if (flags & JPDFIUM_PCRE2_UCP) pcre2_opts |= PCRE2_UCP;
 
     int errcode;
     PCRE2_SIZE erroffset;
-    pcre2_code* code = pcre2_compile(
-        (PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED,
-        pcre2_opts, &errcode, &erroffset, nullptr);
+    pcre2_code* code = pcre2_compile((PCRE2_SPTR)pattern, PCRE2_ZERO_TERMINATED, pcre2_opts,
+                                     &errcode, &erroffset, nullptr);
 
     if (!code) return JPDFIUM_ERR_INVALID;
 
@@ -82,13 +83,13 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
     PCRE2_SIZE offset = 0;
 
     while (offset < subject_len) {
-        int rc = pcre2_match(pw->code, (PCRE2_SPTR)text, subject_len,
-                             offset, 0, pw->match_data, nullptr);
+        int rc = pcre2_match(pw->code, (PCRE2_SPTR)text, subject_len, offset, 0, pw->match_data,
+                             nullptr);
         if (rc < 0) break;
 
         PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(pw->match_data);
         PCRE2_SIZE start = ovector[0];
-        PCRE2_SIZE end   = ovector[1];
+        PCRE2_SIZE end = ovector[1];
 
         if (!first) json += ",";
         first = false;
@@ -98,22 +99,32 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
         std::string escaped;
         for (char c : match_text) {
             switch (c) {
-                case '"':  escaped += "\\\""; break;
-                case '\\': escaped += "\\\\"; break;
-                case '\n': escaped += "\\n";  break;
-                case '\r': escaped += "\\r";  break;
-                case '\t': escaped += "\\t";  break;
-                default:   escaped += c;
+                case '"':
+                    escaped += "\\\"";
+                    break;
+                case '\\':
+                    escaped += "\\\\";
+                    break;
+                case '\n':
+                    escaped += "\\n";
+                    break;
+                case '\r':
+                    escaped += "\\r";
+                    break;
+                case '\t':
+                    escaped += "\\t";
+                    break;
+                default:
+                    escaped += c;
             }
         }
 
         char buf[256];
-        snprintf(buf, sizeof(buf),
-                 "{\"start\":%zu,\"end\":%zu,\"match\":\"%s\"}",
-                 (size_t)start, (size_t)end, escaped.c_str());
+        snprintf(buf, sizeof(buf), "{\"start\":%zu,\"end\":%zu,\"match\":\"%s\"}", (size_t)start,
+                 (size_t)end, escaped.c_str());
         json += buf;
 
-        offset = (end > start) ? end : end + 1; // advance past zero-length matches
+        offset = (end > start) ? end : end + 1;  // advance past zero-length matches
     }
 
     json += "]";
@@ -129,7 +140,7 @@ void jpdfium_pcre2_free(int64_t pattern_handle) {
     delete pw;
 }
 
-#else // !JPDFIUM_HAS_PCRE2
+#else  // !JPDFIUM_HAS_PCRE2
 
 int32_t jpdfium_pcre2_compile(const char*, uint32_t, int64_t* handle) {
     if (handle) *handle = 0;
@@ -141,8 +152,7 @@ int32_t jpdfium_pcre2_match_all(int64_t, const char*, char** json_result) {
 }
 void jpdfium_pcre2_free(int64_t) {}
 
-#endif // JPDFIUM_HAS_PCRE2
-
+#endif  // JPDFIUM_HAS_PCRE2
 
 // Luhn Algorithm - pure C, no dependencies
 
@@ -152,8 +162,10 @@ int32_t jpdfium_luhn_validate(const char* number) {
     int digits[32];
     int n = 0;
     for (const char* p = number; *p && n < 32; ++p) {
-        if (*p >= '0' && *p <= '9') digits[n++] = *p - '0';
-        else if (*p != ' ' && *p != '-') return 0; // invalid character
+        if (*p >= '0' && *p <= '9')
+            digits[n++] = *p - '0';
+        else if (*p != ' ' && *p != '-')
+            return 0;  // invalid character
     }
 
     // Credit cards: 13-19 digits (Visa 13/16/19, MC/Amex/Discover 15-16)
@@ -162,12 +174,14 @@ int32_t jpdfium_luhn_validate(const char* number) {
     int sum = 0;
     for (int i = n - 1, alt = 0; i >= 0; --i, alt ^= 1) {
         int d = digits[i];
-        if (alt) { d *= 2; if (d > 9) d -= 9; }
+        if (alt) {
+            d *= 2;
+            if (d > 9) d -= 9;
+        }
         sum += d;
     }
     return (sum % 10 == 0) ? 1 : 0;
 }
-
 
 // FlashText Trie-based Keyword NER - O(n) matching
 
@@ -206,7 +220,7 @@ struct FlashTextProcessor {
         bool first = true;
         size_t textLen = strlen(text);
 
-        for (size_t i = 0; i < textLen; ) {
+        for (size_t i = 0; i < textLen;) {
             TrieNode* node = root.get();
             size_t matchEnd = 0;
             std::string matchKeyword, matchLabel;
@@ -235,8 +249,8 @@ struct FlashTextProcessor {
                 first = false;
                 char buf[512];
                 snprintf(buf, sizeof(buf),
-                         "{\"start\":%zu,\"end\":%zu,\"keyword\":\"%s\",\"label\":\"%s\"}",
-                         i, matchEnd, matchKeyword.c_str(), matchLabel.c_str());
+                         "{\"start\":%zu,\"end\":%zu,\"keyword\":\"%s\",\"label\":\"%s\"}", i,
+                         matchEnd, matchKeyword.c_str(), matchLabel.c_str());
                 result += buf;
                 i = matchEnd;
             } else {
@@ -249,7 +263,7 @@ struct FlashTextProcessor {
     }
 };
 
-} // anonymous namespace
+}  // anonymous namespace
 
 int32_t jpdfium_flashtext_create(int64_t* handle) {
     if (!handle) return JPDFIUM_ERR_INVALID;
@@ -274,7 +288,7 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
     while (*p) {
         const char* kw_start = strstr(p, "\"keyword\":\"");
         if (!kw_start) break;
-        kw_start += 11; // skip "keyword":"
+        kw_start += 11;  // skip "keyword":"
         const char* kw_end = strchr(kw_start, '"');
         if (!kw_end) break;
         std::string keyword(kw_start, kw_end - kw_start);
@@ -306,7 +320,6 @@ void jpdfium_flashtext_free(int64_t handle) {
     delete ft;
 }
 
-
 // Font Normalization Pipeline - FreeType + HarfBuzz hb-subset
 
 #if defined(JPDFIUM_HAS_FREETYPE) && defined(JPDFIUM_HAS_HARFBUZZ)
@@ -317,13 +330,14 @@ void jpdfium_flashtext_free(int64_t handle) {
 #include FT_TRUETYPE_IDS_H
 #include FT_TRUETYPE_TABLES_H
 
-#include <hb.h>
-#include <hb-subset.h>
-
-#include "jpdfium_internal.h"
 #include <fpdf_edit.h>
 #include <fpdf_text.h>
+#include <hb-subset.h>
+#include <hb.h>
+
 #include <set>
+
+#include "jpdfium_internal.h"
 
 static FT_Library ft_lib = nullptr;
 
@@ -331,8 +345,7 @@ static void ensure_freetype_init() {
     if (!ft_lib) FT_Init_FreeType(&ft_lib);
 }
 
-int32_t jpdfium_font_get_data(int64_t page, int32_t font_index,
-                               uint8_t** data, int64_t* len) {
+int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, uint8_t** data, int64_t* len) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page || !data || !len) return JPDFIUM_ERR_INVALID;
     *data = nullptr;
@@ -340,7 +353,7 @@ int32_t jpdfium_font_get_data(int64_t page, int32_t font_index,
 
     // Enumerate unique fonts on the page by walking text objects.
     int objCount = FPDFPage_CountObjects(pw->page);
-    std::vector<FPDF_FONT> fonts;          // ordered list of unique fonts
+    std::vector<FPDF_FONT> fonts;  // ordered list of unique fonts
     std::set<FPDF_FONT> seen;
 
     for (int i = 0; i < objCount; i++) {
@@ -394,9 +407,10 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
     if (face->face_flags & FT_FACE_FLAG_SFNT) {
         // Check for CFF: presence of CFF table in sfnt container
         FT_ULong cff_len = 0;
-        if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('C','F','F',' '), 0, nullptr, &cff_len) == 0)
+        if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('C', 'F', 'F', ' '), 0, nullptr, &cff_len) == 0)
             type_str = "CFF";
-        else if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('C','F','F','2'), 0, nullptr, &cff_len) == 0)
+        else if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('C', 'F', 'F', '2'), 0, nullptr, &cff_len) ==
+                 0)
             type_str = "CFF2";
         else
             type_str = "TrueType";
@@ -411,7 +425,10 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
         if (plus && (plus - face->family_name) == 6) {
             is_subset = true;
             for (const char* c = face->family_name; c < plus; ++c) {
-                if (*c < 'A' || *c > 'Z') { is_subset = false; break; }
+                if (*c < 'A' || *c > 'Z') {
+                    is_subset = false;
+                    break;
+                }
             }
         }
     }
@@ -421,11 +438,8 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
              "{\"type\":\"%s\",\"sfnt\":%s,\"has_cmap\":%s,"
              "\"num_glyphs\":%ld,\"units_per_em\":%d,\"has_kerning\":%s,"
              "\"is_subset\":%s,\"family\":\"%s\"}",
-             type_str, sfnt ? "true" : "false",
-             has_cmap ? "true" : "false",
-             face->num_glyphs, (int)face->units_per_EM,
-             has_kerning ? "true" : "false",
-             is_subset ? "true" : "false",
+             type_str, sfnt ? "true" : "false", has_cmap ? "true" : "false", face->num_glyphs,
+             (int)face->units_per_EM, has_kerning ? "true" : "false", is_subset ? "true" : "false",
              face->family_name ? face->family_name : "");
 
     FT_Done_Face(face);
@@ -433,8 +447,7 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_font_fix_tounicode(int64_t doc, int32_t page_index,
-                                    int32_t* fonts_fixed) {
+int32_t jpdfium_font_fix_tounicode(int64_t doc, int32_t page_index, int32_t* fonts_fixed) {
     // Real implementation would:
     // 1. Iterate page objects with FPDFPage_CountObjects / FPDFPage_GetObject
     // 2. For each FPDF_PAGEOBJ_TEXT, get the font via FPDFTextObj_GetFont
@@ -443,20 +456,21 @@ int32_t jpdfium_font_fix_tounicode(int64_t doc, int32_t page_index,
     // 5. Build correct GID->Unicode map
     // 6. Generate new /ToUnicode CMap stream
     // 7. Replace via qpdf
-    (void)doc; (void)page_index;
+    (void)doc;
+    (void)page_index;
     if (fonts_fixed) *fonts_fixed = 0;
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_font_repair_widths(int64_t doc, int32_t page_index,
-                                    int32_t* fonts_fixed) {
+int32_t jpdfium_font_repair_widths(int64_t doc, int32_t page_index, int32_t* fonts_fixed) {
     // Real implementation would:
     // 1. For each font, load into FreeType
     // 2. For each glyph: FT_Load_Glyph + linearHoriAdvance
     // 3. Convert to PDF glyph space: (advance * 1000) / units_per_EM
     // 4. Build corrected /W array
     // 5. Replace via qpdf
-    (void)doc; (void)page_index;
+    (void)doc;
+    (void)page_index;
     if (fonts_fixed) *fonts_fixed = 0;
     return JPDFIUM_OK;
 }
@@ -477,18 +491,17 @@ int32_t jpdfium_font_normalize_page(int64_t doc, int32_t page_index, char** json
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len,
-                             const uint32_t* codepoints, int32_t num_codepoints,
-                             int32_t retain_gids,
-                             uint8_t** out_data, int64_t* out_len) {
-    if (!font_data || font_len <= 0 || !codepoints || num_codepoints <= 0 ||
-        !out_data || !out_len) {
+int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const uint32_t* codepoints,
+                            int32_t num_codepoints, int32_t retain_gids, uint8_t** out_data,
+                            int64_t* out_len) {
+    if (!font_data || font_len <= 0 || !codepoints || num_codepoints <= 0 || !out_data ||
+        !out_len) {
         return JPDFIUM_ERR_INVALID;
     }
 
     // Create HarfBuzz blob from font data
     hb_blob_t* blob = hb_blob_create((const char*)font_data, (unsigned int)font_len,
-                                      HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
     hb_face_t* face = hb_face_create(blob, 0);
     hb_blob_destroy(blob);
 
@@ -534,7 +547,7 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len,
     return JPDFIUM_OK;
 }
 
-#else // !FREETYPE || !HARFBUZZ
+#else  // !FREETYPE || !HARFBUZZ
 
 int32_t jpdfium_font_get_data(int64_t, int32_t, uint8_t** data, int64_t* len) {
     if (data) *data = nullptr;
@@ -558,30 +571,26 @@ int32_t jpdfium_font_normalize_page(int64_t, int32_t, char** json) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 int32_t jpdfium_font_subset(const uint8_t*, int64_t, const uint32_t*, int32_t, int32_t,
-                             uint8_t** out, int64_t* len) {
+                            uint8_t** out, int64_t* len) {
     if (out) *out = nullptr;
     if (len) *len = 0;
     return JPDFIUM_ERR_NOT_FOUND;
 }
 
-#endif // JPDFIUM_HAS_FREETYPE && JPDFIUM_HAS_HARFBUZZ
-
+#endif  // JPDFIUM_HAS_FREETYPE && JPDFIUM_HAS_HARFBUZZ
 
 // Glyph-Level Redaction
 
 #if defined(JPDFIUM_HAS_HARFBUZZ) && defined(JPDFIUM_HAS_ICU)
 
 #include <hb.h>
-#include <unicode/unistr.h>
 #include <unicode/ubidi.h>
+#include <unicode/unistr.h>
 
-int32_t jpdfium_redact_glyph_aware(int64_t page,
-                                    const char** words, int32_t word_count,
-                                    uint32_t argb, float padding,
-                                    uint32_t flags,
-                                    int32_t* match_count, char** result_json) {
-    if (!words || word_count <= 0 || !match_count || !result_json)
-        return JPDFIUM_ERR_INVALID;
+int32_t jpdfium_redact_glyph_aware(int64_t page, const char** words, int32_t word_count,
+                                   uint32_t argb, float padding, uint32_t flags,
+                                   int32_t* match_count, char** result_json) {
+    if (!words || word_count <= 0 || !match_count || !result_json) return JPDFIUM_ERR_INVALID;
 
     // Real implementation pipeline:
     // 1. Extract text with FPDFText_GetCharBox() for per-character bounding boxes
@@ -593,7 +602,10 @@ int32_t jpdfium_redact_glyph_aware(int64_t page,
     // 7. If JPDFIUM_GLYPH_REMOVE_STREAM: qpdf structural content removal
     // 8. Paint filled rectangles
 
-    (void)page; (void)argb; (void)padding; (void)flags;
+    (void)page;
+    (void)argb;
+    (void)padding;
+    (void)flags;
     *match_count = 0;
     *result_json = strdup("[]");
     return JPDFIUM_OK;
@@ -601,8 +613,8 @@ int32_t jpdfium_redact_glyph_aware(int64_t page,
 
 #else
 
-int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float,
-                                    uint32_t, int32_t* match_count, char** result_json) {
+int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
+                                   int32_t* match_count, char** result_json) {
     if (match_count) *match_count = 0;
     if (result_json) *result_json = strdup("[]");
     return JPDFIUM_ERR_NOT_FOUND;
@@ -610,16 +622,15 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
 
 #endif
 
-
 // XMP Metadata Redaction + Font Strip - qpdf
 
 #ifdef JPDFIUM_HAS_QPDF
 
-#include <qpdf/QPDF.hh>
-#include <qpdf/QPDFWriter.hh>
-#include <qpdf/QPDFExc.hh>
 #include <qpdf/Buffer.hh>
+#include <qpdf/QPDF.hh>
+#include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFWriter.hh>
 
 // Save an FPDF_DOCUMENT to a byte vector.
 static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
@@ -655,7 +666,10 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
 // The DocWrapper pointer itself is unchanged, so the Java-side handle remains valid.
 static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newBytes) {
     FPDF_CloseDocument(w->doc);
-    if (w->buf) { free(w->buf); w->buf = nullptr; }
+    if (w->buf) {
+        free(w->buf);
+        w->buf = nullptr;
+    }
 
     size_t sz = newBytes.size();
     auto* copy = static_cast<uint8_t*>(malloc(sz));
@@ -663,7 +677,10 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     memcpy(copy, newBytes.data(), sz);
 
     FPDF_DOCUMENT newDoc = FPDF_LoadMemDocument(copy, static_cast<int>(sz), nullptr);
-    if (!newDoc) { free(copy); return JPDFIUM_ERR_NATIVE; }
+    if (!newDoc) {
+        free(copy);
+        return JPDFIUM_ERR_NATIVE;
+    }
 
     w->doc = newDoc;
     w->buf = copy;
@@ -682,7 +699,8 @@ int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, int32_t key_count
         QPDF pdf;
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
-        pdf.processMemoryFile("strip", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+        pdf.processMemoryFile("strip", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size());
 
         QPDFObjectHandle trailer = pdf.getTrailer();
         if (trailer.hasKey("/Info")) {
@@ -712,7 +730,8 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
         QPDF pdf;
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
-        pdf.processMemoryFile("strip_all", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+        pdf.processMemoryFile("strip_all", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size());
 
         QPDFObjectHandle trailer = pdf.getTrailer();
         if (trailer.hasKey("/Info")) trailer.removeKey("/Info");
@@ -738,12 +757,14 @@ int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
         QPDF pdf;
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
-        pdf.processMemoryFile("strip_fonts", reinterpret_cast<const char*>(pdfBytes.data()), pdfBytes.size());
+        pdf.processMemoryFile("strip_fonts", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size());
 
         int count = 0;
         std::set<int> processed;  // object IDs of shared resource dicts already stripped
 
-        for (auto page : pdf.getAllPages()) {  // copy; hasKey/getKey are non-const in libqpdf on Ubuntu 24.04 (qpdf < 11.9 in apt)
+        for (auto page : pdf.getAllPages()) {  // copy; hasKey/getKey are non-const in libqpdf on
+                                               // Ubuntu 24.04 (qpdf < 11.9 in apt)
             if (!page.hasKey("/Resources")) continue;
             QPDFObjectHandle resources = page.getKey("/Resources");
             if (!resources.isDictionary()) continue;
@@ -785,17 +806,17 @@ int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
 
 #endif
 
-
 // XMP pattern redaction requires pugixml in addition to qpdf
 
 #if defined(JPDFIUM_HAS_PUGIXML) && defined(JPDFIUM_HAS_QPDF)
 
 #include <pugixml.hpp>
 
-int32_t jpdfium_xmp_redact_patterns(int64_t doc,
-                                     const char** patterns, int32_t pattern_count,
-                                     int32_t* fields_redacted) {
-    (void)doc; (void)patterns; (void)pattern_count;
+int32_t jpdfium_xmp_redact_patterns(int64_t doc, const char** patterns, int32_t pattern_count,
+                                    int32_t* fields_redacted) {
+    (void)doc;
+    (void)patterns;
+    (void)pattern_count;
     if (fields_redacted) *fields_redacted = 0;
     return JPDFIUM_OK;
 }
@@ -809,15 +830,14 @@ int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* f) 
 
 #endif
 
-
 // ICU4C Text Processing
 
 #ifdef JPDFIUM_HAS_ICU
 
-#include <unicode/unistr.h>
-#include <unicode/normlzr.h>
 #include <unicode/brkiter.h>
+#include <unicode/normlzr.h>
 #include <unicode/ubidi.h>
+#include <unicode/unistr.h>
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     if (!text || !result) return JPDFIUM_ERR_INVALID;
@@ -828,7 +848,7 @@ int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     icu::Normalizer::normalize(src, UNORM_NFC, 0, dst, status);
 
     if (U_FAILURE(status)) {
-        *result = strdup(text); // fallback to original
+        *result = strdup(text);  // fallback to original
         return JPDFIUM_OK;
     }
 
@@ -871,19 +891,29 @@ int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
         std::string escaped;
         for (char c : segUtf8) {
             switch (c) {
-                case '"':  escaped += "\\\""; break;
-                case '\\': escaped += "\\\\"; break;
-                case '\n': escaped += "\\n";  break;
-                case '\r': escaped += "\\r";  break;
-                case '\t': escaped += "\\t";  break;
-                default:   escaped += c;
+                case '"':
+                    escaped += "\\\"";
+                    break;
+                case '\\':
+                    escaped += "\\\\";
+                    break;
+                case '\n':
+                    escaped += "\\n";
+                    break;
+                case '\r':
+                    escaped += "\\r";
+                    break;
+                case '\t':
+                    escaped += "\\t";
+                    break;
+                default:
+                    escaped += c;
             }
         }
 
         char buf[4096];
-        snprintf(buf, sizeof(buf),
-                 "{\"start\":%d,\"end\":%d,\"text\":\"%s\"}",
-                 start, end, escaped.c_str());
+        snprintf(buf, sizeof(buf), "{\"start\":%d,\"end\":%d,\"text\":\"%s\"}", start, end,
+                 escaped.c_str());
         json += buf;
 
         start = end;
@@ -942,7 +972,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-#else // !JPDFIUM_HAS_ICU
+#else  // !JPDFIUM_HAS_ICU
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     if (result) *result = strdup(text ? text : "");
@@ -957,4 +987,4 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 
-#endif // JPDFIUM_HAS_ICU
+#endif  // JPDFIUM_HAS_ICU

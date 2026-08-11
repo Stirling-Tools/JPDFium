@@ -1,21 +1,43 @@
+#if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+
 // Stub implementation - returns realistic data for Java-layer testing.
-// Compiles without PDFium or any external library.
-// Text extraction returns PII-rich text; PCRE2 uses std::regex;
-// FlashText does substring matching; doc.save() copies the input file.
+// Compiles without PDFium or any external library:
+//   PCRE2     -> std::regex
+//   FlashText -> substring matching
+//   doc.save  -> byte-for-byte copy of the input
+// All buffers handed to the JVM are malloc'd and released via
+// jpdfium_free_string / jpdfium_free_buffer (which call free()).
+
 #include "jpdfium.h"
-#include <cstring>
-#include <cstdlib>
-#include <cstdio>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#endif
+
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <charconv>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <regex>
-#include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-// Stub page text - contains words and PII so the pipeline has real data
-static const char* STUB_TEXT =
+namespace {
+
+// Stub page text - words and PII so the pipeline has real data to chew on.
+constexpr std::string_view STUB_TEXT =
     "Hello World Confidential DRAFT Dummy Redaction\n"
     "Introduction Bold item Gradient Row brown fox\n"
     "Contact: test@example.com Phone: (555) 123-4567\n"
@@ -23,83 +45,193 @@ static const char* STUB_TEXT =
     "Card: 4111-1111-1111-1111 Consider Employ VM\n"
     "John Smith works at Acme Corp custom certificat";
 
+// ---------------------------------------------------------------------------
+// RAII handles
+// ---------------------------------------------------------------------------
+
+struct FileCloser {
+    void operator()(std::FILE* f) const noexcept {
+        if (f) std::fclose(f);
+    }
+};
+using FilePtr = std::unique_ptr<std::FILE, FileCloser>;
+
+static FilePtr safe_fopen_write(const char* path) {
+#if defined(_WIN32)
+    return FilePtr(std::fopen(path, "wb"));
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return FilePtr(nullptr);
+    return FilePtr(::fdopen(fd, "wb"));
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// FFI-safe allocators
+//
+// The JVM frees every buffer via jpdfium_free_string / jpdfium_free_buffer
+// (free()), so anything returned across the boundary MUST come from malloc.
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] char* dup_cstring(std::string_view sv) noexcept {
+    char* p = static_cast<char*>(std::malloc(sv.size() + 1));
+    if (!p) return nullptr;
+    std::memcpy(p, sv.data(), sv.size());
+    p[sv.size()] = '\0';
+    return p;
+}
+
+[[nodiscard]] uint8_t* dup_bytes(const void* src, std::size_t len) noexcept {
+    auto* p = static_cast<uint8_t*>(std::malloc(len));
+    if (!p) return nullptr;
+    std::memcpy(p, src, len);
+    return p;
+}
+
+[[nodiscard]] uint8_t* alloc_zeroed(std::size_t len) noexcept {
+    return static_cast<uint8_t*>(std::calloc(len, 1));
+}
+
+// ---------------------------------------------------------------------------
+// JsonBuf - minimal, allocation-cheap JSON writer.
+//
+// Backed by std::string with std::to_chars for numerics: no iostream, no
+// locale, no format-string parsing. Numbers render shortest-round-trip; the
+// JVM reads them through Double/Float.parseFloat (which accepts scientific
+// notation), so output is safe across libstdc++/libc++/MSVC float-to-chars
+// differences.
+// ---------------------------------------------------------------------------
+
+class JsonBuf {
+    std::string s_;
+
+   public:
+    explicit JsonBuf(std::size_t reserve = 256) {
+        s_.reserve(reserve);
+    }
+
+    JsonBuf& operator<<(std::string_view v) {
+        s_ += v;
+        return *this;
+    }
+    JsonBuf& operator<<(char c) {
+        s_.push_back(c);
+        return *this;
+    }
+
+    template <std::integral T>
+    JsonBuf& operator<<(T v) {
+        append(v);
+        return *this;
+    }
+    template <std::floating_point T>
+    JsonBuf& operator<<(T v) {
+        append(v);
+        return *this;
+    }
+
+    // Hand the built JSON to the JVM as a malloc'd, NUL-terminated C string.
+    [[nodiscard]] char* release() {
+        // std::string::data() is NUL-terminated since C++11 - copy once.
+        const auto len = s_.size() + 1;
+        char* out = static_cast<char*>(std::malloc(len));
+        if (out) std::memcpy(out, s_.data(), len);
+        return out;
+    }
+
+   private:
+    template <std::integral T>
+    void append(T v) {
+        std::array<char, 24> buf{};
+        auto [end, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+        if (ec == std::errc{}) s_.append(buf.data(), static_cast<std::size_t>(end - buf.data()));
+    }
+    template <std::floating_point T>
+    void append(T v) {
+        std::array<char, 32> buf{};
+        auto [end, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), v);
+        if (ec == std::errc{}) s_.append(buf.data(), static_cast<std::size_t>(end - buf.data()));
+    }
+};
+
+// Escape a string for inclusion inside a JSON string literal.
+[[nodiscard]] std::string json_escape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == '"' || c == '\\') out.push_back('\\');
+        out.push_back(c);
+    }
+    return out;
+}
+
+// Count non-overlapping occurrences of needle in haystack.
+int count_occurrences(std::string_view haystack, std::string_view needle, bool case_sensitive) {
+    if (needle.empty()) return 0;
+    if (case_sensitive) {
+        int count = 0;
+        for (std::size_t pos = 0; (pos = haystack.find(needle, pos)) != std::string_view::npos;
+             pos += needle.size())
+            ++count;
+        return count;
+    }
+    auto lower = [](std::string_view s) {
+        std::string out(s);
+        std::ranges::transform(out, out.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return out;
+    };
+    const std::string h = lower(haystack);
+    const std::string n = lower(needle);
+    int count = 0;
+    for (std::size_t pos = 0; (pos = h.find(n, pos)) != std::string::npos; pos += n.size()) ++count;
+    return count;
+}
+
+// Common "native feature not compiled in" sentinel for byte-out functions.
+[[nodiscard]] int32_t fail_native_bytes(uint8_t** out_ptr, int64_t* out_len) noexcept {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+// ---------------------------------------------------------------------------
 // Internal state
+// ---------------------------------------------------------------------------
 
 struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
 };
-static std::unordered_map<int64_t, StubDoc> g_docs;
-static int64_t g_next_doc = 12345LL;
 
-static std::unordered_map<int64_t, std::string> g_page_text;
-static std::unordered_map<int64_t, int> g_page_annots;  // page handle -> pending REDACT count
-static int64_t g_next_page = 99000LL;
-
-struct StubPattern { std::string regex; };
-static std::unordered_map<int64_t, StubPattern> g_pcre;
-static int64_t g_next_pcre = 77001LL;
+struct StubPattern {
+    std::string regex;
+};
 
 struct StubFlashText {
     std::vector<std::pair<std::string, std::string>> keywords;
 };
-static std::unordered_map<int64_t, StubFlashText> g_flash;
-static int64_t g_next_flash = 88001LL;
 
-// Helpers
+std::unordered_map<int64_t, StubDoc> g_docs;
+std::unordered_map<int64_t, std::string> g_page_text;
+std::unordered_map<int64_t, int> g_page_annots;   // page -> pending REDACT count
+std::unordered_map<int64_t, int64_t> g_page_doc;  // page -> owning doc handle
+std::unordered_map<int64_t, StubPattern> g_pcre;
+std::unordered_map<int64_t, StubFlashText> g_flash;
 
-static std::string json_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size());
-    for (char c : s) {
-        if (c == '"' || c == '\\') out += '\\';
-        out += c;
-    }
-    return out;
+int64_t g_next_doc = 12345;
+int64_t g_next_page = 99000;
+int64_t g_next_pcre = 77001;
+int64_t g_next_flash = 88001;
+
+}  // namespace
+
+// =====================  Core Document Functions  ===========================
+
+int32_t jpdfium_init() {
+    return JPDFIUM_OK;
 }
-
-static char* generate_chars_json(const char* text) {
-    std::ostringstream os;
-    os << '[';
-    float x = 10.0f, y = 800.0f;
-    bool first = true;
-    int idx = 0;
-    for (int i = 0; text[i]; ++i) {
-        if (text[i] == '\n') { y -= 15.0f; x = 10.0f; continue; }
-        if (!first) os << ',';
-        first = false;
-        os << "{\"i\":" << idx++
-           << ",\"u\":" << (int)(unsigned char)text[i]
-           << ",\"x\":" << x << ",\"y\":" << y
-           << ",\"w\":7.0,\"h\":12.0"
-           << ",\"font\":\"Helvetica\",\"size\":12.0}";
-        x += 7.0f;
-    }
-    os << ']';
-    return strdup(os.str().c_str());
-}
-
-static int count_occurrences(const std::string& haystack, const std::string& needle,
-                             bool case_sensitive) {
-    if (needle.empty()) return 0;
-    std::string h = haystack, n = needle;
-    if (!case_sensitive) {
-        std::transform(h.begin(), h.end(), h.begin(), ::tolower);
-        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
-    }
-    int count = 0;
-    size_t pos = 0;
-    while ((pos = h.find(n, pos)) != std::string::npos) {
-        ++count;
-        pos += n.size();
-    }
-    return count;
-}
-
-//  Core Document Functions
-
-int32_t jpdfium_init()    { return JPDFIUM_OK; }
-void    jpdfium_destroy() {}
+void jpdfium_destroy() {}
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     *handle = g_next_doc++;
@@ -109,7 +241,9 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {"", std::vector<uint8_t>(data, data + len)};
+    std::vector<uint8_t> bytes;
+    if (data && len > 0) bytes.assign(data, data + len);
+    g_docs[*handle] = {"", std::move(bytes)};
     return JPDFIUM_OK;
 }
 
@@ -127,159 +261,197 @@ int32_t jpdfium_doc_page_count(int64_t, int32_t* count) {
 int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return JPDFIUM_OK;
+    const auto& doc = it->second;
 
-    if (!it->second.path.empty()) {
-        FILE* in = fopen(it->second.path.c_str(), "rb");
-        if (in) {
-            FILE* out = fopen(output_path, "wb");
-            if (out) {
-                char buf[8192];
-                size_t n;
-                while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
-                    fwrite(buf, 1, n, out);
-                fclose(out);
+    if (!doc.path.empty()) {
+        FilePtr in(std::fopen(doc.path.c_str(), "rb"));
+        FilePtr out = safe_fopen_write(output_path);
+        if (in && out) {
+            std::array<char, 8192> buf{};
+            while (true) {
+                const std::size_t n = std::fread(buf.data(), 1, buf.size(), in.get());
+                if (n == 0) break;
+                std::fwrite(buf.data(), 1, n, out.get());
             }
-            fclose(in);
         }
-    } else if (!it->second.bytes.empty()) {
-        FILE* out = fopen(output_path, "wb");
-        if (out) {
-            fwrite(it->second.bytes.data(), 1, it->second.bytes.size(), out);
-            fclose(out);
-        }
+    } else if (!doc.bytes.empty()) {
+        if (FilePtr out = safe_fopen_write(output_path); out)
+            std::fwrite(doc.bytes.data(), 1, doc.bytes.size(), out.get());
     }
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
-    auto it = g_docs.find(handle);
-    if (it != g_docs.end() && !it->second.bytes.empty()) {
-        *len = (int64_t)it->second.bytes.size();
-        *data = (uint8_t*)malloc(*len);
-        memcpy(*data, it->second.bytes.data(), *len);
+    constexpr std::string_view stub = "%PDF-1.4 stub";
+    auto return_stub = [&]() -> int32_t {
+        *len = static_cast<int64_t>(stub.size());
+        *data = dup_bytes(stub.data(), stub.size());
         return JPDFIUM_OK;
+    };
+
+    auto it = g_docs.find(handle);
+    if (it == g_docs.end()) return return_stub();
+    const auto& doc = it->second;
+
+    if (!doc.bytes.empty()) {
+        *len = static_cast<int64_t>(doc.bytes.size());
+        *data = dup_bytes(doc.bytes.data(), doc.bytes.size());
+        return *data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
     }
-    if (it != g_docs.end() && !it->second.path.empty()) {
-        FILE* f = fopen(it->second.path.c_str(), "rb");
-        if (f) {
-            fseek(f, 0, SEEK_END);
-            long sz = ftell(f);
-            fseek(f, 0, SEEK_SET);
-            *data = (uint8_t*)malloc(sz);
-            *len = (int64_t)fread(*data, 1, sz, f);
-            fclose(f);
-            return JPDFIUM_OK;
+    if (!doc.path.empty()) {
+        if (FilePtr in(std::fopen(doc.path.c_str(), "rb")); in) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            std::fseek(in.get(), 0, SEEK_SET);
+            if (sz >= 0) {
+                auto* p = static_cast<uint8_t*>(std::malloc(static_cast<std::size_t>(sz)));
+                if (p) {
+                    *len = static_cast<int64_t>(
+                        std::fread(p, 1, static_cast<std::size_t>(sz), in.get()));
+                    *data = p;
+                    return JPDFIUM_OK;
+                }
+                return JPDFIUM_ERR_NATIVE;
+            }
         }
     }
-    const char* stub = "%PDF-1.4 stub";
-    *len = (int64_t)strlen(stub);
-    *data = (uint8_t*)strdup(stub);
-    return JPDFIUM_OK;
+    return return_stub();
 }
 
 void jpdfium_doc_close(int64_t handle) {
     g_docs.erase(handle);
 }
 
-//  Page Functions
+// =====================  Page Functions  ===================================
 
-int32_t jpdfium_page_open(int64_t, int32_t, int64_t* handle) {
+int32_t jpdfium_page_open(int64_t doc, int32_t, int64_t* handle) {
     *handle = g_next_page++;
+    g_page_doc[*handle] = doc;  // remember owning doc for page_doc_raw_handle
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_page_width(int64_t, float* w)  { *w = 595.0f; return JPDFIUM_OK; }
-int32_t jpdfium_page_height(int64_t, float* h) { *h = 842.0f; return JPDFIUM_OK; }
+int32_t jpdfium_page_width(int64_t, float* w) {
+    *w = 595.0f;
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_height(int64_t, float* h) {
+    *h = 842.0f;
+    return JPDFIUM_OK;
+}
 
 void jpdfium_page_close(int64_t handle) {
     g_page_text.erase(handle);
     g_page_annots.erase(handle);
+    g_page_doc.erase(handle);
 }
 
 int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
-    *w = 100; *h = 100;
-    *rgba = (uint8_t*)calloc(100 * 100 * 4, 1);
+    constexpr int dim = 100;
+    *w = dim;
+    *h = dim;
+    *rgba = alloc_zeroed(static_cast<std::size_t>(dim) * dim * 4);
     return JPDFIUM_OK;
 }
 
-void jpdfium_free_buffer(uint8_t* buf) { free(buf); }
+void jpdfium_free_buffer(uint8_t* buf) {
+    std::free(buf);
+}
 
-//  Text Extraction
+// =====================  Text Extraction  ==================================
 
 int32_t jpdfium_text_get_chars(int64_t page, char** json) {
     g_page_text[page] = STUB_TEXT;
-    *json = generate_chars_json(STUB_TEXT);
+    JsonBuf j(STUB_TEXT.size() * 4);
+    j << '[';
+    float x = 10.0f, y = 800.0f;
+    bool first = true;
+    int idx = 0;
+    for (unsigned char c : STUB_TEXT) {
+        if (c == '\n') {
+            y -= 15.0f;
+            x = 10.0f;
+            continue;
+        }
+        if (!first) j << ',';
+        first = false;
+        j << "{\"i\":" << idx++ << ",\"u\":" << static_cast<int>(c) << ",\"x\":" << x
+          << ",\"y\":" << y << ",\"w\":7.0,\"h\":12.0,\"font\":\"Helvetica\",\"size\":12.0}";
+        x += 7.0f;
+    }
+    j << ']';
+    *json = j.release();
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_text_find(int64_t, const char*, char** json) {
-    *json = strdup("[]");
+    *json = dup_cstring("[]");
     return JPDFIUM_OK;
 }
 
-void jpdfium_free_string(char* s) { free(s); }
+void jpdfium_free_string(char* s) {
+    std::free(s);
+}
 
-//  Redaction
+// =====================  Redaction  ========================================
 
 int32_t jpdfium_redact_region(int64_t, float, float, float, float, uint32_t, int32_t) {
     return JPDFIUM_OK;
 }
-
 int32_t jpdfium_redact_pattern(int64_t, const char*, uint32_t, int32_t) {
     return JPDFIUM_OK;
 }
-
-int32_t jpdfium_redact_words(int64_t, const char**, int32_t, uint32_t, float,
-                             int32_t, int32_t, int32_t) {
+int32_t jpdfium_redact_words(int64_t, const char**, int32_t, uint32_t, float, int32_t, int32_t,
+                             int32_t) {
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_count,
-                                uint32_t, float, int32_t, int32_t,
-                                int32_t, int32_t case_sensitive, int32_t* matchCount) {
+int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_count, uint32_t,
+                                float, int32_t, int32_t, int32_t, int32_t case_sensitive,
+                                int32_t* match_count) {
     int matches = 0;
-    // Use cached page text if available, otherwise fall back to STUB_TEXT.
-    // The page handle here may differ from the one used in text_get_chars
-    // because the Java pipeline opens/closes pages in separate passes.
-    auto it = g_page_text.find(page);
-    std::string text = (it != g_page_text.end()) ? it->second : std::string(STUB_TEXT);
+    std::string_view text = STUB_TEXT;
+    if (auto it = g_page_text.find(page); it != g_page_text.end()) text = it->second;
     if (words) {
-        for (int i = 0; i < word_count; ++i) {
-            if (!words[i]) continue;
-            matches += count_occurrences(text, words[i], case_sensitive != 0);
-        }
+        for (int i = 0; i < word_count; ++i)
+            if (words[i]) matches += count_occurrences(text, words[i], case_sensitive != 0);
     }
-    if (matchCount) *matchCount = matches;
+    if (match_count) *match_count = matches;
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_page_flatten(int64_t) { return JPDFIUM_OK; }
-int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) { return JPDFIUM_OK; }
+int32_t jpdfium_page_flatten(int64_t) {
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
+    return JPDFIUM_OK;
+}
 
 int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     g_page_text[page] = STUB_TEXT;
-    std::ostringstream os;
-    os << '[';
+    JsonBuf j(STUB_TEXT.size() * 4);
+    j << '[';
     float x = 10.0f, y = 800.0f;
     bool first = true;
     int idx = 0;
-    for (int i = 0; STUB_TEXT[i]; ++i) {
-        if (STUB_TEXT[i] == '\n') { y -= 15.0f; x = 10.0f; continue; }
-        if (!first) os << ',';
+    for (unsigned char c : STUB_TEXT) {
+        if (c == '\n') {
+            y -= 15.0f;
+            x = 10.0f;
+            continue;
+        }
+        if (!first) j << ',';
         first = false;
-        os << "{\"i\":" << idx++
-           << ",\"u\":" << (int)(unsigned char)STUB_TEXT[i]
-           << ",\"ox\":" << x << ",\"oy\":" << y
-           << ",\"l\":" << x << ",\"r\":" << (x + 7.0f)
-           << ",\"b\":" << (y - 12.0f) << ",\"t\":" << y << "}";
+        j << "{\"i\":" << idx++ << ",\"u\":" << static_cast<int>(c) << ",\"ox\":" << x
+          << ",\"oy\":" << y << ",\"l\":" << x << ",\"r\":" << (x + 7.0f)
+          << ",\"b\":" << (y - 12.0f) << ",\"t\":" << y << "}";
         x += 7.0f;
     }
-    os << ']';
-    *json = strdup(os.str().c_str());
+    j << ']';
+    *json = j.release();
     return JPDFIUM_OK;
 }
 
-//  PCRE2 Pattern Engine (std::regex stand-in)
+// =====================  PCRE2 Pattern Engine (std::regex stand-in)  =======
 
 int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t, int64_t* handle) {
     *handle = g_next_pcre++;
@@ -290,28 +462,26 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t, int64_t* handle) {
 int32_t jpdfium_pcre2_match_all(int64_t handle, const char* text, char** json_result) {
     auto it = g_pcre.find(handle);
     if (it == g_pcre.end() || !text || !*text) {
-        *json_result = strdup("[]");
+        *json_result = dup_cstring("[]");
         return JPDFIUM_OK;
     }
-
     try {
         std::regex re(it->second.regex, std::regex_constants::ECMAScript);
         std::string input(text);
-        std::ostringstream os;
-        os << '[';
+        JsonBuf j(input.size() * 2);
+        j << '[';
         bool first = true;
         for (auto mi = std::sregex_iterator(input.begin(), input.end(), re);
              mi != std::sregex_iterator(); ++mi) {
-            if (!first) os << ',';
+            if (!first) j << ',';
             first = false;
-            os << "{\"start\":" << mi->position()
-               << ",\"end\":" << (mi->position() + mi->length())
-               << ",\"match\":\"" << json_escape(mi->str()) << "\"}";
+            j << "{\"start\":" << mi->position() << ",\"end\":" << (mi->position() + mi->length())
+              << ",\"match\":\"" << json_escape(mi->str()) << "\"}";
         }
-        os << ']';
-        *json_result = strdup(os.str().c_str());
+        j << ']';
+        *json_result = j.release();
     } catch (...) {
-        *json_result = strdup("[]");
+        *json_result = dup_cstring("[]");
     }
     return JPDFIUM_OK;
 }
@@ -320,24 +490,33 @@ void jpdfium_pcre2_free(int64_t handle) {
     g_pcre.erase(handle);
 }
 
+// =====================  Luhn  =============================================
+
 int32_t jpdfium_luhn_validate(const char* number) {
     if (!number) return 0;
-    int digits[32];
+    std::string_view sv(number);
+    // Count digits first so we can compute the doubling parity from the right.
     int n = 0;
-    for (const char* p = number; *p && n < 32; ++p) {
-        if (*p >= '0' && *p <= '9') digits[n++] = *p - '0';
-    }
+    for (char c : sv)
+        if (c >= '0' && c <= '9') ++n;
     if (n < 2) return 0;
-    int sum = 0;
-    for (int i = n - 1, alt = 0; i >= 0; --i, alt ^= 1) {
-        int d = digits[i];
-        if (alt) { d *= 2; if (d > 9) d -= 9; }
+
+    int sum = 0, seen = 0;
+    for (char c : sv) {
+        if (c < '0' || c > '9') continue;
+        int d = c - '0';
+        // Double every second digit counting from the rightmost (check) digit.
+        if (((n - 1 - seen) & 1) != 0) {
+            d *= 2;
+            if (d > 9) d -= 9;
+        }
         sum += d;
+        ++seen;
     }
     return (sum % 10 == 0) ? 1 : 0;
 }
 
-//  FlashText Dictionary NER (substring matching)
+// =====================  FlashText Dictionary NER  ==========================
 
 int32_t jpdfium_flashtext_create(int64_t* handle) {
     *handle = g_next_flash++;
@@ -346,10 +525,8 @@ int32_t jpdfium_flashtext_create(int64_t* handle) {
 }
 
 int32_t jpdfium_flashtext_add_keyword(int64_t handle, const char* keyword, const char* label) {
-    auto it = g_flash.find(handle);
-    if (it != g_flash.end() && keyword && label) {
+    if (auto it = g_flash.find(handle); it != g_flash.end() && keyword && label)
         it->second.keywords.emplace_back(keyword, label);
-    }
     return JPDFIUM_OK;
 }
 
@@ -358,29 +535,29 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t, const char*) {
 }
 
 int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_result) {
+    if (!json_result) return JPDFIUM_ERR_INVALID;
     auto it = g_flash.find(handle);
     if (it == g_flash.end() || !text || !*text) {
-        *json_result = strdup("[]");
+        *json_result = dup_cstring("[]");
         return JPDFIUM_OK;
     }
-    std::string input(text);
-    std::ostringstream os;
-    os << '[';
+    std::string_view input(text);
+    JsonBuf j(input.size() * 2);
+    j << '[';
     bool first = true;
-    for (const auto& kw_pair : it->second.keywords) {
-        size_t pos = 0;
-        while ((pos = input.find(kw_pair.first, pos)) != std::string::npos) {
-            if (!first) os << ',';
+    for (const auto& [kw, label] : it->second.keywords) {
+        for (std::size_t pos = 0; (pos = input.find(kw, pos)) != std::string_view::npos;
+             pos += kw.size()) {
+            if (!first) j << ',';
             first = false;
-            os << "{\"start\":" << pos
-               << ",\"end\":" << (pos + kw_pair.first.size())
-               << ",\"keyword\":\"" << json_escape(kw_pair.first)
-               << "\",\"label\":\"" << json_escape(kw_pair.second) << "\"}";
-            pos += kw_pair.first.size();
+            j << "{\"start\":" << static_cast<int64_t>(pos)
+              << ",\"end\":" << (static_cast<int64_t>(pos) + static_cast<int64_t>(kw.size()))
+              << ",\"keyword\":\"" << json_escape(kw) << "\",\"label\":\"" << json_escape(label)
+              << "\"}";
         }
     }
-    os << ']';
-    *json_result = strdup(os.str().c_str());
+    j << ']';
+    *json_result = j.release();
     return JPDFIUM_OK;
 }
 
@@ -388,18 +565,21 @@ void jpdfium_flashtext_free(int64_t handle) {
     g_flash.erase(handle);
 }
 
-//  Font Normalization Pipeline stubs
+// =====================  Font Normalization Pipeline stubs  =================
 
 int32_t jpdfium_font_get_data(int64_t, int32_t, uint8_t** data, int64_t* len) {
+    if (!data || !len) return JPDFIUM_ERR_INVALID;
     *len = 4;
-    *data = (uint8_t*)calloc(4, 1);
+    *data = alloc_zeroed(4);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_font_classify(const uint8_t*, int64_t, char** json) {
-    *json = strdup("{\"type\":\"TrueType\",\"sfnt\":true,\"has_cmap\":true,"
-                   "\"num_glyphs\":245,\"units_per_em\":2048,\"has_kerning\":false,"
-                   "\"is_subset\":false}");
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring(
+        "{\"type\":\"TrueType\",\"sfnt\":true,\"has_cmap\":true,"
+        "\"num_glyphs\":245,\"units_per_em\":2048,\"has_kerning\":false,"
+        "\"is_subset\":false}");
     return JPDFIUM_OK;
 }
 
@@ -414,33 +594,37 @@ int32_t jpdfium_font_repair_widths(int64_t, int32_t, int32_t* fonts_fixed) {
 }
 
 int32_t jpdfium_font_normalize_page(int64_t, int32_t, char** json) {
-    *json = strdup("{\"fonts_processed\":0,\"tounicode_fixed\":0,"
-                   "\"widths_repaired\":0,\"type1_converted\":0,\"resubset\":0}");
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring(
+        "{\"fonts_processed\":0,\"tounicode_fixed\":0,"
+        "\"widths_repaired\":0,\"type1_converted\":0,\"resubset\":0}");
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len,
-                            const uint32_t*, int32_t, int32_t,
-                            uint8_t** out_data, int64_t* out_len) {
+int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const uint32_t*, int32_t,
+                            int32_t, uint8_t** out_data, int64_t* out_len) {
+    if (!font_data || font_len <= 0) {
+        if (out_data) *out_data = nullptr;
+        if (out_len) *out_len = 0;
+        return JPDFIUM_OK;
+    }
     *out_len = font_len;
-    *out_data = (uint8_t*)malloc(font_len);
-    memcpy(*out_data, font_data, font_len);
-    return JPDFIUM_OK;
+    *out_data = dup_bytes(font_data, static_cast<std::size_t>(font_len));
+    return *out_data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-//  Glyph-Level Redaction stubs
+// =====================  Glyph-Level Redaction stub  =======================
 
-int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float,
-                                   uint32_t, int32_t* match_count, char** result_json) {
+int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
+                                   int32_t* match_count, char** result_json) {
     if (match_count) *match_count = 0;
-    *result_json = strdup("[]");
+    *result_json = dup_cstring("[]");
     return JPDFIUM_OK;
 }
 
-//  XMP Metadata Redaction stubs
+// =====================  XMP Metadata Redaction stubs  =====================
 
-int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t,
-                                    int32_t* fields_redacted) {
+int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* fields_redacted) {
     if (fields_redacted) *fields_redacted = 0;
     return JPDFIUM_OK;
 }
@@ -458,73 +642,73 @@ int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
     return JPDFIUM_OK;
 }
 
-//  ICU4C Text Processing stubs
+// =====================  ICU4C stubs  ======================================
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
-    *result = strdup(text ? text : "");
+    *result = dup_cstring(text ? text : "");
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
     if (!text || !*text) {
-        *json_result = strdup("[]");
+        *json_result = dup_cstring("[]");
         return JPDFIUM_OK;
     }
-    size_t tlen = strlen(text);
-    size_t buflen = tlen * 2 + 128;
-    char* buf = (char*)malloc(buflen);
-    snprintf(buf, buflen, "[{\"start\":0,\"end\":%zu,\"text\":\"%s\"}]", tlen, text);
-    *json_result = buf;
+    std::string_view sv(text);
+    JsonBuf j(sv.size() * 2 + 64);
+    j << "[{\"start\":0,\"end\":" << static_cast<int64_t>(sv.size()) << ",\"text\":\""
+      << json_escape(sv) << "\"}]";
+    *json_result = j.release();
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
-    *result = strdup(text ? text : "");
+    *result = dup_cstring(text ? text : "");
     return JPDFIUM_OK;
 }
 
-//  Annotation-Based Redaction stubs (Mark -> Commit pattern)
+// =====================  Annotation-Based Redaction (Mark -> Commit)  ======
 
-int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float,
-                                     uint32_t, int32_t* annot_index) {
+int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, uint32_t,
+                                    int32_t* annot_index) {
     int idx = g_page_annots[page]++;
     if (annot_index) *annot_index = idx;
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word_count,
-                                   float, int32_t, int32_t, int32_t case_sensitive,
-                                   uint32_t, int32_t* matchCount) {
+int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word_count, float,
+                                  int32_t, int32_t, int32_t case_sensitive, uint32_t,
+                                  int32_t* match_count) {
     int matches = 0;
-    auto it = g_page_text.find(page);
-    std::string text = (it != g_page_text.end()) ? it->second : std::string(STUB_TEXT);
+    std::string_view text = STUB_TEXT;
+    if (auto it = g_page_text.find(page); it != g_page_text.end()) text = it->second;
     if (words) {
-        for (int i = 0; i < word_count; ++i) {
-            if (!words[i]) continue;
-            matches += count_occurrences(text, words[i], case_sensitive != 0);
-        }
+        for (int i = 0; i < word_count; ++i)
+            if (words[i]) matches += count_occurrences(text, words[i], case_sensitive != 0);
     }
     g_page_annots[page] += matches;
-    if (matchCount) *matchCount = matches;
+    if (match_count) *match_count = matches;
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) {
     if (count) {
-        auto it = g_page_annots.find(page);
-        *count = (it != g_page_annots.end()) ? it->second : 0;
+        if (auto it = g_page_annots.find(page); it != g_page_annots.end())
+            *count = it->second;
+        else
+            *count = 0;
     }
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_annot_get_redacts_json(int64_t, char** json) {
-    *json = strdup("[]");
+    *json = dup_cstring("[]");
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) {
-    auto it = g_page_annots.find(page);
-    if (it != g_page_annots.end() && it->second > 0) it->second--;
+    if (auto it = g_page_annots.find(page); it != g_page_annots.end() && it->second > 0)
+        --it->second;
     return JPDFIUM_OK;
 }
 
@@ -533,56 +717,85 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) {
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commitCount) {
-    auto it = g_page_annots.find(page);
-    int pending = (it != g_page_annots.end()) ? it->second : 0;
-    if (commitCount) *commitCount = pending;
+int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commit_count) {
+    int pending = 0;
+    if (auto it = g_page_annots.find(page); it != g_page_annots.end()) pending = it->second;
+    if (commit_count) *commit_count = pending;
     g_page_annots.erase(page);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) {
-    // Delegate to full save for stub
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 
-// Rust-powered stubs — return JPDFIUM_ERR_NATIVE when Rust is not compiled in.
-
-int32_t jpdfium_rust_compress_pdf(
-        const uint8_t*, int64_t,
-        uint8_t** out_ptr, int64_t* out_len,
-        int32_t) {
-    if (out_ptr) *out_ptr = nullptr;
-    if (out_len) *out_len = 0;
-    return JPDFIUM_ERR_NATIVE;
+int64_t jpdfium_doc_raw_handle(int64_t doc) {
+    return doc;
 }
 
-int32_t jpdfium_rust_repair_lopdf(
-        const uint8_t*, int64_t,
-        uint8_t** out_ptr, int64_t* out_len) {
-    if (out_ptr) *out_ptr = nullptr;
-    if (out_len) *out_len = 0;
-    return JPDFIUM_ERR_NATIVE;
+int64_t jpdfium_page_raw_handle(int64_t page) {
+    return page;
 }
 
-int32_t jpdfium_rust_resize_pixels(
-        const uint8_t*, int64_t,
-        int32_t, int32_t, int32_t, int32_t, int32_t,
-        uint8_t** out_ptr, int64_t* out_len) {
-    if (out_ptr) *out_ptr = nullptr;
-    if (out_len) *out_len = 0;
-    return JPDFIUM_ERR_NATIVE;
+int64_t jpdfium_page_doc_raw_handle(int64_t page) {
+    if (auto it = g_page_doc.find(page); it != g_page_doc.end()) return it->second;
+    return page;
 }
 
-int32_t jpdfium_rust_compress_png(
-        const uint8_t*, int64_t,
-        uint8_t** out_ptr, int64_t* out_len,
-        int32_t) {
-    if (out_ptr) *out_ptr = nullptr;
-    if (out_len) *out_len = 0;
-    return JPDFIUM_ERR_NATIVE;
+int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
+                                  int32_t) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_repair_lopdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_resize_pixels(const uint8_t*, int64_t, int32_t, int32_t, int32_t, int32_t,
+                                   int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_compress_png(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
+                                  int32_t) {
+    return fail_native_bytes(out_ptr, out_len);
 }
 
 void jpdfium_rust_free(uint8_t*) {
-    // No-op: no buffer was allocated by the stub
+    // No-op: the stub never allocates a Rust-owned buffer.
+}
+
+int32_t jpdfium_brotli_to_flate(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_pdfio_repair(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_pdfio_try_repair(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
+                                 int32_t* page_count) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    if (page_count) *page_count = 0;
+    return JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_repair_pdf(const uint8_t* in, int64_t in_len, uint8_t** out_ptr, int64_t* out_len,
+                           int32_t) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_repair_inspect(const uint8_t*, int64_t, char** json_out) {
+    if (json_out) *json_out = dup_cstring("{\"status\":\"clean\",\"issues\":[]}");
+    return 0;
 }

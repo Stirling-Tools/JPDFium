@@ -2,7 +2,7 @@
 # Rebuild libharfbuzz without GLib to drop libglib-2.0.{so.0,0.dylib} from
 # the Linux + macOS bundles. Ubuntu's apt libharfbuzz0b and brew's
 # harfbuzz both link against libglib for the hb-glib bindings (and icu /
-# coretext bindings on macOS) we don't use — the bridge calls plain hb_*
+# coretext bindings on macOS) we don't use - the bridge calls plain hb_*
 # C APIs and PDFium has its own embedded harfbuzz, so the system one is
 # only ever used for the bridge's font-shaping needs.
 #
@@ -17,7 +17,7 @@
 # aside so the bundler's ldd/otool walk resolves to /usr/local or brew's
 # refreshed copy.
 #
-# Skips silently with exit 0 if anything fails — bundle falls back to
+# Skips silently with exit 0 if anything fails - bundle falls back to
 # the original glib-linked harfbuzz.
 
 echo "build-harfbuzz-no-glib.sh: start  ($(uname -s) $(uname -m))"
@@ -64,7 +64,7 @@ HB_REPO=https://github.com/harfbuzz/harfbuzz
 for tool in meson ninja pkg-config; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         if [ "$OS" = "darwin" ]; then
-            echo "build-harfbuzz-no-glib.sh: $tool missing — brew install $tool" >&2
+            echo "build-harfbuzz-no-glib.sh: $tool missing - brew install $tool" >&2
             brew install "$tool" 2>&1 | tail -3 || {
                 echo "build-harfbuzz-no-glib.sh: brew install $tool failed; skipping" >&2
                 exit 0
@@ -112,7 +112,7 @@ CROSS
     MESON_CROSS_FLAGS=(--cross-file "$WORK/macos-x64-cross.ini")
 fi
 
-# Configure with all binding options OFF — pure hb_* C API only.
+# Configure with all binding options OFF - pure hb_* C API only.
 # ${ARRAY[@]+...} guard: macOS bash 3.2 expands "${MESON_CROSS_FLAGS[@]}"
 # under `set -u` as unbound when the array is empty (no-cross-file branch).
 # The +alternate form expands to the array contents only when ARRAY is set.
@@ -150,25 +150,29 @@ else
       || { echo "build-harfbuzz-no-glib.sh: ninja install failed; skipping" >&2; exit 0; }
 fi
 
-# Diagnostics — confirm no libglib in the new libharfbuzz.
+# Diagnostics - confirm no libglib in the new libharfbuzz.
 if [ "$OS" = "linux" ]; then
-    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.so.*" -type f 2>/dev/null | head -1)
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 2 -name "libharfbuzz.so.*" -type f 2>/dev/null | head -1)
     if [ -n "$NEW_HB" ]; then
         echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
         echo "ldd:"
         ldd "$NEW_HB" | sed 's/^/  /'
-        if ldd "$NEW_HB" | grep -q 'libglib'; then
-            echo "WARNING: new harfbuzz still links libglib — bindings flag wasn't honored?" >&2
+        if ldd "$NEW_HB" | grep -q glib; then
+            echo "WARNING: new harfbuzz still links libglib - bindings flag wasn't honored?" >&2
+        else
+            echo "SUCCESS: libglib successfully stripped from libharfbuzz."
         fi
     fi
 else
-    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.0.dylib" -type f 2>/dev/null | head -1)
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.*.dylib" -type f 2>/dev/null | head -1)
     if [ -n "$NEW_HB" ]; then
         echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
         echo "otool -L:"
         otool -L "$NEW_HB" | sed 's/^/  /'
-        if otool -L "$NEW_HB" | grep -q 'libglib'; then
-            echo "WARNING: new harfbuzz still links libglib — bindings flag wasn't honored?" >&2
+        if otool -L "$NEW_HB" | grep -q glib; then
+            echo "WARNING: new harfbuzz still links libglib - bindings flag wasn't honored?" >&2
+        else
+            echo "SUCCESS: libglib successfully stripped from libharfbuzz."
         fi
     fi
 fi
