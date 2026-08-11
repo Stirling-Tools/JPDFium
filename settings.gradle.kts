@@ -4,6 +4,7 @@ include(
     "jpdfium",
     "jpdfium-bom",
     "jpdfium-spring",
+    "jpdfium-vips",
     "jpdfium-natives:jpdfium-natives-linux-x64",
     "jpdfium-natives:jpdfium-natives-linux-arm64",
     "jpdfium-natives:jpdfium-natives-darwin-x64",
