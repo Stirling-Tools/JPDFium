@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Convert a PDF to PDF/A conformance using Ghostscript.
@@ -88,13 +89,13 @@ public final class PdfAConverter {
     public static ConversionResult convert(Path input, Path output, PdfALevel level,
                                             Path iccProfile) {
         if (!GhostscriptHelper.isAvailable()) {
-            throw new RuntimeException("Ghostscript is not available. Install: " +
+            throw new JPDFiumException("Ghostscript is not available. Install: " +
                     "apt install ghostscript / brew install ghostscript");
         }
 
         Path icc = (iccProfile != null) ? iccProfile : findSrgbProfile();
         if (icc == null || !Files.isReadable(icc)) {
-            throw new RuntimeException("sRGB ICC profile not found. " +
+            throw new JPDFiumException("sRGB ICC profile not found. " +
                     "Install colord or icc-profiles-free, or provide a profile path.");
         }
 
@@ -102,7 +103,7 @@ public final class PdfAConverter {
         try {
             inputSize = Files.size(input);
         } catch (IOException e) {
-            throw new RuntimeException("Cannot read input file: " + input, e);
+            throw new JPDFiumException("Cannot read input file: " + input, e);
         }
 
         // Create the PDFA_def.ps file that Ghostscript needs
@@ -112,7 +113,7 @@ public final class PdfAConverter {
             String defContent = createPdfaDefPs(icc, level);
             Files.writeString(pdfaDef, defContent);
         } catch (IOException e) {
-            throw new RuntimeException("Cannot create PDFA_def.ps temp file", e);
+            throw new JPDFiumException("Cannot create PDFA_def.ps temp file", e);
         }
 
         try {

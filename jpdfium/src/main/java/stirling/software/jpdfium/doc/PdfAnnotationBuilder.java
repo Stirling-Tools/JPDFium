@@ -8,6 +8,7 @@ import stirling.software.jpdfium.panama.FfmHelper;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Builder for creating annotations on PDF pages.
@@ -104,10 +105,10 @@ public final class PdfAnnotationBuilder {
         MemorySegment annot;
         try {
             annot = (MemorySegment) AnnotationBindings.FPDFPage_CreateAnnot.invokeExact(rawPage, type.code());
-        } catch (Throwable t) { throw new RuntimeException("Failed to create annotation", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Failed to create annotation", t); }
 
         if (annot.equals(MemorySegment.NULL)) {
-            throw new RuntimeException("FPDFPage_CreateAnnot returned null for type " + type);
+            throw new JPDFiumException("FPDFPage_CreateAnnot returned null for type " + type);
         }
 
         try {

@@ -72,8 +72,7 @@ public final class PdfPageEditor {
                 throw new JPDFiumException("FPDFPage_New returned null");
             }
             return page;
-        } catch (JPDFiumException e) { throw e; }
-        catch (Throwable t) { throw new JPDFiumException("FPDFPage_New failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_New failed", t); }
     }
 
     /**
@@ -87,7 +86,7 @@ public final class PdfPageEditor {
         try {
             int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(page);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
     }
 
     /**
@@ -364,7 +363,7 @@ public final class PdfPageEditor {
             try {
                 return (MemorySegment) PageEditBindings.FPDFText_LoadFont.invokeExact(
                         doc, data, fontData.length, fontType, cid ? 1 : 0);
-            } catch (Throwable t) { throw new RuntimeException("FPDFText_LoadFont failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFText_LoadFont failed", t); }
         }
     }
 
@@ -374,7 +373,7 @@ public final class PdfPageEditor {
     public static void closeFont(MemorySegment font) {
         try {
             PageEditBindings.FPDFFont_Close.invokeExact(font);
-        } catch (Throwable t) { throw new RuntimeException("FPDFFont_Close failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFFont_Close failed", t); }
     }
 
     /**
@@ -386,7 +385,7 @@ public final class PdfPageEditor {
     public static void deletePage(MemorySegment doc, int pageIndex) {
         try {
             PageEditBindings.FPDFPage_Delete.invokeExact(doc, pageIndex);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_Delete failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_Delete failed", t); }
     }
 
     /**
@@ -398,7 +397,7 @@ public final class PdfPageEditor {
     public static int getRotation(MemorySegment page) {
         try {
             return (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(page);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetRotation failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetRotation failed", t); }
     }
 
     /**
@@ -410,7 +409,7 @@ public final class PdfPageEditor {
     public static void setRotation(MemorySegment page, int rotation) {
         try {
             PageEditBindings.FPDFPage_SetRotation.invokeExact(page, rotation);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetRotation failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetRotation failed", t); }
     }
 
     /**
@@ -429,7 +428,7 @@ public final class PdfPageEditor {
             try {
                 ok = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
                         page, left, bottom, right, top);
-            } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetMediaBox failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetMediaBox failed", t); }
             if (ok == 0) return null;
             return new float[]{
                     left.get(ValueLayout.JAVA_FLOAT, 0),
@@ -453,7 +452,7 @@ public final class PdfPageEditor {
                                     float right, float top) {
         try {
             PageEditBindings.FPDFPage_SetMediaBox.invokeExact(page, left, bottom, right, top);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetMediaBox failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetMediaBox failed", t); }
     }
 
     /**
@@ -472,7 +471,7 @@ public final class PdfPageEditor {
             try {
                 ok = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
                         page, left, bottom, right, top);
-            } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetCropBox failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetCropBox failed", t); }
             if (ok == 0) return null;
             return new float[]{
                     left.get(ValueLayout.JAVA_FLOAT, 0),
@@ -496,6 +495,6 @@ public final class PdfPageEditor {
                                    float right, float top) {
         try {
             PageEditBindings.FPDFPage_SetCropBox.invokeExact(page, left, bottom, right, top);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_SetCropBox failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetCropBox failed", t); }
     }
 }

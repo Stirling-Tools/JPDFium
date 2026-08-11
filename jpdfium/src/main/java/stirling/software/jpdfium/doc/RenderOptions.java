@@ -12,6 +12,7 @@ import java.awt.image.BufferedImage;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Full-control rendering options with grayscale, print mode, color schemes, and flag control.
@@ -86,7 +87,7 @@ public final class RenderOptions {
         try {
             MemorySegment bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(w, h, 1);
             if (bitmap.equals(MemorySegment.NULL)) {
-                throw new RuntimeException("FPDFBitmap_Create failed for " + w + "x" + h);
+                throw new JPDFiumException("FPDFBitmap_Create failed for " + w + "x" + h);
             }
             try {
                 RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, w, h, (background & 0xFFFFFFFFL));
@@ -147,8 +148,7 @@ public final class RenderOptions {
                 }
                 throw t;
             }
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException("Render failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Render failed", t); }
     }
 
     private static RenderedPageView emptyView() {

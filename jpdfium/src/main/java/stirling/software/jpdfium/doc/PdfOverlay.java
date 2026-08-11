@@ -6,6 +6,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Overlay (stamp) pages from one PDF on top of another.
@@ -49,7 +50,7 @@ public final class PdfOverlay {
                     rawDest, rawOverlay, rangeStr, insertIndex);
             return ok != 0;
         } catch (Throwable t) {
-            throw new RuntimeException("Overlay page import failed", t);
+            throw new JPDFiumException("Overlay page import failed", t);
         }
     }
 

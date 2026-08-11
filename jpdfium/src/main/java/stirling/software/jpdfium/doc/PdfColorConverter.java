@@ -8,6 +8,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Set;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Convert page object colors between color spaces (RGB -> grayscale, etc.).
@@ -133,7 +134,7 @@ public final class PdfColorConverter {
 
         if (changed) {
             try { int gcOk = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
-            catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
         }
         return converted;
     }

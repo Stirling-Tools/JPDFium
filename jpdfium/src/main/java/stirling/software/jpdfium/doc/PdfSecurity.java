@@ -316,7 +316,7 @@ public final class PdfSecurity {
         }
         if (removed > 0) {
             try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
-            catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
         }
         return removed;
     }

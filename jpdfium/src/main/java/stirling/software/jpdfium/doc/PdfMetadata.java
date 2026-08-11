@@ -9,6 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Read and query PDF document metadata: title, author, subject, keywords,
@@ -138,14 +139,14 @@ public final class PdfMetadata {
             try {
                 needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetPageLabel size call", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel size call", t); }
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetPageLabel fill call", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel fill call", t); }
 
             String label = FfmHelper.fromWideString(buf, needed);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);

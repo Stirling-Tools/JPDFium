@@ -5,6 +5,7 @@ import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * PDF Encryption operations.
@@ -30,7 +31,7 @@ public final class PdfEncryption {
     public static boolean isEncrypted(MemorySegment rawDoc) {
         try {
             return (int) EmbedPdfDocumentBindings.EPDF_IsEncrypted.invokeExact(rawDoc) != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -50,9 +51,8 @@ public final class PdfEncryption {
             MemorySegment ownerSeg = arena.allocateFrom(ownerPassword);
             int ok = (int) EmbedPdfDocumentBindings.EPDF_SetEncryption.invokeExact(
                     rawDoc, userSeg, ownerSeg, permissions);
-            if (ok == 0) throw new RuntimeException("EPDF_SetEncryption failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDF_SetEncryption failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -63,9 +63,8 @@ public final class PdfEncryption {
     public static void removeEncryption(MemorySegment rawDoc) {
         try {
             int ok = (int) EmbedPdfDocumentBindings.EPDF_RemoveEncryption.invokeExact(rawDoc);
-            if (ok == 0) throw new RuntimeException("EPDF_RemoveEncryption failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDF_RemoveEncryption failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -81,7 +80,7 @@ public final class PdfEncryption {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment pwSeg = arena.allocateFrom(ownerPassword);
             return (int) EmbedPdfDocumentBindings.EPDF_UnlockOwnerPermissions.invokeExact(rawDoc, pwSeg) != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**
@@ -92,7 +91,7 @@ public final class PdfEncryption {
     public static boolean isOwnerUnlocked(MemorySegment rawDoc) {
         try {
             return (int) EmbedPdfDocumentBindings.EPDF_IsOwnerUnlocked.invokeExact(rawDoc) != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     /**

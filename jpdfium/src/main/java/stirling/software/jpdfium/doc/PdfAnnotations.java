@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Full CRUD operations for PDF annotations.
@@ -41,7 +42,7 @@ public final class PdfAnnotations {
         }
         try {
             return (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(page);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetAnnotCount failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetAnnotCount failed", t); }
     }
 
     /**
@@ -59,7 +60,7 @@ public final class PdfAnnotations {
             MemorySegment annot;
             try {
                 annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, i);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
 
             if (annot.equals(MemorySegment.NULL)) continue;
             try {
@@ -82,7 +83,7 @@ public final class PdfAnnotations {
         MemorySegment annot;
         try {
             annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, index);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         if (annot.equals(MemorySegment.NULL)) return Optional.empty();
         try {
@@ -104,17 +105,17 @@ public final class PdfAnnotations {
         MemorySegment annot;
         try {
             annot = (MemorySegment) AnnotationBindings.FPDFPage_CreateAnnot.invokeExact(page, type.code());
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         if (annot.equals(MemorySegment.NULL)) {
-            throw new RuntimeException("Failed to create annotation of type " + type);
+            throw new JPDFiumException("Failed to create annotation of type " + type);
         }
         try {
             setAnnotRect(annot, rect);
             int index;
             try {
                 index = (int) AnnotationBindings.FPDFPage_GetAnnotIndex.invokeExact(page, annot);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return index;
         } finally {
             closeAnnot(annot);
@@ -135,9 +136,8 @@ public final class PdfAnnotations {
             MemorySegment value = FfmHelper.toWideString(arena, content);
             try {
                 int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, key, value);
-                if (ok == 0) throw new RuntimeException("FPDFAnnot_SetStringValue failed");
-            } catch (RuntimeException e) { throw e; }
-            catch (Throwable t) { throw new RuntimeException(t); }
+                if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetStringValue failed");
+            } catch (Throwable t) { throw new JPDFiumException(t); }
         } finally {
             closeAnnot(annot);
         }
@@ -157,9 +157,8 @@ public final class PdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) AnnotationBindings.FPDFAnnot_SetColor.invokeExact(annot, 0, r, g, b, a);
-            if (ok == 0) throw new RuntimeException("FPDFAnnot_SetColor failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetColor failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -174,9 +173,8 @@ public final class PdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) AnnotationBindings.FPDFAnnot_SetFlags.invokeExact(annot, flags);
-            if (ok == 0) throw new RuntimeException("FPDFAnnot_SetFlags failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetFlags failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -190,20 +188,20 @@ public final class PdfAnnotations {
     public static boolean remove(MemorySegment page, int index) {
         try {
             return (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(page, index) != 0;
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_RemoveAnnot failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_RemoveAnnot failed", t); }
     }
 
     private static Annotation readAnnotation(MemorySegment annot, int index) {
         int subtypeCode;
         try {
             subtypeCode = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         Rect rect = getAnnotRect(annot);
         int flags;
         try {
             flags = (int) AnnotationBindings.FPDFAnnot_GetFlags.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         Optional<String> contents = getAnnotStringValue(annot, AnnotationKeys.CONTENTS);
 
@@ -216,7 +214,7 @@ public final class PdfAnnotations {
             try {
                 int ok = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
                 if (ok == 0) return new Rect(0, 0, 0, 0);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
 
             float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
             float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
@@ -235,9 +233,8 @@ public final class PdfAnnotations {
             rectSeg.set(ValueLayout.JAVA_FLOAT, 12, rect.y());                         // bottom
             try {
                 int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
-                if (ok == 0) throw new RuntimeException("FPDFAnnot_SetRect failed");
-            } catch (RuntimeException e) { throw e; }
-            catch (Throwable t) { throw new RuntimeException(t); }
+                if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetRect failed");
+            } catch (Throwable t) { throw new JPDFiumException(t); }
         }
     }
 
@@ -248,13 +245,13 @@ public final class PdfAnnotations {
             try {
                 needed = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(annot, keySeg,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(annot, keySeg, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             String value = FfmHelper.fromWideString(buf, needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         }
@@ -264,7 +261,7 @@ public final class PdfAnnotations {
         MemorySegment annot;
         try {
             annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, index);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         if (annot.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Annotation index " + index + " not found");
         }
@@ -274,6 +271,6 @@ public final class PdfAnnotations {
     private static void closeAnnot(MemorySegment annot) {
         try {
             AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 }

@@ -12,6 +12,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Orchestrates page-level operations with optional streaming (low-memory)
@@ -355,10 +356,10 @@ public final class PdfPipeline {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;
                 if (cause instanceof Error err) throw err;
-                throw new RuntimeException("Parallel processing failed", cause);
+                throw new JPDFiumException("Parallel processing failed", cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Parallel processing interrupted", e);
+                throw new JPDFiumException("Parallel processing interrupted", e);
             }
         }
         return results;
@@ -372,10 +373,10 @@ public final class PdfPipeline {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;
                 if (cause instanceof Error err) throw err;
-                throw new RuntimeException("Parallel processing failed", cause);
+                throw new JPDFiumException("Parallel processing failed", cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Parallel processing interrupted", e);
+                throw new JPDFiumException("Parallel processing interrupted", e);
             }
         }
     }

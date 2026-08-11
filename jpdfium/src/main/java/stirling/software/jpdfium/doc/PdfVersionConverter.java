@@ -21,6 +21,7 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Save a PDF document with a specific version number.
@@ -76,7 +77,7 @@ public final class PdfVersionConverter {
         try {
             Files.write(path, bytes);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write PDF to " + path, e);
+            throw new JPDFiumException("Failed to write PDF to " + path, e);
         }
     }
 
@@ -98,7 +99,7 @@ public final class PdfVersionConverter {
                         PdfVersionConverter.class, "writeBlockCallback",
                         MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class, long.class));
             } catch (Exception e) {
-                throw new RuntimeException("Failed to create WriteBlock method handle", e);
+                throw new JPDFiumException("Failed to create WriteBlock method handle", e);
             }
 
             MemorySegment writeBlockStub = Linker.nativeLinker().upcallStub(
@@ -115,10 +116,10 @@ public final class PdfVersionConverter {
                 ok = (int) DocBindings.FPDF_SaveWithVersion.invokeExact(
                         rawDoc, fileWrite, 0, version.code());
             } catch (Throwable t) {
-                throw new RuntimeException("FPDF_SaveWithVersion failed", t);
+                throw new JPDFiumException("FPDF_SaveWithVersion failed", t);
             }
             if (ok == 0) {
-                throw new RuntimeException("FPDF_SaveWithVersion returned failure");
+                throw new JPDFiumException("FPDF_SaveWithVersion returned failure");
             }
 
             return baos.toByteArray();

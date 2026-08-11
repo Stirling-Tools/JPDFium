@@ -9,6 +9,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Manage embedded file attachments in a PDF document.
@@ -38,7 +39,7 @@ public final class PdfAttachments {
         }
         try {
             return (int) AttachmentBindings.FPDFDoc_GetAttachmentCount.invokeExact(doc);
-        } catch (Throwable t) { throw new RuntimeException("FPDFDoc_GetAttachmentCount failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_GetAttachmentCount failed", t); }
     }
 
     /**
@@ -69,7 +70,7 @@ public final class PdfAttachments {
         MemorySegment att;
         try {
             att = (MemorySegment) AttachmentBindings.FPDFDoc_GetAttachment.invokeExact(doc, index);
-        } catch (Throwable t) { throw new RuntimeException("FPDFDoc_GetAttachment failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_GetAttachment failed", t); }
 
         if (att.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Attachment index " + index + " not found");
@@ -94,7 +95,7 @@ public final class PdfAttachments {
             MemorySegment att;
             try {
                 att = (MemorySegment) AttachmentBindings.FPDFDoc_AddAttachment.invokeExact(doc, wideName);
-            } catch (Throwable t) { throw new RuntimeException("FPDFDoc_AddAttachment failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_AddAttachment failed", t); }
 
             if (att.equals(MemorySegment.NULL)) {
                 return false;
@@ -106,7 +107,7 @@ public final class PdfAttachments {
             int ok;
             try {
                 ok = (int) AttachmentBindings.FPDFAttachment_SetFile.invokeExact(att, doc, dataBuf, (long) contents.length);
-            } catch (Throwable t) { throw new RuntimeException("FPDFAttachment_SetFile failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFAttachment_SetFile failed", t); }
             return ok != 0;
         }
     }
@@ -122,7 +123,7 @@ public final class PdfAttachments {
         try {
             int ok = (int) AttachmentBindings.FPDFDoc_DeleteAttachment.invokeExact(doc, index);
             return ok != 0;
-        } catch (Throwable t) { throw new RuntimeException("FPDFDoc_DeleteAttachment failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_DeleteAttachment failed", t); }
     }
 
     private static String getAttachmentName(MemorySegment att) {
@@ -131,13 +132,13 @@ public final class PdfAttachments {
             try {
                 needed = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(att,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return "";
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(att, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromWideString(buf, needed);
         }
     }
@@ -152,7 +153,7 @@ public final class PdfAttachments {
             try {
                 ok = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(att,
                         MemorySegment.NULL, 0L, outLen);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
 
             long len = outLen.get(ValueLayout.JAVA_LONG, 0);
             if (ok == 0 || len <= 0) return EMPTY_BYTES;
@@ -160,7 +161,7 @@ public final class PdfAttachments {
             MemorySegment buf = arena.allocate(len);
             try {
                 ok = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(att, buf, len, outLen);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (ok == 0) return EMPTY_BYTES;
 
             return buf.asSlice(0, outLen.get(ValueLayout.JAVA_LONG, 0))
