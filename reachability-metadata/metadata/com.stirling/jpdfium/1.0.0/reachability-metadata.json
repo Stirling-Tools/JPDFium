@@ -1,0 +1,212 @@
+{
+  "reflection": [
+    {
+      "type": "java.lang.Boolean",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "getBoolean",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.NativeLoader",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true,
+      "allDeclaredFields": true,
+      "allPublicFields": true
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.JpdfiumH",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true,
+      "allDeclaredFields": true,
+      "allPublicFields": true
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.JpdfiumLib",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true,
+      "allDeclaredFields": true,
+      "allPublicFields": true
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.NativeGuard",
+      "methods": [
+        {
+          "name": "acquire",
+          "parameterTypes": []
+        },
+        {
+          "name": "release",
+          "parameterTypes": []
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "glob": "natives/**"
+    },
+    {
+      "glob": "pdfs/**"
+    },
+    {
+      "glob": "META-INF/native-image/com.stirling/jpdfium/**"
+    }
+  ],
+  "jni": [
+    {
+      "type": "stirling.software.jpdfium.panama.NativeLoader",
+      "methods": [
+        { "name": "ensureLoaded", "parameterTypes": [] },
+        { "name": "detectPlatform", "parameterTypes": [] }
+      ]
+    }
+  ],
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jlong"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": ["jlong"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jint", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "jint", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "void*", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jint", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "float", "float", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "jfloat", "jfloat", "jfloat", "jfloat", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "jint", "jfloat", "jfloat", "jfloat", "jfloat"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "jint", "jfloat", "jint", "jint", "jint"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["jlong", "void*", "jint", "jint", "jfloat", "jint", "jint", "jint", "jint", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jlong", "void*", "void*", "void*", "void*"]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": ["void*", "jint", "jint", "jint", "jint", "void*", "void*"]
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["jlong", "jdouble", "jdouble", "jdouble", "jdouble", "jdouble", "jdouble"]
+      }
+    ]
+  }
+}
