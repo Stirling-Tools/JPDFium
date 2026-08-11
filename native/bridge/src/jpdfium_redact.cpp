@@ -839,7 +839,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                             s++;
                         } else if (segType == FPDF_SEGMENT_BEZIERTO) {
                             if (s + 2 < sp.endIdx) {
-                                float c1x = sx, c1y = sy, c2x = 0.0f, c2y = 0.0f, ex = 0.0f, ey = 0.0f;
+                                float c1x = sx, c1y = sy, c2x = 0.0f, c2y = 0.0f, ex = 0.0f,
+                                      ey = 0.0f;
                                 FPDF_PATHSEGMENT seg2 = FPDFPath_GetPathSegment(obj, s + 1);
                                 FPDF_PATHSEGMENT seg3 = FPDFPath_GetPathSegment(obj, s + 2);
                                 if (seg2 && seg3) {
