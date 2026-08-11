@@ -19,13 +19,13 @@
 // Returns nullptr if PNG decoding fails or libpng is not linked
 static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_width,
                            int* out_height) {
-#ifdef JPDFIUM_HAS_PNG
-    // libpng decoding would go here
-    // For now, return nullptr to fall back to stb_image
     (void)png_data;
     (void)png_len;
     (void)out_width;
     (void)out_height;
+#ifdef JPDFIUM_HAS_PNG
+    // libpng decoding would go here
+    // For now, return nullptr to fall back to stb_image
 #endif
     return nullptr;
 }
@@ -33,12 +33,12 @@ static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_wid
 // Decode JPEG data to raw RGB pixels using libjpeg-turbo (if available)
 static uint8_t* decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_len, int* out_width,
                             int* out_height) {
-#ifdef JPDFIUM_HAS_JPEG
-    // libjpeg decoding would go here
     (void)jpeg_data;
     (void)jpeg_len;
     (void)out_width;
     (void)out_height;
+#ifdef JPDFIUM_HAS_JPEG
+    // libjpeg decoding would go here
 #endif
     return nullptr;
 }
@@ -305,6 +305,11 @@ JPDFIUM_EXPORT int32_t jpdfium_embed_jpeg_direct(int64_t doc_handle, const uint8
     // For direct JPEG embedding, we would use FPDFImageObj_LoadJpegFileInline
     // This requires setting up a FPDF_FILEACCESS structure
     // Implementation deferred - use decoded bitmap path for now
+    (void)page_width;
+    (void)page_height;
+    (void)margin;
+    (void)position;
+    (void)insert_at_index;
 
     return JPDFIUM_ERR_NATIVE;
 }

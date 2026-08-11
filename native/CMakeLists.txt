@@ -301,6 +301,11 @@ if(JPDFIUM_USE_PDFIUM)
     pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
     target_link_libraries(jpdfium PRIVATE PkgConfig::QPDF)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
+    # Silence qpdf's PointerHolder transition #warning (treated as error by
+    # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
+    # std::shared_ptr qpdf API (e.g. QPDFWriter::getBufferSharedPointer) and
+    # never references PointerHolder directly.
+    target_compile_definitions(jpdfium PRIVATE POINTERHOLDER_TRANSITION)
 
     # pugixml - XMP metadata XML parsing
     pkg_check_modules(PUGIXML REQUIRED IMPORTED_TARGET pugixml)

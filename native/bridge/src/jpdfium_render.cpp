@@ -35,6 +35,7 @@ inline void bgraToRgbaInPlace(uint8_t* buf, int w, int h, int stride) {
     }
 }
 
+#ifdef PDF_USE_SKIA
 inline void unpremulInPlace(uint8_t* buf, int w, int h, int stride) {
     for (int row = 0; row < h; ++row) {
         uint8_t* r = buf + row * stride;
@@ -47,6 +48,7 @@ inline void unpremulInPlace(uint8_t* buf, int w, int h, int stride) {
         }
     }
 }
+#endif
 
 }  // namespace
 

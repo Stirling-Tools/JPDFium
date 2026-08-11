@@ -34,39 +34,6 @@ static void ensureFreeTypeInit() {
 }
 #endif
 
-// UTF-8 -> UTF-16LE for FPDFText_FindStart (PDFium expects UTF-16LE, not wchar_t)
-static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
-    std::vector<uint16_t> result;
-    const auto* s = reinterpret_cast<const uint8_t*>(utf8);
-    while (*s) {
-        uint32_t cp;
-        if (*s < 0x80) {
-            cp = *s++;
-        } else if (*s < 0xE0) {
-            cp = (*s++ & 0x1F) << 6;
-            cp |= (*s++ & 0x3F);
-        } else if (*s < 0xF0) {
-            cp = (*s++ & 0x0F) << 12;
-            cp |= (*s++ & 0x3F) << 6;
-            cp |= (*s++ & 0x3F);
-        } else {
-            cp = (*s++ & 0x07) << 18;
-            cp |= (*s++ & 0x3F) << 12;
-            cp |= (*s++ & 0x3F) << 6;
-            cp |= (*s++ & 0x3F);
-        }
-        if (cp <= 0xFFFF) {
-            result.push_back(static_cast<uint16_t>(cp));
-        } else {  // surrogate pair
-            cp -= 0x10000;
-            result.push_back(static_cast<uint16_t>(0xD800 | (cp >> 10)));
-            result.push_back(static_cast<uint16_t>(0xDC00 | (cp & 0x3FF)));
-        }
-    }
-    result.push_back(0);  // null terminator
-    return result;
-}
-
 // UTF-8 -> std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per codepoint)
 static std::wstring utf8_to_wstring(const char* utf8) {
     std::wstring result;
@@ -239,20 +206,6 @@ static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
         default:
             return 0;
     }
-}
-
-// Paints a filled rectangle (no object removal). Used for visual-only redaction.
-static int32_t paintRedactRect(FPDF_PAGE page, float x, float y, float w, float h, uint32_t argb) {
-    unsigned int r = (argb >> 16) & 0xFF;
-    unsigned int g = (argb >> 8) & 0xFF;
-    unsigned int b = argb & 0xFF;
-
-    FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(x, y, w, h);
-    if (!rect) return JPDFIUM_ERR_NATIVE;
-    FPDFPageObj_SetFillColor(rect, r, g, b, 255);
-    FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
-    FPDFPage_InsertObject(page, rect);
-    return JPDFIUM_OK;
 }
 
 // Removes text/image page objects within [x,y,x+w,y+h] (PDF coords: y up),
