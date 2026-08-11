@@ -239,20 +239,40 @@ public final class PdfImageConverter {
         if (images.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required");
         }
+        List<byte[]> frames = new ArrayList<>(images.size());
+        for (BufferedImage image : images) {
+            frames.add(bufferedImageToRgba(image));
+        }
+        return embedRgbaImages(frames, options);
+    }
 
+    /**
+     * Embed pre-decoded RGBA frames into a new PDF document. Each frame must
+     * carry the 8-byte {@code [width LE][height LE]} header the C bridge's
+     * {@code format=3} path reads, followed by {@code width*height*4} RGBA bytes
+     * (the layout {@link #bufferedImageToRgba} produces). Shared by
+     * {@link #imagesToPdfInternal} (ImageIO decode) and the optional
+     * {@code jpdfium-vips} {@code VipsImageToPdf} (libvips decode) so the
+     * page-size/position/embed logic lives in one place.
+     */
+    public static PdfDocument embedRgbaImages(List<byte[]> rgbaFrames, ImageToPdfOptions options) {
+        if (rgbaFrames.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required");
+        }
         try {
             long docHandle = 0;
             boolean first = true;
 
-            for (BufferedImage image : images) {
-                byte[] rgba = bufferedImageToRgba(image);
+            for (byte[] rgba : rgbaFrames) {
+                int w = readLeInt32(rgba, 0);
+                int h = readLeInt32(rgba, 4);
                 float pageWidth = options.pageSize().width();
                 float pageHeight = options.pageSize().height();
 
                 // Fit to image mode
                 if (pageWidth <= 0 || pageHeight <= 0) {
-                    pageWidth = image.getWidth() * 72f / 96;
-                    pageHeight = image.getHeight() * 72f / 96;
+                    pageWidth = w * 72f / 96;
+                    pageHeight = h * 72f / 96;
                 }
 
                 int position = toNativePosition(options.position());
@@ -274,6 +294,11 @@ public final class PdfImageConverter {
         } catch (Exception e) {
             throw new UncheckedIOException("Failed to create PDF from images", new IOException(e));
         }
+    }
+
+    private static int readLeInt32(byte[] b, int off) {
+        return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8)
+                | ((b[off + 2] & 0xFF) << 16) | ((b[off + 3] & 0xFF) << 24);
     }
 
     /**

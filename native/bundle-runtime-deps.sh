@@ -29,7 +29,7 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 bundle_linux() {
-    local bridge="$DIST_DIR/libjpdfium.so"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
     [ -f "$bridge" ] || { echo "no libjpdfium.so to bundle for"; return 0; }
 
     # Always-present system libs we don't need to (and shouldn't) bundle.
@@ -100,7 +100,7 @@ bundle_linux() {
 }
 
 bundle_macos() {
-    local bridge="$DIST_DIR/libjpdfium.dylib"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib to bundle for"; return 0; }
 
     # Known macOS install prefixes for searching @rpath/@loader_path deps.
@@ -266,7 +266,7 @@ sign_macos() {
 }
 
 bundle_windows() {
-    local bridge="$DIST_DIR/jpdfium.dll"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/jpdfium.dll}"
     [ -f "$bridge" ] || { echo "no jpdfium.dll to bundle for"; return 0; }
 
     # Walk import table of every DLL in DIST_DIR, copying the bridge's runtime

@@ -36,6 +36,22 @@ public final class VipsAvailability {
         };
     }
 
+    /**
+     * Whether {@link VipsDecoder} can read the given format on this platform
+     * (requires the corresponding libvips loader operation).
+     */
+    public static boolean isFormatDecodable(VipsFormat format) {
+        State s = probe();
+        if (!s.available) return false;
+        return switch (format) {
+            case HEIC, HEIF, AVIF -> s.heifload;
+            case JXL -> s.jxlload;
+            case WEBP -> s.webpload;
+            case PNG -> s.pngload;
+            case JPEG -> s.jpegload;
+        };
+    }
+
     public static void require(VipsFormat format) {
         State s = probe();
         if (!s.available) {
@@ -52,6 +68,9 @@ public final class VipsAvailability {
     private static State doProbe() {
         String platform = NativeLoader.detectPlatform();
         try {
+            // Extract bundled libvips (if jpdfium-natives-vips-<platform> is on
+            // the classpath) and point vips-ffm at it before Vips.init() runs.
+            VipsNatives.configure();
             Class<?> vipsClass = Class.forName("app.photofox.vipsffm.Vips");
             vipsClass.getMethod("init").invoke(null);
             String version = "unknown";
@@ -62,14 +81,28 @@ public final class VipsAvailability {
                 // Version method optional across libvips bindings
             }
 
-            boolean heif = probeOperation("heifsave");
-            boolean jxl = probeOperation("jxlsave");
-            boolean webp = probeOperation("webpsave");
+            // Save ops (encoding)
+            boolean heifsave = probeOperation("heifsave");
+            boolean jxlsave = probeOperation("jxlsave");
+            boolean webpsave = probeOperation("webpsave");
 
-            return new State(true, platform, version, heif, jxl, webp, true, true, null);
+            // Load ops (decoding)
+            boolean heifload = probeOperation("heifload");
+            boolean jxlload = probeOperation("jxlload");
+            boolean webpload = probeOperation("webpload");
+            boolean pngload = probeOperation("pngload");
+            boolean jpegload = probeOperation("jpegload");
+
+            return new State(true, platform, version,
+                    heifsave, jxlsave, webpsave, true, true,
+                    heifload, jxlload, webpload, pngload, jpegload,
+                    null);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
-            return new State(false, platform, null, false, false, false, false, false, root);
+            return new State(false, platform, null,
+                    false, false, false, false, false,
+                    false, false, false, false, false,
+                    root);
         }
     }
 
@@ -130,5 +163,10 @@ public final class VipsAvailability {
             boolean webpsave,
             boolean pngsave,
             boolean jpegsave,
+            boolean heifload,
+            boolean jxlload,
+            boolean webpload,
+            boolean pngload,
+            boolean jpegload,
             Throwable error) {}
 }
