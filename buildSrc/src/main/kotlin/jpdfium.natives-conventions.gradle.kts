@@ -9,7 +9,7 @@ java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
     // Central Portal requires sources + javadoc jars for every published artifact.
-    // These jars are empty for resource-only modules — the presence is what matters.
+    // These jars are empty for resource-only modules - the presence is what matters.
     withSourcesJar()
     withJavadocJar()
 }
@@ -32,12 +32,12 @@ val stageNatives by tasks.registering(Copy::class) {
     group = "build"
     from(distDir) {
         // Match every shared library shape we ship: the bridge, PDFium itself,
-        // every PDFium component lib (e.g. libchrome_zlib.so — no version
+        // every PDFium component lib (e.g. libchrome_zlib.so - no version
         // suffix), every bundled third-party dependency (versioned like
         // libicuuc.so.74 on Linux, base name on macOS), every Windows DLL.
         // Earlier this list was narrower and silently dropped Linux PDFium
         // component libs because their basename matched lib*.so but not
-        // *.so.* (no version) — the consumer-side System.load on libpdfium.so
+        // *.so.* (no version) - the consumer-side System.load on libpdfium.so
         // then failed with "libthird_party_abseil-cpp_absl.so: cannot open
         // shared object file".
         include(
