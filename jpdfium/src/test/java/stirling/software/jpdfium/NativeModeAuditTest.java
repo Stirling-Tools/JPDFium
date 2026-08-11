@@ -3,13 +3,8 @@ package stirling.software.jpdfium;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import stirling.software.jpdfium.panama.AnnotationBindings;
-import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
-import stirling.software.jpdfium.panama.PageEditBindings;
-import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.Symbols;
-import stirling.software.jpdfium.panama.TextPageBindings;
 
 import java.util.List;
 
