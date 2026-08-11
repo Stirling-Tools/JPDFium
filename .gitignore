@@ -97,3 +97,6 @@ samples-output/
 gradle.properties.local
 secrets.properties
 *.credentials
+
+# Command Code session + taste-learning files (local only)
+.commandcode/

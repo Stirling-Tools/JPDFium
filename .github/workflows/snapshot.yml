@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, publishing-setup]   # publishing-setup temporary, for bring-up testing
   # On PRs we build the real natives per platform and run the functional smoke
-  # (load + open a PDF), but never publish — so every PR is verified against the
+  # (load + open a PDF), but never publish - so every PR is verified against the
   # actual artifact, not just a compile.
   pull_request: {}
   workflow_dispatch:
@@ -38,7 +38,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
       - name: Install build deps (Linux + mingw-w64)
         run: |
           sudo sed -i \
@@ -57,14 +57,14 @@ jobs:
       - name: Cross-build minimal Windows icudt78.dll
         run: bash native/build-minimal-icu-windows.sh
       - name: Upload trimmed Windows icudt78.dll
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-icu-trimmed
           path: native/dist/windows-x64/icudt78.dll
           if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/icudt*l.dat
@@ -90,9 +90,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -100,14 +100,14 @@ jobs:
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
         # ports.ubuntu.com (the arm64 mirror) has multi-hour network outages
-        # ~weekly (seen May 2026 — Connection failed [IP: 91.189.91.10x] across
+        # ~weekly (seen May 2026 - Connection failed [IP: 91.189.91.10x] across
         # 30+ min). Switch to the Azure mirror which is network-adjacent to GH
         # runners. azure.ports.ubuntu.com proxies ports.ubuntu.com; same for
         # archive.ubuntu.com -> azure.archive.ubuntu.com on x64.
         # Also retry 3x in case the Azure mirror has its own glitch.
         #
         # mingw-w64 + binutils-mingw-w64 lets the Linux x64 job cross-build
-        # a Windows icudt78.dll (Task #7 — drops ~28 MB of unused ICU data
+        # a Windows icudt78.dll (Task #7 - drops ~28 MB of unused ICU data
         # from the windows-x64 natives jar). meson + ninja-build for the
         # harfbuzz-without-glib rebuild (drops libglib).
         run: |
@@ -144,7 +144,7 @@ jobs:
           sudo softwareupdate --install-rosetta --agree-to-license || true
           if [ ! -x /usr/local/bin/brew ]; then
             arch -x86_64 /bin/bash -c \
-              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
           arch -x86_64 /usr/local/bin/brew install \
             pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
@@ -179,10 +179,10 @@ jobs:
         if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         # Rebuild libqpdf with --with-crypto=native to drop the crypto
         # transitive chain:
-        #   Linux   apt libqpdf-dev is GNUTLS-built — drops libgnutls +
+        #   Linux   apt libqpdf-dev is GNUTLS-built - drops libgnutls +
         #           libnettle + libgmp + libp11-kit + libidn2 + libunistring +
         #           libtasn1 + libbrotli* ≈ 7-8 MB.
-        #   macOS   brew libqpdf is OpenSSL-built — drops libcrypto.3.dylib
+        #   macOS   brew libqpdf is OpenSSL-built - drops libcrypto.3.dylib
         #           ≈ 4.85 MB.
         # Must run BEFORE build-real.sh so the bridge links against the new
         # /usr/local (Linux) or $(brew --prefix) (macOS) libqpdf.
@@ -211,7 +211,7 @@ jobs:
         # by the prep-windows-icu job and wrap it on macOS via clang. The
         # .dat is platform-agnostic.
         if: startsWith(matrix.platform, 'darwin-')
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
         with:
           name: icu-data-trimmed
@@ -244,7 +244,7 @@ jobs:
           # Component-built PDFium siblings (libabsl, icuuc, libpng, libc++ ...).
           # Filter out Windows debug helpers that PDFium's gn build pulls into
           # out/Release/ (dbghelp.dll, msdia140.dll, symsrv.dll, dbgcore.dll,
-          # vccorlib140.dll) — not runtime deps, ~5 MB of waste.
+          # vccorlib140.dll) - not runtime deps, ~5 MB of waste.
           if [ -d native/pdfium/lib ]; then
             find native/pdfium/lib -maxdepth 1 -type f \( \
                   -name '*.dll' -o -name 'lib*.so' -o -name 'lib*.so.*' -o -name 'lib*.dylib' \
@@ -261,7 +261,7 @@ jobs:
         # wins. download-artifact@v4 extracts on top, overwriting the larger
         # one.
         if: matrix.platform == 'windows-x64'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         continue-on-error: true        # missing artifact -> stay with PDFium's full 33 MB icudt78.dll
         with:
           name: windows-icu-trimmed
@@ -273,7 +273,7 @@ jobs:
           # publish-snapshot never runs on pull_request.
           MACOS_ALLOW_UNSIGNED: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
-          # Bridge runtime deps — walk the bridge's import table and copy
+          # Bridge runtime deps - walk the bridge's import table and copy
           # only what's actually referenced, skipping system libs. Also
           # strips debug symbols from the bridge. Bundler's "skip if dest
           # exists" guard preserves any pre-staged trimmed files (Linux
@@ -284,7 +284,7 @@ jobs:
       # Functionally verify the freshly-built native instead of trusting that a
       # file was produced: load it via the production NativeLoader and open a
       # PDF. Skips: darwin-x64 (cross-compiled on an arm64 host, can't run here),
-      # and all darwin on PRs (macOS rejects the unsigned dylib — signing only
+      # and all darwin on PRs (macOS rejects the unsigned dylib - signing only
       # runs on push/release). Linux + Windows don't need signing, so they smoke
       # on every PR.
       - name: Install jextract (for smoke build)
@@ -297,7 +297,7 @@ jobs:
             Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
           esac
           mkdir -p "$HOME/jextract-install"
-          curl -fsSL "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
           tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
@@ -305,7 +305,7 @@ jobs:
         if: matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -315,18 +315,18 @@ jobs:
   publish-snapshot:
     needs: build-natives
     # Skipped on a dry run (workflow_dispatch with skip_publish=true) and never
-    # runs on pull_request — PRs build + smoke-test the natives but must not ship.
+    # runs on pull_request - PRs build + smoke-test the natives but must not ship.
     if: ${{ inputs.skip_publish != true && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -335,11 +335,11 @@ jobs:
           # compileJava fails with `cannot find symbol JpdfiumH`.
           JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
           mkdir -p "$HOME/jextract-install"
-          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          curl -fsSL --max-time 120 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         with:
           path: .artifacts
           pattern: natives-*
@@ -361,7 +361,7 @@ jobs:
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
         run: |
           # Snapshots use the -SNAPSHOT version from gradle.properties and skip the
-          # finalize step — the Central Portal snapshots repo is mutable.
+          # finalize step - the Central Portal snapshots repo is mutable.
           ./gradlew \
             :jpdfium:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-bom:publishAllPublicationsToCentralPortalRepository \

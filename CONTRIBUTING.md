@@ -33,7 +33,7 @@
    # One command: build PDFium from source, build real bridge, run all tests and samples
    ./gradlew fullBuildAndTest
    ```
-   
+
    Or step by step:
    ```bash
    ./gradlew buildPdfium         # Build PDFium from EmbedPDF fork (~15 GB, first time takes 15-60 min)

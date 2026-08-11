@@ -1,0 +1,60 @@
+name: CodeQL Security Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['c-cpp', 'java-kotlin']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+          build-mode: manual
+
+      - name: Setup Java 25
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Install jextract
+        if: matrix.language == 'java-kotlin'
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - name: Build C++ stub
+        run: bash native/build-stub.sh
+
+      - name: Build Java
+        if: matrix.language == 'java-kotlin'
+        run: ./gradlew :jpdfium:compileJava --no-daemon
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2

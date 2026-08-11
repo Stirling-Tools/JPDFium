@@ -2,12 +2,12 @@
 
 This guide walks through publishing JPDFium artifacts to Maven Central via the
 Sonatype **Central Portal** (the replacement for legacy OSSRH, which was sunset
-on 2025‑06‑30). It assumes the state of the repo as of the first release cut —
+on 2025-06-30). It assumes the state of the repo as of the first release cut -
 publishing skeleton is already wired in `buildSrc/` and the root
-`build.gradle.kts`, but several pre‑flight items still need doing before the
+`build.gradle.kts`, but several pre-flight items still need doing before the
 first successful upload.
 
-> **TL;DR** — one‑time namespace verification + GPG key + Central Portal token,
+> **TL;DR** - one-time namespace verification + GPG key + Central Portal token,
 > then `./gradlew publishAllToCentralPortal` from a CI matrix that has each
 > platform's prebuilt native libraries copied into
 > `jpdfium-natives-<platform>/src/main/resources/natives/<platform>/`.
@@ -18,7 +18,7 @@ first successful upload.
 
 The following coordinates will land under group `com.stirling` (from
 `build.gradle.kts` line 2). Note that the Maven `groupId` is independent of
-the Java package name (`stirling.software.jpdfium.*`) — the coordinate is
+the Java package name (`stirling.software.jpdfium.*`) - the coordinate is
 `com.stirling` because that is the namespace Sonatype has verified for us.
 All modules share a single version property `jpdfium.version` (defined in
 `gradle.properties`).
@@ -28,22 +28,22 @@ All modules share a single version property `jpdfium.version` (defined in
 | `com.stirling:jpdfium`                    | jar           | Pure Java 25 FFM bindings          |
 | `com.stirling:jpdfium-bom`                | pom (BOM)     | Version constraints for all below  |
 | `com.stirling:jpdfium-spring`             | jar           | Spring Boot starter                |
-| `com.stirling:jpdfium-natives-linux-x64`  | jar (natives) | Resource‑only, `.so` + deps        |
-| `com.stirling:jpdfium-natives-linux-arm64`| jar (natives) | Resource‑only, `.so` + deps        |
-| `com.stirling:jpdfium-natives-darwin-x64` | jar (natives) | Resource‑only, `.dylib` + deps     |
-| `com.stirling:jpdfium-natives-darwin-arm64`| jar (natives)| Resource‑only, `.dylib` + deps     |
-| `com.stirling:jpdfium-natives-windows-x64`| jar (natives) | Resource‑only, `.dll` + deps       |
+| `com.stirling:jpdfium-natives-linux-x64`  | jar (natives) | Resource-only, `.so` + deps        |
+| `com.stirling:jpdfium-natives-linux-arm64`| jar (natives) | Resource-only, `.so` + deps        |
+| `com.stirling:jpdfium-natives-darwin-x64` | jar (natives) | Resource-only, `.dylib` + deps     |
+| `com.stirling:jpdfium-natives-darwin-arm64`| jar (natives)| Resource-only, `.dylib` + deps     |
+| `com.stirling:jpdfium-natives-windows-x64`| jar (natives) | Resource-only, `.dll` + deps       |
 
 Downstream consumers add **one** native classifier matching their runtime, plus
-the pure‑Java `jpdfium` jar (typically via the BOM).
+the pure-Java `jpdfium` jar (typically via the BOM).
 
 ---
 
-## 2. Pre‑flight checklist (one‑time)
+## 2. Pre-flight checklist (one-time)
 
 ### 2.1 Claim the `com.stirling` namespace on Central Portal
 
-Already done — `com.stirling` is verified under the Stirling Tools account.
+Already done - `com.stirling` is verified under the Stirling Tools account.
 If you ever need to add a second namespace:
 
 1. Sign in at <https://central.sonatype.com>.
@@ -57,7 +57,7 @@ Until verified, *every* `publish` will fail with `401` or `namespace not owned`.
 ### 2.2 Generate a Central Portal user token
 
 1. <https://central.sonatype.com> → avatar → **View Account** → **Generate User Token**.
-2. You get a `username:password` pair. These are **not** your login credentials —
+2. You get a `username:password` pair. These are **not** your login credentials -
    they're a scoped token.
 3. Store as:
    ```properties
@@ -117,7 +117,7 @@ plugins {
 `/natives/<platform>/libjpdfium.<ext>` (+ `libpdfium.<ext>` + a `native-libs.txt`
 manifest listing every file to extract). Nothing in the Gradle build copies the
 outputs of `native/build-real.sh` / `setup-pdfium.sh` into those resource
-directories — so the jars will publish **empty**.
+directories - so the jars will publish **empty**.
 
 **Fix options:**
 
@@ -184,8 +184,8 @@ java {
 `jpdfium.library-conventions` points releases at
 `https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/`
 and snapshots at `https://central.sonatype.com/repository/maven-snapshots/`.
-The releases URL is correct for the OSSRH Staging API shim. Double‑check the
-snapshots URL against the live Central Portal docs on the day you publish —
+The releases URL is correct for the OSSRH Staging API shim. Double-check the
+snapshots URL against the live Central Portal docs on the day you publish -
 Sonatype has been iterating on these endpoints.
 
 ### 3.4 Version bump
@@ -196,20 +196,19 @@ Sonatype has been iterating on these endpoints.
 ./gradlew publishAllToCentralPortal -Pjpdfium.version=1.0.0
 ```
 
-Or edit `gradle.properties` before tagging. Never publish a non‑`-SNAPSHOT`
-version twice — Central Portal is immutable.
+Or edit `gradle.properties` before tagging. Never publish a non-`-SNAPSHOT`
+version twice - Central Portal is immutable.
 
 ### 3.5 BOM coverage
 
 `jpdfium-bom/build.gradle.kts` correctly constrains all publishable modules.
-Nothing to fix here, just: **don't add a new publishable module without also
-adding it to the BOM** — easy to forget.
+Nothing to fix here, just: **When adding a new module, adding it to the BOM** - easy to forget.
 
 ---
 
 ## 4. Local smoke test (no upload)
 
-Before any real publish, dry‑run to `~/.m2` and inspect the artifacts.
+Before any real publish, dry-run to `~/.m2` and inspect the artifacts.
 
 ```bash
 ./gradlew publishToMavenLocal -Pjpdfium.version=1.0.0-test
@@ -246,22 +245,18 @@ through the OSSRH Staging API.
 ./gradlew publishAllToCentralPortal -Pjpdfium.version=1.0.0 -PautoRelease=true
 ```
 
-After upload, Sonatype runs validation (signatures, POM metadata, sources/javadoc presence, license, SCM) — 10–30 minutes. If everything passes:
-
-- `user_managed` mode: you go to <https://central.sonatype.com/publishing/deployments> and click **Publish**. Use this the first few times until you trust the pipeline.
-- `automatic` mode: artifacts go live on `repo.maven.apache.org/maven2` automatically.
-
-Artifacts typically take another 10–30 minutes to propagate to
-`search.maven.org` and be resolvable from consumer builds.
+After upload, Sonatype runs validation (signatures, POM metadata, sources/javadoc presence, license, SCM) - 10-30 minutes. If everything passes:
+- Artifacts move to **Published**.
+- Artifacts typically take another 10-30 minutes to propagate to `search.maven.org` and be resolvable from consumer builds.
 
 ---
 
-## 6. The cross‑platform native build problem
+## 6. The cross-platform native build problem
 
 Because each native module ships binaries for a specific OS/arch, you need to
-build on five different host environments (or cross‑compile). JPDFium's
-`native/setup-pdfium.sh` + `native/build-real.sh` assume a bash environment —
-easy on Linux/macOS, works on Windows via MSYS2/git‑bash with care.
+build on five different host environments (or cross-compile). JPDFium's
+`native/setup-pdfium.sh` + `native/build-real.sh` assume a bash environment -
+easy on Linux/macOS, works on Windows via MSYS2/git-bash with care.
 
 The sustainable path is a GitHub Actions release workflow that fans out to a
 matrix, uploads each platform's artifacts separately, then does one final
@@ -307,7 +302,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
-          # paths below depend on build-real.sh output — adjust
+          # paths below depend on build-real.sh output - adjust
           cp native/build/*.{so,dylib,dll} native/dist/${{ matrix.platform }}/ || true
       - uses: actions/upload-artifact@v4
         with:
@@ -325,7 +320,7 @@ jobs:
         with: { path: native/dist, pattern: natives-* }
       - name: Flatten artifact layout
         run: |
-          # download-artifact puts each in natives/dist/natives-<platform>/ — move up
+          # download-artifact puts each in natives/dist/natives-<platform>/ - move up
           for d in native/dist/natives-*; do
             p=${d##*natives-}
             mv "$d" "native/dist/$p"
@@ -347,8 +342,8 @@ Repository → Settings → Secrets and variables → Actions:
 
 | Secret                    | Value                                                        |
 |---------------------------|--------------------------------------------------------------|
-| `CENTRAL_PORTAL_USERNAME` | Central Portal user‑token username                           |
-| `CENTRAL_PORTAL_PASSWORD` | Central Portal user‑token password                           |
+| `CENTRAL_PORTAL_USERNAME` | Central Portal user-token username                           |
+| `CENTRAL_PORTAL_PASSWORD` | Central Portal user-token password                           |
 | `GPG_SIGNING_KEY`         | Output of `gpg --armor --export-secret-keys <ID>`            |
 | `GPG_SIGNING_PASSWORD`    | GPG key passphrase                                           |
 
@@ -366,7 +361,7 @@ on:
 # Same matrix as 6.1, but the final publish step uses:
 #   ./gradlew publishAllPublicationsToCentralPortalRepository \
 #     -Pjpdfium.version="1.0.0-SNAPSHOT"
-# (Do NOT run finalizePortalDeployment — snapshots auto-propagate.)
+# (Do NOT run finalizePortalDeployment - snapshots auto-propagate.)
 ```
 
 Consumers resolve them by adding:
@@ -379,7 +374,7 @@ repositories {
 
 ---
 
-## 8. Consumer‑side verification
+## 8. Consumer-side verification
 
 After the first release is live, test the happy path from a clean project:
 
@@ -403,7 +398,7 @@ public static void main(String[] args) throws Exception {
 ```
 
 Run with `--enable-native-access=ALL-UNNAMED`. If `NativeNotFoundException`
-fires, the native jar is published but its resources aren't staged —
+fires, the native jar is published but its resources aren't staged -
 see §3.1.
 
 ---
@@ -411,9 +406,10 @@ see §3.1.
 ## 9. Release checklist (copy into every release PR)
 
 - [ ] `gradle.properties` bumped, or `-Pjpdfium.version=...` passed to the workflow
-- [ ] `CHANGELOG.md` updated (create it if missing)
+- [ ] `CHANGELOG.md` updated
+- [ ] Check native-libs.txt manifest inside every native jar.
 - [ ] `./gradlew build` green on all five matrix platforms
-- [ ] `./gradlew publishToMavenLocal` inspected — all jars contain what they should, sources/javadoc present
+- [ ] `./gradlew publishToMavenLocal` inspected - all jars contain what they should, sources/javadoc present
 - [ ] BOM includes every publishable module
 - [ ] Tag pushed (`git tag v1.0.0 && git push --tags`)
 - [ ] Release workflow green
@@ -429,25 +425,23 @@ see §3.1.
 | Symptom                                                      | Cause                                                                         |
 |--------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `401 Unauthorized` on upload                                 | User token expired or namespace not verified                                  |
-| `Deployment failed: Missing sources/javadoc`                 | Native modules lack `withSourcesJar()` / `withJavadocJar()` — see §3.2        |
-| `Deployment failed: No signature found for ...asc`           | `signing.key` / `signing.password` not visible to Gradle; check env           |
-| Consumer: `NativeNotFoundException`                          | Native jar published empty — see §3.1                                         |
+| `Deployment failed: Missing sources/javadoc`                 | Native modules lack `withSourcesJar()` / `withJavadocJar()` - see §3.2        |
+| Consumer: `NativeNotFoundException`                          | Native jar published empty - see §3.1                                         |
 | Consumer: `UnsatisfiedLinkError: dependent library not found`| `native-libs.txt` manifest missing, so RUNPATH deps aren't extracted          |
 | `Cannot redeploy version 1.0.0`                              | Release versions are immutable; bump to `1.0.1`                               |
-| Namespace shown as "pending"                                 | DNS TXT record hasn't propagated; wait or re‑check with `dig TXT <namespace>` |
+| Namespace shown as "pending"                                 | DNS TXT record hasn't propagated; wait or re-check with `dig TXT <namespace>` |
 
 ---
 
 ## 11. Future improvements
 
-- **Reproducible native builds** — pin PDFium commit SHA, container‑ize the
-  Linux build so anyone can reproduce the published binaries bit‑for‑bit.
-- **SBOM attachment** — Central Portal accepts `.cdx.json` sidecars; generate
-  via `cyclonedx-gradle-plugin` to give consumers a dependency inventory.
-- **Provenance / SLSA** — attach `actions/attest-build-provenance` attestations
-  to the GitHub Release so consumers can verify binaries came from CI, not a
-  laptop.
-- **Thin + uber artifact split** — publish an `all-natives` jar that bundles
-  every platform for users who don't want to pick per‑OS at build time.
-- **Consumer docs** — a `docs/CONSUMING.md` mirroring §8 with Maven/Gradle/SBT
-  snippets and a per‑OS troubleshooting matrix.
+- **Reproducible native builds** - pin PDFium commit SHA, container-ize the
+  build environments so a release cut from 2 years from now still builds bit-identical binaries.
+- **SBOM attachment** - Central Portal accepts `.cdx.json` sidecars; generate
+  them via CycloneDX plugin and upload alongside the main jar.
+- **Provenance / SLSA** - attach `actions/attest-build-provenance` attestations
+  to the build steps.
+- **Thin + uber artifact split** - publish an `all-natives` jar that bundles
+  every platform for non-modular desktop distribution.
+- **Consumer docs** - a `docs/CONSUMING.md` mirroring §8 with Maven/Gradle/SBT
+  snippets and a per-OS troubleshooting matrix.

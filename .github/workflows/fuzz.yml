@@ -1,0 +1,73 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '11 3 * * 2'
+  workflow_dispatch:
+    inputs:
+      duration_secs:
+        description: 'Fuzz duration in seconds per target'
+        required: false
+        default: '600'
+      corpus_prune:
+        description: 'Minimize corpus before fuzzing'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  jazzer:
+    name: Jazzer fuzz (scheduled / manual)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - name: Install native deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config
+
+      - name: Build stub bridge
+        run: bash native/build-stub.sh
+
+      - name: Check for fuzz targets
+        id: has_targets
+        run: |
+          if find jpdfium/src -name '*Fuzz*.java' -o -name '*Fuzzer*.java' | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No Jazzer fuzz targets found — add jpdfium/src/test/java/.../*FuzzTest.java with @FuzzTest"
+          fi
+
+      - name: Run Jazzer (short smoke)
+        if: steps.has_targets.outputs.found == 'true'
+        run: |
+          DUR=${{ inputs.duration_secs || '120' }}
+          ./gradlew :jpdfium:jazzerFuzz --no-daemon -Pjpdfium.fuzz.durationSecs="$DUR" || echo "Fuzz completed with findings — inspect reports"
+
+      - name: Upload fuzz reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-reports-${{ github.run_id }}
+          path: |
+            jpdfium/build/reports/jazzer/
+            jpdfium/build/jazzer/
+          if-no-files-found: warn

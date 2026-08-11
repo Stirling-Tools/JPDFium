@@ -1,0 +1,59 @@
+name: Bundling
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  schedule:
+    - cron: '9 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  bundle-verify:
+    name: Bundle verify (symbols, RPATH, linkage, sizes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake patchelf binutils
+      - run: bash native/build-stub.sh
+      - run: ./gradlew publishToMavenLocal -Pjpdfium.version=0.0.0-bundle-check --no-daemon
+      - name: Verify jars contain natives + native-libs.txt
+        run: |
+          for plat in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
+            JAR=$(find ~/.m2/repository/com/stirling/jpdfium-natives-$plat -name "*.jar" ! -name "*-sources*" ! -name "*-javadoc*" | head -n1 || true)
+            if [ -z "$JAR" ]; then echo "No jar for $plat (ok in stub)"; continue; fi
+            echo "=== $plat: $JAR ==="
+            jar tf "$JAR" | grep -E "natives/|native-libs" | head -n 30 || true
+          done
+      - name: Check RUNPATH/RPATH and linkage leakage (Linux stub only)
+        run: |
+          SO=$(find jpdfium-natives -name "*.so" -o -name "*.so.*" | head -n1 || true)
+          if [ -z "$SO" ]; then echo "No .so to inspect (stub may not produce one here)"; exit 0; fi
+          echo "Inspecting $SO"
+          readelf -d "$SO" 2>/dev/null | grep -i -E "rpath|runpath" || echo "No RPATH/RUNPATH (expected for stub)"
+          ldd "$SO" 2>&1 | head -n 60 || true
+      - name: SBOM (cyclonedx) — informational
+        continue-on-error: true
+        run: |
+          ./gradlew cyclonedxBom --no-daemon || echo "cyclonedx plugin not configured — add org.cyclonedx.bom when ready"
+          ls -R build/reports/cyclonedx 2>/dev/null | head -n 40 || true
+      - name: Binary size report
+        run: |
+          find ~/.m2/repository/com/stirling -name "*.jar" ! -name "*-sources*" ! -name "*-javadoc*" -exec ls -lh {} \; | awk '{print $5, $9}' | sort -k2
+      - name: Licenses check
+        run: bash .github/scripts/check-licenses.sh || true

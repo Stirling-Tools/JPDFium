@@ -5,7 +5,7 @@ name: Prebuild PDFium
 # and opens a PR bumping native/pdfium.version to the new release tag.
 #
 # Consumers (release.yml, snapshot.yml, publish-github-packages.yml, ci.yml)
-# read that pin and skip the expensive source build entirely — they just
+# read that pin and skip the expensive source build entirely - they just
 # `gh release download` and move on.
 #
 # Triggers:
@@ -75,7 +75,7 @@ jobs:
           SKIP="false"
           if [ "$FORCE" != "true" ] && gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             SKIP="true"
-            echo "Release $TAG already exists — skipping build. Pass force=true to rebuild."
+            echo "Release $TAG already exists - skipping build. Pass force=true to rebuild."
           fi
 
           echo "sha=$SHA"     >> "$GITHUB_OUTPUT"
@@ -104,14 +104,14 @@ jobs:
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: static    }
           # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
           # an "Exec format error" because Chromium's bundled clang for arm64
-          # hosts isn't usable in this PDFium revision — the binary in
+          # hosts isn't usable in this PDFium revision - the binary in
           # third_party/llvm-build/.../bin/clang is x86_64 even on arm64 runners.
           # Cross-compiling from x64 with target_cpu=arm64 uses the x64 clang
           # binary with --target=aarch64-linux-gnu, which works. This is also
           # how bblanchon/pdfium-binaries handles linux-arm64.
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
-          # darwin-x64 cross-compiles from macos-14 (arm64) — the macos-13
+          # darwin-x64 cross-compiles from macos-14 (arm64) - the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: static    }
@@ -134,7 +134,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-')
@@ -196,7 +196,7 @@ jobs:
           ls -lh .prebuild/
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pdfium-${{ matrix.platform }}-${{ matrix.mode }}
           # Use the exact filename produced above; upload-artifact's path
@@ -214,9 +214,9 @@ jobs:
     if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         with:
           path: .prebuild
           pattern: pdfium-*
@@ -247,7 +247,7 @@ jobs:
           SHORT: ${{ needs.resolve-sha.outputs.short }}
         run: |
           NOTES=$(cat <<EOF
-          **PDFium prebuild** — build inputs for JPDFium publishing workflows.
+          **PDFium prebuild** - build inputs for JPDFium publishing workflows.
 
           This is an **infrastructure release**, not a user-facing library release.
           See regular \`v*.*.*\` tags for JPDFium library versions on Maven Central.
@@ -271,7 +271,7 @@ jobs:
           Component tarballs hold libpdfium.{so,dylib,dll} + sibling component
           shared libs (abseil, partition_alloc, etc.); easier to iterate against
           but bigger. Static tarballs hold a single libpdfium.{a,lib} containing
-          PDFium + every bundled dep — picked up by release.yml so the final
+          PDFium + every bundled dep - picked up by release.yml so the final
           natives jars dead-strip aggressively across PDFium internals.
 
           Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
@@ -293,7 +293,7 @@ jobs:
           # If the pin already matches (e.g. manual re-run of the same SHA), nothing to do.
           CURRENT=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
           if [ "$CURRENT" = "$TAG" ]; then
-            echo "Pin already at $TAG — nothing to commit."
+            echo "Pin already at $TAG - nothing to commit."
             exit 0
           fi
 
@@ -334,5 +334,5 @@ jobs:
           - EmbedPDF SHA: [\`$SHA\`](https://github.com/embedpdf/pdfium/commit/$SHA)
 
           Merging this PR will make all subsequent JPDFium publishes consume this prebuild.
-          Previous pins remain as GitHub Releases — safe to revert if needed."
+          Previous pins remain as GitHub Releases - safe to revert if needed."
           fi

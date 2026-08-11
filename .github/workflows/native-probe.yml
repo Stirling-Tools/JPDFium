@@ -1,0 +1,108 @@
+name: Native Probe
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-natives:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-latest
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin-x64
+            runner: macos-14
+          - platform: darwin-arm64
+            runner: macos-14
+          - platform: windows-x64
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Install jextract
+        continue-on-error: true
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   if [ "$(uname -m)" = aarch64 ]; then JX=openjdk-25-jextract+2-4_linux-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz; fi ;;
+            macOS)   if [ "$(uname -m)" = arm64 ]; then JX=openjdk-25-jextract+2-4_macos-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_macos-x64_bin.tar.gz; fi ;;
+            Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
+          esac
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz || true
+          tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1 2>/dev/null || true
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - name: Build stub bridge (native availability probe covers resource wiring; real PDFium probe is snapshot.yml)
+        run: bash native/build-stub.sh ${{ matrix.platform }}
+
+      - name: Build natives jar for this platform
+        run: ./gradlew :jpdfium-natives:jpdfium-natives-${{ matrix.platform }}:jar --no-daemon
+
+      - name: Verify artifact contents
+        run: |
+          JAR=$(find jpdfium-natives/jpdfium-natives-${{ matrix.platform }}/build/libs -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)
+          echo "Inspecting $JAR"
+          jar tf "$JAR" | sort | tee /tmp/jar-contents.txt
+          # Platform must have at least libjpdfium + native-libs.txt (manifest)
+          if ! grep -Eq "natives/${{ matrix.platform }}/(lib)?jpdfium" /tmp/jar-contents.txt; then
+            echo "::error::Missing libjpdfium.* in natives jar — NativeLoader will throw NativeNotFoundException"
+            exit 1
+          fi
+          if ! grep -q "native-libs.txt" /tmp/jar-contents.txt; then
+            echo "::warning::native-libs.txt missing — NativeLoader will silently skip bundled deps"
+          fi
+
+      - name: Probe load in clean environment (publishToMavenLocal + smoke via local repo)
+        run: |
+          ./gradlew publishToMavenLocal -Pjpdfium.version=0.0.0-probe --no-daemon --stacktrace
+          ls -R ~/.m2/repository/com/stirling/jpdfium-natives-${{ matrix.platform }}/ | head -n 50
+          ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+
+      - name: Symbol export check
+        run: |
+          chmod +x .github/scripts/check-native-symbols.sh || true
+          if [ -f .github/scripts/check-native-symbols.sh ]; then
+            .github/scripts/check-native-symbols.sh "${{ matrix.platform }}"
+          else
+            echo "Symbol check script not found — skipping (add .github/scripts/check-native-symbols.sh)"
+          fi
+
+      - name: Binary size report
+        if: always()
+        run: |
+          JAR=$(find jpdfium-natives/jpdfium-natives-${{ matrix.platform }}/build/libs -name '*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)
+          SIZE=$(stat -c%s "$JAR" 2>/dev/null || stat -f%z "$JAR" 2>/dev/null || echo "?")
+          echo "Natives jar size (${{ matrix.platform }}): $SIZE bytes"
+          echo "${{ matrix.platform }}:$SIZE" >> /tmp/size-report.txt
+          # Also report unpacked native size
+          find native/dist/${{ matrix.platform }} -type f -exec ls -lh {} \; 2>/dev/null | head -n 30 || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: natives-probe-${{ matrix.platform }}
+          path: |
+            jpdfium-natives/jpdfium-natives-${{ matrix.platform }}/build/libs/*.jar
+            /tmp/jar-contents.txt
+          if-no-files-found: warn
