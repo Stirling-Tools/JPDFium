@@ -1,0 +1,18 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": ".*natives/.*"
+      },
+      {
+        "pattern": ".*native-libs\\.txt"
+      },
+      {
+        "pattern": ".*pdfs/.*"
+      },
+      {
+        "pattern": ".*META-INF/native-image/.*"
+      }
+    ]
+  }
+}
