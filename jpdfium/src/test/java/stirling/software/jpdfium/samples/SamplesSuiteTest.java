@@ -117,7 +117,9 @@ class SamplesSuiteTest {
                 Arguments.of("S84_SelectiveRaster", S84_SelectiveRaster.class),
                 Arguments.of("S85_AnnotStats", S85_AnnotStats.class),
                 Arguments.of("S86_PosterizeSizes", S86_PosterizeSizes.class),
-                Arguments.of("S87_AutoCropMargins", S87_AutoCropMargins.class)
+                Arguments.of("S87_AutoCropMargins", S87_AutoCropMargins.class),
+                Arguments.of("S93_CropRemoveContent", S93_CropRemoveContent.class),
+                Arguments.of("S94_CropPerf", S94_CropPerf.class)
         );
     }
 

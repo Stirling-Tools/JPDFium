@@ -5,6 +5,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
@@ -68,6 +69,67 @@ public final class PdfPageGeometry {
             PdfPageEditor.setCropBox(page.rawHandle(),
                     rect.x(), rect.y(),
                     rect.x() + rect.width(), rect.y() + rect.height());
+        }
+    }
+
+    /**
+     * Hard crop: set the page MediaBox/CropBox to {@code rect}
+     * AND physically remove every page object (text, image, path, shading, form)
+     * that lies entirely outside it.
+     *
+     * <p>Text objects straddling the crop boundary are split at character level
+     * so only the glyphs inside the crop area survive (pinned to their original
+     * coordinates). Non-text objects straddling the boundary are preserved and
+     * clipped visually by the CropBox, mirroring crop-and-clip
+     * behaviour without ever dropping the visible part of a picture.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param rect      crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} has non-finite coordinates
+     *                                  or non-positive size
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
+        requireValidCrop(rect);
+        try (PdfPage page = doc.page(pageIndex)) {
+            JpdfiumLib.cropRemoveContent(page.nativeHandle(),
+                    rect.x(), rect.y(), rect.width(), rect.height());
+            PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
+            PdfPageBoxes.setCropBox(page.rawHandle(), rect);
+            PdfPageBoxes.setTrimBox(page.rawHandle(), rect);
+            PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
+            PdfPageBoxes.setArtBox(page.rawHandle(), rect);
+        }
+    }
+
+    /**
+     * Hard crop applied to every page.
+     *
+     * @param doc  open PDF document
+     * @param rect crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} has non-finite coordinates
+     *                                  or non-positive size
+     */
+    public static void cropAllAndRemoveContent(PdfDocument doc, Rect rect) {
+        requireValidCrop(rect);
+        for (int i = 0; i < doc.pageCount(); i++) {
+            cropAndRemoveContent(doc, i, rect);
+        }
+    }
+
+    /**
+     * NaN/Inf coordinates make every geometry comparison silently false, so a
+     * non-finite crop rect could remove all content (or nothing) depending on
+     * how each comparison happens to fall out. Reject it up front - before the
+     * native call - so the failure is loud and deterministic.
+     */
+    private static void requireValidCrop(Rect rect) {
+        if (rect == null
+                || !Float.isFinite(rect.x()) || !Float.isFinite(rect.y())
+                || !Float.isFinite(rect.width()) || !Float.isFinite(rect.height())
+                || rect.width() <= 0.0f || rect.height() <= 0.0f) {
+            throw new IllegalArgumentException(
+                    "crop rect must have finite coordinates and positive width/height: " + rect);
         }
     }
 

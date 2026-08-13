@@ -298,6 +298,27 @@ public final class JpdfiumLib {
         }
     }
 
+    /**
+     * Ghostscript-style hard crop: physically remove every page object (text, image,
+     * path, shading, form) lying entirely outside the crop rectangle. Text straddling
+     * the boundary is split at character level; straddling non-text objects are kept
+     * and clipped by the page CropBox. No paint rectangles are emitted.
+     *
+     * @param page bridge page handle
+     * @param x    crop rect left (PDF points)
+     * @param y    crop rect bottom (PDF points)
+     * @param w    crop rect width
+     * @param h    crop rect height
+     */
+    public static void cropRemoveContent(long page, float x, float y, float w, float h) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static void redactPattern(long page, String pattern, int argb, boolean removeContent) {
         NativeGuard.acquire();
         try {

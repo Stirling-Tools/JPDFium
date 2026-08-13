@@ -66,6 +66,8 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
+    if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
+
     uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
     if (!copy) return JPDFIUM_ERR_NATIVE;
     memcpy(copy, data, static_cast<size_t>(len));

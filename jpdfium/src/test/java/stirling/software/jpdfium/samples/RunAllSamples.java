@@ -140,7 +140,9 @@ public class RunAllSamples {
             new Sample("S87_AutoCropMargins", () -> S87_AutoCropMargins.main(a)),
             new Sample("S89_StructureEditor", () -> S89_StructureEditor.main(a)),
             new Sample("S90_Layers", () -> S90_Layers.main(a)),
-            new Sample("S91_AnnotationExchange", () -> S91_AnnotationExchange.main(a))
+            new Sample("S91_AnnotationExchange", () -> S91_AnnotationExchange.main(a)),
+            new Sample("S93_CropRemoveContent", () -> S93_CropRemoveContent.main(a)),
+            new Sample("S94_CropPerf", () -> S94_CropPerf.main(a))
         );
 
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
