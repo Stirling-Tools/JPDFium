@@ -1,8 +1,14 @@
+import com.diffplug.gradle.spotless.SpotlessExtension
+
 plugins {
     `java-library`
     `maven-publish`
     signing
+    checkstyle
+    pmd
 }
+
+apply(plugin = "com.diffplug.spotless")
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
@@ -11,11 +17,64 @@ java {
     withSourcesJar()
 }
 
+checkstyle {
+    toolVersion = "10.21.0"
+    configFile = rootProject.file("config/checkstyle/checkstyle.xml")
+    isIgnoreFailures = true
+    maxWarnings = Int.MAX_VALUE
+}
+
+tasks.withType<Checkstyle>().configureEach {
+    isIgnoreFailures = true
+    maxErrors = Int.MAX_VALUE
+    maxWarnings = Int.MAX_VALUE
+    exclude("**/stirling/software/jpdfium/panama/**")
+    exclude("**/module-info.java")
+}
+
+pmd {
+    toolVersion = "7.11.0"
+    isConsoleOutput = true
+    isIgnoreFailures = true
+    ruleSets = emptyList()
+    ruleSetFiles = files(rootProject.file("config/pmd/ruleset.xml"))
+}
+
+tasks.withType<Pmd>().configureEach {
+    exclude("**/stirling/software/jpdfium/panama/**")
+    classpath = files()
+}
+
+configure<SpotlessExtension> {
+    java {
+        target("src/**/*.java")
+        targetExclude("**/panama/**")
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+
 tasks.withType<Javadoc> {
     (options as StandardJavadocDocletOptions).apply {
         addStringOption("Xdoclint:none", "-quiet")
         encoding = "UTF-8"
         charSet = "UTF-8"
+    }
+}
+
+// Strict compilation: every javac lint is an error (hand-written and test),
+// except `restricted` - this library's entire purpose is the Foreign Function &
+// Memory API, whose methods (Linker/downcallHandle, MemorySegment.reinterpret,
+// System.load) are restricted by design and run under --enable-native-access.
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-restricted", "-Werror"))
+}
+
+tasks.matching { it.name.lowercase().contains("jmh") }.configureEach {
+    if (this is JavaCompile) {
+        options.compilerArgs.remove("-Werror")
     }
 }
 
@@ -85,8 +144,6 @@ publishing {
                     ?: System.getenv("OSSRH_PASSWORD") ?: ""
             }
         }
-        // GitHub Packages — fast path (no GPG, no namespace verification required).
-        // Override the target repo with -PgithubPackagesRepo=owner/repo if the fork lives elsewhere.
         maven {
             name = "githubPackages"
             val targetRepo = (findProperty("githubPackagesRepo")?.toString()
@@ -104,7 +161,6 @@ publishing {
 }
 
 signing {
-    // Use GPG key from gradle.properties or environment
     val signingKey = findProperty("signing.key")?.toString() ?: System.getenv("GPG_SIGNING_KEY")
     val signingPassword = findProperty("signing.password")?.toString() ?: System.getenv("GPG_SIGNING_PASSWORD")
     if (signingKey != null && signingPassword != null) {

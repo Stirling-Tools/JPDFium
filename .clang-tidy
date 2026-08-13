@@ -1,0 +1,19 @@
+# Strict C++ static analysis for the native bridge.
+#
+# FFI boundary: every buffer handed to the JVM is malloc'd and the JVM frees
+# it with free() (see jpdfium_free_buffer / _string). gsl::owner<> ownership
+# semantics do not apply across an FFI boundary, so cppcoreguidelines-
+# owning-memory and -no-malloc are disabled (every malloc here is FFI by
+# design). The bridge uses single-line if/return statements by convention, so
+# readability-braces-around-statements is disabled rather than restyling every
+# one-liner across the (PDFium-dependent, not locally compiled) real bridge.
+Checks: >-
+  clang-analyzer-*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  modernize-use-nullptr,
+  modernize-use-override,
+  performance-*,
+  -performance-no-int-to-ptr
+WarningsAsErrors: '*'
+HeaderFilterRegex: "native/bridge/.*"

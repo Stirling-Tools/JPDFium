@@ -1,0 +1,94 @@
+<?xml version="1.0"?>
+<ruleset name="JPDFium PMD Ruleset"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+    <description>PMD ruleset for JPDFium Java 25 library.</description>
+
+    <!-- Exclude auto-generated jextract panama bindings and sample code from PMD -->
+    <exclude-pattern>.*stirling/software/jpdfium/panama/.*</exclude-pattern>
+    <exclude-pattern>.*stirling/software/jpdfium/samples/.*</exclude-pattern>
+    <exclude-pattern>.*stirling/software/jpdfium/bench/.*</exclude-pattern>
+
+    <rule ref="category/java/bestpractices.xml">
+        <exclude name="SystemPrintln"/>
+        <exclude name="GuardLogStatement"/>
+        <exclude name="ArrayIsStoredDirectly"/>
+        <exclude name="MethodReturnsInternalArray"/>
+        <exclude name="UnusedPrivateMethod"/>
+        <exclude name="UnusedPrivateField"/>
+        <exclude name="PreserveStackTrace"/>
+        <exclude name="UseEnumCollections"/>
+    </rule>
+    <rule ref="category/java/codestyle.xml">
+        <exclude name="OnlyOneReturn"/>
+        <exclude name="AtLeastOneConstructor"/>
+        <exclude name="LocalVariableCouldBeFinal"/>
+        <exclude name="MethodArgumentCouldBeFinal"/>
+        <exclude name="CommentDefaultAccessModifier"/>
+        <exclude name="ShortVariable"/>
+        <exclude name="LongVariable"/>
+        <exclude name="ClassNamingConventions"/>
+        <exclude name="FieldNamingConventions"/>
+        <exclude name="FormalParameterNamingConventions"/>
+        <exclude name="LocalVariableNamingConventions"/>
+        <exclude name="MethodNamingConventions"/>
+        <exclude name="ControlStatementBraces"/>
+        <exclude name="UnnecessaryModifier"/>
+        <exclude name="UselessParentheses"/>
+        <exclude name="PrematureDeclaration"/>
+        <exclude name="LinguisticNaming"/>
+        <exclude name="EmptyControlStatement"/>
+        <!-- AvoidFieldNameMatchingMethodName: standard builder/record pattern where
+             field names intentionally match accessor method names. Renaming fields
+             to synthetic prefixes would harm readability. -->
+        <exclude name="AvoidFieldNameMatchingMethodName"/>
+        <!-- TooManyStaticImports: project convention uses static imports for assertions
+             and enum constants in tests for readability. -->
+        <exclude name="TooManyStaticImports"/>
+        <!-- ShortMethodName: valid short names like fromKey(), key(), toXml() are domain terms. -->
+        <exclude name="ShortMethodName"/>
+        <!-- AvoidDuplicateLiterals: test data and domain strings legitimately repeat. -->
+        <exclude name="AvoidDuplicateLiterals"/>
+        <!-- UseUnderscoresInNumericLiterals: not enforced for small constants. -->
+        <exclude name="UseUnderscoresInNumericLiterals"/>
+        <!-- UseVarargs: array parameters are used for explicitness in binding APIs. -->
+        <exclude name="UseVarargs"/>
+    </rule>
+    <rule ref="category/java/design.xml">
+        <exclude name="LawOfDemeter"/>
+        <exclude name="LoosePackageCoupling"/>
+        <exclude name="ExcessiveImports"/>
+        <exclude name="CouplingBetweenObjects"/>
+        <exclude name="NPathComplexity"/>
+        <exclude name="CyclomaticComplexity"/>
+        <exclude name="TooManyMethods"/>
+        <exclude name="TooManyFields"/>
+        <exclude name="CognitiveComplexity"/>
+        <exclude name="UseUtilityClass"/>
+        <exclude name="AvoidDeeplyNestedIfStmts"/>
+        <exclude name="SignatureDeclareThrowsException"/>
+        <exclude name="ExceptionAsFlowControl"/>
+        <exclude name="SimplifiedTernary"/>
+        <exclude name="ImmutableField"/>
+        <exclude name="GodClass"/>
+        <exclude name="ExcessiveParameterList"/>
+    </rule>
+    <rule ref="category/java/errorprone.xml">
+        <exclude name="NullAssignment"/>
+        <exclude name="AvoidLiteralsInIfCondition"/>
+        <exclude name="CompareObjectsWithEquals"/>
+        <exclude name="AvoidCatchingThrowable"/>
+        <exclude name="AssignmentInOperand"/>
+        <exclude name="EmptyCatchBlock"/>
+        <exclude name="AvoidCatchingGenericException"/>
+        <exclude name="ReturnEmptyCollectionRatherThanNull"/>
+        <exclude name="DataClass"/>
+        <exclude name="NcssCount"/>
+    </rule>
+    <rule ref="category/java/performance.xml">
+        <exclude name="AvoidInstantiatingObjectsInLoops"/>
+    </rule>
+    <rule ref="category/java/security.xml"/>
+</ruleset>

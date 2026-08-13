@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Exclude auto-generated jextract FFM bindings -->
+    <Match>
+        <Package name="~stirling\.software\.jpdfium\.panama.*"/>
+    </Match>
+</FindBugsFilter>
