@@ -210,9 +210,22 @@ public final class JpdfiumLib {
     }
 
     public static RenderResult renderPage(long page, int dpi) {
-        try (RenderedPageView view = renderPageView(page, dpi)) {
-            byte[] rgba = view.pixels().toArray(JAVA_BYTE);
-            return new RenderResult(view.width(), view.height(), rgba);
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                MemorySegment wSeg = a.allocate(JAVA_INT);
+                MemorySegment hSeg = a.allocate(JAVA_INT);
+                check(JpdfiumH.jpdfium_render_page(page, dpi, ptrSeg, wSeg, hSeg), "renderPage");
+                int w = wSeg.get(JAVA_INT, 0);
+                int h = hSeg.get(JAVA_INT, 0);
+                MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
+                byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                return new RenderResult(w, h, rgba);
+            }
+        } finally {
+            NativeGuard.release();
         }
     }
 

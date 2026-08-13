@@ -346,7 +346,12 @@ void jpdfium_page_close(int64_t handle) {
 }
 
 int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
-    constexpr int dim = 100;
+    // Small fake frame: the stub only needs to exercise the bridge contract
+    // (out-params, buffer ownership, free path). Keeping it small keeps the
+    // JMH microbenchmarks focused on the Java/FFM call-path cost instead of
+    // a large memset + byte[] copy of data that never represents real
+    // rendering work.
+    constexpr int dim = 16;
     *w = dim;
     *h = dim;
     *rgba = alloc_zeroed(static_cast<std::size_t>(dim) * dim * 4);
