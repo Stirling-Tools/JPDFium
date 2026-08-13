@@ -156,11 +156,6 @@ public final class RenderOptions {
         return new RenderedPageView(1, 1, 4, 4, PixelFormat.RGBA_STRAIGHT, empty, () -> {});
     }
 
-    private static RenderedPageView emptyView() {
-        MemorySegment empty = MemorySegment.ofArray(new byte[4]);
-        return new RenderedPageView(1, 1, 4, 4, PixelFormat.RGBA_STRAIGHT, empty, () -> {});
-    }
-
     public static final class Builder {
         private int dpi = 150;
         private boolean grayscale = false;
