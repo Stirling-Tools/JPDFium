@@ -8,16 +8,21 @@ GitHub runners:
   (score - scoreError) still exceeds the baseline's upper bound
   (score + scoreError) by more than MAX_REGRESSION_PCT. Within-run JMH noise
   can therefore never trip the gate.
+* Benchmarks whose baseline score is below NOISE_FLOOR_MS are exempt from the
+  gate: on shared runners, sub-microsecond measurements are dominated by
+  scheduler jitter and CPU frequency scaling, so a percentage change there is
+  runner noise, not a signal. They are reported but can never fail the job.
 * The caller (ci.yml) re-runs the suite once when this script fails, to rule
   out transient host noise, before failing the job.
 
-Exit code: 1 if any benchmark regressed, 0 otherwise.
+Exit code: 1 if any gated benchmark regressed, 0 otherwise.
 """
 
 import json
 import sys
 
 MAX_REGRESSION_PCT = 15.0
+NOISE_FLOOR_MS = 0.001
 
 
 def load(path: str) -> dict:
@@ -44,9 +49,14 @@ def main() -> int:
 
         pct = (score - base) / base * 100.0
         conservative = (score - err - (base + base_err)) / (base + base_err) * 100.0
-        status = "REGRESSED" if conservative > MAX_REGRESSION_PCT else "OK"
+        if base < NOISE_FLOOR_MS:
+            status = "OK (noise)"
+        elif conservative > MAX_REGRESSION_PCT:
+            status = "REGRESSED"
+        else:
+            status = "OK"
         print(f"  {status:10s}  {name}: {base:.3f} -> {score:.3f} ms  ({pct:+.1f}%)")
-        if conservative > MAX_REGRESSION_PCT:
+        if status == "REGRESSED":
             regressions.append((name, pct))
 
     if regressions:

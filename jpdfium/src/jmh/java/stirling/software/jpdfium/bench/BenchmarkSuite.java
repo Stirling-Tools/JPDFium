@@ -46,6 +46,9 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class BenchmarkSuite {
 
+    /** Number of downcalls per iteration in {@link #ffmDowncallOverheadBatch}. */
+    private static final int DOWNCCALL_BATCH = 1_000;
+
     private byte[] pdfBytes;
 
     @Setup(Level.Trial)
@@ -165,14 +168,23 @@ public class BenchmarkSuite {
     }
 
     /**
-     * Measures the pure FFM downcall overhead by calling jpdfium_doc_page_count
-     * on an already-open document handle. Because this adds only one FFM call
-     * per iteration (with the doc already loaded), any regression here is
-     * attributable to jextract/Arena changes rather than PDFium.
+     * Measures the Java-to-FFM downcall path cost by calling
+     * {@code jpdfium_doc_page_count} in a batch on an already-open document
+     * handle. Each call is a single native downcall with no allocation.
+     *
+     * <p>The calls are batched because a single downcall (~10-20ns) is below the
+     * resolution that a shared CI runner can measure reliably: at that scale the
+     * result is dominated by scheduler jitter and CPU frequency scaling rather
+     * than the downcall itself. Batching averages per-call jitter away and brings
+     * the measurement into the microsecond range, where a regression in the
+     * jextract/Arena path is actually observable.
      */
     @Benchmark
-    public static int ffmDowncallOverhead(OpenDocState state) {
-        // pageCount() is a single native call with no allocation.
-        return state.doc.pageCount();
+    public static int ffmDowncallOverheadBatch(OpenDocState state) {
+        int sum = 0;
+        for (int i = 0; i < DOWNCCALL_BATCH; i++) {
+            sum += state.doc.pageCount();
+        }
+        return sum;
     }
 }
