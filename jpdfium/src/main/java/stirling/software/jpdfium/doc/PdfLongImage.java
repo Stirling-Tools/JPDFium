@@ -8,6 +8,7 @@ import stirling.software.jpdfium.panama.RenderBindings;
 import java.awt.image.BufferedImage;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Render all pages of a PDF as one continuous vertical image.
@@ -60,7 +61,7 @@ public final class PdfLongImage {
 
         // Cap at reasonable size
         if ((long) maxWidth * totalHeight > 200_000_000L) {
-            throw new RuntimeException("Combined image too large (" + maxWidth + "x" + totalHeight +
+            throw new JPDFiumException("Combined image too large (" + maxWidth + "x" + totalHeight +
                     "). Reduce DPI or page count.");
         }
 
@@ -82,22 +83,22 @@ public final class PdfLongImage {
                 MemorySegment bitmap;
                 try {
                     bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(w, h, 0);
-                } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_Create failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_Create failed", t); }
 
                 try {
                     try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, w, h, 0xFFFFFFFFL); }
-                    catch (Throwable t) { throw new RuntimeException(t); }
+                    catch (Throwable t) { throw new JPDFiumException(t); }
 
                     int flags = RenderBindings.FPDF_ANNOT | RenderBindings.FPDF_PRINTING;
                     try { RenderBindings.FPDF_RenderPageBitmap.invokeExact(bitmap, rawPage, 0, 0, w, h, 0, flags); }
-                    catch (Throwable t) { throw new RuntimeException(t); }
+                    catch (Throwable t) { throw new JPDFiumException(t); }
 
                     MemorySegment buf;
                     int stride;
                     try {
                         buf = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
                         stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
-                    } catch (Throwable t) { throw new RuntimeException(t); }
+                    } catch (Throwable t) { throw new JPDFiumException(t); }
 
                     MemorySegment pixels = buf.reinterpret((long) stride * h);
 

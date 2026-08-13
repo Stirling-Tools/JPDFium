@@ -6,6 +6,7 @@ import stirling.software.jpdfium.model.Position;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.MemorySegment;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Add and scan QR codes and barcodes in PDF documents.
@@ -84,7 +85,7 @@ public final class PdfBarcode {
 
             // Commit the changes
             try { int gcOk = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
-            catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
         }
     }
 
@@ -120,7 +121,7 @@ public final class PdfBarcode {
 
             PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, rect);
         } catch (Throwable t) {
-            throw new RuntimeException("Failed to draw QR module", t);
+            throw new JPDFiumException("Failed to draw QR module", t);
         }
     }
 

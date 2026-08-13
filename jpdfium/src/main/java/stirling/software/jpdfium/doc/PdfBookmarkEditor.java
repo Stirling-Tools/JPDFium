@@ -18,6 +18,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Create and set bookmarks (outlines) in a PDF document.
@@ -113,7 +114,7 @@ public final class PdfBookmarkEditor {
             setBookmarks(doc, tree, tmp);
             return Files.readAllBytes(tmp);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write temporary PDF with bookmarks", e);
+            throw new JPDFiumException("Failed to write temporary PDF with bookmarks", e);
         } finally {
             if (tmp != null) {
                 try {

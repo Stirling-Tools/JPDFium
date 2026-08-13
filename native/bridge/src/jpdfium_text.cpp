@@ -110,7 +110,7 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         FPDFText_GetCharBox(tp, i, &l, &r, &b, &t);
 
         FPDFText_GetFontInfo(tp, i, fontbuf, sizeof(fontbuf), nullptr);
-        float size = FPDFText_GetFontSize(tp, i);
+        float size = static_cast<float>(FPDFText_GetFontSize(tp, i));
 
         if (!first) os << ',';
         first = false;

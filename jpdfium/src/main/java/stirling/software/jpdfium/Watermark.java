@@ -39,10 +39,11 @@ public final class Watermark {
     private final float opacity;
     private final Position position;
     private final float margin;
+    private final float scale;
 
     private Watermark(Type type, String text, BufferedImage image,
                       FontName fontName, float fontSize, int argbColor,
-                      float rotation, float opacity, Position position, float margin) {
+                      float rotation, float opacity, Position position, float margin, float scale) {
         this.type = type;
         this.text = text;
         this.image = image;
@@ -53,6 +54,7 @@ public final class Watermark {
         this.opacity = opacity;
         this.position = position;
         this.margin = margin;
+        this.scale = scale;
     }
 
     /** Create a text watermark builder. */
@@ -80,6 +82,7 @@ public final class Watermark {
     float opacity() { return opacity; }
     Position position() { return position; }
     float margin() { return margin; }
+    float scale() { return scale; }
 
     public static final class TextBuilder {
         private final String text;
@@ -139,7 +142,7 @@ public final class Watermark {
             int alpha = (int) (opacity * 255) & 0xFF;
             int colorWithOpacity = (alpha << 24) | (argbColor & 0x00FFFFFF);
             return new Watermark(Type.TEXT, text, null, fontName, fontSize,
-                    colorWithOpacity, rotation, opacity, position, margin);
+                    colorWithOpacity, rotation, opacity, position, margin, 1.0f);
         }
     }
 
@@ -179,7 +182,7 @@ public final class Watermark {
             int alpha = (int) (opacity * 255) & 0xFF;
             int argb = (alpha << 24) | 0x00FFFFFF;
             return new Watermark(Type.IMAGE, null, image, null, 0,
-                    argb, 0, opacity, position, margin);
+                    argb, 0, opacity, position, margin, scale);
         }
     }
 }

@@ -817,9 +817,13 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 for (auto& sp : subpaths) {
                     if (isSubpathRedacted(sp, pathMatrix)) continue;
 
-                    for (int s = sp.startIdx; s < sp.endIdx; s++) {
+                    int s = sp.startIdx;
+                    while (s < sp.endIdx) {
                         FPDF_PATHSEGMENT seg = FPDFPath_GetPathSegment(obj, s);
-                        if (!seg) continue;
+                        if (!seg) {
+                            s++;
+                            continue;
+                        }
 
                         int segType = FPDFPathSegment_GetType(seg);
                         float sx, sy;
@@ -828,21 +832,15 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
                         if (segType == FPDF_SEGMENT_MOVETO) {
                             FPDFPath_MoveTo(newPath, sx, sy);
+                            s++;
                         } else if (segType == FPDF_SEGMENT_LINETO) {
                             FPDFPath_LineTo(newPath, sx, sy);
                             if (isClose) FPDFPath_Close(newPath);
+                            s++;
                         } else if (segType == FPDF_SEGMENT_BEZIERTO) {
-                            // For Bezier, we need 3 control points. The segment
-                            // only gives us this point. PDFium stores bezier as
-                            // a single BezierTo(cp1x,cp1y,cp2x,cp2y,x,y) but
-                            // the segments API gives back 3 consecutive points.
-                            // Actually, each BezierTo segment IS one point.
-                            // We need to accumulate 3 points for a bezier.
-                            // PDFium stores bezier segments as 3 consecutive points.
                             if (s + 2 < sp.endIdx) {
-                                float c1x, c1y, c2x, c2y, ex, ey;
-                                c1x = sx;
-                                c1y = sy;
+                                float c1x = sx, c1y = sy, c2x = 0.0f, c2y = 0.0f, ex = 0.0f,
+                                      ey = 0.0f;
                                 FPDF_PATHSEGMENT seg2 = FPDFPath_GetPathSegment(obj, s + 1);
                                 FPDF_PATHSEGMENT seg3 = FPDFPath_GetPathSegment(obj, s + 2);
                                 if (seg2 && seg3) {
@@ -851,9 +849,15 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                                     FPDFPath_BezierTo(newPath, c1x, c1y, c2x, c2y, ex, ey);
                                     FPDF_BOOL close3 = FPDFPathSegment_GetClose(seg3);
                                     if (close3) FPDFPath_Close(newPath);
-                                    s += 2;  // skip the 2 consumed segments
+                                    s += 3;
+                                } else {
+                                    s++;
                                 }
+                            } else {
+                                s++;
                             }
+                        } else {
+                            s++;
                         }
                         hasContent = true;
                     }

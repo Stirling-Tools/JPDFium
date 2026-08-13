@@ -61,18 +61,17 @@ public final class PdfPageSplitter {
     public static int split2Up(PdfDocument doc, boolean gutterDetect, boolean leftToRight,
                                 Set<Integer> pages) {
         int originalCount = doc.pageCount();
-        int insertOffset = 0;
         int splitCount = 0;
 
         for (int origIdx = 0; origIdx < originalCount; origIdx++) {
             if (pages != null && !pages.contains(origIdx)) {
-                insertOffset++;
                 continue;
             }
 
             int currentIdx = origIdx + (splitCount); // account for already-inserted pages
 
-            float pageWidth, pageHeight;
+            float pageWidth;
+            float pageHeight;
             try (PdfPage page = doc.page(currentIdx)) {
                 pageWidth = page.size().width();
                 pageHeight = page.size().height();
@@ -126,7 +125,7 @@ public final class PdfPageSplitter {
             // Delete the original (unmodified) page
             try {
                 PageEditBindings.FPDFPage_Delete.invokeExact(rawDoc, currentIdx);
-            } catch (Throwable t) { throw new RuntimeException("FPDFPage_Delete failed", t); }
+            } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPage_Delete failed", t); }
 
             splitCount++;
         }

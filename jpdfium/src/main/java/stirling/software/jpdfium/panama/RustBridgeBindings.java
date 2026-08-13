@@ -65,7 +65,7 @@ public final class RustBridgeBindings {
      * symbol is not found. Never throws.
      */
     private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
-        return Symbols.downcall(name, desc);
+        return Symbols.downcallOptional(name, desc);
     }
 
     /** {@code int32_t jpdfium_rust_compress_pdf(input, input_len, out_ptr, out_len, iters)} */

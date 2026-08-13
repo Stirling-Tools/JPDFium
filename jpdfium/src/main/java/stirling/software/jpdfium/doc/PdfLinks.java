@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Extract hyperlinks from PDF pages.
@@ -56,7 +57,7 @@ public final class PdfLinks {
                 int ok;
                 try {
                     ok = (int) LinkBindings.FPDFLink_Enumerate.invokeExact(page, startPos, linkSeg);
-                } catch (Throwable t) { throw new RuntimeException("FPDFLink_Enumerate failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFLink_Enumerate failed", t); }
 
                 if (ok == 0) break;
 
@@ -82,7 +83,7 @@ public final class PdfLinks {
         MemorySegment link;
         try {
             link = (MemorySegment) LinkBindings.FPDFLink_GetLinkAtPoint.invokeExact(page, x, y);
-        } catch (Throwable t) { throw new RuntimeException("FPDFLink_GetLinkAtPoint failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFLink_GetLinkAtPoint failed", t); }
 
         if (link.equals(MemorySegment.NULL)) return Optional.empty();
         return Optional.of(toLinkRecord(doc, link));
@@ -97,25 +98,25 @@ public final class PdfLinks {
         MemorySegment dest;
         try {
             dest = (MemorySegment) LinkBindings.FPDFLink_GetDest.invokeExact(doc, link);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         if (!dest.equals(MemorySegment.NULL)) {
             actionType = ActionType.GOTO;
             try {
                 pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(doc, dest);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
         }
 
         MemorySegment action;
         try {
             action = (MemorySegment) LinkBindings.FPDFLink_GetAction.invokeExact(link);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         if (!action.equals(MemorySegment.NULL)) {
             long type;
             try {
                 type = (long) ActionBindings.FPDFAction_GetType.invokeExact(action);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             actionType = ActionType.fromCode(type);
 
             if (actionType == ActionType.URI) {
@@ -124,11 +125,11 @@ public final class PdfLinks {
                 MemorySegment actionDest;
                 try {
                     actionDest = (MemorySegment) ActionBindings.FPDFAction_GetDest.invokeExact(doc, action);
-                } catch (Throwable t) { throw new RuntimeException(t); }
+                } catch (Throwable t) { throw new JPDFiumException(t); }
                 if (!actionDest.equals(MemorySegment.NULL)) {
                     try {
                         pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(doc, actionDest);
-                    } catch (Throwable t) { throw new RuntimeException(t); }
+                    } catch (Throwable t) { throw new JPDFiumException(t); }
                 }
             }
         }
@@ -142,7 +143,7 @@ public final class PdfLinks {
             int ok;
             try {
                 ok = (int) LinkBindings.FPDFLink_GetAnnotRect.invokeExact(link, rectSeg);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (ok == 0) return new Rect(0, 0, 0, 0);
 
             float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
@@ -159,13 +160,13 @@ public final class PdfLinks {
             try {
                 needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 1) return null;
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromByteString(buf, needed);
         }
     }

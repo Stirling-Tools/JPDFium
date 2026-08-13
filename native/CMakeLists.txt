@@ -336,6 +336,12 @@ if(JPDFIUM_USE_PDFIUM)
         # call sites. NOMINMAX suppresses those macros so the std:: versions
         # work as expected. WIN32_LEAN_AND_MEAN also trims unneeded headers.
         target_compile_definitions(jpdfium PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+        # The bridge uses POSIX helpers (strdup, fopen, etc.) directly. On MSVC
+        # these trigger C4996 deprecation warnings which are promoted to
+        # errors by CMAKE_COMPILE_WARNING_AS_ERROR. _CRT_SECURE_NO_WARNINGS
+        # silences deprecation for the secure-CRT transition, and
+        # _CRT_NONSTDC_NO_WARNINGS silences deprecation for POSIX names.
+        target_compile_definitions(jpdfium PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
     endif()
 
     # Hermetic natives jar: the publish workflows bundle each third-party

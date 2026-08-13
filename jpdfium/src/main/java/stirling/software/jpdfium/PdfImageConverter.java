@@ -266,8 +266,15 @@ public final class PdfImageConverter {
             boolean first = true;
 
             for (byte[] rgba : rgbaFrames) {
+                if (rgba == null || rgba.length < 8) {
+                    throw new IllegalArgumentException("Each RGBA frame must contain an 8-byte header");
+                }
                 int w = readLeInt32(rgba, 0);
                 int h = readLeInt32(rgba, 4);
+                long availablePixels = (rgba.length - 8L) / 4L;
+                if (w <= 0 || h <= 0 || (long) w * h > availablePixels) {
+                    throw new IllegalArgumentException("Invalid RGBA frame dimensions or payload length");
+                }
                 float pageWidth = options.pageSize().width();
                 float pageHeight = options.pageSize().height();
 

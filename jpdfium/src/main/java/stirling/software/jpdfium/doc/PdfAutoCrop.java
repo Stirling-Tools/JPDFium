@@ -11,6 +11,7 @@ import stirling.software.jpdfium.transform.PdfPageBoxes;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Auto-crop / whitespace trimming for PDF pages.
@@ -59,7 +60,7 @@ public final class PdfAutoCrop {
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
-            } catch (Throwable t) { throw new RuntimeException("FPDFText_LoadPage failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFText_LoadPage failed", t); }
 
             if (textPage.equals(MemorySegment.NULL)) return null;
 
@@ -67,7 +68,7 @@ public final class PdfAutoCrop {
                 int charCount;
                 try {
                     charCount = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
-                } catch (Throwable t) { throw new RuntimeException("FPDFText_CountChars failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFText_CountChars failed", t); }
 
                 if (charCount <= 0) return null;
 
@@ -163,32 +164,32 @@ public final class PdfAutoCrop {
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
-            } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_Create failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_Create failed", t); }
             if (bitmap.equals(MemorySegment.NULL)) return null;
 
             try {
                 // Fill white background
                 try {
                     RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, bmpW, bmpH, 0xFFFFFFFFL);
-                } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_FillRect failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_FillRect failed", t); }
 
                 // Render page
                 int flags = RenderBindings.FPDF_ANNOT | RenderBindings.FPDF_PRINTING;
                 try {
                     RenderBindings.FPDF_RenderPageBitmap.invokeExact(
                             bitmap, rawPage, 0, 0, bmpW, bmpH, 0, flags);
-                } catch (Throwable t) { throw new RuntimeException("FPDF_RenderPageBitmap failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDF_RenderPageBitmap failed", t); }
 
                 // Get pixel buffer
                 MemorySegment bufferPtr;
                 try {
                     bufferPtr = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
-                } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_GetBuffer failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_GetBuffer failed", t); }
 
                 int stride;
                 try {
                     stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
-                } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_GetStride failed", t); }
+                } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_GetStride failed", t); }
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 

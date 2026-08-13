@@ -13,6 +13,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Generate a Table of Contents page from detected headings.
@@ -94,7 +95,7 @@ public final class PdfTocGenerator {
             tocPage = (MemorySegment) PageEditBindings.FPDFPage_New.invokeExact(
                     rawDoc, 0, (double) tocW, (double) tocH);
         } catch (Throwable t) {
-            throw new RuntimeException("FPDFPage_New failed", t);
+            throw new JPDFiumException("FPDFPage_New failed", t);
         }
 
         // Load a standard font
@@ -104,7 +105,7 @@ public final class PdfTocGenerator {
             PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
                 rawDoc, fontName, 20.0f);
         } catch (Throwable t) {
-            throw new RuntimeException("Failed to create font", t);
+            throw new JPDFiumException("Failed to create font", t);
         }
 
         // Add title "Table of Contents"
@@ -139,7 +140,7 @@ public final class PdfTocGenerator {
         try {
             PageEditBindings.FPDFPage_GenerateContent.invokeExact(tocPage);
         } catch (Throwable t) {
-            throw new RuntimeException("FPDFPage_GenerateContent failed", t);
+            throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
         }
 
         // Close the page handle

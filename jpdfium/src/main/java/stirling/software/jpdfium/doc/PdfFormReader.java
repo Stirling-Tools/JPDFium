@@ -13,6 +13,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Read form fields from widget annotations.
@@ -75,21 +76,21 @@ public final class PdfFormReader {
         int annotCount;
         try {
             annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         List<FormField> fields = new ArrayList<>();
         for (int i = 0; i < annotCount; i++) {
             MemorySegment annot;
             try {
                 annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, i);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (annot.equals(MemorySegment.NULL)) continue;
 
             try {
                 int subtype;
                 try {
                     subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
-                } catch (Throwable t) { throw new RuntimeException(t); }
+                } catch (Throwable t) { throw new JPDFiumException(t); }
                 if (subtype != 20) continue; // 20 = WIDGET
 
                 int fieldTypeCode;

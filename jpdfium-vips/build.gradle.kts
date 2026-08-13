@@ -18,7 +18,10 @@ dependencies {
 }
 
 tasks.withType<Test> {
-    jvmArgs("-Dvipsffm.libpath.vips.override=/opt/homebrew/lib/libvips.42.dylib")
-    jvmArgs("-Dvipsffm.libpath.glib.override=/opt/homebrew/lib/libglib-2.0.dylib")
-    jvmArgs("-Dvipsffm.libpath.gobject.override=/opt/homebrew/lib/libgobject-2.0.dylib")
+    if (org.gradle.internal.os.OperatingSystem.current().isMacOsX &&
+        file("/opt/homebrew/lib/libvips.42.dylib").exists()) {
+        jvmArgs("-Dvipsffm.libpath.vips.override=/opt/homebrew/lib/libvips.42.dylib")
+        jvmArgs("-Dvipsffm.libpath.glib.override=/opt/homebrew/lib/libglib-2.0.dylib")
+        jvmArgs("-Dvipsffm.libpath.gobject.override=/opt/homebrew/lib/libgobject-2.0.dylib")
+    }
 }

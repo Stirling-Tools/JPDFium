@@ -34,12 +34,41 @@ class NativeModeAuditTest {
     @Test
     @DisplayName("All binding classes load without missing symbols in FULL mode")
     void allExpectedSymbolsResolveInFullMode() throws Exception {
-        // Touch representative binding classes to trigger static initialisers
-        Class.forName(DocBindings.class.getName());
-        Class.forName(AnnotationBindings.class.getName());
-        Class.forName(PageEditBindings.class.getName());
-        Class.forName(RenderBindings.class.getName());
-        Class.forName(TextPageBindings.class.getName());
+        // Touch all binding and helper classes in stirling.software.jpdfium.panama
+        // to ensure static initializers trigger downcalls for every native symbol.
+        Class<?>[] bindingClasses = {
+            stirling.software.jpdfium.panama.ActionBindings.class,
+            stirling.software.jpdfium.panama.AnnotationBindings.class,
+            stirling.software.jpdfium.panama.AttachmentBindings.class,
+            stirling.software.jpdfium.panama.BookmarkBindings.class,
+            stirling.software.jpdfium.panama.DocBindings.class,
+            stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings.class,
+            stirling.software.jpdfium.panama.EmbedPdfDocumentBindings.class,
+            stirling.software.jpdfium.panama.FlashTextLib.class,
+            stirling.software.jpdfium.panama.FontLib.class,
+            stirling.software.jpdfium.panama.FormFillBindings.class,
+            stirling.software.jpdfium.panama.GlyphLib.class,
+            stirling.software.jpdfium.panama.IcuLib.class,
+            stirling.software.jpdfium.panama.ImageObjBindings.class,
+            stirling.software.jpdfium.panama.JavaScriptBindings.class,
+            stirling.software.jpdfium.panama.JpdfiumLib.class,
+            stirling.software.jpdfium.panama.LinkBindings.class,
+            stirling.software.jpdfium.panama.PageEditBindings.class,
+            stirling.software.jpdfium.panama.PageImportBindings.class,
+            stirling.software.jpdfium.panama.Pcre2Lib.class,
+            stirling.software.jpdfium.panama.RenderBindings.class,
+            stirling.software.jpdfium.panama.RepairLib.class,
+            stirling.software.jpdfium.panama.RustBridgeBindings.class,
+            stirling.software.jpdfium.panama.SignatureBindings.class,
+            stirling.software.jpdfium.panama.StructureBindings.class,
+            stirling.software.jpdfium.panama.TextPageBindings.class,
+            stirling.software.jpdfium.panama.ThumbnailBindings.class,
+            stirling.software.jpdfium.panama.WebLinkBindings.class,
+            stirling.software.jpdfium.panama.XmpLib.class
+        };
+        for (Class<?> clazz : bindingClasses) {
+            Class.forName(clazz.getName());
+        }
 
         if (NativeRuntime.isFull()) {
             List<String> missing = Symbols.auditMissing();

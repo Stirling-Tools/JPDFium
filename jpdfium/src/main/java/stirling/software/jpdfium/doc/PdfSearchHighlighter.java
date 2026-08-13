@@ -12,6 +12,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Search for text and create highlight/underline/strikeout annotations on matches.
@@ -109,7 +110,7 @@ public final class PdfSearchHighlighter {
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
-            } catch (Throwable t) { throw new RuntimeException("FPDFText_LoadPage failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFText_LoadPage failed", t); }
 
             if (textPage.equals(MemorySegment.NULL)) {
                 return new HighlightResult.PageResult(pageIndex, 0, List.of());
@@ -130,7 +131,7 @@ public final class PdfSearchHighlighter {
                     try {
                         searchHandle = (MemorySegment) TextPageBindings.FPDFText_FindStart.invokeExact(
                                 textPage, queryStr, flags, 0);
-                    } catch (Throwable t) { throw new RuntimeException("FPDFText_FindStart failed", t); }
+                    } catch (Throwable t) { throw new JPDFiumException("FPDFText_FindStart failed", t); }
 
                     if (searchHandle.equals(MemorySegment.NULL)) {
                         return new HighlightResult.PageResult(pageIndex, 0, List.of());

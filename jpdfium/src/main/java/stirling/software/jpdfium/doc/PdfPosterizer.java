@@ -81,7 +81,8 @@ public final class PdfPosterizer {
         if (doc.pageCount() == 0) return;
 
         // Use the first page to determine grid size
-        float pageWidth, pageHeight;
+        float pageWidth;
+        float pageHeight;
         try (PdfPage page = doc.page(0)) {
             pageWidth = page.size().width();
             pageHeight = page.size().height();
@@ -111,7 +112,8 @@ public final class PdfPosterizer {
         MemorySegment rawDoc = doc.rawHandle();
 
         for (int p = 0; p < originalPageCount; p++) {
-            float pageWidth, pageHeight;
+            float pageWidth;
+            float pageHeight;
             try (PdfPage page = doc.page(p)) {
                 pageWidth = page.size().width();
                 pageHeight = page.size().height();
@@ -127,7 +129,7 @@ public final class PdfPosterizer {
                     // Import the original page to the end of the document
                     boolean ok = PdfPageImporter.importPagesByIndex(rawDoc, rawDoc,
                             new int[]{p}, doc.pageCount());
-                    if (!ok) throw new RuntimeException("Failed to import page " + p);
+                    if (!ok) throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to import page " + p);
 
                     int newPageIndex = doc.pageCount() - 1;
 
@@ -157,7 +159,7 @@ public final class PdfPosterizer {
         for (int p = originalPageCount - 1; p >= 0; p--) {
             try {
                 PageEditBindings.FPDFPage_Delete.invokeExact(rawDoc, p);
-            } catch (Throwable t) { throw new RuntimeException("FPDFPage_Delete failed", t); }
+            } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPage_Delete failed", t); }
         }
     }
 }

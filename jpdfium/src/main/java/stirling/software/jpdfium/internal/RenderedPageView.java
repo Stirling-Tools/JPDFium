@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.internal;
 
 import java.lang.foreign.MemorySegment;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class RenderedPageView implements AutoCloseable {
 
@@ -11,7 +12,7 @@ public final class RenderedPageView implements AutoCloseable {
     private final PixelFormat format;
     private final MemorySegment pixels;
     private final Runnable cleanup;
-    private boolean closed;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public RenderedPageView(int width, int height, int stride, int bands,
                             PixelFormat format, MemorySegment pixels, Runnable cleanup) {
@@ -37,8 +38,7 @@ public final class RenderedPageView implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!closed) {
-            closed = true;
+        if (closed.compareAndSet(false, true)) {
             if (cleanup != null) cleanup.run();
         }
     }

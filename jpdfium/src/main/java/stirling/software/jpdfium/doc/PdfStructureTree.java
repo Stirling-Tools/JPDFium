@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Navigate the tagged structure tree of a PDF page.
@@ -46,7 +47,7 @@ public final class PdfStructureTree {
         MemorySegment tree;
         try {
             tree = (MemorySegment) StructureBindings.FPDF_StructTree_GetForPage.invokeExact(page);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_StructTree_GetForPage failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDF_StructTree_GetForPage failed", t); }
 
         if (tree.equals(MemorySegment.NULL)) {
             return Collections.emptyList();
@@ -56,7 +57,7 @@ public final class PdfStructureTree {
             int count;
             try {
                 count = (int) StructureBindings.FPDF_StructTree_CountChildren.invokeExact(tree);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
 
             if (count <= 0) return Collections.emptyList();
 
@@ -65,7 +66,7 @@ public final class PdfStructureTree {
                 MemorySegment child;
                 try {
                     child = (MemorySegment) StructureBindings.FPDF_StructTree_GetChildAtIndex.invokeExact(tree, i);
-                } catch (Throwable t) { throw new RuntimeException(t); }
+                } catch (Throwable t) { throw new JPDFiumException(t); }
 
                 if (!child.equals(MemorySegment.NULL)) {
                     result.add(buildElement(child, 0));
@@ -93,7 +94,7 @@ public final class PdfStructureTree {
             int count;
             try {
                 count = (int) StructureBindings.FPDF_StructElement_CountChildren.invokeExact(elem);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
 
             if (count <= 0) {
                 children = Collections.emptyList();
@@ -103,7 +104,7 @@ public final class PdfStructureTree {
                     MemorySegment child;
                     try {
                         child = (MemorySegment) StructureBindings.FPDF_StructElement_GetChildAtIndex.invokeExact(elem, i);
-                    } catch (Throwable t) { throw new RuntimeException(t); }
+                    } catch (Throwable t) { throw new JPDFiumException(t); }
                     if (!child.equals(MemorySegment.NULL)) {
                         children.add(buildElement(child, depth + 1));
                     }
@@ -119,13 +120,13 @@ public final class PdfStructureTree {
             long needed;
             try {
                 needed = (long) getter.invokeExact(elem, MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return "";
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) getter.invokeExact(elem, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromWideString(buf, needed);
         }
     }
