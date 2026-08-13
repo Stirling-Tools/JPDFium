@@ -364,27 +364,45 @@ void jpdfium_free_buffer(uint8_t* buf) {
 
 // =====================  Text Extraction  ==================================
 
+// The fake text JSON depends only on STUB_TEXT, never on the page handle, so
+// build it once and hand out copies. Rebuilding ~40 KB of JSON per call made
+// the extractTextJson JMH benchmark measure repeated fake serialisation work
+// instead of the Java call path, and added allocator-sensitive runner noise.
+const std::string& stub_text_json() {
+    static const std::string json = [] {
+        JsonBuf j(STUB_TEXT.size() * 4);
+        j << '[';
+        float x = 10.0f, y = 800.0f;
+        bool first = true;
+        int idx = 0;
+        for (unsigned char c : STUB_TEXT) {
+            if (c == '\n') {
+                y -= 15.0f;
+                x = 10.0f;
+                continue;
+            }
+            if (!first) j << ',';
+            first = false;
+            j << "{\"i\":" << idx++ << ",\"u\":" << static_cast<int>(c) << ",\"x\":" << x
+              << ",\"y\":" << y << ",\"w\":7.0,\"h\":12.0,\"font\":\"Helvetica\",\"size\":12.0}";
+            x += 7.0f;
+        }
+        j << ']';
+        char* cstr = j.release();
+        std::string s(cstr);
+        std::free(cstr);
+        return s;
+    }();
+    return json;
+}
+
 int32_t jpdfium_text_get_chars(int64_t page, char** json) {
     g_page_text[page] = STUB_TEXT;
-    JsonBuf j(STUB_TEXT.size() * 4);
-    j << '[';
-    float x = 10.0f, y = 800.0f;
-    bool first = true;
-    int idx = 0;
-    for (unsigned char c : STUB_TEXT) {
-        if (c == '\n') {
-            y -= 15.0f;
-            x = 10.0f;
-            continue;
-        }
-        if (!first) j << ',';
-        first = false;
-        j << "{\"i\":" << idx++ << ",\"u\":" << static_cast<int>(c) << ",\"x\":" << x
-          << ",\"y\":" << y << ",\"w\":7.0,\"h\":12.0,\"font\":\"Helvetica\",\"size\":12.0}";
-        x += 7.0f;
-    }
-    j << ']';
-    *json = j.release();
+    const std::string& s = stub_text_json();
+    char* out = static_cast<char*>(std::malloc(s.size() + 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    std::memcpy(out, s.c_str(), s.size() + 1);
+    *json = out;
     return JPDFIUM_OK;
 }
 

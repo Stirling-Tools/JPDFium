@@ -157,10 +157,10 @@ jobs:
       - name: Build stub bridge
         run: bash native/build-stub.sh
 
-      - name: Run JMH (longer warmup for stable baseline)
+      - name: Run JMH (same config as the PR gate for comparable baselines)
         run: |
           ./gradlew :jpdfium:jmh \
-            -Pjmh.warmupIterations=5 \
+            -Pjmh.warmupIterations=4 \
             -Pjmh.iterations=5 \
             --no-daemon
 
