@@ -1,0 +1,90 @@
+name: Dependency Hygiene
+
+on:
+  schedule:
+    - cron: '19 5 * * 1'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'gradle/libs.versions.toml'
+      - 'gradle/wrapper/**'
+      - 'buildSrc/**'
+      - 'native/pdfium.version'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  outdated-report:
+    name: Outdated dependencies report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Gradle dependency updates report
+        run: |
+          ./gradlew dependencyUpdates --no-daemon || true
+          cat build/dependencyUpdates/report.txt 2>/dev/null || cat gradle/dependencyUpdates/report.txt 2>/dev/null || true
+      - name: Check Gradle wrapper freshness
+        run: ./gradlew wrapper --gradle-version latest --no-daemon --dry-run 2>&1 | head -n 50 || true
+      - name: Native pin age
+        run: |
+          echo "Pinned PDFium release:"
+          cat native/pdfium.version
+          echo ""
+          echo "Release date from tag (approx):"
+          TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1)
+          gh release view "$TAG" --json publishedAt -q .publishedAt 2>/dev/null || echo "gh not authenticated or tag not found"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  action-versions:
+    name: Action version audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: List pinned action versions
+        run: |
+          echo "Pinned actions (SHA + comment should match):"
+          grep -R "u""ses:" .github/workflows | sort
+          echo ""
+          echo "Unpinned actions (should be empty):"
+          grep -R "u""ses:.*@v[0-9]" .github/workflows || echo "(none — good)"
+
+  lockfile-check:
+    name: Gradle lockfile freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Verify lockfiles (if enabled)
+        run: |
+          if grep -q "dependencyLocking" buildSrc/src/main/kotlin/*.gradle.kts gradle/libs.versions.toml 2>/dev/null; then
+            ./gradlew dependencies --write-locks --no-daemon || true
+            git diff --exit-code -- gradle.lockfile 2>/dev/null || echo "Lockfile drift detected — run ./gradlew dependencies --write-locks"
+          else
+            echo "Dependency locking not enabled — consider enabling gradle/dependency-locking for reproducible builds"
+          fi
+
+  update-pr:
+    name: Open update PR (manual dispatch only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Placeholder — wire Renovate or update bot here
+        run: |
+          echo "Manual dispatch: evaluate outdated-report output and open a PR with version bumps."
+          echo "Recommended: enable Renovate or Dependabot for automated update PRs with changelogs."

@@ -1,0 +1,80 @@
+name: Repo Health
+
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+
+permissions:
+  contents: read
+
+jobs:
+  link-check:
+    name: Docs link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: lycheeverse/lychee-action@649b0e4890508ea3e11ea6b3ee35ce899a25afd5 # v2.9.0
+        with:
+          args: --verbose --no-progress --accept 200,204,403,429 --exclude-loopback --exclude-mail --max-retries 3 README.md CONTRIBUTING.md docs/
+          fail: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  stale:
+    name: Stale issue/PR triage (dry-run report)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-stale: 60
+          days-before-close: 14
+          stale-issue-label: stale
+          stale-pr-label: stale
+          stale-issue-message: "This issue has been inactive for 60 days and is marked stale. Close in 14 days unless activity resumes."
+          stale-pr-message: "This PR has been inactive for 60 days and is marked stale. Close in 14 days unless activity resumes."
+          exempt-issue-labels: pinned,security
+          exempt-pr-labels: pinned,security,keep-open
+          days-before-pr-stale: 45
+
+  benchmark-trend:
+    name: Benchmark trend storage
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Build stub
+        run: bash native/build-stub.sh
+      - name: Run JMH and store baseline artifact
+        run: |
+          ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=2 -Pjmh.iterations=3 --no-daemon
+          mkdir -p /tmp/bench-history
+          cp jpdfium/build/results/jmh/results.json "/tmp/bench-history/jmh-$(date -u +%Y-%m-%d).json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-history-${{ github.run_id }}
+          path: /tmp/bench-history/
+          retention-days: 90

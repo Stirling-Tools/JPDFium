@@ -1,0 +1,22 @@
+# Pre-commit configuration for JPDFium
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format
+        entry: bash -c 'git diff --cached --name-only --diff-filter=ACM | grep -E "\.(cpp|hpp|h)$" | xargs -r clang-format --dry-run --Werror'
+        language: system
+        pass_filenames: false
+
+      - id: spotless
+        name: spotless-check
+        entry: ./gradlew spotlessCheck
+        language: system
+        pass_filenames: false

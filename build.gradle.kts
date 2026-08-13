@@ -11,12 +11,12 @@ allprojects {
 tasks.register<Exec>("buildRealBridge") {
     group = "build"
     description = "Build the real native bridge with PDFium (run native/setup-pdfium.sh first)"
-    
+
     val scriptPath = rootProject.file("native/build-real.sh")
     if (!scriptPath.exists()) {
         throw GradleException("build-real.sh not found at ${scriptPath.absolutePath}")
     }
-    
+
     commandLine("bash", scriptPath.absolutePath)
 }
 
@@ -24,12 +24,12 @@ tasks.register<Exec>("buildRealBridge") {
 tasks.register<Exec>("buildStubBridge") {
     group = "build"
     description = "Build the stub native bridge (no PDFium required, for unit tests only)"
-    
+
     val scriptPath = rootProject.file("native/build-stub.sh")
     if (!scriptPath.exists()) {
         throw GradleException("build-stub.sh not found at ${scriptPath.absolutePath}")
     }
-    
+
     commandLine("bash", scriptPath.absolutePath)
 }
 
@@ -37,12 +37,12 @@ tasks.register<Exec>("buildStubBridge") {
 tasks.register<Exec>("buildPdfium") {
     group = "build"
     description = "Build PDFium from EmbedPDF fork source (required before building real bridge)"
-    
+
     val scriptPath = rootProject.file("native/setup-pdfium.sh")
     if (!scriptPath.exists()) {
         throw GradleException("setup-pdfium.sh not found at ${scriptPath.absolutePath}")
     }
-    
+
     commandLine("bash", scriptPath.absolutePath)
 }
 
@@ -56,7 +56,7 @@ tasks.register<JavaExec>("runAllSamples") {
     mainClass.set("stirling.software.jpdfium.samples.RunAllSamples")
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
-    classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") + 
+    classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") +
                 files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
                 files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
@@ -72,7 +72,7 @@ tasks.register<JavaExec>("runSample") {
     dependsOn(":jpdfium:compileTestJava", ":jpdfium:processTestResources")
 
     val sampleNum = project.findProperty("sample")?.toString()?.padStart(2, '0') ?: "01"
-    
+
     // Map sample numbers to class names
     val sampleClasses = mapOf(
         "01" to "S01_Render",
@@ -166,14 +166,14 @@ tasks.register<JavaExec>("runSample") {
         "91" to "S91_AnnotationExchange",
         "92" to "S92_RustCompress"
     )
-    
-    val sampleClass = "stirling.software.jpdfium.samples." + 
+
+    val sampleClass = "stirling.software.jpdfium.samples." +
         (sampleClasses[sampleNum] ?: "S${sampleNum}_Render")
 
     mainClass.set(sampleClass)
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
-    classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") + 
+    classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") +
                 files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
                 files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
@@ -188,7 +188,7 @@ tasks.register<JavaExec>("runSample") {
 tasks.register("fullBuildAndTest") {
     group = "build"
     description = "Full end-to-end: build PDFium, build real bridge, run unit tests, integration tests, and all samples"
-    
+
     dependsOn(
         "buildPdfium",
         "buildRealBridge",
@@ -196,7 +196,7 @@ tasks.register("fullBuildAndTest") {
         ":jpdfium:integrationTest",
         "runAllSamples"
     )
-    
+
     doLast {
         println("")
         println("========================================")
@@ -216,13 +216,13 @@ tasks.register("fullBuildAndTest") {
 tasks.register("quickTry") {
     group = "application"
     description = "Quick try-out: build stub bridge and run all samples (no PDFium required)"
-    
+
     dependsOn(
         "buildStubBridge",
         ":jpdfium:test",
         "runAllSamples"
     )
-    
+
     doLast {
         println("")
         println("========================================")
@@ -289,7 +289,7 @@ tasks.register("finalizePortalDeployment") {
         if (response.statusCode() in 200..299) {
             println("✓ Deployment finalized successfully (HTTP ${response.statusCode()})")
             if (autoRelease) {
-                println("  Auto-release enabled — artifacts will appear on Maven Central after validation (~10-30 min)")
+                println("  Auto-release enabled - artifacts will appear on Maven Central after validation (~10-30 min)")
             } else {
                 println("  Go to https://central.sonatype.com/publishing/deployments to review and publish")
             }

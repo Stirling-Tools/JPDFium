@@ -838,7 +838,7 @@ try {
     docs.forEach(PdfDocument::close);
 }
 
-// helper — flatten the source tree into top-level entries
+// helper - flatten the source tree into top-level entries
 static void collectFlat(BookmarkTree.Builder b, Bookmark bm, int offset) {
     if (bm.isInternal()) b.add(bm.title(), offset + bm.pageIndex());
     if (bm.hasChildren()) bm.children().forEach(c -> collectFlat(b, c, offset));
@@ -1133,7 +1133,7 @@ byte[] pdf = NUpLayout.from(doc).grid(2, 2).a4Landscape().build().toBytes();
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor.BookmarkTree;
 
-// Manual bookmark creation. BookmarkTree.Builder is currently flat —
+// Manual bookmark creation. BookmarkTree.Builder is currently flat -
 // every entry becomes a top-level outline item. Nested chapter/section
 // hierarchy is a planned follow-up.
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
@@ -1144,14 +1144,14 @@ try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
         .add("References",  15)
         .build();
 
-    // Streaming variant — O(KB) heap regardless of document size.
+    // Streaming variant - O(KB) heap regardless of document size.
     // Writes the doc to outputPath then appends the outline objects as
     // an incremental update. Recommended for any PDF over a few MB.
     PdfBookmarkEditor.setBookmarks(doc, tree, Path.of("output.pdf"));
 }
 
 // byte[] overload still available for callers that want the result in
-// memory — internally calls the Path variant then reads the file back,
+// memory - internally calls the Path variant then reads the file back,
 // so heap peaks at file-size for the duration of readAllBytes.
 try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
     BookmarkTree tree = BookmarkTree.builder().add("Cover", 0).build();

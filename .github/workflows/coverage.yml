@@ -1,0 +1,65 @@
+name: Coverage
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  jacoco:
+    name: JaCoCo coverage (non-blocking ratchet)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - run: bash native/build-stub.sh
+
+      - name: Tests with JaCoCo
+        continue-on-error: true
+        run: |
+          ./gradlew :jpdfium:test :jpdfium:jacocoTestReport --no-daemon || \
+            ./gradlew :jpdfium:test --no-daemon
+          ls -R jpdfium/build/reports/jacoco 2>/dev/null | head -n 60 || echo "No JaCoCo report — add jacoco plugin to buildSrc"
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f jpdfium/build/reports/jacoco/test/jacocoTestReport.xml ]; then
+            python3 - << 'PY'
+          import xml.etree.ElementTree as ET, pathlib
+          p = pathlib.Path("jpdfium/build/reports/jacoco/test/jacocoTestReport.xml")
+          root = ET.parse(p).getroot()
+          for c in root.findall("counter"):
+              if c.get("type") == "LINE":
+                  m = int(c.get("missed")); cov = int(c.get("covered"))
+                  total = m+cov
+                  pct = 100*cov/total if total else 0
+                  print(f"Line coverage: {cov}/{total} ({pct:.1f}%)")
+          PY
+          else
+            echo "No coverage XML — treat as informational until JaCoCo is wired"
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: jacoco-report
+          path: jpdfium/build/reports/jacoco/
+          if-no-files-found: warn

@@ -37,9 +37,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -84,18 +84,18 @@ jobs:
           # macos-14 is arm64. To cross-compile darwin-x64 we need x86_64
           # builds of every pkg-config dep the bridge links against. The
           # cleanest path is a second Homebrew install at /usr/local managed
-          # by Rosetta — Homebrew refuses dual-arch in a single prefix and
+          # by Rosetta - Homebrew refuses dual-arch in a single prefix and
           # arch -x86_64 brew … uses /usr/local by default.
           sudo softwareupdate --install-rosetta --agree-to-license || true
           # The runner has /usr/local pre-populated by some Apple tools; clear
           # any leftover non-brew files that would clash.
           if [ ! -x /usr/local/bin/brew ]; then
             arch -x86_64 /bin/bash -c \
-              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
           arch -x86_64 /usr/local/bin/brew install \
             pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
-          # Use the host (arm64) cmake/ninja — they emit x64 builds when
+          # Use the host (arm64) cmake/ninja - they emit x64 builds when
           # CMAKE_OSX_ARCHITECTURES=x86_64 is set. Pkg-config from x86_64
           # brew points at x86_64 deps.
           which arch >/dev/null
@@ -159,7 +159,7 @@ jobs:
           # System.load on pdfium.dll fails otherwise: "Can't find dependent libraries".
           # Filter out Windows debug helpers that PDFium's gn build picks up
           # from the MSVC install dir (dbghelp.dll, msdia140.dll, symsrv.dll,
-          # dbgcore.dll, vccorlib140.dll) — they're not runtime deps, just
+          # dbgcore.dll, vccorlib140.dll) - they're not runtime deps, just
           # Chromium-style symbol-collection scaffolding, and add ~5 MB.
           if [ -d native/pdfium/lib ]; then
             find native/pdfium/lib -maxdepth 1 -type f \( \
@@ -170,7 +170,7 @@ jobs:
                ! -name 'vccorlib*.dll' \
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
-          # Bridge's own dynamic deps — pcre2-8, freetype, harfbuzz, icu, qpdf,
+          # Bridge's own dynamic deps - pcre2-8, freetype, harfbuzz, icu, qpdf,
           # pugixml, libunibreak + transitive deps. bundle-runtime-deps.sh
           # walks the bridge's import table per-platform (ldd / otool / dumpbin)
           # and copies only what's actually referenced, skipping system libs.
@@ -199,7 +199,7 @@ jobs:
             Windows) JX=openjdk-25-jextract+2-4_windows-x64_bin.tar.gz ;;
           esac
           mkdir -p "$HOME/jextract-install"
-          curl -fsSL "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "https://download.java.net/java/early_access/jextract/25/2/$JX" -o /tmp/jx.tar.gz
           tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
@@ -207,7 +207,7 @@ jobs:
         if: matrix.platform != 'darwin-x64'
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -218,14 +218,14 @@ jobs:
     needs: build-natives
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -235,12 +235,12 @@ jobs:
           # Download the OpenJDK 25 jextract early-access build for linux-x64.
           JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
           mkdir -p "$HOME/jextract-install"
-          curl -fsSL "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          curl -fsSL --max-time 120 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           ls "$HOME/jextract-install/bin/"
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         with:
           path: .artifacts
           pattern: natives-*

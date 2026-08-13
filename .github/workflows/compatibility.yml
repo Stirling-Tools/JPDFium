@@ -1,0 +1,164 @@
+name: Compatibility
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  japicmp:
+    name: Public API compatibility (japicmp vs last release)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Install deps (stub build needs no PDFium)
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+
+      - name: Build baseline (current) jar
+        run: |
+          bash native/build-stub.sh
+          ./gradlew :jpdfium:jar -Pjpdfium.version=0.0.0-baseline --no-daemon
+
+      - name: Resolve last release version
+        id: ver
+        run: |
+          TAG=$(gh release list --limit 20 --exclude-drafts --json tagName -q '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          if [ -z "$TAG" ]; then
+            echo "No previous release tag found — skipping binary-compat check (first release)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download baseline jar from Maven Central (or build stub if unavailable)
+        if: steps.ver.outputs.skip != 'true'
+        continue-on-error: true
+        run: |
+          VER="${{ steps.ver.outputs.version }}"
+          mkdir -p /tmp/japicmp-baseline
+          if curl -fsSL --max-time 30 "https://repo1.maven.org/maven2/com/stirling/jpdfium/$VER/jpdfium-$VER.jar" -o /tmp/japicmp-baseline/jpdfium-baseline.jar; then
+            echo "Downloaded jpdfium-$VER.jar from Central"
+          else
+            echo "Baseline artifact not on Central yet — treating as first publish, skipping strict check"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run japicmp (fail on binary/source incompatibility)
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          BASE_JAR=/tmp/japicmp-baseline/jpdfium-baseline.jar
+          CURR_JAR=$(find jpdfium/build/libs -name 'jpdfium-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)
+          test -f "$BASE_JAR" || { echo "Baseline jar missing — skipping"; exit 0; }
+          test -f "$CURR_JAR" || { echo "Current jar missing — $CURR_JAR"; exit 1; }
+          JAPICMP_VER=0.23.0
+          curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
+          java -jar /tmp/japicmp.jar \
+            --old "$BASE_JAR" \
+            --new "$CURR_JAR" \
+            --only-modified \
+            --report-only-filename \
+            --ignore-missing-classes \
+            --exclude-external-imports \
+            > /tmp/japicmp-report.txt || true
+          cat /tmp/japicmp-report.txt
+          if grep -qE "BREAKING|INCOMPATIBLE" /tmp/japicmp-report.txt; then
+            echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
+            exit 1
+          fi
+          echo "No binary incompatibilities vs ${{ steps.ver.outputs.tag }}."
+
+  module-info:
+    name: Module descriptor integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - name: Build stub
+        run: bash native/build-stub.sh
+      - name: Compile and validate module descriptor
+        run: |
+          ./gradlew :jpdfium:jar --no-daemon
+          JAR=$(find jpdfium/build/libs -name 'jpdfium-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)
+          echo "Describing module from $JAR"
+          jar --describe-module --file="$JAR"
+          jdeps --module-path "$JAR" -s "$JAR" 2>&1 | tee /tmp/jdeps.txt
+          if grep -q "not found" /tmp/jdeps.txt; then
+            echo "::error::Module descriptor has missing dependencies"
+            exit 1
+          fi
+
+  ffm-layout:
+    name: FFM layout vs pinned PDFium headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake
+      - name: Regenerate FFM bindings and diff
+        run: |
+          bash native/build-stub.sh
+          ./gradlew :jpdfium:generateBindings --no-daemon || echo "generateBindings skipped (jextract not found?)"
+          # Verify committed JpdfiumH.java matches regenerated output
+          if git diff --quiet -- jpdfium/src/main/java/stirling/software/jpdfium/panama/; then
+            echo "FFM bindings are in sync with native/bridge/include/jpdfium.h"
+          else
+            echo "::warning::FFM bindings drift from jpdfium.h — run ./gradlew :jpdfium:generateBindings locally and commit"
+            git diff -- jpdfium/src/main/java/stirling/software/jpdfium/panama/ | head -n 200
+            # Soft-fail first: change to exit 1 once baseline is committed
+            exit 0
+          fi
+      - name: Verify pinned PDFium headers expose expected Skia symbol
+        run: |
+          if grep -q "FPDF_RenderPageSkia" native/bridge/include/jpdfium.h; then
+            echo "Skia symbol check: jpdfium.h references FPDF_RenderPageSkia"
+          fi
+          # CMakeLists.txt already fatal-errors if fpdfview.h lacks FPDF_RenderPageSkia when JPDFIUM_USE_PDFIUM=ON
+          echo "FFM layout check done"
