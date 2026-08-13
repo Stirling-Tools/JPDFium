@@ -29,7 +29,7 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 bundle_linux() {
-    local bridge="$DIST_DIR/libjpdfium.so"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
     [ -f "$bridge" ] || { echo "no libjpdfium.so to bundle for"; return 0; }
 
     # Always-present system libs we don't need to (and shouldn't) bundle.
@@ -100,7 +100,7 @@ bundle_linux() {
 }
 
 bundle_macos() {
-    local bridge="$DIST_DIR/libjpdfium.dylib"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib to bundle for"; return 0; }
 
     # Known macOS install prefixes for searching @rpath/@loader_path deps.
@@ -266,7 +266,7 @@ sign_macos() {
 }
 
 bundle_windows() {
-    local bridge="$DIST_DIR/jpdfium.dll"
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/jpdfium.dll}"
     [ -f "$bridge" ] || { echo "no jpdfium.dll to bundle for"; return 0; }
 
     # Walk import table of every DLL in DIST_DIR, copying the bridge's runtime
@@ -358,7 +358,7 @@ bundle_windows() {
 }
 
 case "$PLATFORM" in
-    linux-*)
+    linux-*|vips-linux-*)
         bundle_linux
         # Strip debug symbols from the bridge to slash binary size. The
         # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
@@ -375,7 +375,7 @@ case "$PLATFORM" in
             done
         fi
         ;;
-    darwin-*)
+    darwin-*|vips-darwin-*)
         bundle_macos
         # macOS strip wants -S (debug symbols only) to keep the symbol table
         # the loader needs. -x would strip non-global symbols which can
@@ -390,7 +390,7 @@ case "$PLATFORM" in
         fi
         sign_macos
         ;;
-    windows-*)
+    windows-*|vips-windows-*)
         bundle_windows
         # The MSVC linker strips PE files in Release config already; no
         # equivalent `strip` step needed.

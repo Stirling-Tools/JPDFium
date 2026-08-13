@@ -1,0 +1,13 @@
+{
+  "reflection": [
+    {
+      "type": "stirling.software.jpdfium.spring.JPDFiumProperties",
+      "allDeclaredConstructors": true,
+      "allPublicConstructors": true,
+      "allDeclaredMethods": true,
+      "allPublicMethods": true,
+      "allDeclaredFields": true,
+      "allPublicFields": true
+    }
+  ]
+}
