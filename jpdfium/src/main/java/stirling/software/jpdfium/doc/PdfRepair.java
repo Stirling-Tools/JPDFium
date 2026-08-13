@@ -73,8 +73,6 @@ public final class PdfRepair {
         this.usePdfioFallback = usePdfioFallback;
         this.useLopdfFallback = useLopdfFallback;
         this.transcodeBrotli = transcodeBrotli;
-        this.validateIcc = validateIcc;
-        this.validateJpx = validateJpx;
         this.writeDiagnostics = writeDiagnostics;
         this.sanitize = sanitize;
     }
