@@ -25,6 +25,10 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t 
     size_t outCapacity = static_cast<size_t>(compressedLen) * 4;
     if (outCapacity < 4096) outCapacity = 4096;
     uint8_t* outBuf = static_cast<uint8_t*>(malloc(outCapacity));
+    if (!outBuf) {
+        BrotliDecoderDestroyInstance(state);
+        return JPDFIUM_ERR_NATIVE;
+    }
     size_t totalOut = 0;
 
     const uint8_t* nextIn = compressed;
@@ -39,8 +43,22 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t 
                                                &nextOut, &totalOut);
 
         if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
+            if (outCapacity > SIZE_MAX / 2) {
+                // Refuse to grow past half the address space (unreachable in
+                // practice; guards 32-bit size_t and pathological inputs).
+                BrotliDecoderDestroyInstance(state);
+                free(outBuf);
+                return JPDFIUM_ERR_INVALID;
+            }
             outCapacity *= 2;
-            outBuf = static_cast<uint8_t*>(realloc(outBuf, outCapacity));
+            uint8_t* grown = static_cast<uint8_t*>(realloc(outBuf, outCapacity));
+            if (!grown) {
+                // realloc leaves the original block intact; free it.
+                BrotliDecoderDestroyInstance(state);
+                free(outBuf);
+                return JPDFIUM_ERR_NATIVE;
+            }
+            outBuf = grown;
         }
     } while (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT);
 
@@ -71,6 +89,11 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(const uint8_t* compressed, int64_
     // Step 2: Flate (zlib) recompress
     uLongf destLen = compressBound(static_cast<uLong>(rawLen));
     *flateOutput = static_cast<uint8_t*>(malloc(destLen));
+    if (!*flateOutput) {
+        free(raw);
+        *flateLen = 0;
+        return JPDFIUM_ERR_NATIVE;
+    }
     int zrc =
         compress2(*flateOutput, &destLen, raw, static_cast<uLong>(rawLen), Z_DEFAULT_COMPRESSION);
     free(raw);

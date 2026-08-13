@@ -538,7 +538,17 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
     const char* result_data = hb_blob_get_data(result_blob, &result_len);
 
     *out_len = result_len;
+    if (result_len == 0) {
+        hb_blob_destroy(result_blob);
+        hb_face_destroy(subset_face);
+        return JPDFIUM_ERR_NATIVE;
+    }
     *out_data = (uint8_t*)malloc(result_len);
+    if (!*out_data) {
+        hb_blob_destroy(result_blob);
+        hb_face_destroy(subset_face);
+        return JPDFIUM_ERR_NATIVE;
+    }
     memcpy(*out_data, result_data, result_len);
 
     hb_blob_destroy(result_blob);
@@ -763,8 +773,8 @@ int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
         int count = 0;
         std::set<int> processed;  // object IDs of shared resource dicts already stripped
 
-        for (auto page : pdf.getAllPages()) {  // copy; hasKey/getKey are non-const in libqpdf on
-                                               // Ubuntu 24.04 (qpdf < 11.9 in apt)
+        // NOLINTNEXTLINE(performance-for-range-copy) - copy is intentional; hasKey/getKey are non-const in libqpdf on Ubuntu 24.04 (qpdf < 11.9 in apt)
+        for (auto page : pdf.getAllPages()) {
             if (!page.hasKey("/Resources")) continue;
             QPDFObjectHandle resources = page.getKey("/Resources");
             if (!resources.isDictionary()) continue;

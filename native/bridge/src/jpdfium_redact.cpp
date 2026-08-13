@@ -18,6 +18,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <type_traits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -64,7 +65,7 @@ static std::wstring utf8_to_wstring(const char* utf8) {
 static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
     std::vector<uint16_t> result;
     for (wchar_t wc : ws) {
-        uint32_t cp = static_cast<uint32_t>(wc);
+        uint32_t cp = static_cast<uint32_t>(static_cast<std::make_unsigned_t<wchar_t>>(wc));
         if (cp <= 0xFFFF) {
             result.push_back(static_cast<uint16_t>(cp));
         } else {
@@ -127,9 +128,7 @@ static std::wstring decomposeLigatures(const std::wstring& input) {
             case 0xFB04:
                 result += L"ffl";
                 break;  // ffl
-            case 0xFB05:
-                result += L"st";
-                break;  // long-s t
+            case 0xFB05:  // long-s t
             case 0xFB06:
                 result += L"st";
                 break;  // st
@@ -1329,7 +1328,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         }
 
         if (wholeWord) {
-            wpattern = L"\\b" + wpattern + L"\\b";
+            wpattern.insert(0, L"\\b");
+            wpattern += L"\\b";
         }
 
         std::wregex wre;
@@ -1518,7 +1518,10 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
                 wpattern += ch;
             }
         }
-        if (wholeWord) wpattern = L"\\b" + wpattern + L"\\b";
+        if (wholeWord) {
+            wpattern.insert(0, L"\\b");
+            wpattern += L"\\b";
+        }
 
         std::wregex wre;
         try {

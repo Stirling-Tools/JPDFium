@@ -148,7 +148,6 @@ JPDFium/
         - jpdfium_lcms.cpp       # ICC color profile validation
         - jpdfium_openjpeg.cpp   # JPEG2000 validation
         - jpdfium_pdfio.cpp      # PDFio fallback repair
-        - jpdfium_unicode.cpp    # Unicode text processing
         - jpdfium_stub.cpp       # Stub for testing without PDFium
     - setup-pdfium.sh            # Build PDFium from EmbedPDF fork source
     - build-real.sh              # Build bridge against real PDFium

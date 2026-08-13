@@ -7,6 +7,7 @@
 //   qpdf     (Apache 2.0) - XRef rebuild, stream normalization, inspection mode
 //   PDFium   (BSD)        - Tolerant parser fallback (Chrome lineage)
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -82,8 +83,11 @@ static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** out
 
         std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
         *outputLen = static_cast<int64_t>(buf->getSize());
-        *output = new uint8_t[*outputLen];
-        memcpy(*output, buf->getBuffer(), *outputLen);
+        // malloc (not new[]) - the caller frees this buffer with
+        // jpdfium_free_buffer, which calls free().
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) return JPDFIUM_REPAIR_FAILED;
+        memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
 
         return warnings.empty() ? JPDFIUM_REPAIR_CLEAN : JPDFIUM_REPAIR_FIXED;
     } catch (QPDFExc& e) {
@@ -102,7 +106,9 @@ static bool try_fix_startxref(std::vector<uint8_t>& data, int delta) {
     size_t needleLen = 9;
 
     int64_t pos = -1;
-    for (int64_t i = static_cast<int64_t>(data.size()) - needleLen - 1; i >= 0; --i) {
+    // NOLINTNEXTLINE(bugprone-narrowing-conversions) - bounded by input size
+    for (int64_t i = static_cast<int64_t>(data.size()) - static_cast<int64_t>(needleLen) - 1;
+         i >= 0; --i) {
         if (memcmp(data.data() + i, needle, needleLen) == 0) {
             pos = i;
             break;
@@ -121,7 +127,8 @@ static bool try_fix_startxref(std::vector<uint8_t>& data, int delta) {
 
     if (numEnd == numStart) return false;
 
-    std::string offsetStr(data.begin() + numStart, data.begin() + numEnd);
+    std::string offsetStr(data.begin() + static_cast<std::ptrdiff_t>(numStart),
+                          data.begin() + static_cast<std::ptrdiff_t>(numEnd));
     long long offset = std::stoll(offsetStr);
     long long newOffset = offset + delta;
     if (newOffset < 0) return false;
@@ -131,10 +138,10 @@ static bool try_fix_startxref(std::vector<uint8_t>& data, int delta) {
 
     // Pad with spaces if shorter, or expand if longer
     std::vector<uint8_t> result;
-    result.insert(result.end(), data.begin(), data.begin() + numStart);
+    result.insert(result.end(), data.begin(), data.begin() + static_cast<std::ptrdiff_t>(numStart));
     result.insert(result.end(), newOffsetStr.begin(), newOffsetStr.end());
     // Keep the same trailing content
-    result.insert(result.end(), data.begin() + numEnd, data.end());
+    result.insert(result.end(), data.begin() + static_cast<std::ptrdiff_t>(numEnd), data.end());
 
     data = std::move(result);
     return true;
@@ -191,7 +198,7 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
                 }
             }
         } catch (...) {
-            // Page tree may be broken
+            pageCount = 0;  // Page tree may be broken
         }
 
         os << "\"status\":\"loaded\",";
