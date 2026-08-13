@@ -4,6 +4,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDFormContentStream;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
@@ -40,6 +41,7 @@ class FormXObjectRedactTest {
 
             PDFormXObject form = new PDFormXObject(doc);
             form.setBBox(new PDRectangle(0, 0, 595, 842));
+            form.setResources(new PDResources());
 
             try (PDFormContentStream fs = new PDFormContentStream(form)) {
                 fs.beginText();

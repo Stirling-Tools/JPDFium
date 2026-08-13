@@ -512,7 +512,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Helper: build a TextFragment from a contiguous run of char indices.
     // Returns true if a valid fragment was produced.
     auto buildFragment = [&](const std::vector<int>& run, const FS_MATRIX& origMatrix,
-                             TextFragment& outFrag) -> bool {
+                             const FS_MATRIX& toPage, TextFragment& outFrag) -> bool {
         if (run.empty()) return false;
 
         // Find first printable non-space character for positioning.
@@ -540,6 +540,12 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         if (FPDFText_GetCharOrigin(textPage, run[firstNonWS], &fx, &fy)) {
             outFrag.matrix.e = static_cast<float>(fx);
             outFrag.matrix.f = static_cast<float>(fy);
+        } else {
+            // Fragments are placed at page level, so the fallback origin must be
+            // page space too; origMatrix e,f are container-local for form children.
+            FS_MATRIX full = concatMatrix(origMatrix, toPage);
+            outFrag.matrix.e = full.e;
+            outFrag.matrix.f = full.f;
         }
         return true;
     };
@@ -627,7 +633,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         auto flushRun = [&]() {
             if (currentRun.empty()) return;
             TextFragment frag;
-            if (buildFragment(currentRun, originalMatrix, frag)) {
+            if (buildFragment(currentRun, originalMatrix, ref.toPage, frag)) {
                 plan.fragments.push_back(std::move(frag));
             }
             currentRun.clear();
@@ -1214,8 +1220,22 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         }
     }
 
-    // 9. Remove all marked objects, from their own container
+    // 9. Remove all marked objects, from their own container.
+    // A marked ancestor form frees its whole subtree when destroyed, so a child
+    // marked alongside it must be skipped or removal touches freed memory.
+    auto ancestorMarked = [&](FPDF_PAGEOBJECT obj) -> bool {
+        auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(obj));
+        while (it != objPtrToIndex.end()) {
+            FPDF_PAGEOBJECT parent = allObjs[it->second].parentForm;
+            if (!parent) return false;
+            if (objsToDestroy.count(parent)) return true;
+            it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
+        }
+        return false;
+    };
     for (auto* obj : objsToDestroy) {
+        if (ancestorMarked(obj)) continue;
+
         FPDF_PAGEOBJECT parentForm = nullptr;
         auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(obj));
         if (pit != objPtrToIndex.end()) parentForm = allObjs[pit->second].parentForm;
