@@ -152,7 +152,7 @@ public final class PdfDuplicateDetector {
                 return hash;
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }

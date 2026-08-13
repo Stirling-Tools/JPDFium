@@ -65,7 +65,7 @@ public final class PdfAnnotationExporter {
                         if (data != null) result.add(data);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
             }
@@ -112,7 +112,6 @@ public final class PdfAnnotationExporter {
             try (PdfPage page = doc.page(d.pageIndex())) {
                 MemorySegment rawPage = page.rawHandle();
                 AnnotationType type = AnnotationType.valueOf(d.type());
-                if (type == null) continue;
 
                 MemorySegment annot;
                 try {
@@ -131,19 +130,19 @@ public final class PdfAnnotationExporter {
                         rect.set(ValueLayout.JAVA_FLOAT, 12, d.top());
                         try {
                             AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rect);
-                        } catch (Throwable ignored) {}
+                        } catch (Throwable _) {}
                     }
 
                     // Set color
                     try {
                         AnnotationBindings.FPDFAnnot_SetColor.invokeExact(
                                 annot, 0, d.r(), d.g(), d.b(), d.a());
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable _) {}
 
                     created++;
                 } finally {
                     try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                    catch (Throwable ignored) {}
+                    catch (Throwable _) {}
                 }
             }
         }
@@ -187,7 +186,7 @@ public final class PdfAnnotationExporter {
                     bi = b.get(ValueLayout.JAVA_INT, 0);
                     ai = a.get(ValueLayout.JAVA_INT, 0);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             return new AnnotationData(pageIndex, typeName, left, bottom, right, top,
                     null, ri, gi, bi, ai);

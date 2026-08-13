@@ -227,7 +227,8 @@ final class QrEncoder {
         for (int i = 0; i < maxDataLen; i++) {
             for (int b = 0; b < numBlocks; b++) {
                 if (i < dataBlocks[b].length) {
-                    result[idx++] = dataBlocks[b][i];
+                    result[idx] = dataBlocks[b][i];
+                    idx++;
                 }
             }
         }
@@ -235,7 +236,8 @@ final class QrEncoder {
         // Interleave EC codewords
         for (int i = 0; i < ecPerBlock; i++) {
             for (int b = 0; b < numBlocks; b++) {
-                result[idx++] = ecBlocks[b][i];
+                result[idx] = ecBlocks[b][i];
+                idx++;
             }
         }
 
@@ -595,7 +597,7 @@ final class QrEncoder {
             if (val != p2[i]) m2 = false;
             if (!m1 && !m2) return false;
         }
-        return m1 || m2;
+        return true;
     }
 
     private static final int[] FORMAT_INFO = {

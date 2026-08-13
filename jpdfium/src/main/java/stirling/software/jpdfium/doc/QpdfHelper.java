@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Helper for invoking the qpdf CLI tool for operations not available in PDFium.
@@ -59,20 +60,20 @@ final class QpdfHelper {
             boolean finished = p.waitFor(120, TimeUnit.SECONDS);
             if (!finished) {
                 p.destroyForcibly();
-                throw new RuntimeException("qpdf timed out after 120 seconds");
+                throw new JPDFiumException("qpdf timed out after 120 seconds");
             }
             if (p.exitValue() != 0 && p.exitValue() != 3 && p.exitValue() != 2) {
                 // qpdf exit 2 = errors but output created (e.g., recoverable issues)
                 // qpdf exit 3 = warnings (success with warnings)
-                throw new RuntimeException("qpdf failed (exit=" + p.exitValue() + "): "
+                throw new JPDFiumException("qpdf failed (exit=" + p.exitValue() + "): "
                         + new String(output).trim());
             }
         } catch (IOException e) {
-            throw new RuntimeException("qpdf not found on PATH. Install qpdf: " +
+            throw new JPDFiumException("qpdf not found on PATH. Install qpdf: " +
                     "apt install qpdf / brew install qpdf / choco install qpdf", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("qpdf interrupted", e);
+            throw new JPDFiumException("qpdf interrupted", e);
         }
     }
 }

@@ -9,6 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Get and set all five PDF page boxes: MediaBox, CropBox, BleedBox, TrimBox, ArtBox.
@@ -91,6 +92,6 @@ public final class PdfPageBoxes {
             float right = box.x() + box.width();
             float top = box.y() + box.height();
             setter.invokeExact(rawPage, left, bottom, right, top);
-        } catch (Throwable t) { throw new RuntimeException("Failed to set page box", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Failed to set page box", t); }
     }
 }

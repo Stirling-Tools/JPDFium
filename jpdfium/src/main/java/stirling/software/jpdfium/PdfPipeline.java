@@ -12,6 +12,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Orchestrates page-level operations with optional streaming (low-memory)
@@ -125,11 +126,11 @@ public final class PdfPipeline {
     public static PdfDocument process(byte[] input, ProcessingMode mode, PageOperation op) {
         if (mode.isParallel()) {
             return processParallel(input, mode, op);
-        } else if (mode.isStreaming()) {
-            return processStreaming(input, mode, op);
-        } else {
-            return processSequential(input, op);
         }
+        if (mode.isStreaming()) {
+            return processStreaming(input, mode, op);
+        }
+        return processSequential(input, op);
     }
 
     /**
@@ -173,8 +174,9 @@ public final class PdfPipeline {
     /**
      * Read-only iteration using a {@link PageOperation}.
      */
+    @SuppressWarnings("overloads") // delegates to the BiConsumer overload; rename would break the public API
     public static void forEach(byte[] sourceBytes, ProcessingMode mode, PageOperation op) {
-        forEach(sourceBytes, mode, (BiConsumer<PdfDocument, Integer>) (doc, i) -> op.apply(doc, i));
+        forEach(sourceBytes, mode, (BiConsumer<PdfDocument, Integer>) op::apply);
     }
 
     private static PdfDocument processSequential(byte[] input, PageOperation op) {
@@ -354,10 +356,10 @@ public final class PdfPipeline {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;
                 if (cause instanceof Error err) throw err;
-                throw new RuntimeException("Parallel processing failed", cause);
+                throw new JPDFiumException("Parallel processing failed", cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Parallel processing interrupted", e);
+                throw new JPDFiumException("Parallel processing interrupted", e);
             }
         }
         return results;
@@ -371,10 +373,10 @@ public final class PdfPipeline {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;
                 if (cause instanceof Error err) throw err;
-                throw new RuntimeException("Parallel processing failed", cause);
+                throw new JPDFiumException("Parallel processing failed", cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Parallel processing interrupted", e);
+                throw new JPDFiumException("Parallel processing interrupted", e);
             }
         }
     }

@@ -1,14 +1,22 @@
 package stirling.software.jpdfium;
 
-import stirling.software.jpdfium.doc.*;
-import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.doc.Attachment;
+import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.MetadataTag;
+import stirling.software.jpdfium.doc.PdfAttachments;
+import stirling.software.jpdfium.doc.PdfBookmarks;
+import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfSignatures;
+import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Represents an open PDF document backed by native PDFium.
@@ -25,8 +33,7 @@ import java.util.Optional;
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
-    private final java.util.concurrent.atomic.AtomicBoolean closed =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;

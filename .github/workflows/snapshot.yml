@@ -312,6 +312,74 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # Optional libvips natives for the jpdfium-vips image decoder (HEIC/HEIF/JXL/
+  # AVIF/WebP/...). Bring-up: the whole job is continue-on-error so PRs are NOT
+  # blocked while the per-platform libvips bundle is being hardened. Publishes
+  # nothing yet - add vips natives to publish-snapshot once staging is stable.
+  build-vips-natives:
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - name: Install libvips (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvips-dev patchelf
+      - name: Install libvips (macOS)
+        if: matrix.platform == 'darwin-arm64'
+        run: brew install vips
+      - name: Fetch prebuilt libvips (Windows)
+        # Asset name/version may need updating to match a current
+        # libvips/build-win64-mxe release. Non-blocking (job-level
+        # continue-on-error) so a stale URL doesn't fail the PR.
+        if: matrix.platform == 'windows-x64'
+        run: |
+          set -e
+          url=$(curl -fsSL https://api.github.com/repos/libvips/build-win64-mxe/releases/latest \
+                | grep -oE 'https://[^"]*vips-dev-w64-webp-[0-9.]+\.zip' | head -n1 || true)
+          [ -z "$url" ] && { echo "No prebuilt libvips Windows zip found - skipping"; exit 0; }
+          curl -fsSL "$url" -o /tmp/vips.zip
+          mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
+          echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
+
+      - name: Stage libvips + codec chain
+        id: stage
+        continue-on-error: true
+        env:
+          MACOS_ALLOW_UNSIGNED: '1'
+        run: bash native/build-vips.sh ${{ matrix.platform }}
+
+      - name: Build vips natives jar
+        if: steps.stage.outcome == 'success'
+        continue-on-error: true
+        run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.stage.outcome == 'success'
+        with:
+          name: natives-vips-${{ matrix.platform }}
+          path: native/dist/vips-${{ matrix.platform }}/
+          if-no-files-found: warn
+
   publish-snapshot:
     needs: build-natives
     # Skipped on a dry run (workflow_dispatch with skip_publish=true) and never

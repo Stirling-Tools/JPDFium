@@ -4,7 +4,10 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.redact.pii.PiiCategory;
 
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for the unified {@link RedactOptions}.
@@ -27,7 +30,7 @@ class RedactOptionsTest {
                 .build();
 
         assertEquals(2, opts.words().size());
-        assertEquals("Confidential", opts.words().get(0));
+        assertEquals("Confidential", opts.words().getFirst());
         assertEquals("Secret", opts.words().get(1));
         assertEquals(0xFFFF0000, opts.boxColor());
         assertEquals(2.0f, opts.padding(), 0.001f);

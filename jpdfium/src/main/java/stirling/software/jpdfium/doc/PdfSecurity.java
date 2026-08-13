@@ -311,12 +311,12 @@ public final class PdfSecurity {
             catch (Throwable t) { continue; }
             if (renderMode == 3) { // invisible
                 try { PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj); removed++; }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
         if (removed > 0) {
             try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
-            catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
         }
         return removed;
     }

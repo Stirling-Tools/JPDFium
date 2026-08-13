@@ -13,6 +13,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Read form fields from widget annotations.
@@ -61,13 +62,13 @@ public final class PdfFormReader {
         // FORM_OnAfterLoadPage is required for export values, IsChecked, and other
         // form-field metadata to become available on the annotations.
         try { FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, formHandle); }
-        catch (Throwable ignored) {}
+        catch (Throwable _) {}
 
         try {
             return readPageAnnotations(formHandle, rawPage, pageIndex);
         } finally {
             try { FormFillBindings.FORM_OnBeforeClosePage.invokeExact(rawPage, formHandle); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 
@@ -75,21 +76,21 @@ public final class PdfFormReader {
         int annotCount;
         try {
             annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
         List<FormField> fields = new ArrayList<>();
         for (int i = 0; i < annotCount; i++) {
             MemorySegment annot;
             try {
                 annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, i);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (annot.equals(MemorySegment.NULL)) continue;
 
             try {
                 int subtype;
                 try {
                     subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
-                } catch (Throwable t) { throw new RuntimeException(t); }
+                } catch (Throwable t) { throw new JPDFiumException(t); }
                 if (subtype != 20) continue; // 20 = WIDGET
 
                 int fieldTypeCode;
@@ -106,12 +107,12 @@ public final class PdfFormReader {
                 boolean checked = false;
                 try {
                     checked = (int) AnnotationBindings.FPDFAnnot_IsChecked.invokeExact(formHandle, annot) != 0;
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
 
                 int flags = 0;
                 try {
                     flags = (int) AnnotationBindings.FPDFAnnot_GetFormFieldFlags.invokeExact(formHandle, annot);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
                 boolean readOnly = (flags & 1) != 0;
                 boolean required = (flags & 2) != 0;
 
@@ -119,7 +120,7 @@ public final class PdfFormReader {
                 int optCount = 0;
                 try {
                     optCount = (int) AnnotationBindings.FPDFAnnot_GetOptionCount.invokeExact(formHandle, annot);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
 
                 List<String> options = new ArrayList<>();
                 List<Integer> selectedIndices = new ArrayList<>();
@@ -130,7 +131,7 @@ public final class PdfFormReader {
                         if ((int) AnnotationBindings.FPDFAnnot_IsOptionSelected.invokeExact(formHandle, annot, o) != 0) {
                             selectedIndices.add(o);
                         }
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable _) {}
                 }
 
                 Rect rect = getAnnotRect(annot);
@@ -138,7 +139,7 @@ public final class PdfFormReader {
                         checked, readOnly, required, tooltip, options, selectedIndices, rect));
             } finally {
                 try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
         return fields;
@@ -188,7 +189,7 @@ public final class PdfFormReader {
         public void close() {
             try {
                 DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
             arena.close();
         }
     }

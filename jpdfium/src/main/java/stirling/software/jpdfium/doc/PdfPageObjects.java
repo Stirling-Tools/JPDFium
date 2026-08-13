@@ -52,7 +52,11 @@ public final class PdfPageObjects {
             return new PageContentSummary(0, 0, 0, 0, 0, false);
         }
 
-        int text = 0, image = 0, path = 0, shading = 0, form = 0;
+        int text = 0;
+        int image = 0;
+        int path = 0;
+        int shading = 0;
+        int form = 0;
         for (int i = 0; i < count; i++) {
             MemorySegment obj;
             try {
@@ -70,6 +74,7 @@ public final class PdfPageObjects {
                 case 3 -> image++;
                 case 4 -> shading++;
                 case 5 -> form++;
+                default -> {}
             }
         }
 
@@ -158,7 +163,7 @@ public final class PdfPageObjects {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment w = arena.allocate(ValueLayout.JAVA_FLOAT);
             int ok = (int) PageEditBindings.FPDFPageObj_GetStrokeWidth.invokeExact(obj, w);
-            return ok != 0 ? w.get(ValueLayout.JAVA_FLOAT, 0) : 0f;
+            return ok == 0 ? 0f : w.get(ValueLayout.JAVA_FLOAT, 0);
         } catch (Throwable t) { return 0f; }
     }
 
@@ -177,7 +182,7 @@ public final class PdfPageObjects {
                 if (ok != 0) {
                     marks.add(FfmHelper.fromByteString(buf, 256));
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
         return marks;
     }

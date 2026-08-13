@@ -39,10 +39,11 @@ public final class Watermark {
     private final float opacity;
     private final Position position;
     private final float margin;
+    private final float scale;
 
     private Watermark(Type type, String text, BufferedImage image,
                       FontName fontName, float fontSize, int argbColor,
-                      float rotation, float opacity, Position position, float margin) {
+                      float rotation, float opacity, Position position, float margin, float scale) {
         this.type = type;
         this.text = text;
         this.image = image;
@@ -53,6 +54,7 @@ public final class Watermark {
         this.opacity = opacity;
         this.position = position;
         this.margin = margin;
+        this.scale = scale;
     }
 
     /** Create a text watermark builder. */
@@ -80,6 +82,7 @@ public final class Watermark {
     float opacity() { return opacity; }
     Position position() { return position; }
     float margin() { return margin; }
+    float scale() { return scale; }
 
     public static final class TextBuilder {
         private final String text;
@@ -95,20 +98,51 @@ public final class Watermark {
             this.text = text;
         }
 
-        public TextBuilder font(FontName fontName) { this.fontName = fontName; return this; }
-        public TextBuilder font(String fontName) { this.fontName = FontName.fromName(fontName); return this; }
-        public TextBuilder size(float fontSize) { this.fontSize = fontSize; return this; }
-        public TextBuilder color(int argbColor) { this.argbColor = argbColor; return this; }
-        public TextBuilder rotation(float degrees) { this.rotation = degrees; return this; }
-        public TextBuilder opacity(float opacity) { this.opacity = Math.max(0, Math.min(1, opacity)); return this; }
-        public TextBuilder position(Position position) { this.position = position; return this; }
-        public TextBuilder margin(float margin) { this.margin = margin; return this; }
+        public TextBuilder font(FontName fontName) {
+            this.fontName = fontName;
+            return this;
+        }
+
+        public TextBuilder font(String fontName) {
+            this.fontName = FontName.fromName(fontName);
+            return this;
+        }
+
+        public TextBuilder size(float fontSize) {
+            this.fontSize = fontSize;
+            return this;
+        }
+
+        public TextBuilder color(int argbColor) {
+            this.argbColor = argbColor;
+            return this;
+        }
+
+        public TextBuilder rotation(float degrees) {
+            this.rotation = degrees;
+            return this;
+        }
+
+        public TextBuilder opacity(float opacity) {
+            this.opacity = Math.clamp(opacity, 0, 1);
+            return this;
+        }
+
+        public TextBuilder position(Position position) {
+            this.position = position;
+            return this;
+        }
+
+        public TextBuilder margin(float margin) {
+            this.margin = margin;
+            return this;
+        }
 
         public Watermark build() {
             int alpha = (int) (opacity * 255) & 0xFF;
             int colorWithOpacity = (alpha << 24) | (argbColor & 0x00FFFFFF);
             return new Watermark(Type.TEXT, text, null, fontName, fontSize,
-                    colorWithOpacity, rotation, opacity, position, margin);
+                    colorWithOpacity, rotation, opacity, position, margin, 1.0f);
         }
     }
 
@@ -118,22 +152,37 @@ public final class Watermark {
         private Position position = Position.CENTER;
         private float margin = 0;
 
+        private float scale = 0.30f;
+
         private ImageBuilder(BufferedImage image) {
             this.image = image;
         }
 
-        public ImageBuilder opacity(float opacity) { this.opacity = Math.max(0, Math.min(1, opacity)); return this; }
-        public ImageBuilder position(Position position) { this.position = position; return this; }
-        public ImageBuilder margin(float margin) { this.margin = margin; return this; }
-        public ImageBuilder scale(float scale) { // default: 30% of page width
-            float scale1 = Math.max(0.01f, Math.min(1, scale));
-            return this; }
+        public ImageBuilder opacity(float opacity) {
+            this.opacity = Math.clamp(opacity, 0, 1);
+            return this;
+        }
+
+        public ImageBuilder position(Position position) {
+            this.position = position;
+            return this;
+        }
+
+        public ImageBuilder margin(float margin) {
+            this.margin = margin;
+            return this;
+        }
+
+        public ImageBuilder scale(float scale) {
+            this.scale = Math.clamp(scale, 0.01f, 1.0f);
+            return this;
+        }
 
         public Watermark build() {
             int alpha = (int) (opacity * 255) & 0xFF;
             int argb = (alpha << 24) | 0x00FFFFFF;
             return new Watermark(Type.IMAGE, null, image, null, 0,
-                    argb, 0, opacity, position, margin);
+                    argb, 0, opacity, position, margin, scale);
         }
     }
 }

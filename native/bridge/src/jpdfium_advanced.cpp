@@ -203,7 +203,7 @@ struct FlashTextProcessor {
         if (!keyword) return;
         TrieNode* node = root.get();
         for (const char* p = keyword; *p; ++p) {
-            char c = case_sensitive ? *p : tolower(*p);
+            char c = case_sensitive ? *p : static_cast<char>(tolower(*p));
             auto it = node->children.find(c);
             if (it == node->children.end()) {
                 node->children[c] = std::make_unique<TrieNode>();
@@ -227,7 +227,7 @@ struct FlashTextProcessor {
             bool found = false;
 
             for (size_t j = i; j < textLen; ++j) {
-                char c = case_sensitive ? text[j] : tolower(text[j]);
+                char c = case_sensitive ? text[j] : static_cast<char>(tolower(text[j]));
                 auto it = node->children.find(c);
                 if (it == node->children.end()) break;
                 node = it->second.get();

@@ -4,9 +4,13 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.redact.RedactResult;
 
+import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for unified {@link RedactResult} advanced fields (pure Java, no native dependency). */
 class PiiRedactResultTest {
@@ -59,11 +63,11 @@ class PiiRedactResultTest {
 
     private static RedactResult createResult(int words, int patterns, int entities,
                                              int glyphs, int metadata) {
-        List<PatternEngine.Match> patternList = new java.util.ArrayList<>();
+        List<PatternEngine.Match> patternList = new ArrayList<>();
         for (int i = 0; i < patterns; i++) {
             patternList.add(new PatternEngine.Match(i, i + 5, "test" + i, null));
         }
-        List<EntityRedactor.EntityMatch> entityList = new java.util.ArrayList<>();
+        List<EntityRedactor.EntityMatch> entityList = new ArrayList<>();
         for (int i = 0; i < entities; i++) {
             entityList.add(new EntityRedactor.EntityMatch(0, i, i + 5, "entity" + i, "PERSON"));
         }

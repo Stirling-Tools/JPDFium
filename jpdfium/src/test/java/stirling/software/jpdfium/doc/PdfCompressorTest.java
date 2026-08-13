@@ -9,7 +9,9 @@ import java.nio.file.Path;
 
 import stirling.software.jpdfium.PdfDocument;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class PdfCompressorTest {

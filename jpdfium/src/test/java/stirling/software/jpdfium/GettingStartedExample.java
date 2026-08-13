@@ -7,6 +7,7 @@ import stirling.software.jpdfium.model.RenderResult;
 
 import javax.imageio.ImageIO;
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -146,7 +147,7 @@ public class GettingStartedExample {
 
         // Bonus: Open from byte array
         System.out.println("\n=== Bonus: Open from bytes ===");
-        byte[] pdfBytes = java.nio.file.Files.readAllBytes(input);
+        byte[] pdfBytes = Files.readAllBytes(input);
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
             System.out.printf("Opened from %d bytes - %d pages%n", pdfBytes.length, doc.pageCount());
         }

@@ -7,8 +7,12 @@ import stirling.software.jpdfium.model.Rect;
 import java.io.IOException;
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.Objects;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests against the real native library (stub or PDFium).
@@ -23,7 +27,7 @@ class PdfDocumentTest {
     }
 
     private static byte[] pdfBytes() throws IOException {
-        return PdfDocumentTest.class.getResourceAsStream("/pdfs/general/minimal.pdf").readAllBytes();
+        return Objects.requireNonNull(PdfDocumentTest.class.getResourceAsStream("/pdfs/general/minimal.pdf")).readAllBytes();
     }
 
     @Test

@@ -38,7 +38,7 @@ public final class PdfBoundedText {
             return extractFromTextPage(textPage, left, top, right, bottom);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 
@@ -89,7 +89,7 @@ public final class PdfBoundedText {
             return FfmHelper.fromWideString(buf, (long) written * 2);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 }

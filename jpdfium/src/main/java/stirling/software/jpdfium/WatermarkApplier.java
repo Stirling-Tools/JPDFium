@@ -4,7 +4,8 @@ import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Position;
 
-import java.awt.*;
+import java.awt.AlphaComposite;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.lang.foreign.MemorySegment;
 import java.util.Set;
@@ -120,7 +121,7 @@ public final class WatermarkApplier {
         int w = withAlpha.getWidth();
         int h = withAlpha.getHeight();
 
-        float targetW = pageSize.width() * 0.3f;
+        float targetW = pageSize.width() * wm.scale();
         float scale = targetW / w;
         float targetH = h * scale;
 
@@ -153,17 +154,45 @@ public final class WatermarkApplier {
      */
     private static float[] computePosition(Position pos, float pageW, float pageH,
                                             float objW, float objH, float margin) {
-        float x, y;
+        float x;
+        float y;
         switch (pos) {
-            case TOP_LEFT -> { x = margin; y = pageH - objH - margin; }
-            case TOP_CENTER -> { x = (pageW - objW) / 2f; y = pageH - objH - margin; }
-            case TOP_RIGHT -> { x = pageW - objW - margin; y = pageH - objH - margin; }
-            case MIDDLE_LEFT -> { x = margin; y = (pageH - objH) / 2f; }
-            case MIDDLE_RIGHT -> { x = pageW - objW - margin; y = (pageH - objH) / 2f; }
-            case BOTTOM_LEFT -> { x = margin; y = margin; }
-            case BOTTOM_CENTER -> { x = (pageW - objW) / 2f; y = margin; }
-            case BOTTOM_RIGHT -> { x = pageW - objW - margin; y = margin; }
-            default -> { x = (pageW - objW) / 2f; y = (pageH - objH) / 2f; }
+            case TOP_LEFT -> {
+                x = margin;
+                y = pageH - objH - margin;
+            }
+            case TOP_CENTER -> {
+                x = (pageW - objW) / 2f;
+                y = pageH - objH - margin;
+            }
+            case TOP_RIGHT -> {
+                x = pageW - objW - margin;
+                y = pageH - objH - margin;
+            }
+            case MIDDLE_LEFT -> {
+                x = margin;
+                y = (pageH - objH) / 2f;
+            }
+            case MIDDLE_RIGHT -> {
+                x = pageW - objW - margin;
+                y = (pageH - objH) / 2f;
+            }
+            case BOTTOM_LEFT -> {
+                x = margin;
+                y = margin;
+            }
+            case BOTTOM_CENTER -> {
+                x = (pageW - objW) / 2f;
+                y = margin;
+            }
+            case BOTTOM_RIGHT -> {
+                x = pageW - objW - margin;
+                y = margin;
+            }
+            default -> {
+                x = (pageW - objW) / 2f;
+                y = (pageH - objH) / 2f;
+            }
         }
         return new float[]{ x, y };
     }

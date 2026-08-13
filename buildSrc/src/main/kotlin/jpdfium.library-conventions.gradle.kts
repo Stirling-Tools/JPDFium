@@ -1,4 +1,5 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
+import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 plugins {
     `java-library`
@@ -11,8 +12,12 @@ plugins {
 apply(plugin = "com.diffplug.spotless")
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_25
-    targetCompatibility = JavaVersion.VERSION_25
+    // Modern idiom: a JVM toolchain auto-selects (and can auto-provision via
+    // the foojay resolver) a JDK matching the language level, instead of
+    // pinning source/targetCompatibility to the daemon JVM.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
     withJavadocJar()
     withSourcesJar()
 }
@@ -79,6 +84,9 @@ tasks.matching { it.name.lowercase().contains("jmh") }.configureEach {
 }
 
 dependencies {
+    // JUnit lives in buildSrc convention plugins; version catalogs don't expose
+    // accessors to precompiled script plugins in Gradle 9, so these stay as
+    // literals aligned with the `junit` catalog version (see gradle/libs.versions.toml).
     testImplementation(platform("org.junit:junit-bom:5.11.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

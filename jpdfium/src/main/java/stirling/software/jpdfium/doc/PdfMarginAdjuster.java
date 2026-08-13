@@ -7,6 +7,7 @@ import stirling.software.jpdfium.panama.PageEditBindings;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Add whitespace margins (padding) around existing page content.
@@ -47,7 +48,7 @@ public final class PdfMarginAdjuster {
             float newH = srcH + top + bottom;
 
             try (Arena arena = Arena.ofConfined()) {
-                // Identity scale, translate by (left, bottom) 
+                // Identity scale, translate by (left, bottom)
                 MemorySegment matrix = arena.allocate(PageEditBindings.FS_MATRIX_LAYOUT);
                 matrix.set(ValueLayout.JAVA_FLOAT, 0, 1f);        // a
                 matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);        // b
@@ -65,16 +66,16 @@ public final class PdfMarginAdjuster {
                 try {
                     int ok = (int) PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(
                             rawPage, matrix, clip);
-                    if (ok == 0) throw new RuntimeException("TransFormWithClip failed");
+                    if (ok == 0) throw new JPDFiumException("TransFormWithClip failed");
                 } catch (RuntimeException re) { throw re; }
-                catch (Throwable t) { throw new RuntimeException("TransFormWithClip failed", t); }
+                catch (Throwable t) { throw new JPDFiumException("TransFormWithClip failed", t); }
             }
 
             try {
                 PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPage, 0f, 0f, newW, newH);
                 PageEditBindings.FPDFPage_SetCropBox.invokeExact(rawPage, 0f, 0f, newW, newH);
             } catch (Throwable t) {
-                throw new RuntimeException("Failed to set page boxes", t);
+                throw new JPDFiumException("Failed to set page boxes", t);
             }
         }
     }

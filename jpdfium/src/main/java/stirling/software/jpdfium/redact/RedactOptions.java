@@ -74,7 +74,7 @@ public final class RedactOptions {
     private final boolean stripAllMetadata;
     private final List<String> metadataKeysToStrip;
 
-    
+
     private final boolean semanticRedact;
     private final int coreferenceWindow;
     private final List<String> coreferencePronouns;
@@ -111,7 +111,7 @@ public final class RedactOptions {
         this.processingMode = b.processingMode;
     }
 
-    
+
 
     public List<String> words() { return words; }
     public int boxColor() { return boxColor; }
@@ -187,7 +187,7 @@ public final class RedactOptions {
 
         private Builder() {}
 
-        
+
 
         /** Add a word or pattern to the redaction list. */
         public Builder addWord(String word) {
@@ -202,16 +202,28 @@ public final class RedactOptions {
         }
 
         /** Set the fill color as 0xAARRGGBB (default: black). */
-        public Builder boxColor(int argb) { this.boxColor = argb; return this; }
+        public Builder boxColor(int argb) {
+            this.boxColor = argb;
+            return this;
+        }
 
         /** Extra padding in PDF points around each match (default: 0). */
-        public Builder padding(float pts) { this.padding = pts; return this; }
+        public Builder padding(float pts) {
+            this.padding = pts;
+            return this;
+        }
 
         /** If true, treat each word as a regex pattern (default: false). */
-        public Builder useRegex(boolean v) { this.useRegex = v; return this; }
+        public Builder useRegex(boolean v) {
+            this.useRegex = v;
+            return this;
+        }
 
         /** If true, only match whole words at word boundaries (default: false). */
-        public Builder wholeWord(boolean v) { this.wholeWord = v; return this; }
+        public Builder wholeWord(boolean v) {
+            this.wholeWord = v;
+            return this;
+        }
 
         /** If true, remove underlying PDF objects; if false, only paint over (default: true). */
         public Builder removeContent(boolean v) { this.removeContent = v; return this; }
@@ -219,7 +231,7 @@ public final class RedactOptions {
         /** If true, match case-sensitively; if false, ignore case (default: false). */
         public Builder caseSensitive(boolean v) { this.caseSensitive = v; return this; }
 
-        
+
 
         /** Convert each page to an image after redaction (most secure, default: false). */
         public Builder convertToImage(boolean v) { this.convertToImage = v; return this; }
@@ -227,12 +239,12 @@ public final class RedactOptions {
         /** DPI for image conversion (default: 150). Only used if convertToImage is true. */
         public Builder imageDpi(int dpi) { this.imageDpi = dpi; return this; }
 
-        
+
 
         /** If true, use incremental save (default: false). */
         public Builder incrementalSave(boolean v) { this.incrementalSave = v; return this; }
 
-        
+
 
         /** Run the font normalization pipeline before redaction (default: false). */
         public Builder normalizeFonts(boolean v) { this.normalizeFonts = v; return this; }
@@ -243,7 +255,7 @@ public final class RedactOptions {
         /** Repair /W glyph widths (default: true, only used if normalizeFonts is true). */
         public Builder repairWidths(boolean v) { this.repairWidths = v; return this; }
 
-        
+
 
         /** Enable a set of PCRE2 JIT PII patterns. */
         public Builder enablePiiPatterns(Map<PiiCategory, String> patterns) {
@@ -259,7 +271,7 @@ public final class RedactOptions {
         /** Enable Luhn checksum validation for credit card patterns (default: true). */
         public Builder luhnValidation(boolean v) { this.luhnValidation = v; return this; }
 
-        
+
 
         /** Add a named entity for FlashText NER dictionary matching. */
         public Builder addEntity(String keyword, String label) {
@@ -273,7 +285,7 @@ public final class RedactOptions {
             return this;
         }
 
-        
+
 
         /** Enable HarfBuzz-aware glyph-level redaction (default: false). */
         public Builder glyphAware(boolean v) { this.glyphAware = v; return this; }
@@ -287,7 +299,7 @@ public final class RedactOptions {
         /** Grapheme-safe cluster boundaries (default: true, only used if glyphAware is true). */
         public Builder graphemeSafe(boolean v) { this.graphemeSafe = v; return this; }
 
-        
+
 
         /** Redact matching words/patterns from XMP and /Info metadata (default: false). */
         public Builder redactMetadata(boolean v) { this.redactMetadata = v; return this; }
@@ -301,7 +313,7 @@ public final class RedactOptions {
             return this;
         }
 
-        
+
 
         /** Enable semantic coreference expansion (default: false). */
         public Builder semanticRedact(boolean v) { this.semanticRedact = v; return this; }

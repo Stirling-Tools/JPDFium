@@ -61,7 +61,7 @@ public final class PdfJavaScriptInspector {
                 scripts.add(new JsAction(name, script, JsAction.JsLocation.DOCUMENT, -1, -1, "document-level"));
             } finally {
                 try { JavaScriptBindings.FPDFDoc_CloseJavaScriptAction.invokeExact(jsAction); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
         return scripts;
@@ -116,14 +116,14 @@ public final class PdfJavaScriptInspector {
                         }
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
             }
             return scripts;
         } finally {
             try { DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
             arena.close();
         }
     }

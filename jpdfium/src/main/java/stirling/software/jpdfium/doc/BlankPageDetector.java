@@ -38,7 +38,7 @@ public final class BlankPageDetector {
             return charCount <= 0;
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 

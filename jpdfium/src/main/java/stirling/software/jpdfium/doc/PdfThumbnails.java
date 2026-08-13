@@ -9,6 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Extract embedded page thumbnails from a PDF.
@@ -69,7 +70,7 @@ public final class PdfThumbnails {
         MemorySegment bitmap;
         try {
             bitmap = (MemorySegment) ThumbnailBindings.FPDFPage_GetThumbnailAsBitmap.invokeExact(page);
-        } catch (Throwable t) { throw new RuntimeException("FPDFPage_GetThumbnailAsBitmap failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetThumbnailAsBitmap failed", t); }
 
         if (bitmap.equals(MemorySegment.NULL)) return Optional.empty();
 
@@ -82,7 +83,7 @@ public final class PdfThumbnails {
                 stride = (int)           PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
                 fmt    = (int)           PageEditBindings.FPDFBitmap_GetFormat.invokeExact(bitmap);
                 buf    = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
-            } catch (Throwable t) { throw new RuntimeException("FPDFBitmap_Get* failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFBitmap_Get* failed", t); }
 
             if (w <= 0 || h <= 0 || buf.equals(MemorySegment.NULL)) return Optional.empty();
 
@@ -116,7 +117,7 @@ public final class PdfThumbnails {
             return Optional.of(img);
         } finally {
             try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 
@@ -126,13 +127,13 @@ public final class PdfThumbnails {
             long needed;
             try {
                 needed = (long) getter.invokeExact(page, MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 0) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) getter.invokeExact(page, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return Optional.of(buf.asSlice(0, needed).toArray(ValueLayout.JAVA_BYTE));
         }
     }

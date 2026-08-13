@@ -84,7 +84,7 @@ public final class RepairCorpus {
         }
     }
 
-    
+
 
     /** Replace xref table bytes with random ASCII, keeping the rest of the file intact. */
     static byte[] corruptXref(byte[] pdf) {
@@ -123,7 +123,7 @@ public final class RepairCorpus {
         return (before + "startxref\n999999\n%%EOF").getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    
+
 
     /** Truncate the PDF at the given ratio (0.0-1.0). */
     static byte[] truncate(byte[] pdf, double ratio) {
@@ -139,7 +139,7 @@ public final class RepairCorpus {
         return s.substring(0, eofPos).getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    
+
 
     /** Remove the trailer dictionary. */
     static byte[] stripTrailer(byte[] pdf) {
@@ -168,7 +168,7 @@ public final class RepairCorpus {
         return sb.toString().getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    
+
 
     /** Change the /Length value of the first content stream to be wrong. */
     static byte[] wrongStreamLength(byte[] pdf) {
@@ -184,7 +184,7 @@ public final class RepairCorpus {
         return (before + "99999" + after).getBytes(StandardCharsets.ISO_8859_1);
     }
 
-    
+
 
     /** Prepend garbage bytes before the %PDF header. */
     static byte[] garbageHeader(byte[] pdf) {

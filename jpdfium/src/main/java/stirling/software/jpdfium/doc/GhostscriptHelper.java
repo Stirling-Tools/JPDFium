@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Helper for invoking Ghostscript for PDF compression operations.
@@ -137,18 +138,18 @@ final class GhostscriptHelper {
             boolean finished = p.waitFor(300, TimeUnit.SECONDS);
             if (!finished) {
                 p.destroyForcibly();
-                throw new RuntimeException("Ghostscript timed out after 300 seconds");
+                throw new JPDFiumException("Ghostscript timed out after 300 seconds");
             }
             if (p.exitValue() != 0) {
-                throw new RuntimeException("Ghostscript failed (exit=" + p.exitValue() + "): "
+                throw new JPDFiumException("Ghostscript failed (exit=" + p.exitValue() + "): "
                         + new String(output).trim());
             }
         } catch (IOException e) {
-            throw new RuntimeException("gs not found on PATH. Install Ghostscript: " +
+            throw new JPDFiumException("gs not found on PATH. Install Ghostscript: " +
                     "apt install ghostscript / brew install ghostscript", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Ghostscript interrupted", e);
+            throw new JPDFiumException("Ghostscript interrupted", e);
         }
     }
 }

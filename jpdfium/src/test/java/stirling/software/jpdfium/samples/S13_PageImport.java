@@ -47,7 +47,7 @@ public class S13_PageImport {
         // 2. Cross-document merge: import first page of second PDF into first PDF
         if (inputs.size() >= 2) {
             System.out.println("\n  -- Cross-document import (page 1 of second into first) --");
-            Path a = inputs.get(0);
+            Path a = inputs.getFirst();
             Path b = inputs.get(1);
             try (PdfDocument src  = PdfDocument.open(b);
                  PdfDocument dest = PdfDocument.open(a)) {

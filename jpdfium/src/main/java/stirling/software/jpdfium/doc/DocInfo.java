@@ -5,11 +5,17 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.JavaScriptBindings;
+import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * One-call document audit. Tells you everything about a PDF.
@@ -109,15 +115,17 @@ public final class DocInfo {
                 // Image count via page objects
                 MemorySegment rawPage = page.rawHandle();
                 try {
-                    int objCount = (int) stirling.software.jpdfium.panama.PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
+                    int objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
                     for (int j = 0; j < objCount; j++) {
-                        MemorySegment obj = (MemorySegment) stirling.software.jpdfium.panama.PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, j);
+                        MemorySegment obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, j);
                         if (!obj.equals(MemorySegment.NULL)) {
-                            int type = (int) stirling.software.jpdfium.panama.PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+                            int type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
                             if (type == 3) imgCount++; // IMAGE
                         }
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {
+                    // Page object enumeration optional
+                }
 
                 // Text detection
                 try {
@@ -140,7 +148,7 @@ public final class DocInfo {
 
         // JavaScript
         try {
-            b.javaScriptCount = (int) stirling.software.jpdfium.panama.JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
+            b.javaScriptCount = (int) JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
             b.hasJavaScript = b.javaScriptCount > 0;
         } catch (Throwable t) { b.hasJavaScript = false; b.javaScriptCount = 0; }
 
@@ -170,7 +178,7 @@ public final class DocInfo {
                 int v = versionSeg.get(ValueLayout.JAVA_INT, 0);
                 return PdfVersion.fromCode(v).toString();
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
         return PdfVersion.V1_7.toString();
     }
 

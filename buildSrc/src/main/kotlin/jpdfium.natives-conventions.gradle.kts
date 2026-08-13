@@ -1,4 +1,6 @@
 // Resource-only JAR - ships the platform-specific native library.
+import org.gradle.jvm.toolchain.JavaLanguageVersion
+
 plugins {
     `java-library`
     `maven-publish`
@@ -6,8 +8,12 @@ plugins {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    // Resource-only module: no Java sources to compile. A JVM toolchain keeps
+    // the javadoc/sources tasks deterministic without forcing a specific JDK
+    // on consumers. 25 matches the library module; these jars are empty.
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
     // Central Portal requires sources + javadoc jars for every published artifact.
     // These jars are empty for resource-only modules - the presence is what matters.
     withSourcesJar()

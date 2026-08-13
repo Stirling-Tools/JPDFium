@@ -1,13 +1,18 @@
 package stirling.software.jpdfium.doc;
 
+import java.lang.foreign.MemorySegment;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
-
-import java.lang.foreign.MemorySegment;
-import java.util.*;
 
 /**
  * Comprehensive document statistics and analytics.
@@ -78,7 +83,7 @@ public final class PdfAnalytics {
                             fontUsage.merge(ch.fontName(), 1, Integer::sum);
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception _) {}
 
                 // Page object stats
                 MemorySegment rawPage = page.rawHandle();

@@ -2,7 +2,6 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.doc.Annotation;
 import stirling.software.jpdfium.doc.AnnotationType;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.doc.PdfAnnotationExchange;

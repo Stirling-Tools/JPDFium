@@ -172,7 +172,7 @@ public final class PdfRedactor {
                 }
 
                 if (!words.isEmpty()) {
-                    String[] wordArray = words.toArray(new String[0]);
+                    String[] wordArray = words.toArray(String[]::new);
                     matchesOnPage = page.redactWordsEx(
                             wordArray, options.boxColor(), options.padding(),
                             options.wholeWord(), options.useRegex(),
@@ -281,12 +281,12 @@ public final class PdfRedactor {
         }
 
         if (!options.piiPatterns().isEmpty()) {
-            String[] patterns = options.piiPatterns().values().toArray(new String[0]);
+            String[] patterns = options.piiPatterns().values().toArray(String[]::new);
             total += XmpRedactor.redactPatterns(doc, patterns);
         }
 
         if (!options.metadataKeysToStrip().isEmpty()) {
-            XmpRedactor.stripKeys(doc, options.metadataKeysToStrip().toArray(new String[0]));
+            XmpRedactor.stripKeys(doc, options.metadataKeysToStrip().toArray(String[]::new));
             total += options.metadataKeysToStrip().size();
         }
 

@@ -2,12 +2,18 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.panama.PageEditBindings;
-
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.security.MessageDigest;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import stirling.software.jpdfium.panama.ImageObjBindings;
+import stirling.software.jpdfium.panama.PageEditBindings;
 
 /**
  * Detect and report duplicate embedded resources (images) across pages.
@@ -95,17 +101,17 @@ public final class PdfResourceDedup {
                         totalImages++;
                         String fp = fingerprint(obj);
                         int w = 0, h = 0;
-                        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+                        try (var arena = Arena.ofConfined()) {
                             var wBuf = arena.allocate(ValueLayout.JAVA_INT);
                             var hBuf = arena.allocate(ValueLayout.JAVA_INT);
                             try {
-                                int ok = (int) stirling.software.jpdfium.panama.ImageObjBindings
+                                int ok = (int) ImageObjBindings
                                         .FPDFImageObj_GetImagePixelSize.invokeExact(obj, wBuf, hBuf);
                                 if (ok != 0) {
                                     w = wBuf.get(ValueLayout.JAVA_INT, 0);
                                     h = hBuf.get(ValueLayout.JAVA_INT, 0);
                                 }
-                            } catch (Throwable ignored) {}
+                            } catch (Throwable _) {}
                         }
 
                         ImageRef ref = new ImageRef(p, i, w, h);
@@ -136,11 +142,11 @@ public final class PdfResourceDedup {
      * Generate a fingerprint for an image object based on its pixel data hash.
      */
     private static String fingerprint(MemorySegment imgObj) {
-        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+        try (var arena = Arena.ofConfined()) {
             var wBuf = arena.allocate(ValueLayout.JAVA_INT);
             var hBuf = arena.allocate(ValueLayout.JAVA_INT);
             try {
-                int ok = (int) stirling.software.jpdfium.panama.ImageObjBindings
+                int ok = (int) ImageObjBindings
                         .FPDFImageObj_GetImagePixelSize.invokeExact(imgObj, wBuf, hBuf);
                 if (ok == 0) return "unknown-" + System.identityHashCode(imgObj);
             } catch (Throwable t) { return "unknown-" + System.identityHashCode(imgObj); }

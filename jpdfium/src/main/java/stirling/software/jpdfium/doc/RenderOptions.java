@@ -1,6 +1,8 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.ProcessingMode;
+import stirling.software.jpdfium.internal.PixelFormat;
+import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ColorScheme;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -10,6 +12,7 @@ import java.awt.image.BufferedImage;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Full-control rendering options with grayscale, print mode, color schemes, and flag control.
@@ -25,6 +28,8 @@ public final class RenderOptions {
     private final int background;
     private final ColorScheme colorScheme;
     private final ProcessingMode processingMode;
+
+    private static final float POINTS_PER_INCH = 72f;
 
     private RenderOptions(Builder b) {
         this.dpi = b.dpi;
@@ -65,28 +70,28 @@ public final class RenderOptions {
 
     /**
      * Render a page with these options.
-     *
-     * @param rawPage  raw FPDF_PAGE MemorySegment
-     * @param pageWidth  page width in points
-     * @param pageHeight page height in points
-     * @return the rendered image as a BufferedImage
      */
     public BufferedImage render(MemorySegment rawPage, float pageWidth, float pageHeight) {
-        int w = Math.round(pageWidth * dpi / 72f);
-        int h = Math.round(pageHeight * dpi / 72f);
-        if (w <= 0 || h <= 0) return new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        try (RenderedPageView view = renderView(rawPage, pageWidth, pageHeight)) {
+            byte[] rgba = view.pixels().toArray(ValueLayout.JAVA_BYTE);
+            return new RenderResult(view.width(), view.height(), rgba).toBufferedImage();
+        }
+    }
 
+    RenderedPageView renderView(MemorySegment rawPage, float pageWidth, float pageHeight) {
+        int w = Math.round(pageWidth * dpi / POINTS_PER_INCH);
+        int h = Math.round(pageHeight * dpi / POINTS_PER_INCH);
+        if (w <= 0 || h <= 0) {
+            return emptyView();
+        }
         try {
             MemorySegment bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(w, h, 1);
             if (bitmap.equals(MemorySegment.NULL)) {
-                throw new RuntimeException("FPDFBitmap_Create failed for " + w + "x" + h);
+                throw new JPDFiumException("FPDFBitmap_Create failed for " + w + "x" + h);
             }
             try {
-                // Fill background
-                RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, w, h, (long)(background & 0xFFFFFFFFL));
-
+                RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, w, h, (background & 0xFFFFFFFFL));
                 if (colorScheme != null) {
-                    // Render with color scheme (progressive API)
                     try (Arena arena = Arena.ofConfined()) {
                         MemorySegment cs = arena.allocate(RenderBindings.COLORSCHEME_LAYOUT);
                         cs.set(ValueLayout.JAVA_INT, 0, colorScheme.pathFillColor());
@@ -95,32 +100,60 @@ public final class RenderOptions {
                         cs.set(ValueLayout.JAVA_INT, 12, colorScheme.textStrokeColor());
                         int status = (int) RenderBindings.FPDF_RenderPageBitmapWithColorScheme_Start.invokeExact(
                                 bitmap, rawPage, 0, 0, w, h, 0, flags(), cs, MemorySegment.NULL);
-                        // Complete progressive render if needed (status 1 = to-be-continued)
                         while (status == 1) {
                             status = (int) RenderBindings.FPDF_RenderPage_Continue.invokeExact(
                                     rawPage, MemorySegment.NULL);
                         }
                     } finally {
-                        // Always close progressive render context
                         RenderBindings.FPDF_RenderPage_Close.invokeExact(rawPage);
                     }
                 } else {
-                    // Standard render
                     RenderBindings.FPDF_RenderPageBitmap.invokeExact(
                             bitmap, rawPage, 0, 0, w, h, 0, flags());
                 }
-
-                // Extract pixel data
                 MemorySegment buffer = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
                 int stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
-                byte[] rgba = buffer.reinterpret((long) stride * h).toArray(ValueLayout.JAVA_BYTE);
-
-                return new RenderResult(w, h, rgba).toBufferedImage();
-            } finally {
+                MemorySegment pixels;
+                int snapW = w;
+                int snapH = h;
+                MemorySegment snapBitmap = bitmap;
+                if (stride == w * 4) {
+                    pixels = buffer.reinterpret((long) stride * h);
+                    MemorySegment capturedPixels = pixels;
+                    return new RenderedPageView(w, h, stride, 4, PixelFormat.RGBA_STRAIGHT,
+                            capturedPixels, () -> {
+                                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(snapBitmap); }
+                                catch (Throwable _) {
+                                    // Bitmap cleanup best effort
+                                }
+                            });
+                }
+                byte[] tight = buffer.reinterpret((long) stride * h).toArray(ValueLayout.JAVA_BYTE);
+                byte[] packed = new byte[w * h * 4];
+                for (int row = 0; row < h; row++) {
+                    System.arraycopy(tight, row * stride, packed, row * w * 4, w * 4);
+                }
                 PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap);
+                try (Arena arena = Arena.ofConfined()) {
+                    MemorySegment heapSeg = arena.allocateFrom(ValueLayout.JAVA_BYTE, packed);
+                    long len = packed.length;
+                    MemorySegment owned = Arena.ofAuto().allocate(len);
+                    MemorySegment.copy(heapSeg, 0, owned, 0, len);
+                    return new RenderedPageView(snapW, snapH, snapW * 4, 4, PixelFormat.RGBA_STRAIGHT,
+                            owned.reinterpret(len), () -> {});
+                }
+            } catch (Throwable t) {
+                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); } catch (Throwable _) {
+                    // Bitmap cleanup on exception
+                }
+                throw t;
             }
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException("Render failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Render failed", t); }
+    }
+
+    private static RenderedPageView emptyView() {
+        MemorySegment empty = MemorySegment.ofArray(new byte[4]);
+        return new RenderedPageView(1, 1, 4, 4, PixelFormat.RGBA_STRAIGHT, empty, () -> {});
     }
 
     public static final class Builder {

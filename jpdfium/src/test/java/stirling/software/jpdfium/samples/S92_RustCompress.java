@@ -38,7 +38,7 @@ import java.util.List;
  */
 public class S92_RustCompress {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
         List<Path> inputs = SampleBase.inputPdfs(args);
         Path outDir = SampleBase.out("S92_rust-compress");

@@ -1,7 +1,9 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.MemorySegment;
@@ -102,7 +104,7 @@ public final class PdfPrint {
                 newPage = (MemorySegment) PageEditBindings.FPDFPage_New.invokeExact(
                         rawResult, result.pageCount(), (double) sheetW, (double) sheetH);
             } catch (Throwable t) {
-                throw new RuntimeException("Failed to create booklet page", t);
+                throw new JPDFiumException("Failed to create booklet page", t);
             }
 
             int leftIdx = pair[0];
@@ -118,11 +120,11 @@ public final class PdfPrint {
                 placePageContent(rawResult, rawSrc, rightIdx, result.pageCount() - 1, halfW, halfW, sheetH);
             }
 
-            try { int gcOk = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(newPage); }
-            catch (Throwable t) { throw new RuntimeException("FPDFPage_GenerateContent failed", t); }
+            try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(newPage); }
+            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
 
             try { PageEditBindings.FPDF_ClosePage.invokeExact(newPage); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
 
         return result;
@@ -142,7 +144,7 @@ public final class PdfPrint {
         // Import the source page as a new page at the end
         int beforeCount;
         try {
-            beforeCount = (int) stirling.software.jpdfium.panama.DocBindings.FPDF_GetPageCount.invokeExact(rawDest);
+            beforeCount = (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDest);
         } catch (Throwable t) { return; }
 
         PdfPageImporter.importPagesByIndex(rawDest, rawSrc, new int[]{srcPageIndex}, beforeCount);
@@ -169,13 +171,11 @@ public final class PdfPrint {
         int obj3 = sb.length();
         sb.append("3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n");
         int xrefPos = sb.length();
-        sb.append("xref\n0 4\n");
-        sb.append("0000000000 65535 f \n");
+        sb.append("xref\n0 4\n0000000000 65535 f \n");
         sb.append(String.format("%010d 00000 n \n", obj1));
         sb.append(String.format("%010d 00000 n \n", obj2));
         sb.append(String.format("%010d 00000 n \n", obj3));
-        sb.append("trailer<</Root 1 0 R/Size 4>>\n");
-        sb.append("startxref\n").append(xrefPos).append("\n%%EOF");
+        sb.append("trailer<</Root 1 0 R/Size 4>>\nstartxref\n").append(xrefPos).append("\n%%EOF");
         return sb.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII);
     }
 
@@ -191,32 +191,32 @@ public final class PdfPrint {
      * Options for booklet creation.
      */
     public static final class BookletOptions {
-        private final PageSize sheetSize;
-        private final Binding binding;
-        private final boolean creepCompensation;
+        private final PageSize sheetSizeValue;
+        private final Binding bindingMode;
+        private final boolean isCreepCompensated;
 
         private BookletOptions(Builder b) {
-            this.sheetSize = b.sheetSize;
-            this.binding = b.binding;
-            this.creepCompensation = b.creepCompensation;
+            this.sheetSizeValue = b.sheetSizeValue;
+            this.bindingMode = b.bindingMode;
+            this.isCreepCompensated = b.isCreepCompensated;
         }
 
-        public PageSize sheetSize() { return sheetSize; }
-        public Binding binding() { return binding; }
-        public boolean creepCompensation() { return creepCompensation; }
+        public PageSize sheetSize() { return sheetSizeValue; }
+        public Binding binding() { return bindingMode; }
+        public boolean creepCompensation() { return isCreepCompensated; }
 
         public static Builder builder() { return new Builder(); }
 
         public static final class Builder {
-            private PageSize sheetSize = PageSize.A3;
-            private Binding binding = Binding.LEFT;
-            private boolean creepCompensation = false;
+            private PageSize sheetSizeValue = PageSize.A3;
+            private Binding bindingMode = Binding.LEFT;
+            private boolean isCreepCompensated;
 
             private Builder() {}
 
-            public Builder sheetSize(PageSize size) { this.sheetSize = size; return this; }
-            public Builder binding(Binding binding) { this.binding = binding; return this; }
-            public Builder creepCompensation(boolean v) { this.creepCompensation = v; return this; }
+            public Builder sheetSize(PageSize size) { this.sheetSizeValue = size; return this; }
+            public Builder binding(Binding binding) { this.bindingMode = binding; return this; }
+            public Builder creepCompensation(boolean v) { this.isCreepCompensated = v; return this; }
 
             public BookletOptions build() { return new BookletOptions(this); }
         }

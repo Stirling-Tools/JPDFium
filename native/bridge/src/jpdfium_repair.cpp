@@ -187,7 +187,7 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
             if (root.hasKey("/Pages")) {
                 QPDFObjectHandle pages = root.getKey("/Pages");
                 if (pages.hasKey("/Count")) {
-                    pageCount = pages.getKey("/Count").getIntValue();
+                    pageCount = static_cast<int>(pages.getKey("/Count").getIntValue());
                 }
             }
         } catch (...) {

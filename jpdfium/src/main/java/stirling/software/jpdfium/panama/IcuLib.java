@@ -3,7 +3,7 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
 
 /**
  * FFM bindings for ICU4C text processing (NFC normalization, sentence breaking, BiDi).

@@ -71,10 +71,10 @@ public final class PdfNamedDestinations {
                     if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
                     if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
                     if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
 
                 result.add(new NamedDestination(name, pageIndex, x, y, zoom, viewType));
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
         return Collections.unmodifiableList(result);
     }
@@ -108,7 +108,7 @@ public final class PdfNamedDestinations {
                 if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
                 if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
                 if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             return new NamedDestination(name, pageIndex, x, y, zoom, viewType);
         } catch (Throwable t) { return null; }

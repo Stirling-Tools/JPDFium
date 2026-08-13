@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * PDF compression and file size reduction.
@@ -139,7 +140,7 @@ public final class PdfCompressor {
                 resultBytes = Files.readAllBytes(currentInput);
             }
         } catch (IOException e) {
-            throw new RuntimeException("Compression failed", e);
+            throw new JPDFiumException("Compression failed", e);
         } finally {
             deleteQuietly(tempIn);
             deleteQuietly(tempGs);

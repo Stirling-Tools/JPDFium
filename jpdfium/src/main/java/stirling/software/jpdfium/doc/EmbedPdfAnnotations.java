@@ -8,6 +8,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Extended annotation operations provided by the EmbedPDF PDFium fork.
@@ -39,9 +40,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetColor.invokeExact(annot, type, r, g, b);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetColor failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetColor failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -63,8 +63,7 @@ public final class EmbedPdfAnnotations {
                     gBuf.get(ValueLayout.JAVA_INT, 0),
                     bBuf.get(ValueLayout.JAVA_INT, 0)
             });
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -75,9 +74,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, alpha);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetOpacity failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetOpacity failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -91,8 +89,7 @@ public final class EmbedPdfAnnotations {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetOpacity.invokeExact(annot, buf);
             if (ok == 0) return 255;
             return buf.get(ValueLayout.JAVA_INT, 0);
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -104,9 +101,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GenerateAppearance.invokeExact(annot);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_GenerateAppearance failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_GenerateAppearance failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -119,7 +115,7 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             return (int) EmbedPdfAnnotationBindings.EPDFAnnot_HasAppearanceStream.invokeExact(annot, mode) != 0;
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -130,9 +126,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetRotate.invokeExact(annot, degrees);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetRotate failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetRotate failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -146,8 +141,7 @@ public final class EmbedPdfAnnotations {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetRotate.invokeExact(annot, buf);
             if (ok == 0) return 0f;
             return buf.get(ValueLayout.JAVA_FLOAT, 0);
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
     /**
@@ -159,7 +153,7 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             return (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetReplyType.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -172,9 +166,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetReplyType.invokeExact(annot, rt);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetReplyType failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetReplyType failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -187,9 +180,8 @@ public final class EmbedPdfAnnotations {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment textSeg = text != null ? FfmHelper.toWideString(arena, text) : MemorySegment.NULL;
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOverlayText.invokeExact(annot, textSeg);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetOverlayText failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetOverlayText failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -206,8 +198,7 @@ public final class EmbedPdfAnnotations {
             long _ = (long) EmbedPdfAnnotationBindings.EPDFAnnot_GetOverlayText.invokeExact(annot, buf, needed);
             String value = FfmHelper.fromWideString(buf, needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -224,9 +215,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction.invokeExact(page, annot);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_ApplyRedaction failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_ApplyRedaction failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -239,7 +229,7 @@ public final class EmbedPdfAnnotations {
     public static boolean applyAllRedactions(MemorySegment page) {
         try {
             return (int) EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions.invokeExact(page) != 0;
-        } catch (Throwable t) { throw new RuntimeException("EPDFPage_ApplyRedactions failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
     }
 
     /**
@@ -253,9 +243,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_Flatten.invokeExact(page, annot);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_Flatten failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_Flatten failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -270,9 +259,8 @@ public final class EmbedPdfAnnotations {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment intentSeg = arena.allocateFrom(intent);
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIntent.invokeExact(annot, intentSeg);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetIntent failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetIntent failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -287,9 +275,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetBorderStyle.invokeExact(annot, style, width);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetBorderStyle failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetBorderStyle failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -303,9 +290,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetTextAlignment.invokeExact(annot, alignment);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetTextAlignment failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetTextAlignment failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -318,9 +304,8 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
-            if (ok == 0) throw new RuntimeException("EPDFAnnot_SetIcon failed");
-        } catch (RuntimeException e) { throw e; }
-        catch (Throwable t) { throw new RuntimeException(t); }
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetIcon failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -333,7 +318,7 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot = openAnnot(page, index);
         try {
             return (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
 
@@ -341,7 +326,7 @@ public final class EmbedPdfAnnotations {
         MemorySegment annot;
         try {
             annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, index);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
         if (annot.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Annotation index " + index + " not found");
         }
@@ -351,6 +336,6 @@ public final class EmbedPdfAnnotations {
     private static void closeAnnot(MemorySegment annot) {
         try {
             AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 }

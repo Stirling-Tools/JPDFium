@@ -15,8 +15,11 @@
 
 // Internal helpers
 
-// Decode PNG data to raw RGBA pixels using libpng (if available)
-// Returns nullptr if PNG decoding fails or libpng is not linked
+// Decode PNG data to raw RGBA pixels.
+// Returns nullptr - PNG/JPEG decoding is handled Java-side (see the optional
+// jpdfium-vips module's VipsDecoder + the format=3 raw-RGBA embed path in
+// PdfImageConverter.embedRgbaImages). Formats 0/1/2 fall through to
+// JPDFIUM_ERR_NATIVE below.
 static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_width,
                            int* out_height) {
     (void)png_data;
@@ -30,7 +33,8 @@ static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_wid
     return nullptr;
 }
 
-// Decode JPEG data to raw RGB pixels using libjpeg-turbo (if available)
+// Decode JPEG data to raw RGB pixels.
+// Returns nullptr - see decode_png above; decoding is Java-side via libvips.
 static uint8_t* decode_jpeg(const uint8_t* jpeg_data, size_t jpeg_len, int* out_width,
                             int* out_height) {
     (void)jpeg_data;

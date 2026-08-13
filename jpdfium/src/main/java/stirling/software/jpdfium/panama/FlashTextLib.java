@@ -3,7 +3,8 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the FlashText keyword processor (O(n) dictionary NER matching).

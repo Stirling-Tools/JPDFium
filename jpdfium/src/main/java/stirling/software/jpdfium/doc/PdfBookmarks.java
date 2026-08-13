@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Navigate the bookmark (outline) tree of a PDF document.
@@ -54,7 +55,7 @@ public final class PdfBookmarks {
             MemorySegment bm;
             try {
                 bm = (MemorySegment) BookmarkBindings.FPDFBookmark_Find.invokeExact(doc, titleSeg);
-            } catch (Throwable t) { throw new RuntimeException("FPDFBookmark_Find failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFBookmark_Find failed", t); }
 
             if (bm.equals(MemorySegment.NULL)) return Optional.empty();
             return Optional.of(toBookmark(doc, bm, 0));
@@ -62,19 +63,19 @@ public final class PdfBookmarks {
     }
 
     private static List<Bookmark> collectChildren(MemorySegment doc, MemorySegment parent, int depth) {
-        if (depth > MAX_DEPTH) return Collections.emptyList();
+        if (depth > MAX_DEPTH || BookmarkBindings.FPDFBookmark_GetFirstChild == null) return Collections.emptyList();
 
         List<Bookmark> result = new ArrayList<>();
         MemorySegment child;
         try {
             child = (MemorySegment) BookmarkBindings.FPDFBookmark_GetFirstChild.invokeExact(doc, parent);
-        } catch (Throwable t) { throw new RuntimeException("FPDFBookmark_GetFirstChild failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFBookmark_GetFirstChild failed", t); }
 
         while (!child.equals(MemorySegment.NULL)) {
             result.add(toBookmark(doc, child, depth));
             try {
                 child = (MemorySegment) BookmarkBindings.FPDFBookmark_GetNextSibling.invokeExact(doc, child);
-            } catch (Throwable t) { throw new RuntimeException("FPDFBookmark_GetNextSibling failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFBookmark_GetNextSibling failed", t); }
         }
         return Collections.unmodifiableList(result);
     }
@@ -89,24 +90,24 @@ public final class PdfBookmarks {
         MemorySegment action;
         try {
             action = (MemorySegment) BookmarkBindings.FPDFBookmark_GetAction.invokeExact(bm);
-        } catch (Throwable t) { throw new RuntimeException("FPDFBookmark_GetAction failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDFBookmark_GetAction failed", t); }
 
         if (!action.equals(MemorySegment.NULL)) {
             try {
                 long type = (long) ActionBindings.FPDFAction_GetType.invokeExact(action);
                 actionType = ActionType.fromCode(type);
-            } catch (Throwable t) { throw new RuntimeException("FPDFAction_GetType failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFAction_GetType failed", t); }
 
             switch (actionType) {
                 case GOTO -> {
                     MemorySegment dest;
                     try {
                         dest = (MemorySegment) ActionBindings.FPDFAction_GetDest.invokeExact(doc, action);
-                    } catch (Throwable t) { throw new RuntimeException(t); }
+                    } catch (Throwable t) { throw new JPDFiumException(t); }
                     if (!dest.equals(MemorySegment.NULL)) {
                         try {
                             pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(doc, dest);
-                        } catch (Throwable t) { throw new RuntimeException(t); }
+                        } catch (Throwable t) { throw new JPDFiumException(t); }
                     }
                 }
                 case URI -> uri = Optional.ofNullable(getActionUri(doc, action));
@@ -117,12 +118,12 @@ public final class PdfBookmarks {
             MemorySegment dest;
             try {
                 dest = (MemorySegment) BookmarkBindings.FPDFBookmark_GetDest.invokeExact(doc, bm);
-            } catch (Throwable t) { throw new RuntimeException("FPDFBookmark_GetDest failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFBookmark_GetDest failed", t); }
             if (!dest.equals(MemorySegment.NULL)) {
                 actionType = ActionType.GOTO;
                 try {
                     pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(doc, dest);
-                } catch (Throwable t) { throw new RuntimeException(t); }
+                } catch (Throwable t) { throw new JPDFiumException(t); }
             }
         }
 
@@ -136,13 +137,13 @@ public final class PdfBookmarks {
             try {
                 needed = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bm,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return "";
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bm, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromWideString(buf, needed);
         }
     }
@@ -153,13 +154,13 @@ public final class PdfBookmarks {
             try {
                 needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 1) return null;
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromByteString(buf, needed);
         }
     }
@@ -170,13 +171,13 @@ public final class PdfBookmarks {
             try {
                 needed = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(action,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 1) return null;
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(action, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return FfmHelper.fromByteString(buf, needed);
         }
     }

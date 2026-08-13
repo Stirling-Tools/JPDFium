@@ -4,7 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link PdfTextSearcher}'s JSON parsing.
@@ -41,8 +42,8 @@ class PdfTextSearcherTest {
         List<PdfTextSearcher.SearchMatch> matches = PdfTextSearcher.parseMatchesJson(json, 0);
 
         assertEquals(2, matches.size());
-        assertEquals(0, matches.get(0).startIndex());
-        assertEquals(4, matches.get(0).length());
+        assertEquals(0, matches.getFirst().startIndex());
+        assertEquals(4, matches.getFirst().length());
         assertEquals(10, matches.get(1).startIndex());
         assertEquals(2, matches.get(1).length());
     }

@@ -1,13 +1,15 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Read and query PDF document metadata: title, author, subject, keywords,
@@ -64,16 +66,23 @@ public final class PdfMetadata {
             // Double-call pattern: first call gets required buffer size
             long needed;
             try {
+                if (DocBindings.FPDF_GetMetaText == null) return Optional.empty();
                 needed = (long) DocBindings.FPDF_GetMetaText.invokeExact(docSeg, tagSeg,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetMetaText size call failed", t); }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return Optional.empty();
+            }
 
             if (needed <= 2) return Optional.empty();  // only null terminator
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(docSeg, tagSeg, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetMetaText fill call failed", t); }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return Optional.empty();
+            }
 
             String value = FfmHelper.fromWideString(buf, needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
@@ -97,8 +106,12 @@ public final class PdfMetadata {
      */
     public int permissions() {
         try {
+            if (DocBindings.FPDF_GetDocPermissions == null) return -1;
             return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(docSeg);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_GetDocPermissions failed", t); }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
     }
 
     /**
@@ -106,8 +119,12 @@ public final class PdfMetadata {
      */
     public int securityHandlerRevision() {
         try {
+            if (DocBindings.FPDF_GetSecurityHandlerRevision == null) return 0;
             return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(docSeg);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_GetSecurityHandlerRevision failed", t); }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
     }
 
     /**
@@ -122,14 +139,14 @@ public final class PdfMetadata {
             try {
                 needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetPageLabel size call", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel size call", t); }
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException("FPDF_GetPageLabel fill call", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel fill call", t); }
 
             String label = FfmHelper.fromWideString(buf, needed);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);

@@ -76,25 +76,25 @@ public final class PdfFlattenRotation {
                 if (!obj.equals(MemorySegment.NULL)) {
                     PageEditBindings.FPDFPageObj_Transform.invokeExact(obj, a, b, c, d, e, f);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
 
         // Swap MediaBox dimensions for 90 degrees and 270 degrees
         if (rotation == 1 || rotation == 3) {
             try {
                 PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPage, 0f, 0f, height, width);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
 
         // Reset rotation to 0
         try {
             PageEditBindings.FPDFPage_SetRotation.invokeExact(rawPage, 0);
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
 
         // Regenerate content
         try {
             int gcok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
 
         return degrees;
     }

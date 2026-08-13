@@ -73,7 +73,7 @@ import java.util.List;
  */
 public class S52_Compress {
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
         List<Path> inputs = SampleBase.inputPdfs(args);
         Path outDir = SampleBase.out("S52_compress");
@@ -85,9 +85,7 @@ public class S52_Compress {
         System.out.printf("S52_Compress  |  input: %s (%,d bytes)%n",
                 input.getFileName(), inputSize);
 
-        // ====================================================================
         // SECTION 1: Standard Compression (no Rust)
-        // ====================================================================
 
         // 1. Lossless (structural optimization only, no quality loss)
         SampleBase.section("Lossless compression (qpdf only, no quality loss)");
@@ -155,9 +153,7 @@ public class S52_Compress {
             System.out.println("  JSON: " + result.toJson());
         }
 
-        // ====================================================================
         // SECTION 2: Rust/zopfli Enhancement
-        // ====================================================================
 
         // 6. Rust/zopfli pass with default iteration count (15)
         SampleBase.section("Rust/zopfli: lossless + zopfli (15 iterations, default)");

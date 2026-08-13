@@ -5,6 +5,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.MemorySegment;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Add a solid-color background rectangle behind existing page content.
@@ -47,25 +48,25 @@ public final class PdfBackground {
                 rect = (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewRect.invokeExact(
                         0f, 0f, w, h);
             } catch (Throwable t) {
-                throw new RuntimeException("FPDFPageObj_CreateNewRect failed", t);
+                throw new JPDFiumException("FPDFPageObj_CreateNewRect failed", t);
             }
 
             if (rect.equals(MemorySegment.NULL)) {
-                throw new RuntimeException("Failed to create background rect");
+                throw new JPDFiumException("Failed to create background rect");
             }
 
             // Set fill color
             try {
                 PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(rect, r, g, b, 255);
             } catch (Throwable t) {
-                throw new RuntimeException("FPDFPageObj_SetFillColor failed", t);
+                throw new JPDFiumException("FPDFPageObj_SetFillColor failed", t);
             }
 
             // Set draw mode: fill only (FPDF_FILLMODE_ALTERNATE = 1), no stroke (0)
             try {
                 PageEditBindings.FPDFPath_SetDrawMode.invokeExact(rect, 1, 0);
             } catch (Throwable t) {
-                throw new RuntimeException("FPDFPath_SetDrawMode failed", t);
+                throw new JPDFiumException("FPDFPath_SetDrawMode failed", t);
             }
 
             // PDFium InsertObject appends to the end (top of z-order).
@@ -91,7 +92,7 @@ public final class PdfBackground {
             try {
                 PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, rect);
             } catch (Throwable t) {
-                throw new RuntimeException("FPDFPage_InsertObject failed", t);
+                throw new JPDFiumException("FPDFPage_InsertObject failed", t);
             }
 
             // Re-add all existing objects on top
@@ -99,7 +100,7 @@ public final class PdfBackground {
                 if (obj != null && !obj.equals(MemorySegment.NULL)) {
                     try {
                         PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, obj);
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable _) {}
                 }
             }
 
@@ -107,7 +108,7 @@ public final class PdfBackground {
             try {
                 PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
             } catch (Throwable t) {
-                throw new RuntimeException("FPDFPage_GenerateContent failed", t);
+                throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
             }
         }
     }

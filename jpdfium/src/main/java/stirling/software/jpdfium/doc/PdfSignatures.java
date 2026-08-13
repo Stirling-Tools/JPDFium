@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Inspect digital signatures in a PDF document.
@@ -38,9 +39,12 @@ public final class PdfSignatures {
      * Returns the number of signatures in the document.
      */
     public static int count(MemorySegment doc) {
+        if (SignatureBindings.FPDF_GetSignatureCount == null) {
+            return 0;
+        }
         try {
             return (int) SignatureBindings.FPDF_GetSignatureCount.invokeExact(doc);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_GetSignatureCount failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDF_GetSignatureCount failed", t); }
     }
 
     /**
@@ -71,7 +75,7 @@ public final class PdfSignatures {
         MemorySegment sig;
         try {
             sig = (MemorySegment) SignatureBindings.FPDF_GetSignatureObject.invokeExact(doc, index);
-        } catch (Throwable t) { throw new RuntimeException("FPDF_GetSignatureObject failed", t); }
+        } catch (Throwable t) { throw new JPDFiumException("FPDF_GetSignatureObject failed", t); }
 
         if (sig.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Signature index " + index + " not found");
@@ -93,13 +97,13 @@ public final class PdfSignatures {
             try {
                 needed = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(sig,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 1) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return Optional.of(FfmHelper.fromByteString(buf, needed));
         }
     }
@@ -110,13 +114,13 @@ public final class PdfSignatures {
             try {
                 needed = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(sig,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return Optional.of(FfmHelper.fromWideString(buf, needed));
         }
     }
@@ -127,13 +131,13 @@ public final class PdfSignatures {
             try {
                 needed = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(sig,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 1) return Optional.empty();
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return Optional.of(FfmHelper.fromByteString(buf, needed));
         }
     }
@@ -146,13 +150,13 @@ public final class PdfSignatures {
             try {
                 needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(sig,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 0) return EMPTY_BYTES;
 
             MemorySegment buf = arena.allocate(needed);
             try {
                 long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new RuntimeException(t); }
+            } catch (Throwable t) { throw new JPDFiumException(t); }
             return buf.toArray(ValueLayout.JAVA_BYTE);
         }
     }
@@ -160,6 +164,6 @@ public final class PdfSignatures {
     private static int getPermission(MemorySegment sig) {
         try {
             return (int) SignatureBindings.FPDFSignatureObj_GetDocMDPPermission.invokeExact(sig);
-        } catch (Throwable t) { throw new RuntimeException(t); }
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 }

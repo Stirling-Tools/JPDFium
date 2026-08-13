@@ -50,7 +50,7 @@ public final class GlyphRedactor {
      * @return result with match count and detailed glyph information
      */
     public static Result redact(PdfPage page, List<String> words, Options options) {
-        String[] wordArray = words.toArray(new String[0]);
+        String[] wordArray = words.toArray(String[]::new);
         int flags = 0;
         if (options.ligatureAware) flags |= GlyphLib.GLYPH_LIGATURE_AWARE;
         if (options.bidiAware)     flags |= GlyphLib.GLYPH_BIDI_AWARE;
@@ -103,36 +103,57 @@ public final class GlyphRedactor {
 
             private Builder() {}
 
-            public Builder color(int argb) { this.color = argb; return this; }
-            public Builder padding(float pts) { this.padding = pts; return this; }
+            public Builder color(int argb) {
+                this.color = argb;
+                return this;
+            }
+
+            public Builder padding(float pts) {
+                this.padding = pts;
+                return this;
+            }
 
             /**
              * Enable HarfBuzz cluster mapping for ligatures (default: true).
              * Ligature glyphs (fi, fl, ffi) are redacted as a whole even when only one
              * character of the ligature is targeted.
              */
-            public Builder ligatureAware(boolean v) { this.ligatureAware = v; return this; }
+            public Builder ligatureAware(boolean v) {
+                this.ligatureAware = v;
+                return this;
+            }
 
             /**
              * Enable ICU BiDi visual order resolution (default: true).
              * Essential for correct redaction rectangles in RTL and mixed-direction text.
              */
-            public Builder bidiAware(boolean v) { this.bidiAware = v; return this; }
+            public Builder bidiAware(boolean v) {
+                this.bidiAware = v;
+                return this;
+            }
 
             /**
              * Enable grapheme cluster boundary safety (default: true).
              * Prevents splitting combining character pairs (e.g., base + accent).
              */
-            public Builder graphemeSafe(boolean v) { this.graphemeSafe = v; return this; }
+            public Builder graphemeSafe(boolean v) {
+                this.graphemeSafe = v;
+                return this;
+            }
 
             /**
              * Enable qpdf structural content removal (default: true).
              * When enabled, redacted content is removed from the PDF content stream,
              * not just covered with a rectangle.
              */
-            public Builder removeStream(boolean v) { this.removeStream = v; return this; }
+            public Builder removeStream(boolean v) {
+                this.removeStream = v;
+                return this;
+            }
 
-            public Options build() { return new Options(this); }
+            public Options build() {
+                return new Options(this);
+            }
         }
     }
 }

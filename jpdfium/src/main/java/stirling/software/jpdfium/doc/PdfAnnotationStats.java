@@ -5,7 +5,12 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.Rect;
 
 import java.lang.foreign.MemorySegment;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Generate annotation statistics and summaries for a PDF document.
@@ -97,7 +102,7 @@ public final class PdfAnnotationStats {
                         }
 
                         // Author extraction from string values
-                        if (a.contents() != null && !a.contents().isEmpty()) {
+                        if (a.contents().isPresent()) {
                             // Contents don't contain author; we'd need T key for author
                         }
                     }
