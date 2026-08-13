@@ -319,6 +319,11 @@ struct TextFragment {
 struct FissionPlan {
     FPDF_PAGEOBJECT originalObj;
 
+    // Form XObject holding originalObj, or null when it sits directly on the page.
+    // Fragments are always re-inserted at page level, so toPage maps them back into place.
+    FPDF_PAGEOBJECT parentForm;
+    FS_MATRIX toPage;
+
     // All surviving text fragments (replaces the old prefix/suffix pair).
     // Each fragment is independently positioned via FPDFText_GetCharOrigin, so
     // multi-gap redactions (e.g. two SSNs in the same text run) are handled
@@ -384,15 +389,67 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     //    as before to keep spaces in the correct text flow.
     int objCount = FPDFPage_CountObjects(page);
 
-    // Build a reverse map: FPDF_PAGEOBJECT pointer -> object index
+    // The text page flattens form XObjects, so FPDFText_GetTextObject can return an object
+    // nested inside one. Index those too, or their chars stay unmapped and never get redacted.
+    struct ObjRef {
+        FPDF_PAGEOBJECT obj;
+        FPDF_PAGEOBJECT parentForm;  // null when the object sits directly on the page
+        FS_MATRIX toPage;            // cumulative form-to-page transform, identity at page level
+    };
+    std::vector<ObjRef> allObjs;
     std::unordered_map<uintptr_t, int> objPtrToIndex;
+
+    const FS_MATRIX identityMatrix = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+
+    auto concatMatrix = [](const FS_MATRIX& m, const FS_MATRIX& t) -> FS_MATRIX {
+        FS_MATRIX out;
+        out.a = m.a * t.a + m.b * t.c;
+        out.b = m.a * t.b + m.b * t.d;
+        out.c = m.c * t.a + m.d * t.c;
+        out.d = m.c * t.b + m.d * t.d;
+        out.e = m.e * t.a + m.f * t.c + t.e;
+        out.f = m.e * t.b + m.f * t.d + t.f;
+        return out;
+    };
+
+    std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, int)> indexFormChildren =
+        [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& formToPage, int depth) {
+            if (depth > 8) return;  // guard against a malformed self-referential form chain
+            int childCount = FPDFFormObj_CountObjects(formObj);
+            for (int ci = 0; ci < childCount; ci++) {
+                FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
+                if (!child) continue;
+                uintptr_t key = reinterpret_cast<uintptr_t>(child);
+                if (objPtrToIndex.count(key)) continue;
+                objPtrToIndex[key] = static_cast<int>(allObjs.size());
+                allObjs.push_back({child, formObj, formToPage});
+
+                if (FPDFPageObj_GetType(child) == FPDF_PAGEOBJ_FORM) {
+                    FS_MATRIX childMatrix;
+                    if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
+                        indexFormChildren(child, concatMatrix(childMatrix, formToPage), depth + 1);
+                    }
+                }
+            }
+        };
+
     for (int oi = 0; oi < objCount; oi++) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
-        objPtrToIndex[reinterpret_cast<uintptr_t>(obj)] = oi;
+        objPtrToIndex[reinterpret_cast<uintptr_t>(obj)] = static_cast<int>(allObjs.size());
+        allObjs.push_back({obj, nullptr, identityMatrix});
+    }
+    // Descend only after the page level is indexed, so page objects keep indices 0..objCount-1.
+    for (int oi = 0; oi < objCount; oi++) {
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
+        if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_FORM) continue;
+        FS_MATRIX formMatrix;
+        if (FPDFPageObj_GetMatrix(obj, &formMatrix)) {
+            indexFormChildren(obj, formMatrix, 0);
+        }
     }
 
     struct CharInfo {
-        int ownerObj;      // index into page-object array (-1 = unmapped)
+        int ownerObj;      // index into allObjs (-1 = unmapped)
         bool isGenerated;  // FPDFText_IsGenerated
     };
     std::vector<CharInfo> charInfo(totalChars);
@@ -490,8 +547,13 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     std::vector<FissionPlan> plans;
     std::set<FPDF_PAGEOBJECT> objsToDestroy;
 
+    // Form children handled here must be skipped by the geometric pass in step 6, or the same
+    // object gets destroyed twice.
+    std::set<FPDF_PAGEOBJECT> formChildrenClaimed;
+
     for (auto& [oi, chars] : objChars) {
-        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, oi);
+        const ObjRef& ref = allObjs[oi];
+        FPDF_PAGEOBJECT obj = ref.obj;
         if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_TEXT) continue;
 
         // Check redaction status for this object
@@ -508,6 +570,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         // Fully contained in redaction -> simple removal
         if (allRedacted) {
             objsToDestroy.insert(obj);
+            if (ref.parentForm) formChildrenClaimed.insert(obj);
             continue;
         }
 
@@ -541,6 +604,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         // redaction boundaries.
         FissionPlan plan;
         plan.originalObj = obj;
+        plan.parentForm = ref.parentForm;
+        plan.toPage = ref.toPage;
         plan.removeEntirely = false;
         plan.font = FPDFTextObj_GetFont(obj);
         if (!plan.font) continue;  // cannot fission without a font
@@ -589,6 +654,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         // Only plan replacement if we actually produced fragments
         // (and the object needs it: redacted chars or multiple words)
         if (!plan.fragments.empty()) {
+            if (ref.parentForm) formChildrenClaimed.insert(obj);
             plans.push_back(std::move(plan));
         }
     }
@@ -686,6 +752,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         for (int ci = childCount - 1; ci >= 0; ci--) {
             FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
             if (!child) continue;
+            if (formChildrenClaimed.count(child)) continue;  // char-level fission owns this one
 
             int childType = FPDFPageObj_GetType(child);
 
@@ -1077,7 +1144,18 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 break;
             }
 
-            FPDFPageObj_SetMatrix(fragObj, &frag.matrix);
+            // Fragments always go back at page level. For a form child the a,b,c,d part is
+            // form-local, so fold in the form transform; e,f already come from the page-space
+            // char origin and must not be transformed again.
+            FS_MATRIX placed = frag.matrix;
+            if (plan.parentForm) {
+                FS_MATRIX linear = concatMatrix(frag.matrix, plan.toPage);
+                placed.a = linear.a;
+                placed.b = linear.b;
+                placed.c = linear.c;
+                placed.d = linear.d;
+            }
+            FPDFPageObj_SetMatrix(fragObj, &placed);
             FPDFTextObj_SetTextRenderMode(fragObj, plan.renderMode);
 
             // Restore original text colors
@@ -1132,9 +1210,17 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         }
     }
 
-    // 9. Remove all marked objects
+    // 9. Remove all marked objects, from their own container
     for (auto* obj : objsToDestroy) {
-        FPDFPage_RemoveObject(page, obj);
+        FPDF_PAGEOBJECT parentForm = nullptr;
+        auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(obj));
+        if (pit != objPtrToIndex.end()) parentForm = allObjs[pit->second].parentForm;
+
+        if (parentForm) {
+            FPDFFormObj_RemoveObject(parentForm, obj);
+        } else {
+            FPDFPage_RemoveObject(page, obj);
+        }
         FPDFPageObj_Destroy(obj);
     }
 
