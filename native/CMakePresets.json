@@ -1,0 +1,87 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release (stub bridge)",
+      "binaryDir": "${sourceDir}/build-presets/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "release-real",
+      "displayName": "Release (real PDFium bridge)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build-presets/release-real",
+      "cacheVariables": {
+        "JPDFIUM_USE_PDFIUM": "ON",
+        "PDFIUM_DIR": "${sourceDir}/pdfium"
+      }
+    },
+    {
+      "name": "dev-asan",
+      "displayName": "ASan+UBSan (stub bridge)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build-presets/dev-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "JPDFIUM_SANITIZE": "address,undefined"
+      }
+    },
+    {
+      "name": "dev-asan-real",
+      "displayName": "ASan+UBSan (real PDFium bridge)",
+      "inherits": "dev-asan",
+      "binaryDir": "${sourceDir}/build-presets/dev-asan-real",
+      "cacheVariables": {
+        "JPDFIUM_USE_PDFIUM": "ON",
+        "PDFIUM_DIR": "${sourceDir}/pdfium"
+      }
+    },
+    {
+      "name": "tidy",
+      "displayName": "clang-tidy (stub bridge)",
+      "binaryDir": "${sourceDir}/build-presets/tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENABLE_CLANG_TIDY": "ON"
+      }
+    },
+    {
+      "name": "tidy-real",
+      "displayName": "clang-tidy (real PDFium bridge)",
+      "inherits": "tidy",
+      "binaryDir": "${sourceDir}/build-presets/tidy-real",
+      "cacheVariables": {
+        "JPDFIUM_USE_PDFIUM": "ON",
+        "PDFIUM_DIR": "${sourceDir}/pdfium"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "release" },
+    { "name": "release-real", "configurePreset": "release-real" },
+    { "name": "dev-asan", "configurePreset": "dev-asan" },
+    { "name": "dev-asan-real", "configurePreset": "dev-asan-real" },
+    { "name": "tidy", "configurePreset": "tidy" },
+    { "name": "tidy-real", "configurePreset": "tidy-real" }
+  ],
+  "testPresets": [
+    {
+      "name": "dev-asan",
+      "configurePreset": "dev-asan",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "dev-asan-real",
+      "configurePreset": "dev-asan-real",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
