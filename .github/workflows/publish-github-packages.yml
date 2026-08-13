@@ -32,6 +32,7 @@ jobs:
           - { platform: darwin-x64,   runner: macos-14,         target_cpu: x64   }
           - { platform: darwin-arm64, runner: macos-14,         target_cpu: arm64 }
           - { platform: windows-x64,  runner: windows-latest,   target_cpu: x64   }
+          - { platform: windows-arm64, runner: windows-11-arm,  target_cpu: arm64 }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -106,19 +107,26 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Install build deps (Windows)
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         run: |
           choco install -y cmake ninja pkgconfiglite
-          # vcpkg ships preinstalled on windows-latest; pick up the libs we need.
-          vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
-                        icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
-                        libunibreak:x64-windows
+          # vcpkg ships preinstalled on windows-latest / windows-11-arm; pick up
+          # the libs we need. Installed tree is triplet-scoped, so match the
+          # target arch (arm64-windows on windows-11-arm runners).
+          if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
+            TRIPLET="arm64-windows"
+          else
+            TRIPLET="x64-windows"
+          fi
+          vcpkg install pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+                        icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
+                        libunibreak:$TRIPLET
           # CMakeLists.txt uses pkg_check_modules for these libs (same code path
           # as Linux/macOS). Point PKG_CONFIG_PATH at vcpkg's generated .pc
           # files so the lookups resolve.
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)
@@ -296,6 +304,7 @@ jobs:
             :jpdfium-natives:jpdfium-natives-darwin-x64:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToGithubPackagesRepository \
             :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToGithubPackagesRepository \
+            :jpdfium-natives:jpdfium-natives-windows-arm64:publishAllPublicationsToGithubPackagesRepository \
             -Pjpdfium.version=${{ steps.v.outputs.version }} \
             --no-daemon --stacktrace
 
