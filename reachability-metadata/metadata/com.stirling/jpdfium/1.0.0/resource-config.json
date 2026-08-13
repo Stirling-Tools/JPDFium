@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "natives/.*"
+      },
+      {
+        "pattern": "META-INF/native-image/com.stirling/jpdfium/.*"
+      }
+    ]
+  }
+}
