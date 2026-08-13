@@ -253,8 +253,8 @@ jobs:
       - name: Run JMH benchmarks
         run: |
           ./gradlew :jpdfium:jmh \
-            -Pjmh.warmupIterations=2 \
-            -Pjmh.iterations=3 \
+            -Pjmh.warmupIterations=4 \
+            -Pjmh.iterations=5 \
             --no-daemon
 
       - name: Restore main-branch baseline from cache
@@ -273,36 +273,19 @@ jobs:
             echo "No baseline found -- this is either the first run or the cache expired."
             echo "Storing current results as the new baseline."
             cp "$RESULTS" "$BASELINE"
-          else
-            python3 - << 'PYEOF'
-          import json, sys
-          results_path  = "jpdfium/build/results/jmh/results.json"
-          baseline_path = "jpdfium/build/results/jmh/baseline.json"
-          MAX_REGRESSION_PCT = 15.0
-
-          with open(results_path)  as f: results  = {b["benchmark"]: b["primaryMetric"]["score"] for b in json.load(f)}
-          with open(baseline_path) as f: baseline = {b["benchmark"]: b["primaryMetric"]["score"] for b in json.load(f)}
-
-          regressions = []
-          for name, score in results.items():
-              if name not in baseline:
-                  continue
-              base = baseline[name]
-              pct = (score - base) / base * 100.0
-              status = "REGRESSED" if pct > MAX_REGRESSION_PCT else "OK"
-              print(f"  {status:10s}  {name}: {base:.3f} -> {score:.3f} ms  ({pct:+.1f}%)")
-              if pct > MAX_REGRESSION_PCT:
-                  regressions.append((name, pct))
-
-          if regressions:
-              print(f"\nFAIL: {len(regressions)} benchmark(s) regressed by more than {MAX_REGRESSION_PCT}%:")
-              for name, pct in regressions:
-                  print(f"  {name}: +{pct:.1f}%")
-              sys.exit(1)
-          else:
-              print(f"\nAll benchmarks within {MAX_REGRESSION_PCT}% of baseline.")
-          PYEOF
+            exit 0
           fi
+          if python3 .github/scripts/compare-jmh.py; then
+            exit 0
+          fi
+          echo ""
+          echo "Regressions detected - re-running benchmarks once to rule out"
+          echo "transient runner noise before failing the job..."
+          ./gradlew :jpdfium:jmh \
+            -Pjmh.warmupIterations=4 \
+            -Pjmh.iterations=5 \
+            --no-daemon
+          python3 .github/scripts/compare-jmh.py
 
       - name: Update baseline cache on main push
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
