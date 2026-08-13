@@ -11,12 +11,13 @@ on:
 permissions:
   actions: read
   contents: read
-  security-events: write
 
 jobs:
   analyze:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # Upload SARIF analysis results
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +28,7 @@ jobs:
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+        uses: github/codeql-action/init@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
@@ -73,4 +74,4 @@ jobs:
         run: ./gradlew :jpdfium:compileJava --no-daemon
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+        uses: github/codeql-action/analyze@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3

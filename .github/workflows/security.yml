@@ -47,7 +47,7 @@ jobs:
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
             libqpdf-dev libpugixml-dev libunibreak-dev
 
-      - uses: github/codeql-action/init@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+      - uses: github/codeql-action/init@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
         with:
           languages: ${{ matrix.language }}
           queries: security-extended
@@ -63,7 +63,7 @@ jobs:
         if: matrix.language == 'c-cpp'
         run: bash native/build-stub.sh
 
-      - uses: github/codeql-action/analyze@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+      - uses: github/codeql-action/analyze@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -97,6 +97,6 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@7d9249f5a57288b8a472ddd9cc3ece1921f7dc38 # codeql-bundle-v2.26.2
+      - uses: github/codeql-action/upload-sarif@c16c0f3f2812ec4bb3750a5ed64873fe2ce0fbef # codeql-bundle-v2.26.3
         with:
           sarif_file: results.sarif

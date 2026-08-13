@@ -36,8 +36,7 @@ on:
     branches: [publishing-setup]
 
 permissions:
-  contents: write         # create releases, push the pin-bump branch
-  pull-requests: write    # open the auto-PR
+  contents: read
 
 concurrency:
   group: prebuild-pdfium
@@ -148,7 +147,10 @@ jobs:
 
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
-        run: choco install -y cmake ninja python3
+        run: |
+          choco install -y cmake --version=4.4.2
+          choco install -y ninja --version=1.13.2
+          choco install -y python3 --version=3.14.7
 
       - name: Configure Windows depot_tools environment
         if: startsWith(matrix.platform, 'windows-')
@@ -208,11 +210,13 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    # always(): a failed windows-arm64 leg (warn-only, unproven) must not skip
-    # the release. The sanity check still hard-fails on missing established
-    # platforms, so a real breakage cannot slip through.
+    # always(): a failed build leg must not skip the release; the sanity check
+    # below still hard-fails on missing required platforms.
     if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write         # create releases, push the pin-bump branch
+      pull-requests: write    # open the auto-PR
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -228,15 +232,9 @@ jobs:
           # Both variants must be present for every platform: component
           # (no suffix, consumed by snapshot.yml) and static (-static suffix,
           # consumed by release.yml).
-          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
             test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
             test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
-          done
-          # windows-arm64 is warn-only until the cross-compile leg is proven -
-          # a failure there must not block the established-platform prebuild.
-          for p in windows-arm64; do
-            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARN missing: $p (component)"
-            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARN missing: $p (static)"
           done
 
       - name: Create GitHub Release

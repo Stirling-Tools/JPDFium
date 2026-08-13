@@ -70,7 +70,7 @@ jobs:
         run: bash native/build-stub.sh
       - name: Run JMH and store baseline artifact
         run: |
-          ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=2 -Pjmh.iterations=3 --no-daemon
+          ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=4 -Pjmh.iterations=5 --no-daemon
           mkdir -p /tmp/bench-history
           cp jpdfium/build/results/jmh/results.json "/tmp/bench-history/jmh-$(date -u +%Y-%m-%d).json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

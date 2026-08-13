@@ -93,6 +93,9 @@ jobs:
           - platform: windows-x64
             runner: windows-latest
             shell: 'bash'  # git-bash provided by actions/checkout
+          - platform: windows-arm64
+            runner: windows-11-arm
+            shell: 'bash'  # git-bash provided by actions/checkout
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -102,7 +105,9 @@ jobs:
 
       - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
-          distribution: 'temurin'
+          # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
+          # Build of OpenJDK does, so use it on the windows-arm64 leg.
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
 
       - name: Install build deps (Linux)
@@ -154,15 +159,22 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Install build deps (Windows)
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         run: |
           choco install -y cmake ninja pkgconfiglite
-          vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
-                        icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
-                        libunibreak:x64-windows
+          # vcpkg installs into a triplet-scoped tree. Pick the triplet that
+          # matches the target arch (arm64-windows on windows-11-arm runners).
+          if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
+            TRIPLET="arm64-windows"
+          else
+            TRIPLET="x64-windows"
+          fi
+          vcpkg install pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+                        icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
+                        libunibreak:$TRIPLET
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)

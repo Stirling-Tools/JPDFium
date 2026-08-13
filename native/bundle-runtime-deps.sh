@@ -13,9 +13,9 @@
 #        dyld finds bundled deps next to the bridge. The bridge itself is
 #        built with INSTALL_RPATH=@loader_path (set in CMakeLists.txt).
 #
-# Windows: not needed - vcpkg DLLs are already copied wholesale by the
-#          workflow's `Stage binaries` step, and Windows has no equivalent
-#          of RUNPATH that we have to set on the bridge.
+# Windows: walk the bridge's import table with dumpbin and copy the runtime
+#          DLLs it references from vcpkg's installed/<triplet>/bin (skipping
+#          Windows system DLLs). Triplet is x64-windows or arm64-windows.
 #
 # Usage: bundle-runtime-deps.sh <platform>     e.g. linux-x64, darwin-arm64
 set -euo pipefail
@@ -314,10 +314,16 @@ bundle_windows() {
         return 1
     }
 
-    # Search locations for resolving a DLL by name.
+    # Search locations for resolving a DLL by name. vcpkg's installed-tree
+    # folder is triplet-scoped (x64-windows vs arm64-windows on ARM64), so
+    # derive it from the platform instead of hardcoding x64.
+    local vcpkg_triplet="x64-windows"
+    case "$PLATFORM" in
+        windows-arm64|vips-windows-arm64) vcpkg_triplet="arm64-windows" ;;
+    esac
     local search_dirs=(
         "$DIST_DIR"
-        "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
+        "$VCPKG_INSTALLATION_ROOT/installed/$vcpkg_triplet/bin"
         "native/pdfium/lib"
     )
     find_dll() {

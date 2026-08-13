@@ -62,7 +62,7 @@ public final class PdfReadingOrder {
         }
 
         // Group lines into blocks based on vertical proximity and x-alignment
-        List<LineBlock> rawBlocks = groupIntoBlocks(lines, pageWidth);
+        List<LineBlock> rawBlocks = groupIntoBlocks(lines);
 
         // Classify each block
         List<TextBlock> result = new ArrayList<>();
@@ -131,7 +131,7 @@ public final class PdfReadingOrder {
         return Region.BODY;
     }
 
-    private static List<LineBlock> groupIntoBlocks(List<TextLine> lines, float pageWidth) {
+    private static List<LineBlock> groupIntoBlocks(List<TextLine> lines) {
         if (lines.isEmpty()) return List.of();
 
         // Sort lines by Y descending (top of page first in PDF coords)
