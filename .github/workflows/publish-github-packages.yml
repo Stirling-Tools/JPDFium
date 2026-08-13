@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: ghpkgs-${{ github.ref }}
@@ -109,7 +108,9 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y cmake ninja pkgconfiglite
+          choco install -y cmake --version=4.4.2
+          choco install -y ninja --version=1.13.2
+          choco install -y pkgconfiglite --version=0.28
           # vcpkg ships preinstalled on windows-latest / windows-11-arm; pick up
           # the libs we need. Installed tree is triplet-scoped, so match the
           # target arch (arm64-windows on windows-11-arm runners).
@@ -225,6 +226,9 @@ jobs:
   publish:
     needs: build-natives
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # Publish jars to GitHub Packages
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 

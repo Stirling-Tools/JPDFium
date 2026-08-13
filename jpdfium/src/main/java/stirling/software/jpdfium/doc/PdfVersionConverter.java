@@ -130,11 +130,20 @@ public final class PdfVersionConverter {
 
     /**
      * Upcall target for FPDF_FILEWRITE.WriteBlock.
+     *
+     * @param pThis the FPDF_FILEWRITE instance the callback was invoked on
+     * @param pData the block of bytes to write
+     * @param size  number of bytes in {@code pData}
      */
     @SuppressWarnings("unused")
     private static int writeBlockCallback(MemorySegment pThis, MemorySegment pData, long size) {
+        // The upcall is registered against the FPDF_FILEWRITE struct we
+        // allocated, so the receiver is always that same struct. Verify it to
+        // guard against a mis-wired binding rather than writing to the caller's
+        // buffer unchecked.
+        if (pThis == null || pThis.equals(MemorySegment.NULL)) return 0;
         ByteArrayOutputStream baos = WRITE_BUFFER.get();
-        if (baos == null || size <= 0) return 0;
+        if (baos == null || size <= 0 || pData == null) return 0;
         byte[] data = pData.reinterpret(size).toArray(JAVA_BYTE);
         baos.write(data, 0, data.length);
         return 1;

@@ -158,7 +158,9 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y cmake ninja pkgconfiglite
+          choco install -y cmake --version=4.4.2
+          choco install -y ninja --version=1.13.2
+          choco install -y pkgconfiglite --version=0.28
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch so the bridge + bundler resolve the right
           # DLLs (arm64-windows on windows-11-arm runners, x64-windows on x64).

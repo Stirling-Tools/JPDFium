@@ -33,10 +33,11 @@ public final class PdfNamedDestinations {
             count = (long) DocBindings.FPDF_CountNamedDests.invokeExact(rawDoc);
         } catch (Throwable t) { return Collections.emptyList(); }
 
-        if (count <= 0) return Collections.emptyList();
+        if (count <= 0 || count > Integer.MAX_VALUE) return Collections.emptyList();
 
-        List<NamedDestination> result = new ArrayList<>((int) count);
-        for (int i = 0; i < count; i++) {
+        int destCount = (int) count;
+        List<NamedDestination> result = new ArrayList<>(destCount);
+        for (int i = 0; i < destCount; i++) {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment bufLenSeg = arena.allocate(ValueLayout.JAVA_LONG);
                 bufLenSeg.set(ValueLayout.JAVA_LONG, 0, 0L);
