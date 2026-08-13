@@ -157,7 +157,9 @@ jobs:
       - name: Install build deps (Windows)
         if: matrix.platform == 'windows-x64'
         run: |
-          choco install -y cmake --version=4.4.2 ninja --version=1.13.2 pkgconfiglite --version=0.28
+          choco install -y cmake --version=4.4.2
+          choco install -y ninja --version=1.13.2
+          choco install -y pkgconfiglite --version=0.28
           vcpkg install pcre2:x64-windows freetype:x64-windows harfbuzz:x64-windows \
                         icu:x64-windows qpdf:x64-windows pugixml:x64-windows \
                         libunibreak:x64-windows

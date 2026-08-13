@@ -147,7 +147,10 @@ jobs:
 
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
-        run: choco install -y cmake --version=4.4.2 ninja --version=1.13.2 python3 --version=3.14.7
+        run: |
+          choco install -y cmake --version=4.4.2
+          choco install -y ninja --version=1.13.2
+          choco install -y python3 --version=3.14.7
 
       - name: Configure Windows depot_tools environment
         if: startsWith(matrix.platform, 'windows-')
