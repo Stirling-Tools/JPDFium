@@ -1,5 +1,4 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
-import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 plugins {
     `java-library`
