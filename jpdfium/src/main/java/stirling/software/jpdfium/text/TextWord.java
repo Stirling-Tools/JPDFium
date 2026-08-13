@@ -26,9 +26,10 @@ public record TextWord(
 
     /** Returns the word text as a String. */
     public String text() {
+        // appendCodePoint avoids the per-char String allocation that toText() would incur.
         StringBuilder sb = new StringBuilder(chars.size());
         for (TextChar c : chars) {
-            sb.append(c.toText());
+            sb.appendCodePoint(c.unicode());
         }
         return sb.toString();
     }

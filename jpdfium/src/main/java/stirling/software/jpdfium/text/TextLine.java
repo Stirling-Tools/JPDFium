@@ -25,7 +25,7 @@ public record TextLine(
 
     /** Returns the full line text with spaces between words. */
     public String text() {
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sb = new StringBuilder(words.size() * 8);
         for (int i = 0; i < words.size(); i++) {
             if (i > 0) sb.append(' ');
             sb.append(words.get(i).text());

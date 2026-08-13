@@ -2,13 +2,13 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
-import java.util.Optional;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the Rust-powered PDF processing functions declared in
@@ -40,26 +40,22 @@ public final class RustBridgeBindings {
     private static final int JPDFIUM_REPAIR_FIXED  =  1;
     private static final int JPDFIUM_REPAIR_FAILED = -1;
 
-    private static final Linker       LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LOOKUP;
-
     // Whether all required native symbols were found. When false the convenience
     // wrappers return null immediately without even attempting a native call.
     private static final boolean AVAILABLE;
 
     static {
         NativeLoader.ensureLoaded();
-        LOOKUP = SymbolLookup.loaderLookup();
         AVAILABLE = checkAvailability();
     }
 
     private static boolean checkAvailability() {
         // Core symbols must be present for the bindings to work.
-        return LOOKUP.find("jpdfium_rust_compress_pdf").isPresent()
-                && LOOKUP.find("jpdfium_rust_repair_lopdf").isPresent()
-                && LOOKUP.find("jpdfium_rust_resize_pixels").isPresent()
-                && LOOKUP.find("jpdfium_rust_compress_png").isPresent()
-                && LOOKUP.find("jpdfium_rust_free").isPresent();
+        return Symbols.find("jpdfium_rust_compress_pdf").isPresent()
+                && Symbols.find("jpdfium_rust_repair_lopdf").isPresent()
+                && Symbols.find("jpdfium_rust_resize_pixels").isPresent()
+                && Symbols.find("jpdfium_rust_compress_png").isPresent()
+                && Symbols.find("jpdfium_rust_free").isPresent();
     }
 
     private RustBridgeBindings() {}
@@ -69,11 +65,7 @@ public final class RustBridgeBindings {
      * symbol is not found. Never throws.
      */
     private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
-        Optional<MemorySegment> sym = LOOKUP.find(name);
-        if (sym.isEmpty()) {
-            return null;
-        }
-        return NativeGuard.guard(LINKER.downcallHandle(sym.get(), desc));
+        return Symbols.downcall(name, desc);
     }
 
     /** {@code int32_t jpdfium_rust_compress_pdf(input, input_len, out_ptr, out_len, iters)} */
@@ -255,7 +247,7 @@ public final class RustBridgeBindings {
         }
         try {
             RUST_FREE.invokeExact(ptr);
-        } catch (Throwable ignored) {
+        } catch (Throwable _) {
             // best-effort
         }
     }

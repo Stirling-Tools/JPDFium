@@ -211,7 +211,7 @@ public final class PdfPageSplitter {
                 return minCol * (72.0f / dpi);
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }

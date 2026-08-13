@@ -3,7 +3,12 @@ package stirling.software.jpdfium.samples;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * System validation suite executing all samples sequentially with memory management.
@@ -24,6 +29,7 @@ import java.util.concurrent.*;
  */
 public class RunAllSamples {
 
+    private static final String[] EMPTY_ARGS = new String[0];
     private static final int DEFAULT_TIMEOUT_SECONDS = 120;
 
     static void main(String[] args) throws Exception {
@@ -32,17 +38,14 @@ public class RunAllSamples {
 
         int timeoutSec = Integer.getInteger("sample.timeout", DEFAULT_TIMEOUT_SECONDS);
 
-        System.out.println("+==================================================+");
-        System.out.println("|            JPDFium - Run All Samples             |");
-        System.out.println("+==================================================+");
-        System.out.printf( "|  input:   %-38s|%n", input.getFileName());
-        System.out.printf( "|  output:  %-38s|%n", "~/" + SampleBase.OUT_ROOT
+        System.out.println("JPDFium - Run All Samples");
+        System.out.printf("  input:   %s%n", input.getFileName());
+        System.out.printf("  output:  %s%n", "~/" + SampleBase.OUT_ROOT
                 .toString().replaceFirst(System.getProperty("user.home") + "/", ""));
-        System.out.printf( "|  timeout: %-38s|%n", timeoutSec + "s per sample");
-        System.out.println("+==================================================+");
+        System.out.printf("  timeout: %s%n", timeoutSec + "s per sample");
         System.out.println();
 
-        String[] a = args.length > 0 ? args : new String[0];
+        String[] a = args.length > 0 ? args : EMPTY_ARGS;
         int passed = 0;
         int failed = 0;
         List<String> failures = new ArrayList<>();

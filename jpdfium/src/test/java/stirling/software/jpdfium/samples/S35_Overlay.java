@@ -57,7 +57,7 @@ public class S35_Overlay {
 
         // 2. If we have 2+ PDFs, also demonstrate cross-document overlay
         if (inputs.size() >= 2) {
-            Path pdf1 = inputs.get(0);
+            Path pdf1 = inputs.getFirst();
             Path pdf2 = inputs.get(1);
             String stem1 = SampleBase.stem(pdf1);
             String stem2 = SampleBase.stem(pdf2);

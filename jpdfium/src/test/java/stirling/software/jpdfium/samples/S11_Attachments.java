@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * SAMPLE 11 - Full CRUD for embedded file attachments.
@@ -22,6 +23,8 @@ import java.util.List;
  * {@code --enable-native-access=ALL-UNNAMED}
  */
 public class S11_Attachments {
+
+    private static final Pattern PATTERN = Pattern.compile("[^a-zA-Z0-9._-]");
 
     public static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
@@ -134,6 +137,6 @@ public class S11_Attachments {
     }
 
     private static String sanitize(String name) {
-        return name.replaceAll("[^a-zA-Z0-9._-]", "_");
+        return PATTERN.matcher(name).replaceAll("_");
     }
 }

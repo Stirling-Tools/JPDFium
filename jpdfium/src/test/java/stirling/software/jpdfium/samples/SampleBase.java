@@ -2,6 +2,7 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.panama.NativeLoader;
 
+import java.io.File;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -71,7 +72,7 @@ final class SampleBase {
         // Enumerate ALL classpath roots (classes dir + resources dir are separate entries)
         Enumeration<URL> roots = SampleBase.class.getClassLoader().getResources("");
         List<Path> pdfs = new ArrayList<>();
-        String repairSep = java.io.File.separator + "repair" + java.io.File.separator;
+        String repairSep = File.separator + "repair" + File.separator;
         while (roots.hasMoreElements()) {
             URL root = roots.nextElement();
             if (!"file".equals(root.getProtocol())) continue;
@@ -147,15 +148,12 @@ final class SampleBase {
     /** Prints a completion banner listing all produced output files. */
     static void done(String sampleName, Path... outputs) {
         System.out.println();
-        System.out.println("+==================================================+");
-        System.out.printf( "|  %-48s|%n", sampleName + " - DONE");
-        System.out.println("+==================================================+");
+        System.out.println(sampleName + " - DONE");
         for (Path p : outputs) {
             String rel = p.toAbsolutePath().toString()
                     .replaceFirst(System.getProperty("user.home"), "~");
-            System.out.printf("|  -> %-44s|%n", rel.length() > 44 ? "..." + rel.substring(rel.length() - 43) : rel);
+            System.out.println("  -> " + rel);
         }
-        System.out.println("+==================================================+");
     }
 
     static void section(String title) {

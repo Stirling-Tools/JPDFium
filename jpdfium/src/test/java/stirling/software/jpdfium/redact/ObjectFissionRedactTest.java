@@ -5,8 +5,12 @@ import stirling.software.jpdfium.PdfDocument;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Objects;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for the Object Fission redaction algorithm.
@@ -26,6 +30,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ObjectFissionRedactTest {
 
+    private static final String[] EMPTY_STRINGS = new String[0];
+
     private static Path pdfPath() throws Exception {
         var url = ObjectFissionRedactTest.class.getResource("/pdfs/general/minimal.pdf");
         assertNotNull(url, "minimal.pdf test resource missing");
@@ -33,10 +39,10 @@ class ObjectFissionRedactTest {
     }
 
     private static byte[] pdfBytes() throws IOException {
-        return ObjectFissionRedactTest.class.getResourceAsStream("/pdfs/general/minimal.pdf").readAllBytes();
+        return Objects.requireNonNull(ObjectFissionRedactTest.class.getResourceAsStream("/pdfs/general/minimal.pdf")).readAllBytes();
     }
 
-    
+
     @Test
     void redactWordsExReturnsNonNegativeMatchCount() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
@@ -66,7 +72,7 @@ class ObjectFissionRedactTest {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
             int count = page.redactWordsEx(
-                    new String[]{},
+                    EMPTY_STRINGS,
                     0xFF000000, 0.0f,
                     false, false, true, false);
             assertEquals(0, count);
@@ -131,7 +137,7 @@ class ObjectFissionRedactTest {
         }
     }
 
-    
+
     @Test
     void pdfRedactorReturnsMatchCounts() throws Exception {
         RedactOptions opts = RedactOptions.builder()
@@ -207,7 +213,7 @@ class ObjectFissionRedactTest {
         }
     }
 
-    
+
     @Test
     void pageResultRecordFields() {
         var pr = new RedactResult.PageResult(0, 5, 3);

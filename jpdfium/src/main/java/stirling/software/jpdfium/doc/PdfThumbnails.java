@@ -116,7 +116,7 @@ public final class PdfThumbnails {
             return Optional.of(img);
         } finally {
             try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 

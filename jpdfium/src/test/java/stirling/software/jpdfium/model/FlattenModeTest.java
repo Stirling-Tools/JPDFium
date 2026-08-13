@@ -2,7 +2,9 @@ package stirling.software.jpdfium.model;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Tests for {@link FlattenMode} enum (pure Java, no native dependency). */
 class FlattenModeTest {

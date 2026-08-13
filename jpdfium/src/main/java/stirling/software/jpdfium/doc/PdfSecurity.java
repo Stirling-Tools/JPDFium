@@ -311,7 +311,7 @@ public final class PdfSecurity {
             catch (Throwable t) { continue; }
             if (renderMode == 3) { // invisible
                 try { PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj); removed++; }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
         if (removed > 0) {

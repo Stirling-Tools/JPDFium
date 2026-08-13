@@ -8,7 +8,9 @@ import stirling.software.jpdfium.text.TextChar;
 import stirling.software.jpdfium.text.TextLine;
 import stirling.software.jpdfium.text.TextWord;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -97,10 +99,10 @@ public final class PdfTocGenerator {
 
         // Load a standard font
         MemorySegment font;
-        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+        try (var arena = Arena.ofConfined()) {
             var fontName = arena.allocateFrom("Helvetica");
-            font = (MemorySegment) PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
-                    rawDoc, fontName, 20.0f);
+            PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
+                rawDoc, fontName, 20.0f);
         } catch (Throwable t) {
             throw new RuntimeException("Failed to create font", t);
         }
@@ -143,7 +145,7 @@ public final class PdfTocGenerator {
         // Close the page handle
         try {
             PageEditBindings.FPDF_ClosePage.invokeExact(tocPage);
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
 
         return entriesAdded;
     }
@@ -155,7 +157,7 @@ public final class PdfTocGenerator {
 
     private static void addText(MemorySegment rawDoc, MemorySegment rawPage,
                                  String text, float x, float y, float fontSize) {
-        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+        try (var arena = Arena.ofConfined()) {
             var fontName = arena.allocateFrom("Helvetica");
             MemorySegment textObj = (MemorySegment) PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
                     rawDoc, fontName, fontSize);
@@ -163,11 +165,11 @@ public final class PdfTocGenerator {
             if (textObj.equals(MemorySegment.NULL)) return;
 
             // Set text content (UTF-16LE)
-            var utf16 = arena.allocate(java.lang.foreign.ValueLayout.JAVA_SHORT, text.length() + 1);
+            var utf16 = arena.allocate(ValueLayout.JAVA_SHORT, text.length() + 1);
             for (int i = 0; i < text.length(); i++) {
-                utf16.setAtIndex(java.lang.foreign.ValueLayout.JAVA_SHORT, i, (short) text.charAt(i));
+                utf16.setAtIndex(ValueLayout.JAVA_SHORT, i, (short) text.charAt(i));
             }
-            utf16.setAtIndex(java.lang.foreign.ValueLayout.JAVA_SHORT, text.length(), (short) 0);
+            utf16.setAtIndex(ValueLayout.JAVA_SHORT, text.length(), (short) 0);
 
             try {
                 PageEditBindings.FPDFText_SetText.invokeExact(textObj, utf16);
@@ -176,18 +178,18 @@ public final class PdfTocGenerator {
             // Set fill color (black)
             try {
                 PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(textObj, 0, 0, 0, 255);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             // Position the text
             try {
                 PageEditBindings.FPDFPageObj_Transform.invokeExact(textObj,
                         1.0, 0.0, 0.0, 1.0, (double) x, (double) y);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             // Insert into page
             try {
                 PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, textObj);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         } catch (Throwable t) {
             // Swallow - text obj creation failed
         }

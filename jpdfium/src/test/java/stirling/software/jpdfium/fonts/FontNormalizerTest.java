@@ -3,7 +3,10 @@ package stirling.software.jpdfium.fonts;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.model.FontType;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link FontNormalizer}.
@@ -12,6 +15,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * the Java-layer parsing, record construction, and API correctness.
  */
 class FontNormalizerTest {
+
+    private static final byte[] EMPTY_BYTES = new byte[0];
 
     @Test
     void resultRecordProperties() {
@@ -41,7 +46,7 @@ class FontNormalizerTest {
     void classifyEmptyFontDataRejects() {
         // Real FreeType correctly rejects empty data; stub returns a default
         try {
-            FontNormalizer.FontClassification fc = FontNormalizer.classify(new byte[0]);
+            FontNormalizer.FontClassification fc = FontNormalizer.classify(EMPTY_BYTES);
             assertNotNull(fc);
             assertNotNull(fc.type());
         } catch (Exception e) {

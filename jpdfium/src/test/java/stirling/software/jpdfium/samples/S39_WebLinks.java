@@ -138,7 +138,7 @@ public class S39_WebLinks {
                 // Flush page content
                 try {
                     PageEditBindings.FPDFPage_GenerateContent.invokeExact(page.rawHandle());
-                } catch (Throwable ignored) {
+                } catch (Throwable _) {
                 }
 
                 int afterCount = PdfWebLinks.countLinkAnnotations(page.rawHandle());

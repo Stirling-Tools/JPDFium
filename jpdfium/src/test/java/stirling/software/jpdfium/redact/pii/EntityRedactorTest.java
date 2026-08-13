@@ -2,7 +2,11 @@ package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** Tests for {@link EntityRedactor} builder and records (pure Java, no native dependency). */
 class EntityRedactorTest {
@@ -21,7 +25,7 @@ class EntityRedactorTest {
         try (var redactor = EntityRedactor.builder()
                 .addEntity("John Smith", "PERSON")
                 .addEntity("Acme Corp", "ORGANIZATION")
-                .addEntities(java.util.List.of("Jane Doe", "Bob Jones"), "PERSON")
+                .addEntities(List.of("Jane Doe", "Bob Jones"), "PERSON")
                 .build()) {
             assertNotNull(redactor);
         }
@@ -41,7 +45,7 @@ class EntityRedactorTest {
     void builderCustomPronouns() {
         try (var redactor = EntityRedactor.builder()
                 .addEntity("test", "TEST")
-                .setCoreferencePronouns(java.util.List.of("it", "that"))
+                .setCoreferencePronouns(List.of("it", "that"))
                 .addCoreferencePronouns("this")
                 .build()) {
             assertNotNull(redactor);
@@ -90,9 +94,9 @@ class EntityRedactorTest {
 
     @Test
     void resultRecord() {
-        var entities = java.util.List.of(
+        var entities = List.of(
                 new EntityRedactor.EntityMatch(0, 0, 10, "test", "TEST"));
-        var targets = java.util.List.of(
+        var targets = List.of(
                 new EntityRedactor.RedactionTarget(0, 0, 10, "test",
                         EntityRedactor.RedactionReason.ENTITY_MATCH, "TEST"));
         var result = new EntityRedactor.Result(entities, targets);

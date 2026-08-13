@@ -3,9 +3,15 @@ package stirling.software.jpdfium;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
+import stirling.software.jpdfium.model.Rect;
+
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Integration tests that exercise real PDF behaviour - text extraction, search, redaction round-trip.
@@ -22,7 +28,7 @@ class RealPdfIntegrationTest {
         return Path.of(url.toURI());
     }
 
-    
+
     @Test
     void renderedPageHasNonWhitePixels() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
@@ -45,7 +51,7 @@ class RealPdfIntegrationTest {
         }
     }
 
-    
+
     @Test
     void textExtractionReturnsCharData() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
@@ -79,7 +85,7 @@ class RealPdfIntegrationTest {
         }
     }
 
-    
+
     @Test
     void patternRedactRemovesContent() throws Exception {
         byte[] redacted;
@@ -107,12 +113,12 @@ class RealPdfIntegrationTest {
             // Redact a region covering top-left text area
             assertDoesNotThrow(() ->
                 page.redactRegion(
-                    stirling.software.jpdfium.model.Rect.of(50, 700, 500, 60),
+                    Rect.of(50, 700, 500, 60),
                     0xFF000000));
         }
     }
 
-    
+
     @Test
     void saveBytesThenReopenPreservesPageCount() throws Exception {
         try (var doc = PdfDocument.open(pdfPath())) {

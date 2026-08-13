@@ -248,7 +248,7 @@ public final class PdfStructureEditor {
          * @param text      heading text content
          */
         public Builder addHeading(int pageIndex, Rect bounds, int level, String text) {
-            tags.add(new TagEntry(pageIndex, "H" + Math.max(1, Math.min(6, level)), bounds, text, null));
+            tags.add(new TagEntry(pageIndex, "H" + Math.clamp(level, 1, 6), bounds, text, null));
             return this;
         }
 
@@ -354,13 +354,11 @@ public final class PdfStructureEditor {
             }
 
             // Set document-level metadata if provided
-            if (title != null || language != null) {
-                // Structure metadata stored as custom metadata via the existing API
-                // Title and language are standard PDF document properties
-            }
+            // Structure metadata stored as custom metadata via the existing API
+            // Title and language are standard PDF document properties
         }
 
-        private String buildContents(TagEntry tag) {
+        private static String buildContents(TagEntry tag) {
             StringBuilder sb = new StringBuilder();
             sb.append("[STRUCT:").append(tag.type).append("]");
             if (tag.text != null && !tag.text.isEmpty()) {

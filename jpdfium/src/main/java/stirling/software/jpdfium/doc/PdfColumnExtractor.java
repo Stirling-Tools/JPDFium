@@ -7,7 +7,9 @@ import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.TextChar;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -59,7 +61,7 @@ public final class PdfColumnExtractor {
         int[] histogram = new int[binCount];
         for (TextChar ch : chars) {
             if (ch.unicode() <= 32) continue; // skip whitespace
-            int bin = Math.min(binCount - 1, Math.max(0, (int) ((ch.x() + ch.width() / 2) / pageWidth * binCount)));
+            int bin = Math.clamp((int) ((ch.x() + ch.width() / 2) / pageWidth * binCount), 0, binCount - 1);
             histogram[bin]++;
         }
 
@@ -119,7 +121,7 @@ public final class PdfColumnExtractor {
                 }
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
 
@@ -142,7 +144,7 @@ public final class PdfColumnExtractor {
 
     private static String getBoundedText(MemorySegment textPage,
                                          double left, double bottom, double right, double top) {
-        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+        try (var arena = Arena.ofConfined()) {
             int charCount;
             try {
                 charCount = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
@@ -152,7 +154,7 @@ public final class PdfColumnExtractor {
 
             if (charCount <= 0) return "";
 
-            var buf = arena.allocate(java.lang.foreign.ValueLayout.JAVA_SHORT, charCount + 1);
+            var buf = arena.allocate(ValueLayout.JAVA_SHORT, charCount + 1);
             try {
                 TextPageBindings.FPDFText_GetBoundedText.invokeExact(
                         textPage, left, top, right, bottom,
@@ -161,7 +163,7 @@ public final class PdfColumnExtractor {
 
             char[] chars = new char[charCount];
             for (int i = 0; i < charCount; i++) {
-                chars[i] = (char) buf.getAtIndex(java.lang.foreign.ValueLayout.JAVA_SHORT, i);
+                chars[i] = (char) buf.getAtIndex(ValueLayout.JAVA_SHORT, i);
             }
             return new String(chars).replace("\0", "");
         }

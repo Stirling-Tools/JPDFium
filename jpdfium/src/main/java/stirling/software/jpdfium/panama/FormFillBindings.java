@@ -1,11 +1,11 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 
 /**
  * FFM bindings for PDFium interactive form filling ({@code fpdf_formfill.h}).
@@ -25,21 +25,14 @@ import static java.lang.foreign.ValueLayout.*;
  */
 public final class FormFillBindings {
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LOOKUP = SymbolLookup.loaderLookup();
-
     private FormFillBindings() {}
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc));
+        return Symbols.downcall(name, desc);
     }
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return NativeGuard.guard(LINKER.downcallHandle(
-                LOOKUP.find(name).orElseThrow(() -> new UnsatisfiedLinkError("PDFium symbol not found: " + name)),
-                desc, Linker.Option.critical(false)));
+        return Symbols.downcallCritical(name, desc);
     }
 
     /**

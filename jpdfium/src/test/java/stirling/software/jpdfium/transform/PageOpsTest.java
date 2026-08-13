@@ -1,10 +1,13 @@
 package stirling.software.jpdfium.transform;
 
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 import stirling.software.jpdfium.PdfDocument;
+
+import java.lang.reflect.Modifier;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for {@link PageOps}.
@@ -18,7 +21,7 @@ class PageOpsTest {
         // Verifies that the PageOps utility class cannot be instantiated.
         var constructors = PageOps.class.getDeclaredConstructors();
         assertEquals(1, constructors.length);
-        assertTrue(java.lang.reflect.Modifier.isPrivate(constructors[0].getModifiers()),
+        assertTrue(Modifier.isPrivate(constructors[0].getModifiers()),
                 "PageOps constructor should be private");
     }
 

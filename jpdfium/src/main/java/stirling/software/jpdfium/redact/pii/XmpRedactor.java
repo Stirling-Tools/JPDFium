@@ -85,7 +85,7 @@ public final class XmpRedactor {
      * @param doc open PDF document
      */
     public static void stripPiiKeys(PdfDocument doc) {
-        stripKeys(doc, PII_KEYS.toArray(new String[0]));
+        stripKeys(doc, PII_KEYS.toArray(String[]::new));
     }
 
     /**

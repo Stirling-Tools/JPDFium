@@ -60,7 +60,7 @@ public final class PdfSelectiveRasterize {
         List<Integer> pagesToRasterize = new ArrayList<>();
         for (int i = 0; i < doc.pageCount(); i++) {
             String text = PdfTextExtractor.extractPage(doc, i).plainText();
-            if (text != null && text.toLowerCase().contains(keyword.toLowerCase())) {
+            if (text.toLowerCase().contains(keyword.toLowerCase())) {
                 pagesToRasterize.add(i);
             }
         }
@@ -127,7 +127,7 @@ public final class PdfSelectiveRasterize {
                     try {
                         MemorySegment obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                         PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
-                    } catch (Throwable ignored) {}
+                    } catch (Throwable _) {}
                 }
 
                 // Create an image object
@@ -152,16 +152,16 @@ public final class PdfSelectiveRasterize {
                 // Add image to page
                 try {
                     PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, imgObj);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
 
                 // Generate content
                 try {
                     PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
         } finally {
             try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable ignored) {}
+            catch (Throwable _) {}
         }
     }
 }

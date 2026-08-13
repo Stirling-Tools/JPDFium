@@ -256,7 +256,7 @@ public final class PdfDiff {
                 return pixels;
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }
@@ -288,7 +288,7 @@ public final class PdfDiff {
                 }
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable ignored) {}
+                catch (Throwable _) {}
             }
         }
     }
@@ -321,7 +321,7 @@ public final class PdfDiff {
             } else if (j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j])) {
                 ops.add(new Object[]{ChangeType.INSERTION, "", b[j - 1]});
                 j--;
-            } else if (i > 0) {
+            } else {
                 ops.add(new Object[]{ChangeType.DELETION, a[i - 1], ""});
                 i--;
             }

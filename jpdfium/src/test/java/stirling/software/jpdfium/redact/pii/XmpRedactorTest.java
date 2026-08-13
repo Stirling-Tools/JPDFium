@@ -2,7 +2,9 @@ package stirling.software.jpdfium.redact.pii;
 
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for {@link XmpRedactor} - pure Java logic (escapeRegex, PII_KEYS). */
 class XmpRedactorTest {

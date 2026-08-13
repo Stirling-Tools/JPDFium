@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Export and import annotations using XFDF (XML Forms Data Format) - the
@@ -43,6 +44,8 @@ import java.util.Set;
  * }</pre>
  */
 public final class PdfAnnotationExchange {
+
+    private static final Pattern PATTERN = Pattern.compile("\\s+");
 
     private PdfAnnotationExchange() {}
 
@@ -93,7 +96,7 @@ public final class PdfAnnotationExchange {
                         appendAnnotXfdf(sb, annot, p);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
             }
@@ -141,7 +144,7 @@ public final class PdfAnnotationExchange {
                         appendAnnotFdf(sb, annot, p);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
             }
@@ -161,7 +164,7 @@ public final class PdfAnnotationExchange {
      */
     public static ImportResult importXfdf(PdfDocument doc, String xfdf) {
         int annotationsImported = 0;
-        int fieldsImported = 0;
+        int fieldsImported;
         List<String> warnings = new ArrayList<>();
 
         // Parse XFDF annotations
@@ -333,7 +336,7 @@ public final class PdfAnnotationExchange {
      */
     public record ImportResult(int annotationsImported, int fieldsImported, List<String> warnings) {
         public ImportResult {
-            warnings = Collections.unmodifiableList(new ArrayList<>(warnings));
+            warnings = List.copyOf(warnings);
         }
 
         public int total() {
@@ -383,7 +386,7 @@ public final class PdfAnnotationExchange {
                             g.get(ValueLayout.JAVA_INT, 0),
                             b.get(ValueLayout.JAVA_INT, 0));
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             // Get contents
             String contents = readAnnotString(annot, AnnotationKeys.CONTENTS);
@@ -476,7 +479,7 @@ public final class PdfAnnotationExchange {
                         }
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable ignored) {}
+                        catch (Throwable _) {}
                     }
                 }
             }
@@ -600,7 +603,7 @@ public final class PdfAnnotationExchange {
     }
 
     private static int[] parseColorString(String color) {
-        if (color == null || !color.startsWith("#") || color.length() < 7) return null;
+        if (color == null || !(!color.isEmpty() && color.charAt(0) == '#') || color.length() < 7) return null;
         try {
             return new int[]{
                     Integer.parseInt(color.substring(1, 3), 16),
@@ -629,7 +632,7 @@ public final class PdfAnnotationExchange {
         int idx = dict.indexOf(key);
         if (idx < 0) return null;
         String rest = dict.substring(idx + key.length()).trim();
-        if (!rest.startsWith("/")) return null;
+        if (!(!rest.isEmpty() && rest.charAt(0) == '/')) return null;
         StringBuilder name = new StringBuilder();
         for (int i = 1; i < rest.length(); i++) {
             char c = rest.charAt(i);
@@ -645,7 +648,7 @@ public final class PdfAnnotationExchange {
         int arrStart = dict.indexOf('[', idx);
         int arrEnd = dict.indexOf(']', arrStart);
         if (arrStart < 0 || arrEnd < 0) return null;
-        String[] parts = dict.substring(arrStart + 1, arrEnd).trim().split("\\s+");
+        String[] parts = PATTERN.split(dict.substring(arrStart + 1, arrEnd).trim());
         if (parts.length != 4) return null;
         try {
             return new float[]{

@@ -94,7 +94,7 @@ public final class PdfImageExtractor {
                 long rawSize = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(
                         obj, MemorySegment.NULL, 0L);
                 totalRawBytes += rawSize;
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
 
         return new ImageStats(total, totalRawBytes, Collections.unmodifiableMap(formats));
@@ -130,10 +130,10 @@ public final class PdfImageExtractor {
                         PageEditBindings.FPDFBitmap_Destroy.invokeExact(bmp);
                     }
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
 
             // If rendered bitmap failed, try metadata + raw data
-            if (width == 0 || height <= 0 || decodedBytes == null) {
+            if (width == 0 || decodedBytes == null) {
                 MemorySegment metaSeg = arena.allocate(ImageObjBindings.IMAGE_METADATA_LAYOUT);
                 int metaOk;
                 try {
@@ -163,7 +163,7 @@ public final class PdfImageExtractor {
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
                         rawBytes = rawBuf.toArray(ValueLayout.JAVA_BYTE);
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
 
                 // Decoded data (pixels)
                 try {
@@ -174,7 +174,7 @@ public final class PdfImageExtractor {
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
                         decodedBytes = decBuf.toArray(ValueLayout.JAVA_BYTE);
                     }
-                } catch (Throwable ignored) {}
+                } catch (Throwable _) {}
             }
 
             // Bounds (if not already retrieved)

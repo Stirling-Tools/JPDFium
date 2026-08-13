@@ -4,7 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 /** Tests for {@link RenderResult} record (pure Java, no native dependency). */
 class RenderResultTest {

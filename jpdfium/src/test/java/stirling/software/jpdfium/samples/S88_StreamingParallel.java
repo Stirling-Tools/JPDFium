@@ -23,13 +23,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 /**
  * SAMPLE 88 - Streaming &amp; Parallel Processing: Comprehensive Showcase.
@@ -93,6 +93,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @see ProcessingMode
  * @see PdfPipeline
  */
+@SuppressWarnings("deprecation") // exercises the retained-for-back-compat PDFIUM_LOCK
 public class S88_StreamingParallel {
 
 
@@ -108,15 +109,14 @@ public class S88_StreamingParallel {
     private static final int HASH_ROUNDS       = 20;
     /** Streaming flush interval (pages between save/reload cycles). */
     private static final int FLUSH_INTERVAL    = 25;
+    private static final Pattern PATTERN = Pattern.compile("[^0-9]");
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         SampleBase.ensureNative();
         Path outDir = SampleBase.out("S88_streaming-parallel");
         Path reportFile = outDir.resolve("report.txt");
 
-        System.out.println("╔══════════════════════════════════════════════════════════╗");
-        System.out.println("|  S88 - Streaming & Parallel: All-Operations Benchmark   |");
-        System.out.println("╚══════════════════════════════════════════════════════════╝");
+        System.out.println("S88 - Streaming & Parallel: All-Operations Benchmark");
         System.out.printf("  JVM:        %s %s%n",
                 System.getProperty("java.vm.name"),
                 System.getProperty("java.vm.version"));
@@ -124,7 +124,7 @@ public class S88_StreamingParallel {
         System.out.printf("  Threads:    %d%n", PARALLEL_THREADS);
         System.out.printf("  Flush:      every %d pages%n%n", FLUSH_INTERVAL);
 
-        System.out.println("═══ PHASE 1: Corpus Generation ════════════════════════════");
+        System.out.println("=== PHASE 1: Corpus Generation ============================");
         List<Path> inputs = SampleBase.inputPdfs(args);
 
         Path textTemplate  = findTemplate(inputs, "mozilla_tracemonkey");
@@ -173,7 +173,7 @@ public class S88_StreamingParallel {
         ProcessingMode COMBINED  = ProcessingMode.builder().streaming(true)
                 .parallel(PARALLEL_THREADS).flushInterval(FLUSH_INTERVAL).build();
 
-        // ══════════════════════════════════════════════════════════════
+        // ==============================================================
         //  PHASE 2: Per-Page READ-ONLY operations (parallelize via forEach)
         //
         //  These operations read data from each page independently.
@@ -187,8 +187,8 @@ public class S88_StreamingParallel {
         //    S47 BlankDetect, S58 Analytics, S60 AutoCrop (detect), S64 LinkValidation,
         //    S67 AutoDeskew (detect), S68 FontAudit, S76 DuplicateDetect,
         //    S77 ColumnExtract, S78 ImageDpi, S81 ReadingOrder, S85 AnnotStats
-        // ══════════════════════════════════════════════════════════════
-        System.out.println("═══ PHASE 2: Read-Only Operations ═════════════════════════\n");
+        // ==============================================================
+        System.out.println("=== PHASE 2: Read-Only Operations =========================\n");
 
         //
         // HOW TO ADD TO YOUR SAMPLE (e.g. S02_TextExtract):
@@ -311,7 +311,7 @@ public class S88_StreamingParallel {
                 SEQ, PAR, STREAM, COMBINED,
                 pageInspectOp()));
 
-        // ══════════════════════════════════════════════════════════════
+        // ==============================================================
         //  PHASE 3: Per-Page MODIFICATION operations (parallelize via
         //  PdfPipeline.process / processAndSave with split-merge)
         //
@@ -328,8 +328,8 @@ public class S88_StreamingParallel {
         //    S70 PageScaling, S71 MarginAdjust, S72 SelectiveFlatten,
         //    S74 ImageReplace, S79 PageMirror, S80 Background,
         //    S84 SelectiveRaster, S86 PosterizeSizes, S87 AutoCropMargins
-        // ══════════════════════════════════════════════════════════════
-        System.out.println("\n═══ PHASE 3: Modification Operations ══════════════════════\n");
+        // ==============================================================
+        System.out.println("\n=== PHASE 3: Modification Operations ======================\n");
 
         //
         // HOW TO ADD TO YOUR SAMPLE (S09_Flatten):
@@ -387,10 +387,10 @@ public class S88_StreamingParallel {
                 SEQ, PAR, STREAM, COMBINED,
                 selectiveRasterOp()));
 
-        // ══════════════════════════════════════════════════════════════
+        // ==============================================================
         //  PHASE 4: Verification & Report
-        // ══════════════════════════════════════════════════════════════
-        System.out.println("\n═══ PHASE 4: Verification ═════════════════════════════════\n");
+        // ==============================================================
+        System.out.println("\n=== PHASE 4: Verification =================================\n");
 
         report.append("================================================================\n");
         report.append("  BENCHMARK RESULTS\n");
@@ -436,9 +436,9 @@ public class S88_StreamingParallel {
         }
 
         report.append(String.format(
-                "%n═══════════════════════════════════════%n" +
+                "%n=======================================%n" +
                 "  OVERALL: %d PASS, %d MARGINAL%n" +
-                "═══════════════════════════════════════%n",
+                "=======================================%n",
                 totalPass, totalMarginal));
 
         String reportStr = report.toString();
@@ -448,7 +448,7 @@ public class S88_StreamingParallel {
         SampleBase.done("S88_StreamingParallel", corpusText, corpusForms, corpusMixed, reportFile);
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     //  OPERATION DEFINITIONS
     //
     //  Each method returns a PdfPipeline.PageOperation that demonstrates
@@ -464,7 +464,7 @@ public class S88_StreamingParallel {
     //    processes each chunk on a thread, merges results.
     //    The PageOperation runs inside the chunk context, so PDFium
     //    calls need PDFIUM_LOCK in parallel mode.
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     /**
      * Text extraction + SHA-256 hashing (S02, S03, S42, S77).
@@ -664,9 +664,9 @@ public class S88_StreamingParallel {
         };
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     //  BENCHMARK HARNESS
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     /**
      * Benchmarks a read-only operation across 4 modes.
@@ -788,7 +788,7 @@ public class S88_StreamingParallel {
         Thread monitor = startMonitor(memBean, peakHeap, peakRss);
 
         long startNs = System.nanoTime();
-        try (PdfDocument result = PdfPipeline.process(pdf, mode, wrapped)) {
+        try (PdfDocument _ = PdfPipeline.process(pdf, mode, wrapped)) {
             // discard - measuring processing time
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -820,10 +820,7 @@ public class S88_StreamingParallel {
             doc.close();
         }
     }
-
-    // ════════════════════════════════════════════════════════════════
-    //  DATA STRUCTURES
-    // ════════════════════════════════════════════════════════════════
+    // Data Structures
 
     record Metrics(
             long durationMs,
@@ -838,13 +835,13 @@ public class S88_StreamingParallel {
             Metrics streaming, Metrics combined
     ) {}
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     //  REPORT FORMATTING
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     private static String formatGroup(BenchmarkGroup g) {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("── %s ──%n", g.label));
+        sb.append(String.format("-- %s --%n", g.label));
         sb.append(formatMetrics("Sequential", g.sequential));
         sb.append(formatMetrics("Parallel-" + PARALLEL_THREADS, g.parallel));
         sb.append(formatMetrics("Streaming", g.streaming));
@@ -877,9 +874,9 @@ public class S88_StreamingParallel {
         return sb.toString();
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     //  MONITORING HELPERS
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     private static Thread startMonitor(MemoryMXBean memBean, AtomicLong peakHeap, AtomicLong peakRss) {
         Thread monitor = new Thread(() -> {
@@ -916,9 +913,9 @@ public class S88_StreamingParallel {
         try {
             for (String line : Files.readAllLines(Path.of("/proc/self/status"))) {
                 if (line.startsWith("VmRSS:"))
-                    return Long.parseLong(line.replaceAll("[^0-9]", ""));
+                    return Long.parseLong(PATTERN.matcher(line).replaceAll(""));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception _) {}
         return -1;
     }
 
@@ -933,7 +930,7 @@ public class S88_StreamingParallel {
         return b > 0 ? (double) a / b : 1.0;
     }
 
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
     //  CORPUS GENERATION
     //
     //  Large documents amplify the advantages of streaming (less cache
@@ -942,24 +939,21 @@ public class S88_StreamingParallel {
     //    - text-heavy: exercises text extraction, search, NLP pipelines
     //    - form-heavy: exercises annotation inspection, form processing
     //    - mixed: combines both for realistic enterprise documents
-    // ════════════════════════════════════════════════════════════════
+    // ================================================================
 
     private static byte[] generateCorpus(Path templatePath, int targetPages, String label) {
         System.out.printf("  Generating %s corpus (%d pages)...", label, targetPages);
         System.out.flush();
         try (PdfDocument template = PdfDocument.open(templatePath)) {
             if (template.pageCount() >= targetPages) return template.saveBytes();
-            PdfDocument dest = PdfDocument.open(template.saveBytes());
-            try {
+            try (PdfDocument dest = PdfDocument.open(template.saveBytes())) {
                 while (dest.pageCount() < targetPages) {
                     PdfPageImporter.importPages(
-                            dest.rawHandle(), template.rawHandle(), null, dest.pageCount());
+                        dest.rawHandle(), template.rawHandle(), null, dest.pageCount());
                 }
                 byte[] result = dest.saveBytes();
                 System.out.println(" done");
                 return result;
-            } finally {
-                dest.close();
             }
         }
     }
@@ -969,18 +963,15 @@ public class S88_StreamingParallel {
         System.out.flush();
         try (PdfDocument textDoc = PdfDocument.open(textTemplate);
              PdfDocument formDoc = PdfDocument.open(formTemplate)) {
-            PdfDocument dest = PdfDocument.open(textDoc.saveBytes());
-            try {
+            try (PdfDocument dest = PdfDocument.open(textDoc.saveBytes())) {
                 while (dest.pageCount() < targetPages) {
                     PdfDocument src = (dest.pageCount() / 5) % 2 == 0 ? textDoc : formDoc;
                     PdfPageImporter.importPages(
-                            dest.rawHandle(), src.rawHandle(), null, dest.pageCount());
+                        dest.rawHandle(), src.rawHandle(), null, dest.pageCount());
                 }
                 byte[] result = dest.saveBytes();
                 System.out.println(" done");
                 return result;
-            } finally {
-                dest.close();
             }
         }
     }
@@ -993,16 +984,16 @@ public class S88_StreamingParallel {
     }
 }
 
-// ════════════════════════════════════════════════════════════════════════
+// ========================================================================
 //  STREAMING / PARALLEL GUIDE
-// ════════════════════════════════════════════════════════════════════════
+// ========================================================================
 //
 //  This guide explains how to enable streaming and parallel modes in ANY
 //  JPDFium sample. The patterns below are universal.
 //
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //  1. STREAMING MODE (low memory)
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //
 //  Streaming mode periodically saves and reloads the document to release
 //  PDFium's internal caches (font renderer, page parser, image decoder).
@@ -1036,9 +1027,9 @@ public class S88_StreamingParallel {
 //  Custom flush interval:
 //    ProcessingMode.builder().streaming(true).flushInterval(20).build()
 //
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //  2. PARALLEL MODE (multi-threaded)
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //
 //  CRITICAL: PDFium is NOT thread-safe. All PDFium calls must be wrapped
 //  in synchronized(PdfPipeline.PDFIUM_LOCK). Java-side work (hashing,
@@ -1072,9 +1063,9 @@ public class S88_StreamingParallel {
 //  Java-side processing (text analysis, image encoding, hashing)
 //  scale near-linearly with thread count.
 //
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //  3. COMBINED MODE (streaming + parallel)
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //
 //  Best for very large documents (1000+ pages) with CPU-heavy operations:
 //    PdfPipeline.processAndSave(input, output,
@@ -1086,9 +1077,9 @@ public class S88_StreamingParallel {
 //        .streaming(true).parallel(4).flushInterval(25)
 //        .build()
 //
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //  4. WHICH SAMPLES BENEFIT?
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------
 //
 //  HIGH BENEFIT (per-page read + Java processing):
 //    S01 Render, S02 TextExtract, S03 TextSearch, S07 Annotations,
@@ -1119,4 +1110,4 @@ public class S88_StreamingParallel {
 //    S62 PageSplit2Up, S63 PageLabels, S66 PdfDiff,
 //    S69 PdfAConversion, S75 LongImage, S82 ResourceDedup,
 //    S83 TocGenerate
-//  ──────────────────────────────────────────────────────────────────────
+//  ----------------------------------------------------------------------

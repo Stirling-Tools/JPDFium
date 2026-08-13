@@ -2,7 +2,12 @@ package stirling.software.jpdfium.text;
 
 import stirling.software.jpdfium.PdfDocument;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Extracts tables from PDF pages using geometric clustering of text positions.

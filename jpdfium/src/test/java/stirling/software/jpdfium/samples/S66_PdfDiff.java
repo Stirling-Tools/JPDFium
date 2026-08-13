@@ -36,7 +36,7 @@ public class S66_PdfDiff {
             }
         } else {
             // Compare first two PDFs
-            Path pdf1 = inputs.get(0);
+            Path pdf1 = inputs.getFirst();
             Path pdf2 = inputs.get(1);
 
             SampleBase.section("Text diff: " + SampleBase.stem(pdf1) + " vs " + SampleBase.stem(pdf2));

@@ -69,7 +69,7 @@ public final class PdfReadingOrder {
         for (LineBlock block : rawBlocks) {
             Region region = classifyRegion(block, pageWidth, pageHeight);
             String text = block.text();
-            result.add(new TextBlock(0, region, block.minX, block.minY, 
+            result.add(new TextBlock(0, region, block.minX, block.minY,
                     block.maxX - block.minX, block.maxY - block.minY, text));
         }
 
@@ -157,7 +157,7 @@ public final class PdfReadingOrder {
                 current.add(line, lineX, lineY, lineMaxX, lineH);
             } else {
                 float gap = current.lastY - lineY;
-                boolean sameColumn = Math.abs(lineX - current.minX) < 30f || 
+                boolean sameColumn = Math.abs(lineX - current.minX) < 30f ||
                                      Math.abs(lineMaxX - current.maxX) < 30f;
                 if (gap < lineH * 2.0f && sameColumn) {
                     current.add(line, lineX, lineY, lineMaxX, lineH);

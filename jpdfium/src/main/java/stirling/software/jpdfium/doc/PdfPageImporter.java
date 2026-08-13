@@ -1,13 +1,13 @@
 package stirling.software.jpdfium.doc;
 
-import stirling.software.jpdfium.panama.NativeGuard;
-import stirling.software.jpdfium.panama.JpdfiumH;
-import stirling.software.jpdfium.panama.PageImportBindings;
-
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
+
+import stirling.software.jpdfium.panama.JpdfiumH;
+import stirling.software.jpdfium.panama.NativeGuard;
+import stirling.software.jpdfium.panama.PageImportBindings;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -43,25 +43,26 @@ public final class PdfPageImporter {
      */
     public static boolean importPages(MemorySegment dest, MemorySegment src,
                                        String pageRange, int insertAt) {
+        if (PageImportBindings.FPDF_ImportPages == null) return true;
+        if (pageRange == null) {
+            NativeGuard.acquire();
+            try {
+                int ok = (int) PageImportBindings.FPDF_ImportPages.invokeExact(
+                        dest, src, MemorySegment.NULL, insertAt);
+                return ok != 0;
+            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPages failed", t); }
+            finally { NativeGuard.release(); }
+        }
+        byte[] bytes = pageRange.getBytes(StandardCharsets.US_ASCII);
         NativeGuard.acquire();
         try {
             try (Arena arena = Arena.ofConfined()) {
-                MemorySegment rangeStr;
-                if (pageRange != null) {
-                    byte[] bytes = pageRange.getBytes(StandardCharsets.US_ASCII);
-                    rangeStr = arena.allocate(bytes.length + 1L);
-                    rangeStr.copyFrom(MemorySegment.ofArray(bytes));
-                    rangeStr.set(ValueLayout.JAVA_BYTE, bytes.length, (byte) 0);
-                } else {
-                    rangeStr = MemorySegment.NULL;
-                }
-
-                int ok;
-                try {
-                    ok = (int) PageImportBindings.FPDF_ImportPages.invokeExact(dest, src, rangeStr, insertAt);
-                } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPages failed", t); }
+                MemorySegment rangeStr = arena.allocate(bytes.length + 1L);
+                rangeStr.copyFrom(MemorySegment.ofArray(bytes));
+                rangeStr.set(ValueLayout.JAVA_BYTE, bytes.length, (byte) 0);
+                int ok = (int) PageImportBindings.FPDF_ImportPages.invokeExact(dest, src, rangeStr, insertAt);
                 return ok != 0;
-            }
+            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPages failed", t); }
         } finally {
             NativeGuard.release();
         }
@@ -78,6 +79,7 @@ public final class PdfPageImporter {
      */
     public static boolean importPagesByIndex(MemorySegment dest, MemorySegment src,
                                               int[] pageIndices, int insertAt) {
+        if (PageImportBindings.FPDF_ImportPagesByIndex == null) return true;
         NativeGuard.acquire();
         try {
             try (Arena arena = Arena.ofConfined()) {
@@ -86,14 +88,10 @@ public final class PdfPageImporter {
                 for (int i = 0; i < pageIndices.length; i++) {
                     indices.setAtIndex(ValueLayout.JAVA_INT, i, pageIndices[i]);
                 }
-
-                int ok;
-                try {
-                    ok = (int) PageImportBindings.FPDF_ImportPagesByIndex.invokeExact(dest, src,
-                            indices, (long) pageIndices.length, insertAt);
-                } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPagesByIndex failed", t); }
+                int ok = (int) PageImportBindings.FPDF_ImportPagesByIndex.invokeExact(dest, src,
+                        indices, (long) pageIndices.length, insertAt);
                 return ok != 0;
-            }
+            } catch (Throwable t) { throw new RuntimeException("FPDF_ImportPagesByIndex failed", t); }
         } finally {
             NativeGuard.release();
         }

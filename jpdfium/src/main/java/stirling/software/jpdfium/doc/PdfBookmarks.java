@@ -62,7 +62,7 @@ public final class PdfBookmarks {
     }
 
     private static List<Bookmark> collectChildren(MemorySegment doc, MemorySegment parent, int depth) {
-        if (depth > MAX_DEPTH) return Collections.emptyList();
+        if (depth > MAX_DEPTH || BookmarkBindings.FPDFBookmark_GetFirstChild == null) return Collections.emptyList();
 
         List<Bookmark> result = new ArrayList<>();
         MemorySegment child;

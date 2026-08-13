@@ -12,6 +12,7 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 /**
  * Detect, add, and remove web links on PDF pages.
@@ -72,14 +73,12 @@ public final class PdfWebLinks {
             } finally {
                 try {
                     WebLinkBindings.FPDFLink_CloseWebLinks.invokeExact(webLinks);
-                } catch (Throwable ignored) {
-                }
+                } catch (Throwable _) {}
             }
         } finally {
             try {
                 TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable _) {}
         }
     }
 
@@ -110,7 +109,7 @@ public final class PdfWebLinks {
      * @return annotation index, or -1 on failure
      */
     public static int addLink(MemorySegment rawPage, Rect rect, String uri,
-            java.util.function.UnaryOperator<PdfAnnotationBuilder> builderConsumer) {
+            UnaryOperator<PdfAnnotationBuilder> builderConsumer) {
         PdfAnnotationBuilder builder = PdfAnnotationBuilder.on(rawPage)
                 .type(AnnotationType.LINK)
                 .rect(rect)
@@ -158,20 +157,17 @@ public final class PdfWebLinks {
                 if (subtype == AnnotationType.LINK.code()) {
                     try {
                         AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-                    } catch (Throwable ignored) {
-                    }
+                    } catch (Throwable _) {}
                     int ok = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(rawPage, i);
                     if (ok != 0)
                         removed++;
                     continue; // annot already closed
                 }
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable _) {}
 
             try {
                 AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable _) {}
         }
         return removed;
     }
@@ -205,12 +201,10 @@ public final class PdfWebLinks {
                 int subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
                 if (subtype == AnnotationType.LINK.code())
                     linkCount++;
-            } catch (Throwable ignored) {
-            } finally {
+            } catch (Throwable _) {} finally {
                 try {
                     AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-                } catch (Throwable ignored) {
-                }
+                } catch (Throwable _) {}
             }
         }
         return linkCount;
@@ -271,8 +265,7 @@ public final class PdfWebLinks {
                     float t = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
                     rects.add(new Rect(l, b, ri - l, t - b));
                 }
-            } catch (Throwable ignored) {
-            }
+            } catch (Throwable _) {}
         }
         return rects;
     }

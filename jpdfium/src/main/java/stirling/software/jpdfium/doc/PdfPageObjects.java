@@ -177,7 +177,7 @@ public final class PdfPageObjects {
                 if (ok != 0) {
                     marks.add(FfmHelper.fromByteString(buf, 256));
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
         return marks;
     }

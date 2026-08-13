@@ -8,6 +8,7 @@ dependencies {
     constraints {
         api(project(":jpdfium"))
         api(project(":jpdfium-spring"))
+        api(project(":jpdfium-vips"))
         api(project(":jpdfium-natives:jpdfium-natives-linux-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-linux-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-darwin-x64"))

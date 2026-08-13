@@ -3,12 +3,18 @@ package stirling.software.jpdfium.panama;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
+import stirling.software.jpdfium.internal.PixelFormat;
+import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.RenderResult;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Thin Java-friendly wrapper around the jextract-generated {@link JpdfiumH}.
@@ -204,19 +210,27 @@ public final class JpdfiumLib {
     }
 
     public static RenderResult renderPage(long page, int dpi) {
+        try (RenderedPageView view = renderPageView(page, dpi)) {
+            byte[] rgba = view.pixels().toArray(JAVA_BYTE);
+            return new RenderResult(view.width(), view.height(), rgba);
+        }
+    }
+
+    public static RenderedPageView renderPageView(long page, int dpi) {
         NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
-                MemorySegment wSeg   = a.allocate(JAVA_INT);
-                MemorySegment hSeg   = a.allocate(JAVA_INT);
+                MemorySegment wSeg = a.allocate(JAVA_INT);
+                MemorySegment hSeg = a.allocate(JAVA_INT);
                 check(JpdfiumH.jpdfium_render_page(page, dpi, ptrSeg, wSeg, hSeg), "renderPage");
                 int w = wSeg.get(JAVA_INT, 0);
                 int h = hSeg.get(JAVA_INT, 0);
                 MemorySegment nativePtr = ptrSeg.get(ADDRESS, 0);
-                byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
-                JpdfiumH.jpdfium_free_buffer(nativePtr);
-                return new RenderResult(w, h, rgba);
+                long byteLen = (long) w * h * 4;
+                MemorySegment pixels = nativePtr.reinterpret(byteLen);
+                return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
+                        pixels, () -> JpdfiumH.jpdfium_free_buffer(nativePtr));
             }
         } finally {
             NativeGuard.release();
@@ -498,7 +512,9 @@ public final class JpdfiumLib {
         NativeGuard.acquire();
         try {
             long raw = JpdfiumH.jpdfium_doc_raw_handle(doc);
-            if (raw == 0) throw new JPDFiumException("Invalid document handle");
+            if (raw == 0) {
+                throw new JPDFiumException("jpdfium_doc_raw_handle returned null pointer for handle " + doc);
+            }
             return FfmHelper.ptrToSegment(raw);
         } finally {
             NativeGuard.release();
@@ -512,7 +528,9 @@ public final class JpdfiumLib {
         NativeGuard.acquire();
         try {
             long raw = JpdfiumH.jpdfium_page_raw_handle(page);
-            if (raw == 0) throw new JPDFiumException("Invalid page handle");
+            if (raw == 0) {
+                throw new JPDFiumException("jpdfium_page_raw_handle returned null pointer for handle " + page);
+            }
             return FfmHelper.ptrToSegment(raw);
         } finally {
             NativeGuard.release();
@@ -526,7 +544,9 @@ public final class JpdfiumLib {
         NativeGuard.acquire();
         try {
             long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
-            if (raw == 0) throw new JPDFiumException("Invalid page handle");
+            if (raw == 0) {
+                throw new JPDFiumException("jpdfium_page_doc_raw_handle returned null pointer for handle " + page);
+            }
             return FfmHelper.ptrToSegment(raw);
         } finally {
             NativeGuard.release();
@@ -535,14 +555,6 @@ public final class JpdfiumLib {
 
     /**
      * Create a new PDF document containing a single image page.
-     *
-     * @param imageData   raw RGBA bytes with 8-byte [width][height] header (imageFormat=3)
-     * @param pageWidth   output page width in PDF points
-     * @param pageHeight  output page height in PDF points
-     * @param margin      margin in PDF points
-     * @param position    placement position (POSITION_* constant)
-     * @param imageFormat 0=auto, 1=PNG, 2=JPEG, 3=raw RGBA with header
-     * @return bridge document handle (must be closed via {@link #docClose(long)})
      */
     public static long imageToPdf(byte[] imageData, float pageWidth, float pageHeight,
                                    float margin, int position, int imageFormat) {

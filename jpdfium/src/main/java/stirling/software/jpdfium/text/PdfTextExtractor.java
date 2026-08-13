@@ -6,7 +6,6 @@ import stirling.software.jpdfium.PdfPage;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
 
 /**
  * High-level structured text extraction from PDF documents.
@@ -31,8 +30,6 @@ import java.util.regex.Pattern;
  * }</pre>
  */
 public final class PdfTextExtractor {
-
-    private static final Pattern COMMA_BEFORE_QUOTE = Pattern.compile(",(?=\")");
 
     private PdfTextExtractor() {}
 
@@ -81,52 +78,113 @@ public final class PdfTextExtractor {
     /**
      * Parses the compact JSON character array returned by the C bridge.
      * Format: [{"i":0,"u":65,"x":10.1,"y":20.2,"w":8.3,"h":12.4,"font":"Arial","size":12.0}, ...]
+     *
+     * <p>Single index-based sweep with substring views for values: no regex
+     * {@code split}, no per-field {@code String.replace}. Quoted values are
+     * JSON-unescaped (handling {@code \"} and {@code \\}); number values are
+     * handed to {@code Integer.parseInt}/{@code Float.parseFloat} as substrings.
+     * Malformed objects are skipped wholesale.
      */
     static List<TextChar> parseCharsJson(String json) {
-        List<TextChar> chars = new ArrayList<>();
-        if (json == null || json.equals("[]")) return chars;
-
-        int pos = 0;
-        while (pos < json.length()) {
-            int objStart = json.indexOf('{', pos);
+        if (json == null || json.isEmpty() || json.equals("[]")) return new ArrayList<>();
+        final int n = json.length();
+        // Rough pre-size: ~56 bytes per char object in the stub/real schema.
+        List<TextChar> chars = new ArrayList<>(Math.max(8, n / 56));
+        int p = 0;
+        while (true) {
+            int objStart = json.indexOf('{', p);
             if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
-            if (objEnd < 0) break;
-
-            String obj = json.substring(objStart + 1, objEnd);
-            pos = objEnd + 1;
-
+            int i = objStart + 1;
             int index = 0, unicode = 0;
             float x = 0, y = 0, w = 0, h = 0, fontSize = 0;
             String fontName = "";
-
-            String[] pairs = COMMA_BEFORE_QUOTE.split(obj);
+            boolean complete = false;
             try {
-                for (String pair : pairs) {
-                    int colon = pair.indexOf(':');
-                    if (colon < 0) continue;
-                    String key = pair.substring(0, colon).replace("\"", "").trim();
-                    String val = pair.substring(colon + 1).trim();
-
-                    switch (key) {
-                        case "i" -> index = Integer.parseInt(val);
-                        case "u" -> unicode = Integer.parseInt(val);
-                        case "x" -> x = Float.parseFloat(val);
-                        case "y" -> y = Float.parseFloat(val);
-                        case "w" -> w = Float.parseFloat(val);
-                        case "h" -> h = Float.parseFloat(val);
-                        case "size" -> fontSize = Float.parseFloat(val);
-                        case "font" -> fontName = val.replace("\"", "");
+                while (i < n) {
+                    char c = json.charAt(i);
+                    if (c == '}') { i++; complete = true; break; }
+                    if (c == ',' || Character.isWhitespace(c)) { i++; continue; }
+                    if (c != '"') break;                  // malformed field
+                    int k1 = json.indexOf('"', i + 1);
+                    if (k1 < 0) break;
+                    int colon = json.indexOf(':', k1 + 1);
+                    if (colon < 0) break;
+                    char k0 = json.charAt(i + 1);        // first char of key
+                    int v0 = colon + 1;
+                    while (v0 < n && Character.isWhitespace(json.charAt(v0))) v0++;
+                    if (v0 >= n) break;
+                    if (json.charAt(v0) == '"') {        // string value (font)
+                        int close = endOfQuoted(json, v0 + 1);
+                        if (close < 0) break;
+                        if (k0 == 'f') fontName = unescape(json, v0 + 1, close);
+                        i = close + 1;
+                    } else {                             // number value
+                        int v1 = v0;
+                        while (v1 < n) {
+                            char d = json.charAt(v1);
+                            if (d == ',' || d == '}') break;
+                            v1++;
+                        }
+                        String val = json.substring(v0, v1);
+                        switch (k0) {
+                            case 'i' -> index = Integer.parseInt(val);
+                            case 'u' -> unicode = Integer.parseInt(val);
+                            case 'x' -> x = Float.parseFloat(val);
+                            case 'y' -> y = Float.parseFloat(val);
+                            case 'w' -> w = Float.parseFloat(val);
+                            case 'h' -> h = Float.parseFloat(val);
+                            case 's' -> fontSize = Float.parseFloat(val); // "size"
+                            default -> { /* font handled as string above */ }
+                        }
+                        i = v1;
                     }
                 }
-            } catch (NumberFormatException ignored) {
-                // Skip malformed entries from the native bridge
-                continue;
+                if (complete) chars.add(new TextChar(index, unicode, x, y, w, h, fontName, fontSize));
+            } catch (NumberFormatException skip) {
+                // malformed entry - don't add this char
             }
-
-            chars.add(new TextChar(index, unicode, x, y, w, h, fontName, fontSize));
+            p = i;
         }
         return chars;
+    }
+
+    /** Index of the closing {@code "} for the string opened at {@code openQuote} (handles {@code \"}). */
+    private static int endOfQuoted(String json, int from) {
+        final int n = json.length();
+        for (int i = from; i < n; ) {
+            char c = json.charAt(i);
+            if (c == '\\') { i += 2; continue; }
+            if (c == '"') return i;
+            i++;
+        }
+        return -1;
+    }
+
+    /** JSON-unescape the chars between {@code start} and {@code end}; fast path when no {@code \} present. */
+    private static String unescape(String json, int start, int end) {
+        if (start >= end) return "";
+        for (int i = start; i < end; i++) {
+            if (json.charAt(i) == '\\') {
+                StringBuilder sb = new StringBuilder(end - start);
+                for (int i2 = start; i2 < end; ) {
+                    char c = json.charAt(i2);
+                    if (c == '\\' && i2 + 1 < end) {
+                        sb.append(switch (json.charAt(i2 + 1)) {
+                            case '"' -> '"'; case '\\' -> '\\'; case '/' -> '/';
+                            case 'n' -> '\n'; case 't' -> '\t'; case 'r' -> '\r';
+                            case 'b' -> '\b'; case 'f' -> '\f';
+                            default -> json.charAt(i2 + 1);
+                        });
+                        i2 += 2;
+                    } else {
+                        sb.append(c);
+                        i2++;
+                    }
+                }
+                return sb.toString();
+            }
+        }
+        return json.substring(start, end);
     }
 
     /**
@@ -149,27 +207,35 @@ public final class PdfTextExtractor {
         for (TextChar ch : chars) {
             if (!currentLineChars.isEmpty() && Math.abs(ch.y() - currentLineY) > lineThreshold) {
                 lines.add(buildLine(currentLineChars));
-                currentLineChars = new ArrayList<>();
+                // TextLine does not retain this list, so reuse it for the next line.
+                currentLineChars.clear();
                 lineThreshold = ch.height() * 0.5f;
             }
             currentLineChars.add(ch);
             currentLineY = ch.y();
         }
 
-        if (!currentLineChars.isEmpty()) {
-            lines.add(buildLine(currentLineChars));
-        }
+        lines.add(buildLine(currentLineChars));
 
         return lines;
     }
 
     private static TextLine buildLine(List<TextChar> lineChars) {
         List<TextWord> words = buildWords(lineChars);
-        float x = lineChars.stream().map(TextChar::x).min(Float::compare).orElse(0f);
-        float y = lineChars.stream().map(TextChar::y).min(Float::compare).orElse(0f);
-        float maxX = lineChars.stream().map(c -> c.x() + c.width()).max(Float::compare).orElse(0f);
-        float maxY = lineChars.stream().map(c -> c.y() + c.height()).max(Float::compare).orElse(0f);
-        return new TextLine(words, x, y, maxX - x, maxY - y);
+        if (lineChars.isEmpty()) return new TextLine(words, 0f, 0f, 0f, 0f);
+        // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
+        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        for (TextChar c : lineChars) {
+            float cx = c.x(), cy = c.y();
+            if (cx < minX) minX = cx;
+            if (cy < minY) minY = cy;
+            float rx = cx + c.width();
+            float by = cy + c.height();
+            if (rx > maxX) maxX = rx;
+            if (by > maxY) maxY = by;
+        }
+        return new TextLine(words, minX, minY, maxX - minX, maxY - minY);
     }
 
     private static List<TextWord> buildWords(List<TextChar> lineChars) {
@@ -180,6 +246,7 @@ public final class PdfTextExtractor {
             if (ch.isWhitespace() || ch.isNewline()) {
                 if (!currentWord.isEmpty()) {
                     words.add(buildWord(currentWord));
+                    // TextWord retains its char list, so allocate a fresh one per word.
                     currentWord = new ArrayList<>();
                 }
             } else {
@@ -195,10 +262,19 @@ public final class PdfTextExtractor {
     }
 
     private static TextWord buildWord(List<TextChar> wordChars) {
-        float x = wordChars.stream().map(TextChar::x).min(Float::compare).orElse(0f);
-        float y = wordChars.stream().map(TextChar::y).min(Float::compare).orElse(0f);
-        float maxX = wordChars.stream().map(c -> c.x() + c.width()).max(Float::compare).orElse(0f);
-        float maxY = wordChars.stream().map(c -> c.y() + c.height()).max(Float::compare).orElse(0f);
-        return new TextWord(wordChars, x, y, maxX - x, maxY - y);
+        if (wordChars.isEmpty()) return new TextWord(wordChars, 0f, 0f, 0f, 0f);
+        // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
+        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        for (TextChar c : wordChars) {
+            float cx = c.x(), cy = c.y();
+            if (cx < minX) minX = cx;
+            if (cy < minY) minY = cy;
+            float rx = cx + c.width();
+            float by = cy + c.height();
+            if (rx > maxX) maxX = rx;
+            if (by > maxY) maxY = by;
+        }
+        return new TextWord(wordChars, minX, minY, maxX - minX, maxY - minY);
     }
 }

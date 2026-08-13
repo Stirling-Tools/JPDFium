@@ -63,13 +63,40 @@ public final class HeaderFooter {
 
         private Builder() {}
 
-        public Builder font(FontName fontName) { this.fontName = fontName; return this; }
-        public Builder font(String fontName) { this.fontName = FontName.fromName(fontName); return this; }
-        public Builder footer(String footer) { this.footer = footer; return this; }
-        public Builder header(String header) { this.header = header; return this; }
-        public Builder size(float fontSize) { this.fontSize = fontSize; return this; }
-        public Builder color(int argbColor) { this.argbColor = argbColor; return this; }
-        public Builder margin(float margin) { this.margin = margin; return this; }
+        public Builder font(FontName fontName) {
+            this.fontName = fontName;
+            return this;
+        }
+
+        public Builder font(String fontName) {
+            this.fontName = FontName.fromName(fontName);
+            return this;
+        }
+
+        public Builder footer(String footer) {
+            this.footer = footer;
+            return this;
+        }
+
+        public Builder header(String header) {
+            this.header = header;
+            return this;
+        }
+
+        public Builder size(float fontSize) {
+            this.fontSize = fontSize;
+            return this;
+        }
+
+        public Builder color(int argbColor) {
+            this.argbColor = argbColor;
+            return this;
+        }
+
+        public Builder margin(float margin) {
+            this.margin = margin;
+            return this;
+        }
 
         public HeaderFooter build() {
             if (header == null && footer == null) {

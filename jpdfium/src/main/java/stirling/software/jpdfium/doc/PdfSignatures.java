@@ -38,6 +38,9 @@ public final class PdfSignatures {
      * Returns the number of signatures in the document.
      */
     public static int count(MemorySegment doc) {
+        if (SignatureBindings.FPDF_GetSignatureCount == null) {
+            return 0;
+        }
         try {
             return (int) SignatureBindings.FPDF_GetSignatureCount.invokeExact(doc);
         } catch (Throwable t) { throw new RuntimeException("FPDF_GetSignatureCount failed", t); }

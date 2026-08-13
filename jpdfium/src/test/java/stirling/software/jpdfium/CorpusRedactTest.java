@@ -12,10 +12,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * Corpus-level redaction regression test with structural failure detection.
@@ -98,6 +105,8 @@ class CorpusRedactTest {
 
     /** Output directory under samples-output for structured report. */
     private static final Path REPORT_DIR;
+    private static final Pattern PATTERN = Pattern.compile("[\\s\\p{Punct}]+");
+
     static {
         String override = System.getProperty("samples.output");
         Path root = (override != null)
@@ -171,8 +180,8 @@ class CorpusRedactTest {
         }
     }
 
-    private void testSinglePdfInner(Path pdf, String stem, Path pdfOutDir,
-                                     PdfReport report) throws Exception {
+    private static void testSinglePdfInner(Path pdf, String stem, Path pdfOutDir,
+                                           PdfReport report) throws Exception {
         int pageCount;
         try (var doc = PdfDocument.open(pdf)) {
             pageCount = doc.pageCount();
@@ -277,7 +286,7 @@ class CorpusRedactTest {
     }
 
 
-    private PageAnalysis analyzePage(
+    private static PageAnalysis analyzePage(
             BufferedImage before, BufferedImage after,
             String jsonBefore, String jsonAfter,
             int pageIndex, Path outDir, String pdfName) throws IOException {
@@ -368,7 +377,7 @@ class CorpusRedactTest {
     private static List<String> extractNonTargetWords(String text) {
         if (text == null || text.length() < 5) return List.of();
         List<String> targetSet = Arrays.asList(REDACT_WORDS);
-        String[] allWords = text.split("[\\s\\p{Punct}]+");
+        String[] allWords = PATTERN.split(text);
         List<String> candidates = new ArrayList<>();
         for (String w : allWords) {
             // Only consider words with 4+ alphabetic chars to avoid noise
