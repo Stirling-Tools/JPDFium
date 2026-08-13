@@ -218,7 +218,6 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
     endif()
 
-    # ── Rust integration (required for real PDFium build) ────────────────────
     find_program(CARGO_CMD cargo)
     if(NOT CARGO_CMD)
         message(FATAL_ERROR
@@ -463,7 +462,6 @@ if(JPDFIUM_USE_PDFIUM)
     endif()
 endif()
 
-# ── Native smoke tests (CTest) ───────────────────────────────────────────────
 if(JPDFIUM_BUILD_TESTS)
     enable_testing()
     add_executable(native_smoke bridge/tests/smoke.cpp)
@@ -492,7 +490,6 @@ if(JPDFIUM_BUILD_TESTS)
     endif()
 endif()
 
-# ── libFuzzer harness ────────────────────────────────────────────────────────
 if(JPDFIUM_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "JPDFIUM_BUILD_FUZZERS requires Clang (-fsanitize=fuzzer)")
