@@ -17,6 +17,34 @@ if(ENABLE_CLANG_TIDY)
   set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 endif()
 
+# Sanitizer support (dev/CI builds). Usage:
+#   cmake -DJPDFIUM_SANITIZE=address,undefined
+# Applies -fsanitize=<san> + -fno-omit-frame-pointer to all native targets
+# (stub and real bridge). thread is also supported for TSan runs.
+option(JPDFIUM_SANITIZE "Comma-separated sanitizers (address,undefined,thread)" "")
+if(JPDFIUM_SANITIZE AND NOT MSVC)
+  string(REPLACE "," ";" JPDFIUM_SANITIZERS "${JPDFIUM_SANITIZE}")
+  set(_jpdfium_san_flags "")
+  foreach(_san IN LISTS JPDFIUM_SANITIZERS)
+    if(NOT _san STREQUAL "")
+      list(APPEND _jpdfium_san_flags "-fsanitize=${_san}")
+    endif()
+  endforeach()
+  if(_jpdfium_san_flags)
+    add_compile_options(${_jpdfium_san_flags} -fno-omit-frame-pointer)
+    add_link_options(${_jpdfium_san_flags})
+    message(STATUS "Sanitizers enabled: ${JPDFIUM_SANITIZE}")
+  endif()
+endif()
+
+# Native smoke tests (CTest). Exercises the bridge end-to-end without the
+# JVM: doc open -> page count -> page open -> render -> free -> close.
+option(JPDFIUM_BUILD_TESTS "Build native smoke tests (CTest)" ON)
+
+# libFuzzer harness for the bridge's untrusted-input boundary
+# (doc_open_bytes / render / text / save). Requires Clang.
+option(JPDFIUM_BUILD_FUZZERS "Build libFuzzer fuzz targets" OFF)
+
 # Platform detection
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(JPDFIUM_OS "linux")
@@ -298,8 +326,15 @@ if(JPDFIUM_USE_PDFIUM)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
 
     # qpdf - PDF structure manipulation, stream replacement
-    pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::QPDF)
+    pkg_check_modules(QPDF REQUIRED libqpdf)
+    # qpdf's pkg-config Cflags inject -std=c++20, which appears AFTER
+    # -std=gnu++23 on the compile line and silently downgrades the whole
+    # target to C++20 (last -std= wins). Strip it and keep gnu++23.
+    string(REGEX REPLACE "-std=[^ ;]+" "" QPDF_CFLAGS_OTHER "${QPDF_CFLAGS_OTHER}")
+    target_include_directories(jpdfium PRIVATE ${QPDF_INCLUDE_DIRS})
+    target_link_directories(jpdfium PRIVATE ${QPDF_LIBRARY_DIRS})
+    target_link_libraries(jpdfium PRIVATE ${QPDF_LIBRARIES})
+    target_compile_options(jpdfium PRIVATE ${QPDF_CFLAGS_OTHER})
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
     # Silence qpdf's PointerHolder transition #warning (treated as error by
     # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
@@ -423,7 +458,56 @@ if(JPDFIUM_USE_PDFIUM)
         message(STATUS "Skia check: FPDF_RenderPageSkia not found (using standard AGG renderer backend)")
     else()
         message(STATUS "Skia check: FPDF_RenderPageSkia found, Skia backend confirmed")
-        add_compile_definitions(JPDFIUM_HAS_SKIA=1)
+        # The bridge sources gate Skia paths on #ifdef JPDFIUM_HAS_SKIA.
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_SKIA=1)
+    endif()
+endif()
+
+# ── Native smoke tests (CTest) ───────────────────────────────────────────────
+if(JPDFIUM_BUILD_TESTS)
+    enable_testing()
+    add_executable(native_smoke bridge/tests/smoke.cpp)
+    target_include_directories(native_smoke PRIVATE bridge/include)
+    if(MSVC)
+        target_compile_options(native_smoke PRIVATE /W4 /WX)
+    else()
+        target_compile_options(native_smoke PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(native_smoke PRIVATE jpdfium)
+    else()
+        target_link_libraries(native_smoke PRIVATE jpdfium_stub)
+    endif()
+    add_test(NAME native_smoke COMMAND native_smoke)
+    # Component PDFium builds: the sibling libpdfium.* lives in PDFIUM_LIB_DIR
+    # and is only resolvable at test time via the library search path.
+    if(JPDFIUM_USE_PDFIUM AND PDFIUM_LINK_MODE STREQUAL "component")
+        if(JPDFIUM_OS STREQUAL "darwin")
+            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
+                "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
+        elseif(JPDFIUM_OS STREQUAL "linux")
+            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
+                "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
+        endif()
+    endif()
+endif()
+
+# ── libFuzzer harness ────────────────────────────────────────────────────────
+if(JPDFIUM_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "JPDFIUM_BUILD_FUZZERS requires Clang (-fsanitize=fuzzer)")
+    endif()
+    add_executable(jpdfium_fuzz bridge/fuzz/jpdfium_fuzz.cpp)
+    target_include_directories(jpdfium_fuzz PRIVATE bridge/include)
+    target_compile_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address -fno-omit-frame-pointer -g)
+    target_link_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address)
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(jpdfium_fuzz PRIVATE jpdfium)
+        if(PDFIUM_LINK_MODE STREQUAL "component")
+            target_link_options(jpdfium_fuzz PRIVATE "-Wl,-rpath,${PDFIUM_LIB_DIR}")
+        endif()
+    else()
+        target_link_libraries(jpdfium_fuzz PRIVATE jpdfium_stub)
     endif()
 endif()
 
