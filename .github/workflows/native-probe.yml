@@ -37,7 +37,9 @@ jobs:
 
       - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
         with:
-          distribution: temurin
+          # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
+          # Build of OpenJDK does, so use it on the windows-arm64 leg.
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
 
       - name: Install jextract
