@@ -1,0 +1,9 @@
+[
+  {
+    "name": "stirling.software.jpdfium.panama.NativeLoader",
+    "methods": [
+      { "name": "ensureLoaded", "parameterTypes": [] },
+      { "name": "detectPlatform", "parameterTypes": [] }
+    ]
+  }
+]
