@@ -4,7 +4,7 @@
 # Why on Linux: the Windows runner doesn't have icupkg.exe / pkgdata.exe
 # (vcpkg's icu port skips installing the tools dir on Windows targets), but
 # Linux ubuntu-latest does via icu-devtools. The .dat file format itself is
-# platform-portable — items inside are byte-for-byte the same whether held
+# platform-portable - items inside are byte-for-byte the same whether held
 # in a Linux .so or a Windows .dll, what differs is the binary wrapper.
 #
 # Pipeline:
@@ -15,7 +15,7 @@
 #   3. icupkg -x '*' → loose items (ICU 74 icupkg reads ICU 78 .dat fine;
 #      .dat archive format has been stable since ICU 4.x and items inside
 #      keep their original ICU 78 byte content untouched)
-#   4. Build keep-list (same patterns as the Linux trim — cnvalias, uchar,
+#   4. Build keep-list (same patterns as the Linux trim - cnvalias, uchar,
 #      ubidi, unames, ulayout, ucase, uemoji, nfc/nfkc/nfkc_cf, brkitr/,
 #      root.res + en.res + en_US.res + pool.res)
 #   5. pkgdata -m archive packages the kept items into a fresh .dat
@@ -24,7 +24,7 @@
 #   7. Pre-stage into native/dist/windows-x64/ for upload-artifact / pickup
 #      by the Windows job's Stage binaries step.
 #
-# Best-effort: every failure path is exit 0 with a message — the Windows
+# Best-effort: every failure path is exit 0 with a message - the Windows
 # job will fall back to vcpkg's full icudt78.dll (~33 MB) if anything here
 # misfires. No size regression vs current state.
 
@@ -94,7 +94,7 @@ fi
 echo "Source .dat : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
 
 # Step 3: Extract items. ICU 74's icupkg can read ICU 78 .dat because the
-# archive format itself has been stable since ICU 4.x — only the items
+# archive format itself has been stable since ICU 4.x - only the items
 # inside have their own (independent) format versions which we don't touch.
 EXTRACT="$WORK/extract"
 mkdir -p "$EXTRACT"
@@ -105,7 +105,7 @@ icupkg -l "$DAT_FILE" > "$WORK/all.lst"
 TOTAL=$(wc -l < "$WORK/all.lst")
 echo "Total items in source : $TOTAL"
 
-# Step 4: Build keep list — same patterns as the Linux trim. See
+# Step 4: Build keep list - same patterns as the Linux trim. See
 # build-minimal-icu.sh for the full rationale; bridge doesn't use
 # unames/uemoji/nfkc/nfkc_cf/en_US so they're dropped.
 KEEP=(
@@ -134,7 +134,7 @@ done < "$WORK/all.lst"
 KEPT=$(wc -l < "$WORK/keep.lst")
 echo "Keeping  : $KEPT items (out of $TOTAL)"
 
-# Step 5: pkgdata -m archive — no compiler needed, just data layout.
+# Step 5: pkgdata -m archive - no compiler needed, just data layout.
 ICUPKG_INC=$(find /usr/lib /usr/share -maxdepth 6 -type f \
               \( -name "pkgdata.inc" -o -name "icupkg.inc" -o -name "Makefile.inc" \) \
               2>/dev/null | grep -iE '/icu(/|$)' | head -1)
@@ -209,7 +209,7 @@ echo "Pre-staged  : $PLATFORM_DIST/icudt${ICU_VER}.dll"
 # on macOS, so we do the trim once on Linux (this job already has both
 # apt's icu-devtools binaries AND the matching upstream ICU 78 source
 # data) and let the macOS jobs do the platform-specific wrapping. The .dat
-# is byte-identical across OSes — only the binary wrapper differs.
+# is byte-identical across OSes - only the binary wrapper differs.
 SHARED_DIST="$(dirname "$0")/dist/icu-data"
 mkdir -p "$SHARED_DIST"
 cp -v "$TRIMMED_DAT" "$SHARED_DIST/icudt${ICU_VER}l.dat"

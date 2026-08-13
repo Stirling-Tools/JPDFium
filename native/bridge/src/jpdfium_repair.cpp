@@ -7,22 +7,22 @@
 //   qpdf     (Apache 2.0) - XRef rebuild, stream normalization, inspection mode
 //   PDFium   (BSD)        - Tolerant parser fallback (Chrome lineage)
 
-#include "jpdfium.h"
-
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
-#include <string>
 #include <sstream>
+#include <string>
 #include <vector>
+
+#include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_QPDF
 
-#include <qpdf/QPDF.hh>
-#include <qpdf/QPDFWriter.hh>
-#include <qpdf/QPDFExc.hh>
 #include <qpdf/Buffer.hh>
+#include <qpdf/QPDF.hh>
+#include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
+#include <qpdf/QPDFWriter.hh>
 
 // Helper: serialize qpdf warnings to JSON array
 static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
@@ -38,7 +38,10 @@ static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
         escaped.reserve(msg.size());
         for (char c : msg) {
             if (c == '"' || c == '\\') escaped += '\\';
-            if (c == '\n') { escaped += "\\n"; continue; }
+            if (c == '\n') {
+                escaped += "\\n";
+                continue;
+            }
             if (c == '\r') continue;
             escaped += c;
         }
@@ -49,18 +52,13 @@ static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
 }
 
 // Helper: attempt qpdf recovery on raw bytes
-static int try_qpdf_repair(
-    const uint8_t* input, int64_t inputLen,
-    uint8_t** output, int64_t* outputLen,
-    int32_t flags,
-    std::string& errorMsg) {
+static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** output,
+                           int64_t* outputLen, int32_t flags, std::string& errorMsg) {
     try {
         QPDF pdf;
         pdf.setSuppressWarnings(true);
-        pdf.processMemoryFile(
-            "repair",
-            reinterpret_cast<const char*>(input),
-            static_cast<size_t>(inputLen));
+        pdf.processMemoryFile("repair", reinterpret_cast<const char*>(input),
+                              static_cast<size_t>(inputLen));
 
         QPDFWriter writer(pdf);
         writer.setOutputMemory();
@@ -98,9 +96,7 @@ static int try_qpdf_repair(
 }
 
 // Helper: attempt startxref offset correction
-static bool try_fix_startxref(
-    std::vector<uint8_t>& data,
-    int delta) {
+static bool try_fix_startxref(std::vector<uint8_t>& data, int delta) {
     // Find last "startxref" in the file
     const char* needle = "startxref";
     size_t needleLen = 9;
@@ -116,12 +112,12 @@ static bool try_fix_startxref(
 
     // Parse the offset value after "startxref\n"
     size_t numStart = pos + needleLen;
-    while (numStart < data.size() && (data[numStart] == '\n' || data[numStart] == '\r' || data[numStart] == ' '))
+    while (numStart < data.size() &&
+           (data[numStart] == '\n' || data[numStart] == '\r' || data[numStart] == ' '))
         numStart++;
 
     size_t numEnd = numStart;
-    while (numEnd < data.size() && data[numEnd] >= '0' && data[numEnd] <= '9')
-        numEnd++;
+    while (numEnd < data.size() && data[numEnd] >= '0' && data[numEnd] <= '9') numEnd++;
 
     if (numEnd == numStart) return false;
 
@@ -146,11 +142,8 @@ static bool try_fix_startxref(
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
-    const uint8_t* input, int64_t inputLen,
-    uint8_t** output, int64_t* outputLen,
-    int32_t flags) {
-
+JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen, uint8_t** output,
+                                          int64_t* outputLen, int32_t flags) {
     if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
 
     // Stage 1: Direct qpdf recovery (handles most xref, trailer, stream issues)
@@ -164,9 +157,8 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
         for (int delta : deltas) {
             std::vector<uint8_t> patched(input, input + inputLen);
             if (try_fix_startxref(patched, delta)) {
-                result = try_qpdf_repair(
-                    patched.data(), static_cast<int64_t>(patched.size()),
-                    output, outputLen, flags, errorMsg);
+                result = try_qpdf_repair(patched.data(), static_cast<int64_t>(patched.size()),
+                                         output, outputLen, flags, errorMsg);
                 if (result != JPDFIUM_REPAIR_FAILED) return result;
             }
         }
@@ -175,10 +167,8 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
     return JPDFIUM_REPAIR_FAILED;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
-    const uint8_t* input, int64_t inputLen,
-    char** diagnosticJson) {
-
+JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inputLen,
+                                              char** diagnosticJson) {
     if (!input || inputLen <= 0 || !diagnosticJson) return JPDFIUM_ERR_INVALID;
 
     std::ostringstream os;
@@ -187,10 +177,8 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
     try {
         QPDF pdf;
         pdf.setSuppressWarnings(true);
-        pdf.processMemoryFile(
-            "inspect",
-            reinterpret_cast<const char*>(input),
-            static_cast<size_t>(inputLen));
+        pdf.processMemoryFile("inspect", reinterpret_cast<const char*>(input),
+                              static_cast<size_t>(inputLen));
 
         auto warnings = pdf.getWarnings();
         int pageCount = 0;
@@ -206,12 +194,12 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
             // Page tree may be broken
         }
 
-        os << "\"status\":\"loaded\","
-           << "\"warning_count\":" << warnings.size() << ","
-           << "\"page_count\":" << pageCount << ","
-           << "\"xref_valid\":true,"
-           << "\"trailer_valid\":true,"
-           << "\"issues\":" << warnings_to_json(warnings);
+        os << "\"status\":\"loaded\",";
+        os << "\"warning_count\":" << warnings.size() << ",";
+        os << "\"page_count\":" << pageCount << ",";
+        os << "\"xref_valid\":true,";
+        os << "\"trailer_valid\":true,";
+        os << "\"issues\":" << warnings_to_json(warnings);
 
     } catch (QPDFExc& e) {
         std::string msg = e.what();
@@ -219,16 +207,19 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
         escaped.reserve(msg.size());
         for (char c : msg) {
             if (c == '"' || c == '\\') escaped += '\\';
-            if (c == '\n') { escaped += "\\n"; continue; }
+            if (c == '\n') {
+                escaped += "\\n";
+                continue;
+            }
             if (c == '\r') continue;
             escaped += c;
         }
-        os << "\"status\":\"fatal\","
-           << "\"warning_count\":0,"
-           << "\"page_count\":0,"
-           << "\"xref_valid\":false,"
-           << "\"trailer_valid\":false,"
-           << "\"issues\":[{\"message\":\"" << escaped << "\"}]";
+        os << "\"status\":\"fatal\",";
+        os << "\"warning_count\":0,";
+        os << "\"page_count\":0,";
+        os << "\"xref_valid\":false,";
+        os << "\"trailer_valid\":false,";
+        os << "\"issues\":[{\"message\":\"" << escaped << "\"}]";
     }
 
     os << "}";
@@ -237,18 +228,16 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
     return 0;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#else // !JPDFIUM_HAS_QPDF
+#else  // !JPDFIUM_HAS_QPDF
 
 // Stub implementations when qpdf is not available
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
-    const uint8_t* input, int64_t inputLen,
-    uint8_t** output, int64_t* outputLen,
-    int32_t) {
+JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen, uint8_t** output,
+                                          int64_t* outputLen, int32_t) {
     if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
     // Without qpdf, just pass through the bytes unchanged
     *outputLen = inputLen;
@@ -257,14 +246,13 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(
     return JPDFIUM_REPAIR_CLEAN;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(
-    const uint8_t* input, int64_t inputLen,
-    char** diagnosticJson) {
+JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inputLen,
+                                              char** diagnosticJson) {
     if (!input || inputLen <= 0 || !diagnosticJson) return JPDFIUM_ERR_INVALID;
     *diagnosticJson = strdup("{\"status\":\"unavailable\",\"message\":\"qpdf not linked\"}");
     return 0;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#endif // JPDFIUM_HAS_QPDF
+#endif  // JPDFIUM_HAS_QPDF

@@ -14,7 +14,7 @@
 #
 # Requires:
 #   - gh CLI authenticated (GH_TOKEN env var is enough in GitHub Actions)
-#   - GITHUB_REPOSITORY env var OR -Prepo argument — defaults to Stirling-Tools/JPDFium
+#   - GITHUB_REPOSITORY env var OR -Prepo argument - defaults to Stirling-Tools/JPDFium
 set -euo pipefail
 
 PLATFORM="${1:-}"
@@ -42,9 +42,9 @@ if [ -z "$TAG" ]; then
 fi
 
 # Pick the prebuilt variant based on JPDFIUM_BUILD_MODE:
-#   "component" (default): pdfium-<platform>.tar.gz — multiple .so/.dylib/.dll
+#   "component" (default): pdfium-<platform>.tar.gz - multiple .so/.dylib/.dll
 #       files, consumed by snapshot.yml / publish-github-packages.yml / ci.yml.
-#   "static": pdfium-<platform>-static.tar.gz — single libpdfium.{a,lib},
+#   "static": pdfium-<platform>-static.tar.gz - single libpdfium.{a,lib},
 #       consumed by release.yml. Picked up by build-real.sh + CMakeLists.txt
 #       which whole-archive-link the .a into libjpdfium.so.
 JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bundle the JPDFium bridge's third-party shared-library dependencies next to
-# libjpdfium.so/.dylib so the published natives jar is hermetic — downstream
+# libjpdfium.so/.dylib so the published natives jar is hermetic - downstream
 # users don't need apt/brew/system-package installs at runtime.
 #
 # Linux: walk `ldd` recursively, skip libc/libm/etc., copy everything else.
@@ -13,7 +13,7 @@
 #        dyld finds bundled deps next to the bridge. The bridge itself is
 #        built with INSTALL_RPATH=@loader_path (set in CMakeLists.txt).
 #
-# Windows: not needed — vcpkg DLLs are already copied wholesale by the
+# Windows: not needed - vcpkg DLLs are already copied wholesale by the
 #          workflow's `Stage binaries` step, and Windows has no equivalent
 #          of RUNPATH that we have to set on the bridge.
 #
@@ -24,7 +24,7 @@ PLATFORM="${1:?platform required}"
 DIST_DIR="native/dist/$PLATFORM"
 
 if [ ! -d "$DIST_DIR" ]; then
-    echo "ERROR: $DIST_DIR not found — staging step didn't run?" >&2
+    echo "ERROR: $DIST_DIR not found - staging step didn't run?" >&2
     exit 1
 fi
 
@@ -71,7 +71,7 @@ bundle_linux() {
 
     # NOTE: deliberately NOT creating libfoo.so unversioned aliases for the
     # bundled SONAME-versioned files. The bridge's NEEDED entries reference
-    # SONAMEs like libicudata.so.74 — that's what the runtime loader looks
+    # SONAMEs like libicudata.so.74 - that's what the runtime loader looks
     # up. Unversioned libfoo.so is a compile-time linker convention that
     # nothing needs at runtime. Skipping the alias copies saves the jar
     # 30+ MB on Linux (icudata, gnutls, unistring, p11-kit, libqpdf, etc.).
@@ -95,7 +95,7 @@ bundle_linux() {
             fi
         done
     else
-        echo "WARNING: patchelf not installed — transitive deps may not resolve at runtime" >&2
+        echo "WARNING: patchelf not installed - transitive deps may not resolve at runtime" >&2
     fi
 }
 
@@ -110,7 +110,7 @@ bundle_macos() {
     # Intel hosts.
     #
     # Keg-only formulas (icu4c@78, openssl@3, libgcrypt, gnutls, etc.) live
-    # at <prefix>/opt/<formula>/lib/ — not symlinked into <prefix>/lib/. We
+    # at <prefix>/opt/<formula>/lib/ - not symlinked into <prefix>/lib/. We
     # add a glob fallback below so any keg-only formula's libs are found
     # without having to enumerate them by name.
     local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
@@ -145,7 +145,7 @@ bundle_macos() {
         return 1
     }
 
-    # Use file existence in DIST_DIR as the "seen" marker — works under macOS'
+    # Use file existence in DIST_DIR as the "seen" marker - works under macOS'
     # bash 3.2 (which lacks declare -A) without needing brewed bash on PATH.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
@@ -165,7 +165,7 @@ bundle_macos() {
                 /System/*|/usr/lib/*) continue;;  # always present, signed
             esac
 
-            # The raw dep string we'll rewrite later — preserve so
+            # The raw dep string we'll rewrite later - preserve so
             # install_name_tool -change matches what's actually in the
             # binary's load commands.
             local orig_dep="$dep"
@@ -174,11 +174,11 @@ bundle_macos() {
                 @rpath/*|@loader_path/*|@executable_path/*)
                     # Resolve through known install prefixes. If we can't,
                     # the dep is something we didn't build (or it lives in
-                    # an unexpected location) — skip and let dyld fail at
+                    # an unexpected location) - skip and let dyld fail at
                     # runtime instead of silently shipping a half-bundle.
                     local resolved
                     if ! resolved=$(_resolve_rpath_dep "$dep"); then
-                        echo "  (bundle_macos: can't resolve $dep — skipping)" >&2
+                        echo "  (bundle_macos: can't resolve $dep - skipping)" >&2
                         continue
                     fi
                     dep="$resolved"
@@ -205,7 +205,7 @@ bundle_macos() {
             fi
             # Rewrite the consumer (target)'s dep reference to the bundled
             # copy. Use $orig_dep (what's literally in the load command)
-            # not $dep (the resolved absolute path) — install_name_tool
+            # not $dep (the resolved absolute path) - install_name_tool
             # -change has to match exactly.
             install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
         done <<<"$deps"
@@ -239,7 +239,7 @@ sign_macos() {
             echo "WARNING: MACOS_SIGN_IDENTITY not set - skipping code-signing (MACOS_ALLOW_UNSIGNED=1). These dylibs must not ship." >&2
             return 0
         fi
-        echo "ERROR: MACOS_SIGN_IDENTITY not set — refusing to ship unsigned" \
+        echo "ERROR: MACOS_SIGN_IDENTITY not set - refusing to ship unsigned" \
              "macOS dylibs. Import a Developer ID cert first" \
              "(native/import-macos-cert.sh)." >&2
         exit 1
@@ -273,7 +273,7 @@ bundle_windows() {
     # deps from vcpkg's installed bin while skipping Windows system DLLs.
     # Use dumpbin (ships with Visual Studio on github-runner windows-latest).
     if ! command -v dumpbin >/dev/null 2>&1; then
-        # Fallback to PATH lookup — VS install dir varies. Try a few.
+        # Fallback to PATH lookup - VS install dir varies. Try a few.
         local vs_dumpbin
         vs_dumpbin=$(find "/c/Program Files/Microsoft Visual Studio" \
                      -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
@@ -286,7 +286,7 @@ bundle_windows() {
         DUMPBIN=dumpbin
     fi
 
-    # Windows DLLs we never need to ship — they're always present on a
+    # Windows DLLs we never need to ship - they're always present on a
     # Windows installation, signed and version-managed by the OS.
     #
     # We intentionally DO NOT skip msvcp140 / vcruntime140 / ucrtbase here:
@@ -294,7 +294,7 @@ bundle_windows() {
     # real link-time deps. A pure-Java user who installs Java but not the VS
     # Redistributable would otherwise see "msvcp140.dll not found" at JNI
     # load. The proper fix to drop them is paired with /MT + vcpkg
-    # x64-windows-static — tracked as a follow-up.
+    # x64-windows-static - tracked as a follow-up.
     is_system_dll() {
         local lc
         lc=$(echo "$1" | tr 'A-Z' 'a-z')
@@ -329,7 +329,7 @@ bundle_windows() {
         return 1
     }
 
-    # Recursive walk by basename — copy only first occurrence per name.
+    # Recursive walk by basename - copy only first occurrence per name.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
@@ -348,7 +348,7 @@ bundle_windows() {
             local src
             src=$(find_dll "$dep" || true)
             if [ -z "$src" ]; then
-                echo "  (skipping $dep — not found in any source dir)" >&2
+                echo "  (skipping $dep - not found in any source dir)" >&2
                 continue
             fi
             cp -v "$src" "$dest"
@@ -366,7 +366,7 @@ case "$PLATFORM" in
         # leave megabytes of section info. Safe on shared libs.
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
-            # Also strip the bundled libs — they came from /usr/lib already
+            # Also strip the bundled libs - they came from /usr/lib already
             # stripped on most distros, but be defensive.
             for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
                 [ -L "$f" ] && continue

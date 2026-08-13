@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Wrap the pre-trimmed ICU 78 .dat (produced once on Linux by
-# build-minimal-icu-windows.sh — same data file, OS-agnostic) into a
+# build-minimal-icu-windows.sh - same data file, OS-agnostic) into a
 # macOS libicudata.<MAJ>.dylib via a clang .incbin asm stub.
 #
 # Why not trim locally on macOS: brew's icu4c@78 bottle doesn't ship
@@ -14,7 +14,7 @@
 # Output : native/dist/<darwin-*>/libicudata.<MAJ>.dylib  (pre-staged so
 #          the bundler picks it up instead of brew's full 33 MB copy)
 #
-# Best-effort: any failure exits 0 — bundle falls back to brew's full
+# Best-effort: any failure exits 0 - bundle falls back to brew's full
 # icudata (or, on arm64 where bundle_macos's rpath resolver doesn't
 # search icu4c@78's keg-only path, to current "no libicudata" state).
 
@@ -73,7 +73,7 @@ fi
 
 # Verify the workflow's brew icu4c is the same MAJOR. If brew is at a
 # different version (e.g. icu4c@79 in the future), wrapping a 78 .dat
-# would still produce a 78-named dylib but libicuuc would look for 79 —
+# would still produce a 78-named dylib but libicuuc would look for 79 -
 # skip to avoid shipping a useless lib.
 BREW_PREFIX=""
 if [ "$TARGET_ARCH" = "x86_64" ] && [ -x /usr/local/bin/brew ]; then
@@ -96,7 +96,7 @@ if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/lib" ]; then
             echo "build-minimal-icu-macos.sh: prep ICU $ICU_VER ≠ brew ICU $BREW_VER; skipping" >&2
             exit 0
         fi
-        echo "  brew icu4c  : ICU $BREW_VER ($BREW_SONAME) — matches"
+        echo "  brew icu4c  : ICU $BREW_VER ($BREW_SONAME) - matches"
     fi
 fi
 
@@ -140,7 +140,7 @@ fi
 # On darwin-arm64 (where bundle_macos's rpath resolver doesn't search
 # /opt/homebrew/opt/icu4c@78/lib and currently SKIPS libicudata.78.dylib
 # entirely), this pre-stage still gets uploaded as part of native/dist/<plat>/
-# via the upload-artifact step — so the final natives jar contains a working
+# via the upload-artifact step - so the final natives jar contains a working
 # libicudata that libicuuc.78.dylib's @loader_path lookup will resolve at
 # runtime.
 mkdir -p "$PLATFORM_DIST"

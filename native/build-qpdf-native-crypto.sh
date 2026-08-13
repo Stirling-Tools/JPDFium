@@ -8,13 +8,13 @@
 #   macOS  (brew libqpdf, OpenSSL-built):   libcrypto.3.dylib ≈ 4.85 MB
 #
 # qpdf supports three crypto backends:
-#   --with-crypto=native  : qpdf's own AES, RC4, SHA — zero external deps
+#   --with-crypto=native  : qpdf's own AES, RC4, SHA - zero external deps
 #   --with-crypto=openssl : pulls libssl/libcrypto (~5 MB)
 #   --with-crypto=gnutls  : pulls the gnutls chain (~8-9 MB) (apt default)
 #
 # JPDFium uses qpdf only for structure inspection / repair via QPDF and
 # QPDFObjectHandle (jpdfium_repair.cpp, jpdfium_advanced.cpp). Password-
-# protected PDFs are handled via FPDF_LoadDocument (PDFium), not qpdf —
+# protected PDFs are handled via FPDF_LoadDocument (PDFium), not qpdf -
 # so the native backend's AES/RC4 is fully sufficient for our use.
 #
 # Output:
@@ -114,7 +114,7 @@ if [ "$OS" = "darwin" ]; then
     # bundle_macos walks otool -L and SKIPS @-prefixed deps (it assumes they
     # are already-relativized references that some earlier step handled),
     # so an @rpath install_name causes the bundler to silently drop libqpdf
-    # from the natives jar — the bridge then fails to dlopen libqpdf at
+    # from the natives jar - the bridge then fails to dlopen libqpdf at
     # runtime. Absolute install_name keeps the dep visible to otool and the
     # bundler picks it up like any other lib; install_name_tool rewrites it
     # to @loader_path/libqpdf.<v>.dylib at bundle time.
@@ -151,7 +151,7 @@ if [ "$OS" = "linux" ]; then
     $SUDO ldconfig 2>/dev/null || true
 fi
 
-# Diagnostics — confirm libcrypto/libgnutls/libssl aren't pulled in.
+# Diagnostics - confirm libcrypto/libgnutls/libssl aren't pulled in.
 if [ "$OS" = "linux" ]; then
     NEW_QPDF=$(find "$PREFIX/lib" -maxdepth 1 -name "libqpdf.so.*" -type f 2>/dev/null | head -1)
     if [ -n "$NEW_QPDF" ]; then

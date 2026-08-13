@@ -1,9 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
 project(jpdfium-native CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# NOTE: CMAKE_CXX_EXTENSIONS is left ON (default, -std=gnu++23) so the real
+# (JPDFIUM_USE_PDFIUM) build keeps access to POSIX helpers like strdup that
+# the bridge sources use liberally. Strict -std=c++23 hides those on glibc.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)  # bridge has no C++20 modules; skip the scan
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
+
+option(ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
+if(ENABLE_CLANG_TIDY)
+  find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
+  set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
+endif()
 
 # Platform detection
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -26,7 +38,11 @@ else()
     set(JPDFIUM_ARCH "x64")
 endif()
 
-set(JPDFIUM_PLATFORM "${JPDFIUM_OS}-${JPDFIUM_ARCH}")
+if(DEFINED JPDFIUM_TARGET_PLATFORM AND NOT JPDFIUM_TARGET_PLATFORM STREQUAL "")
+    set(JPDFIUM_PLATFORM "${JPDFIUM_TARGET_PLATFORM}")
+else()
+    set(JPDFIUM_PLATFORM "${JPDFIUM_OS}-${JPDFIUM_ARCH}")
+endif()
 message(STATUS "JPDFium target platform: ${JPDFIUM_PLATFORM}")
 
 set(NATIVES_RESOURCES
@@ -36,9 +52,12 @@ set(NATIVES_RESOURCES
 if(JPDFIUM_OS STREQUAL "windows")
     set(JPDFIUM_LIB_NAME "jpdfium")
     set(JPDFIUM_LIB_EXTENSION ".dll")
+elseif(JPDFIUM_OS STREQUAL "darwin")
+    set(JPDFIUM_LIB_NAME "libjpdfium")
+    set(JPDFIUM_LIB_EXTENSION ".dylib")
 else()
-    set(JPDFIUM_LIB_NAME "jpdfium")
-    set(JPDFIUM_LIB_EXTENSION "${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set(JPDFIUM_LIB_NAME "libjpdfium")
+    set(JPDFIUM_LIB_EXTENSION ".so")
 endif()
 
 # Off by default - stub is used for Java-layer unit tests.
@@ -51,6 +70,11 @@ option(JPDFIUM_USE_PDFIUM "Build against real PDFium (requires PDFIUM_DIR)" OFF)
 # (they return JPDFIUM_ERR_NATIVE so unit tests run without PDFium/Rust).
 add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp)
 target_include_directories(jpdfium_stub PUBLIC bridge/include)
+if(MSVC)
+    target_compile_options(jpdfium_stub PRIVATE /W4 /WX)
+else()
+    target_compile_options(jpdfium_stub PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 set_target_properties(jpdfium_stub PROPERTIES
     OUTPUT_NAME "jpdfium_stub"
     POSITION_INDEPENDENT_CODE ON)
@@ -71,7 +95,7 @@ if(JPDFIUM_USE_PDFIUM)
     # modes drop different artifacts here:
     #   component mode: libpdfium.{so,dylib} + sibling component .sos
     #                   (Linux/macOS) / pdfium.dll + sibling .dlls (Windows)
-    #   static mode:    libpdfium.a (POSIX) / pdfium.lib (Windows) — a
+    #   static mode:    libpdfium.a (POSIX) / pdfium.lib (Windows) - a
     #                   single archive with PDFium + every bundled dep.
     #
     # We probe for the static archive first; if found, force whole-archive
@@ -119,6 +143,13 @@ if(JPDFIUM_USE_PDFIUM)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
+    # Strict warnings; -Werror deferred until the PDFium-dependent bridge can
+    # be compiled (needs setup-pdfium.sh + system libs not present locally).
+    if(MSVC)
+        target_compile_options(jpdfium PRIVATE /W4)
+    else()
+        target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Wno-ignored-qualifiers)
+    endif()
 
     if(PDFIUM_LINK_MODE STREQUAL "static")
         # Whole-archive: pull every symbol from libpdfium.a (FPDF/EPDF exports
@@ -193,7 +224,7 @@ if(JPDFIUM_USE_PDFIUM)
     # Link the static library with whole-archive semantics so Rust #[no_mangle]
     # symbols are preserved (they are called from Java/FFM, not from C++ code).
     # GNU ld and lld use --whole-archive/--no-whole-archive bracketing; Apple's
-    # ld64 uses -force_load <path> (no bracketing — applies per-archive); MSVC
+    # ld64 uses -force_load <path> (no bracketing - applies per-archive); MSVC
     # link.exe uses /WHOLEARCHIVE:<file>.
     if(APPLE)
         target_link_libraries(jpdfium PRIVATE
@@ -201,7 +232,7 @@ if(JPDFIUM_USE_PDFIUM)
     elseif(MSVC)
         # target_link_libraries treats /WHOLEARCHIVE: as a path and CMake
         # mangles it into a file lookup. target_link_options passes raw
-        # flags to link.exe — use that instead and link the .lib normally.
+        # flags to link.exe - use that instead and link the .lib normally.
         # /FORCE:MULTIPLE silences LNK2005 for duplicate import descriptors:
         # Rust's staticlib bundles its own kernel32/bcryptprimitives import
         # stubs, and MSVC's auto-link adds them too. Both copies are
@@ -218,7 +249,7 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
     endif()
-    # Rust staticlibs don't carry their own platform system-lib dependencies —
+    # Rust staticlibs don't carry their own platform system-lib dependencies -
     # the consuming target has to supply them.
     if(JPDFIUM_OS STREQUAL "linux")
         target_link_libraries(jpdfium PRIVATE dl pthread m)
@@ -270,6 +301,11 @@ if(JPDFIUM_USE_PDFIUM)
     pkg_check_modules(QPDF REQUIRED IMPORTED_TARGET libqpdf)
     target_link_libraries(jpdfium PRIVATE PkgConfig::QPDF)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
+    # Silence qpdf's PointerHolder transition #warning (treated as error by
+    # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
+    # std::shared_ptr qpdf API (e.g. QPDFWriter::getBufferSharedPointer) and
+    # never references PointerHolder directly.
+    target_compile_definitions(jpdfium PRIVATE POINTERHOLDER_TRANSITION)
 
     # pugixml - XMP metadata XML parsing
     pkg_check_modules(PUGIXML REQUIRED IMPORTED_TARGET pugixml)
@@ -304,7 +340,7 @@ if(JPDFIUM_USE_PDFIUM)
 
     # Hermetic natives jar: the publish workflows bundle each third-party
     # dynamic dependency (pcre2, freetype, harfbuzz, icu, qpdf, pugixml,
-    # libunibreak — and their transitive deps) next to libjpdfium.* in the
+    # libunibreak - and their transitive deps) next to libjpdfium.* in the
     # platform's natives jar so downstream users don't need apt/brew installs.
     # The bridge needs to look in its own directory FIRST for those deps:
     if(APPLE)
@@ -320,7 +356,7 @@ if(JPDFIUM_USE_PDFIUM)
             BUILD_RPATH "\$ORIGIN")
         target_link_options(jpdfium PRIVATE "-Wl,-rpath,\$ORIGIN" "-Wl,-z,origin")
     endif()
-    # Windows has no RUNPATH equivalent — the NativeLoader pre-loads each
+    # Windows has no RUNPATH equivalent - the NativeLoader pre-loads each
     # dep by absolute path on Windows specifically (see Java side).
 
     set_target_properties(jpdfium PROPERTIES
@@ -362,8 +398,27 @@ else()
 
     add_custom_command(TARGET jpdfium_stub POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory ${NATIVES_RESOURCES}
-        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:jpdfium_stub> ${NATIVES_RESOURCES}/libjpdfium.so
-        COMMENT "Copied stub libjpdfium.so → jpdfium-natives-${JPDFIUM_PLATFORM} resources")
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:jpdfium_stub> ${NATIVES_RESOURCES}/${JPDFIUM_LIB_NAME}${JPDFIUM_LIB_EXTENSION}
+        COMMENT "Copied stub ${JPDFIUM_LIB_NAME}${JPDFIUM_LIB_EXTENSION} → jpdfium-natives-${JPDFIUM_PLATFORM} resources")
+
+    add_custom_command(TARGET jpdfium_stub POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${NATIVES_RESOURCES}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
+        COMMENT "Generated native-libs.txt for stub")
+endif()
+
+if(JPDFIUM_USE_PDFIUM)
+    include(CheckSymbolExists)
+    set(CMAKE_REQUIRED_INCLUDES "${PDFIUM_INCLUDE_DIR}")
+    check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    if(NOT JPDFIUM_HAS_SKIA)
+        message(STATUS "Skia check: FPDF_RenderPageSkia not found (using standard AGG renderer backend)")
+    else()
+        message(STATUS "Skia check: FPDF_RenderPageSkia found, Skia backend confirmed")
+        add_compile_definitions(JPDFIUM_HAS_SKIA=1)
+    endif()
 endif()
 
 # Install target

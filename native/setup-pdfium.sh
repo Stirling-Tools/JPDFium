@@ -18,7 +18,7 @@
 # The script will install depot_tools (gclient/gn/ninja) automatically.
 set -euo pipefail
 
-# Portable in-place sed — BSD (macOS) requires a backup suffix argument to -i,
+# Portable in-place sed - BSD (macOS) requires a backup suffix argument to -i,
 # GNU sed treats it as optional. Using -i.bak works on both; the .bak files are
 # removed after each edit. All uses of `sed -i` below go through this wrapper.
 sed_i() {
@@ -92,7 +92,7 @@ fi
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         export PATH="${PATH}:${DEPOT_TOOLS_DIR}"
-        # depot_tools tries to fetch Google's bundled VS toolchain by default —
+        # depot_tools tries to fetch Google's bundled VS toolchain by default -
         # not available outside Google, breaks the Windows build.
         export DEPOT_TOOLS_WIN_TOOLCHAIN=0
         ;;
@@ -119,7 +119,7 @@ if [ -f "${GIT_CACHE_PY}" ]; then
     # Idempotent: sed replaces the bare except with the widened tuple. Running
     # this twice is a no-op because the second pass won't match. (Previous
     # version of this guard used `! grep -q FileNotFoundError`, which was too
-    # broad — that string appears elsewhere in depot_tools and silently
+    # broad - that string appears elsewhere in depot_tools and silently
     # skipped the patch.)
     sed_i 's/except subprocess\.CalledProcessError:/except (subprocess.CalledProcessError, FileNotFoundError):/g' "${GIT_CACHE_PY}"
     if grep -q 'except (subprocess.CalledProcessError, FileNotFoundError)' "${GIT_CACHE_PY}"; then
@@ -129,7 +129,7 @@ if [ -f "${GIT_CACHE_PY}" ]; then
     fi
 fi
 # On Windows, set GIT_CACHE_PATH to empty string. The patched git_cache.py
-# returns this as the cachepath, which is falsy — gclient_scm's _GetMirror
+# returns this as the cachepath, which is falsy - gclient_scm's _GetMirror
 # then sees no cache and falls back to direct clones, sidestepping the
 # depot_tools git.bat shim which cmd.exe child processes can't resolve
 # from bash's exported PATH. On Linux/macOS, use a real cache dir for sync
@@ -153,7 +153,7 @@ if [ ! -f "${BUILD_DIR}/.gclient" ]; then
     # download_remoteexec_cfg=False gates three DEPS hooks that fetch
     # remoteexec config from Google's internal CIPD bucket, unreachable from
     # public CI. The buildtools/reclient dep is removed below by patching
-    # DEPS directly — custom_deps in .gclient did not take effect for reasons
+    # DEPS directly - custom_deps in .gclient did not take effect for reasons
     # unclear (likely a path-prefix mismatch between gclient versions), so we
     # patch the dep out at the source instead.
     cat > "${BUILD_DIR}/.gclient" <<GCLIENT_EOF
@@ -178,7 +178,7 @@ PDFIUM_SRC="${BUILD_DIR}/pdfium"
 # sync hard-fails on arm64 runners with "no such package:
 # infra/rbe/client/linux-arm64". We don't use remote execution anyway
 # (use_remoteexec=false in GN args), so this dep is dead weight on all
-# platforms — strip it out before sync.
+# platforms - strip it out before sync.
 if [ ! -d "${PDFIUM_SRC}/.git" ]; then
     echo "[2/7] Pre-cloning source so DEPS can be patched..."
     git clone --depth=1 --branch "${EMBEDPDF_BRANCH}" "${EMBEDPDF_REPO}" "${PDFIUM_SRC}"
@@ -327,14 +327,14 @@ OUT_DIR="out/Release"
 # Two build flavors selected by ${JPDFIUM_BUILD_MODE:-component}:
 #
 #   "component" (default, used by snapshot.yml / publish-github-packages.yml /
-#       ci.yml — iteration-friendly path):
+#       ci.yml - iteration-friendly path):
 #         is_component_build=true → SOLINK each PDFium subcomponent into its
 #         own .so. Output: libpdfium.so + ~15 sibling .so files (abseil,
 #         partition_alloc, libchrome_zlib, icuuc, libpng, freetype, …) that
 #         the bridge links against at the consumer end. Build is fast and
 #         per-component, debugging is easier.
 #
-#   "static" (release-only, used by release.yml — release-size-optimized
+#   "static" (release-only, used by release.yml - release-size-optimized
 #       path):
 #         is_component_build=false + pdf_is_complete_lib=true → roll all of
 #         PDFium and its bundled deps (abseil, partition_alloc, zlib, libpng,
@@ -350,15 +350,15 @@ OUT_DIR="out/Release"
 #       JVM that already manages its own heap.
 #   COMPONENT_BUILD + FPDF_IMPLEMENTATION defines (set automatically by
 #   is_component_build=true) give FPDF_EXPORT symbols
-#   visibility("default") — in static mode we instead pass these via
+#   visibility("default") - in static mode we instead pass these via
 #   compile flags below.
 JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
 case "$JPDFIUM_BUILD_MODE" in
     component)
-        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     static)
-        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     *)
         echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
@@ -378,7 +378,7 @@ fi
 # For Linux arm64 cross-compile from x64 host, the bundled Chromium clang
 # acts as a cross-compiler (--target=aarch64-linux-gnu), but it needs a
 # matching sysroot for arm64 system libraries. Toggle use_sysroot=true and
-# explicitly invoke install-sysroot.py — gclient sync's hooks don't pull
+# explicitly invoke install-sysroot.py - gclient sync's hooks don't pull
 # the arm64 sysroot unless target_cpu is in the .gclient (it's only in
 # GN args here), so we trigger it manually. Also force use_custom_libcxx=true
 # because the cross-compile build can't find libc++ module headers (e.g.
@@ -405,7 +405,7 @@ if [ "$(uname -s)" = "Linux" ] && [ "${TARGET_CPU:-}" = "arm64" ]; then
 fi
 
 # Windows has no system libc++, so use_custom_libcxx=false produces broken
-# component builds — abseil-cpp.dll fails to link with undefined symbols on
+# component builds - abseil-cpp.dll fails to link with undefined symbols on
 # std::__Cr::basic_string template instantiations because the libc++ DLL
 # doesn't export them when built in "use system libc++" mode. Force
 # use_custom_libcxx=true so Chromium builds and exports its own libc++.
@@ -469,7 +469,7 @@ if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
     # archive wherever ninja put it.
     SRC=$(find "${OUT_DIR}" -maxdepth 3 -type f -name "${MAIN_LIB}" 2>/dev/null | head -1)
     if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
-        echo "  ERROR: ${MAIN_LIB} not produced — check pdf_is_complete_lib args" >&2
+        echo "  ERROR: ${MAIN_LIB} not produced - check pdf_is_complete_lib args" >&2
         exit 1
     fi
     cp "$SRC" "${TARGET_DIR}/lib/${MAIN_LIB}"

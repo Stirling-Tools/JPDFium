@@ -13,11 +13,11 @@
 #   MACOS_KEYCHAIN_PASSWORD        ephemeral keychain password (default derived)
 #
 # On success appends MACOS_SIGN_IDENTITY and MACOS_KEYCHAIN_PATH to $GITHUB_ENV
-# so the staging step signs. Signing is MANDATORY — if the cert secret is
+# so the staging step signs. Signing is MANDATORY - if the cert secret is
 # missing this FAILS the build rather than producing unsigned dylibs.
 set -euo pipefail
 
-: "${MACOS_CERTIFICATE_P12_BASE64:?MACOS_CERTIFICATE_P12_BASE64 not set — macOS signing certificate is required (unsigned dylibs are not a supported output)}"
+: "${MACOS_CERTIFICATE_P12_BASE64:?MACOS_CERTIFICATE_P12_BASE64 not set - macOS signing certificate is required (unsigned dylibs are not a supported output)}"
 : "${MACOS_CERTIFICATE_PASSWORD:?MACOS_CERTIFICATE_PASSWORD required to import the signing certificate}"
 
 TMP_DIR="${RUNNER_TEMP:-/tmp}"

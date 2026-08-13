@@ -3,9 +3,10 @@
 // Opt-in: requires JPDFIUM_HAS_BROTLI at build time.
 // Transcodes /BrotliDecode - /FlateDecode for backward compatibility.
 
-#include "jpdfium.h"
 #include <cstdlib>
 #include <cstring>
+
+#include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_BROTLI
 
@@ -14,12 +15,9 @@
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(
-    const uint8_t* compressed, int64_t compressedLen,
-    uint8_t** output, int64_t* outputLen) {
-
-    if (!compressed || compressedLen <= 0 || !output || !outputLen)
-        return JPDFIUM_ERR_INVALID;
+JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t compressedLen,
+                                             uint8_t** output, int64_t* outputLen) {
+    if (!compressed || compressedLen <= 0 || !output || !outputLen) return JPDFIUM_ERR_INVALID;
 
     BrotliDecoderState* state = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
     if (!state) return JPDFIUM_ERR_INVALID;
@@ -37,8 +35,8 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(
         size_t availableOut = outCapacity - totalOut;
         uint8_t* nextOut = outBuf + totalOut;
 
-        result = BrotliDecoderDecompressStream(
-            state, &availableIn, &nextIn, &availableOut, &nextOut, &totalOut);
+        result = BrotliDecoderDecompressStream(state, &availableIn, &nextIn, &availableOut,
+                                               &nextOut, &totalOut);
 
         if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
             outCapacity *= 2;
@@ -60,12 +58,9 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(
     return JPDFIUM_OK;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(
-    const uint8_t* compressed, int64_t compressedLen,
-    uint8_t** flateOutput, int64_t* flateLen) {
-
-    if (!compressed || compressedLen <= 0 || !flateOutput || !flateLen)
-        return JPDFIUM_ERR_INVALID;
+JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(const uint8_t* compressed, int64_t compressedLen,
+                                               uint8_t** flateOutput, int64_t* flateLen) {
+    if (!compressed || compressedLen <= 0 || !flateOutput || !flateLen) return JPDFIUM_ERR_INVALID;
 
     // Step 1: Brotli decompress
     uint8_t* raw = nullptr;
@@ -76,8 +71,8 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(
     // Step 2: Flate (zlib) recompress
     uLongf destLen = compressBound(static_cast<uLong>(rawLen));
     *flateOutput = static_cast<uint8_t*>(malloc(destLen));
-    int zrc = compress2(*flateOutput, &destLen,
-                        raw, static_cast<uLong>(rawLen), Z_DEFAULT_COMPRESSION);
+    int zrc =
+        compress2(*flateOutput, &destLen, raw, static_cast<uLong>(rawLen), Z_DEFAULT_COMPRESSION);
     free(raw);
 
     if (zrc != Z_OK) {
@@ -91,22 +86,20 @@ JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(
     return JPDFIUM_OK;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#else // !JPDFIUM_HAS_BROTLI
+#else  // !JPDFIUM_HAS_BROTLI
 
 extern "C" {
 
-JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(
-    const uint8_t*, int64_t, uint8_t**, int64_t*) {
+JPDFIUM_EXPORT int32_t jpdfium_brotli_decode(const uint8_t*, int64_t, uint8_t**, int64_t*) {
     return JPDFIUM_ERR_NATIVE;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(
-    const uint8_t*, int64_t, uint8_t**, int64_t*) {
+JPDFIUM_EXPORT int32_t jpdfium_brotli_to_flate(const uint8_t*, int64_t, uint8_t**, int64_t*) {
     return JPDFIUM_ERR_NATIVE;
 }
 
-} // extern "C"
+}  // extern "C"
 
-#endif // JPDFIUM_HAS_BROTLI
+#endif  // JPDFIUM_HAS_BROTLI

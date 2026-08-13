@@ -1,5 +1,8 @@
 #pragma once
+
 #include <stdint.h>
+
+#include "jpdfium.h"
 
 // Rust-powered PDF processing functions.
 //
@@ -25,15 +28,14 @@ extern "C" {
 // @param out_len        [out] Length of output buffer
 // @param zopfli_iters   Number of zopfli iterations (5=fast, 15=default, 100=max)
 // @return 0 on success, -1 on error, JPDFIUM_ERR_NATIVE(-99) if unavailable
-JPDFIUM_EXPORT int32_t jpdfium_rust_compress_pdf(
-    const uint8_t* input, int64_t input_len,
-    uint8_t** out_ptr, int64_t* out_len,
-    int32_t zopfli_iters);
+JPDFIUM_EXPORT int32_t jpdfium_rust_compress_pdf(const uint8_t* input, int64_t input_len,
+                                                 uint8_t** out_ptr, int64_t* out_len,
+                                                 int32_t zopfli_iters);
 
 // Repair a PDF using lopdf's tolerant XRef parser.
 //
 // Loads the PDF with lopdf (which tolerantly parses broken XRef tables), then
-// immediately saves it back — this rebuilds the cross-reference table correctly.
+// immediately saves it back - this rebuilds the cross-reference table correctly.
 // Returns JPDFIUM_REPAIR_FIXED(1) on success.
 //
 // @param input          PDF bytes (may be damaged)
@@ -43,9 +45,8 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_compress_pdf(
 // @param out_len        [out] Length of output buffer
 // @return JPDFIUM_REPAIR_FIXED(1) on success, JPDFIUM_REPAIR_FAILED(-1) on failure,
 //         JPDFIUM_ERR_NATIVE(-99) if unavailable
-JPDFIUM_EXPORT int32_t jpdfium_rust_repair_lopdf(
-    const uint8_t* input, int64_t input_len,
-    uint8_t** out_ptr, int64_t* out_len);
+JPDFIUM_EXPORT int32_t jpdfium_rust_repair_lopdf(const uint8_t* input, int64_t input_len,
+                                                 uint8_t** out_ptr, int64_t* out_len);
 
 // Resize raw pixel data using SIMD-accelerated fast_image_resize.
 //
@@ -60,12 +61,11 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_repair_lopdf(
 //                       jpdfium_rust_free)
 // @param out_len        [out] Length of output buffer
 // @return 0 on success, -1 on error, JPDFIUM_ERR_NATIVE(-99) if unavailable
-JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(
-    const uint8_t* src_pixels, int64_t src_len,
-    int32_t src_width, int32_t src_height,
-    int32_t components,
-    int32_t dst_width, int32_t dst_height,
-    uint8_t** out_ptr, int64_t* out_len);
+JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(const uint8_t* src_pixels, int64_t src_len,
+                                                  int32_t src_width, int32_t src_height,
+                                                  int32_t components, int32_t dst_width,
+                                                  int32_t dst_height, uint8_t** out_ptr,
+                                                  int64_t* out_len);
 
 // Optimise a standalone PNG byte stream using oxipng (lossless).
 //
@@ -80,15 +80,14 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(
 // @param level      oxipng preset 0-6 (2=fast, 6=maximum)
 // @return 0 if smaller output produced, -1 if no improvement or not a valid PNG,
 //         JPDFIUM_ERR_NATIVE(-99) if unavailable
-JPDFIUM_EXPORT int32_t jpdfium_rust_compress_png(
-    const uint8_t* input, int64_t input_len,
-    uint8_t** out_ptr, int64_t* out_len,
-    int32_t level);
+JPDFIUM_EXPORT int32_t jpdfium_rust_compress_png(const uint8_t* input, int64_t input_len,
+                                                 uint8_t** out_ptr, int64_t* out_len,
+                                                 int32_t level);
 
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.
-// Safe to call with a NULL pointer.
+// Safe to call with a nullptr pointer.
 JPDFIUM_EXPORT void jpdfium_rust_free(uint8_t* ptr);
 
 #ifdef __cplusplus

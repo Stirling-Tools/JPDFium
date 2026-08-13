@@ -48,11 +48,11 @@ ICU_VER=$(echo "$ICU_FULL_VER" | cut -d. -f1)
 echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 
 # The Ubuntu binary packages (libicu-dev, icu-devtools) DO NOT ship the
-# source icudt<MAJ>l.dat file — it's baked into libicudata.so.<MAJ>.<MIN> at
+# source icudt<MAJ>l.dat file - it's baked into libicudata.so.<MAJ>.<MIN> at
 # build time via genccode. The upstream icu4c-*-data.zip contains the loose
 # source items (.icu, .nrm) but no pre-assembled .dat either. So we extract
 # the data straight out of the system .so by reading the icudt<MAJ>_dat ELF
-# symbol's bytes — that symbol IS the .dat file, byte-for-byte.
+# symbol's bytes - that symbol IS the .dat file, byte-for-byte.
 WORK=$(mktemp -d)
 trap "rm -rf '$WORK'" EXIT
 
@@ -98,7 +98,7 @@ DAT_FILE="$WORK/icudt${ICU_VER}l.dat"
 #
 # Address columns from readelf -W are hex without a "0x" prefix (literal
 # hex VMA strings like "0000000000043000"). The Size column on binutils
-# 2.42+ is decimal *or* "0x"-prefixed hex depending on build config — use
+# 2.42+ is decimal *or* "0x"-prefixed hex depending on build config - use
 # Python's int(s, 0) auto-detect.
 python3 - <<EOF || { echo "build-minimal-icu.sh: extraction failed; skipping" >&2; exit 0; }
 import sys
@@ -119,11 +119,11 @@ print(f"extracted {len(blob)} bytes -> ${DAT_FILE}")
 EOF
 echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_VER}_dat symbol"
 
-# Items to KEEP — patterns matching item names in the .dat.
+# Items to KEEP - patterns matching item names in the .dat.
 # What the JPDFium bridge actually uses (verified by grep over
 # native/bridge/src/):
 #   u_strFromUTF8           → cnvalias.icu (converter alias table)
-#   icu::Normalizer NFC     → nfc.nrm  (NFC normalization data — bridge
+#   icu::Normalizer NFC     → nfc.nrm  (NFC normalization data - bridge
 #                                       only uses UNORM_NFC at
 #                                       jpdfium_advanced.cpp:828)
 #   icu::BreakIterator      → brkitr/* (sentence/word/line/char boundaries)
@@ -132,12 +132,12 @@ echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_V
 #   icu::Locale::getDefault → root.res + en.res (default locale fallback)
 #
 # Deliberately NOT included (verified unused by bridge AND not loaded
-# eagerly by libicuuc on init — ICU data loading is lazy):
-#   unames.icu      ~300 KB — u_charName / u_charFromName, bridge doesn't
-#   uemoji.icu      ~200 KB — UCHAR_EMOJI property, bridge doesn't
-#   nfkc.nrm         ~50 KB — NFKC normalization, bridge uses only NFC
-#   nfkc_cf.nrm      ~50 KB — NFKC casefold, same
-#   en_US.res        ~50 KB — bridge has no US-specific locale need;
+# eagerly by libicuuc on init - ICU data loading is lazy):
+#   unames.icu      ~300 KB - u_charName / u_charFromName, bridge doesn't
+#   uemoji.icu      ~200 KB - UCHAR_EMOJI property, bridge doesn't
+#   nfkc.nrm         ~50 KB - NFKC normalization, bridge uses only NFC
+#   nfkc_cf.nrm      ~50 KB - NFKC casefold, same
+#   en_US.res        ~50 KB - bridge has no US-specific locale need;
 #                             root + en cover the default chain
 KEEP=(
     '^cnvalias\.icu$'
@@ -164,7 +164,7 @@ mkdir -p "$EXTRACT"
 icupkg -x '*' -d "$EXTRACT" "$DAT_FILE" \
     || { echo "build-minimal-icu.sh: icupkg extract failed; skipping" >&2; exit 0; }
 
-# Compute the keep list (item names, no path prefix — relative to EXTRACT).
+# Compute the keep list (item names, no path prefix - relative to EXTRACT).
 # pkgdata wants line-separated items. Add pool.res implicitly because the
 # locale .res files reference it and icupkg warns when it's missing.
 > "$WORK/keep.lst"
@@ -189,7 +189,7 @@ echo "Keeping  : $KEPT items (out of $TOTAL)"
 
 # Two-step build:
 #   (1) `pkgdata -m archive` assembles the kept items into a single trimmed
-#       .dat — no compiler/linker invocations, just data shuffling.
+#       .dat - no compiler/linker invocations, just data shuffling.
 #   (2) `objcopy -I binary` wraps that .dat in an ELF object exporting the
 #       icudt<MAJ>_dat symbol, then `gcc -shared` links it into a .so.
 #
@@ -249,7 +249,7 @@ esac
 # objcopy turns the raw .dat into an .o with auto-generated
 # `_binary_<name>_{start,end,size}` symbols. The symbol name is derived from
 # the source file PATH passed to objcopy with non-alphanumeric chars replaced
-# by underscores — so `/tmp/work/out/icudata.dat` becomes
+# by underscores - so `/tmp/work/out/icudata.dat` becomes
 # `_binary__tmp_work_out_icudata_dat_start`. To keep that predictable, run
 # objcopy from the file's directory with a relative basename: that gives
 # `_binary_icudata_dat_start`. Then --redefine-sym renames it to the symbol

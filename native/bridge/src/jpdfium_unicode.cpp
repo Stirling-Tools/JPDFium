@@ -5,19 +5,19 @@
 //   utf8proc  (MIT)  - NFC normalisation, case folding, grapheme clusters
 //   xxHash    (BSD)  - XXH3 non-cryptographic hashing (approximately 80 GB/s)
 
-#include "jpdfium.h"
-#include "jpdfium_internal.h"
-
-#include <fpdfview.h>
-#include <fpdf_text.h>
 #include <fpdf_edit.h>
+#include <fpdf_text.h>
+#include <fpdfview.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
-#include <string>
 #include <sstream>
+#include <string>
 #include <vector>
+
+#include "jpdfium.h"
+#include "jpdfium_internal.h"
 
 // simdutf - SIMD-accelerated UTF-8/16/32 transcoding (header-only).
 // The actual UTF-8-UTF-16 conversion uses ICU4C's u_strFromUTF8 because
@@ -31,9 +31,9 @@ extern "C" {
 
 // xxHash - fully inline when XXH_INLINE_ALL is defined.
 #define XXH_INLINE_ALL
-#include "xxhash.h"
-
 #include <unicode/ustring.h>
+
+#include "xxhash.h"
 
 // Internal helpers
 
@@ -58,11 +58,11 @@ std::vector<uint16_t> simdutf_utf8_to_utf16le(const char* utf8, size_t len) {
 extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_nfc(const char* utf8) {
     if (!utf8) return nullptr;
     uint8_t* result = nullptr;
-    utf8proc_ssize_t r = utf8proc_map(
-        reinterpret_cast<const uint8_t*>(utf8), 0, &result,
-        static_cast<utf8proc_option_t>(UTF8PROC_COMPOSE | UTF8PROC_STABLE));
+    utf8proc_ssize_t r =
+        utf8proc_map(reinterpret_cast<const uint8_t*>(utf8), 0, &result,
+                     static_cast<utf8proc_option_t>(UTF8PROC_COMPOSE | UTF8PROC_STABLE));
     if (r < 0) return nullptr;
-    return reinterpret_cast<char*>(result);   // utf8proc uses libc malloc
+    return reinterpret_cast<char*>(result);  // utf8proc uses libc malloc
 }
 
 // Case-fold a UTF-8 string (locale-insensitive, Unicode-aware).
@@ -74,8 +74,7 @@ extern "C" JPDFIUM_EXPORT char* jpdfium_unicode_casefold(const char* utf8) {
     uint8_t* result = nullptr;
     utf8proc_ssize_t r = utf8proc_map(
         reinterpret_cast<const uint8_t*>(utf8), 0, &result,
-        static_cast<utf8proc_option_t>(
-            UTF8PROC_COMPOSE | UTF8PROC_STABLE | UTF8PROC_CASEFOLD));
+        static_cast<utf8proc_option_t>(UTF8PROC_COMPOSE | UTF8PROC_STABLE | UTF8PROC_CASEFOLD));
     if (r < 0) return nullptr;
     return reinterpret_cast<char*>(result);
 }
@@ -97,7 +96,7 @@ extern "C" JPDFIUM_EXPORT uint64_t jpdfium_page_content_hash(int64_t page) {
     if (!pw || !pw->page) return 0;
 
     // Render at low DPI - just enough for reliable change detection, very fast.
-    const int dpi    = 36;
+    const int dpi = 36;
     const double w72 = FPDF_GetPageWidth(pw->page);
     const double h72 = FPDF_GetPageHeight(pw->page);
     int w = static_cast<int>(w72 / 72.0 * dpi);
@@ -110,9 +109,9 @@ extern "C" JPDFIUM_EXPORT uint64_t jpdfium_page_content_hash(int64_t page) {
     FPDFBitmap_FillRect(bmp, 0, 0, w, h, 0xFFFFFFFF);
     FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w, h, 0, 0);
 
-    const void* buf    = FPDFBitmap_GetBuffer(bmp);
-    int         stride = FPDFBitmap_GetStride(bmp);
-    uint64_t    hash   = XXH3_64bits(buf, static_cast<size_t>(stride) * h);
+    const void* buf = FPDFBitmap_GetBuffer(bmp);
+    int stride = FPDFBitmap_GetStride(bmp);
+    uint64_t hash = XXH3_64bits(buf, static_cast<size_t>(stride) * h);
     FPDFBitmap_Destroy(bmp);
     return hash;
 }
@@ -157,15 +156,12 @@ extern "C" JPDFIUM_EXPORT int32_t jpdfium_page_font_hashes(int64_t page, char** 
         }
 
         char hash_str[32];
-        snprintf(hash_str, sizeof(hash_str), "0x%016llX",
-                 static_cast<unsigned long long>(hash));
+        snprintf(hash_str, sizeof(hash_str), "0x%016llX", static_cast<unsigned long long>(hash));
 
         if (!first) os << ",";
         first = false;
-        os << "{\"index\":" << font_idx++
-           << ",\"name\":\"" << name_buf << "\""
-           << ",\"hash\":\"" << hash_str << "\""
-           << ",\"bytes\":" << font_bytes << "}";
+        os << "{\"index\":" << font_idx++ << ",\"name\":\"" << name_buf << "\",\"hash\":\""
+           << hash_str << "\",\"bytes\":" << font_bytes << "}";
     }
     os << "]";
 

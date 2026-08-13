@@ -2,28 +2,28 @@
 // pattern/word/region redaction, annotation-based mark-commit redaction,
 // and incremental save.
 
-#include "jpdfium.h"
-#include "jpdfium_internal.h"
-
-#include <fpdfview.h>
-#include <fpdf_save.h>
-#include <fpdf_text.h>
+#include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
-#include <fpdf_annot.h>
+#include <fpdf_save.h>
+#include <fpdf_text.h>
+#include <fpdfview.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdio>
-#include <string>
-#include <sstream>
-#include <vector>
+#include <functional>
+#include <map>
 #include <regex>
 #include <set>
-#include <map>
-#include <algorithm>
+#include <sstream>
+#include <string>
 #include <unordered_map>
-#include <functional>
+#include <vector>
+
+#include "jpdfium.h"
+#include "jpdfium_internal.h"
 
 #ifdef JPDFIUM_HAS_FREETYPE
 #include <ft2build.h>
@@ -34,43 +34,27 @@ static void ensureFreeTypeInit() {
 }
 #endif
 
-
-// UTF-8 -> UTF-16LE for FPDFText_FindStart (PDFium expects UTF-16LE, not wchar_t)
-static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
-    std::vector<uint16_t> result;
-    const auto* s = reinterpret_cast<const uint8_t*>(utf8);
-    while (*s) {
-        uint32_t cp;
-        if      (*s < 0x80) { cp = *s++; }
-        else if (*s < 0xE0) { cp  = (*s++ & 0x1F) << 6;  cp |= (*s++ & 0x3F); }
-        else if (*s < 0xF0) { cp  = (*s++ & 0x0F) << 12; cp |= (*s++ & 0x3F) << 6;
-                               cp |= (*s++ & 0x3F); }
-        else                { cp  = (*s++ & 0x07) << 18; cp |= (*s++ & 0x3F) << 12;
-                               cp |= (*s++ & 0x3F) << 6; cp |= (*s++ & 0x3F); }
-        if (cp <= 0xFFFF) {
-            result.push_back(static_cast<uint16_t>(cp));
-        } else {                              // surrogate pair
-            cp -= 0x10000;
-            result.push_back(static_cast<uint16_t>(0xD800 | (cp >> 10)));
-            result.push_back(static_cast<uint16_t>(0xDC00 | (cp & 0x3FF)));
-        }
-    }
-    result.push_back(0);  // null terminator
-    return result;
-}
-
 // UTF-8 -> std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per codepoint)
 static std::wstring utf8_to_wstring(const char* utf8) {
     std::wstring result;
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
     while (*s) {
         uint32_t cp;
-        if      (*s < 0x80) { cp = *s++; }
-        else if (*s < 0xE0) { cp  = (*s++ & 0x1F) << 6;  cp |= (*s++ & 0x3F); }
-        else if (*s < 0xF0) { cp  = (*s++ & 0x0F) << 12; cp |= (*s++ & 0x3F) << 6;
-                               cp |= (*s++ & 0x3F); }
-        else                { cp  = (*s++ & 0x07) << 18; cp |= (*s++ & 0x3F) << 12;
-                               cp |= (*s++ & 0x3F) << 6; cp |= (*s++ & 0x3F); }
+        if (*s < 0x80) {
+            cp = *s++;
+        } else if (*s < 0xE0) {
+            cp = (*s++ & 0x1F) << 6;
+            cp |= (*s++ & 0x3F);
+        } else if (*s < 0xF0) {
+            cp = (*s++ & 0x0F) << 12;
+            cp |= (*s++ & 0x3F) << 6;
+            cp |= (*s++ & 0x3F);
+        } else {
+            cp = (*s++ & 0x07) << 18;
+            cp |= (*s++ & 0x3F) << 12;
+            cp |= (*s++ & 0x3F) << 6;
+            cp |= (*s++ & 0x3F);
+        }
         result += static_cast<wchar_t>(cp);
     }
     return result;
@@ -89,7 +73,7 @@ static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
             result.push_back(static_cast<uint16_t>(0xDC00 | (cp & 0x3FF)));
         }
     }
-    result.push_back(0); // null terminator
+    result.push_back(0);  // null terminator
     return result;
 }
 
@@ -97,20 +81,20 @@ static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
 
 // Check if rectangle A is FULLY contained within rectangle B
 // A = [al, ab, ar, at], B = [bl, bb, br, bt] (PDF coords: y up)
-static bool isFullyContained(float al, float ab, float ar, float at,
-                              float bl, float bb, float br, float bt) {
+static bool isFullyContained(float al, float ab, float ar, float at, float bl, float bb, float br,
+                             float bt) {
     return al >= bl && ab >= bb && ar <= br && at <= bt;
 }
 
 // Check if two rectangles overlap at all
-static bool rectsOverlap(float al, float ab, float ar, float at,
-                          float bl, float bb, float br, float bt) {
+static bool rectsOverlap(float al, float ab, float ar, float at, float bl, float bb, float br,
+                         float bt) {
     return !(ar < bl || al > br || at < bb || ab > bt);
 }
 
 // Compute intersection area ratio (of object) for partial-overlap decisions
-static float overlapRatio(float al, float ab, float ar, float at,
-                           float bl, float bb, float br, float bt) {
+static float overlapRatio(float al, float ab, float ar, float at, float bl, float bb, float br,
+                          float bt) {
     float ix0 = std::max(al, bl), iy0 = std::max(ab, bb);
     float ix1 = std::min(ar, br), iy1 = std::min(at, bt);
     if (ix1 <= ix0 || iy1 <= iy0) return 0.0f;
@@ -128,14 +112,30 @@ static std::wstring decomposeLigatures(const std::wstring& input) {
     result.reserve(input.size() + 8);
     for (wchar_t wc : input) {
         switch (static_cast<uint32_t>(wc)) {
-            case 0xFB00: result += L"ff";  break;  // ff
-            case 0xFB01: result += L"fi";  break;  // fi
-            case 0xFB02: result += L"fl";  break;  // fl
-            case 0xFB03: result += L"ffi"; break;  // ffi
-            case 0xFB04: result += L"ffl"; break;  // ffl
-            case 0xFB05: result += L"st";  break;  // long-s t
-            case 0xFB06: result += L"st";  break;  // st
-            default:     result += wc;     break;
+            case 0xFB00:
+                result += L"ff";
+                break;  // ff
+            case 0xFB01:
+                result += L"fi";
+                break;  // fi
+            case 0xFB02:
+                result += L"fl";
+                break;  // fl
+            case 0xFB03:
+                result += L"ffi";
+                break;  // ffi
+            case 0xFB04:
+                result += L"ffl";
+                break;  // ffl
+            case 0xFB05:
+                result += L"st";
+                break;  // long-s t
+            case 0xFB06:
+                result += L"st";
+                break;  // st
+            default:
+                result += wc;
+                break;
         }
     }
     return result;
@@ -149,49 +149,63 @@ static uint32_t unicodeToWinAnsiCharcode(uint32_t unicode) {
     if (unicode >= 0x20 && unicode <= 0x7F) return unicode;
     if (unicode >= 0xA0 && unicode <= 0xFF) return unicode;
     switch (unicode) {
-        case 0x20AC: return 0x80;  // €
-        case 0x201A: return 0x82;  // ‚
-        case 0x0192: return 0x83;  // ƒ
-        case 0x201E: return 0x84;  // „
-        case 0x2026: return 0x85;  // …
-        case 0x2020: return 0x86;  // †
-        case 0x2021: return 0x87;  // ‡
-        case 0x02C6: return 0x88;  // ˆ
-        case 0x2030: return 0x89;  // ‰
-        case 0x0160: return 0x8A;  // Š
-        case 0x2039: return 0x8B;  // ‹
-        case 0x0152: return 0x8C;  // Œ
-        case 0x017D: return 0x8E;  // Ž
-        case 0x2018: return 0x91;  // '
-        case 0x2019: return 0x92;  // '
-        case 0x201C: return 0x93;  // "
-        case 0x201D: return 0x94;  // "
-        case 0x2022: return 0x95;  // bullet
-        case 0x2013: return 0x96;  // -
-        case 0x2014: return 0x97;  // -
-        case 0x02DC: return 0x98;  // ˜
-        case 0x2122: return 0x99;  // TM
-        case 0x0161: return 0x9A;  // š
-        case 0x203A: return 0x9B;  // ›
-        case 0x0153: return 0x9C;  // œ
-        case 0x017E: return 0x9E;  // ž
-        case 0x0178: return 0x9F;  // Ÿ
-        default:     return 0;
+        case 0x20AC:
+            return 0x80;  // €
+        case 0x201A:
+            return 0x82;  // ‚
+        case 0x0192:
+            return 0x83;  // ƒ
+        case 0x201E:
+            return 0x84;  // „
+        case 0x2026:
+            return 0x85;  // …
+        case 0x2020:
+            return 0x86;  // †
+        case 0x2021:
+            return 0x87;  // ‡
+        case 0x02C6:
+            return 0x88;  // ˆ
+        case 0x2030:
+            return 0x89;  // ‰
+        case 0x0160:
+            return 0x8A;  // Š
+        case 0x2039:
+            return 0x8B;  // ‹
+        case 0x0152:
+            return 0x8C;  // Œ
+        case 0x017D:
+            return 0x8E;  // Ž
+        case 0x2018:
+            return 0x91;  // '
+        case 0x2019:
+            return 0x92;  // '
+        case 0x201C:
+            return 0x93;  // "
+        case 0x201D:
+            return 0x94;  // "
+        case 0x2022:
+            return 0x95;  // bullet
+        case 0x2013:
+            return 0x96;  // -
+        case 0x2014:
+            return 0x97;  // -
+        case 0x02DC:
+            return 0x98;  // ˜
+        case 0x2122:
+            return 0x99;  // TM
+        case 0x0161:
+            return 0x9A;  // š
+        case 0x203A:
+            return 0x9B;  // ›
+        case 0x0153:
+            return 0x9C;  // œ
+        case 0x017E:
+            return 0x9E;  // ž
+        case 0x0178:
+            return 0x9F;  // Ÿ
+        default:
+            return 0;
     }
-}
-
-// Paints a filled rectangle (no object removal). Used for visual-only redaction.
-static int32_t paintRedactRect(FPDF_PAGE page, float x, float y, float w, float h, uint32_t argb) {
-    unsigned int r = (argb >> 16) & 0xFF;
-    unsigned int g = (argb >>  8) & 0xFF;
-    unsigned int b =  argb        & 0xFF;
-
-    FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(x, y, w, h);
-    if (!rect) return JPDFIUM_ERR_NATIVE;
-    FPDFPageObj_SetFillColor(rect, r, g, b, 255);
-    FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
-    FPDFPage_InsertObject(page, rect);
-    return JPDFIUM_OK;
 }
 
 // Removes text/image page objects within [x,y,x+w,y+h] (PDF coords: y up),
@@ -201,11 +215,11 @@ static int32_t paintRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 // FIX: Only removes objects whose bounding box is MOSTLY (>70%) within the
 // redaction rectangle. Previously ANY overlap caused removal, which deleted
 // entire lines of text when only one word was targeted.
-static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float h,
-                                uint32_t argb, bool removeContent = true) {
+static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float h, uint32_t argb,
+                               bool removeContent = true) {
     unsigned int r = (argb >> 16) & 0xFF;
-    unsigned int g = (argb >>  8) & 0xFF;
-    unsigned int b =  argb        & 0xFF;
+    unsigned int g = (argb >> 8) & 0xFF;
+    unsigned int b = argb & 0xFF;
 
     float rx = x, ry = y, rr = x + w, rt = y + h;
 
@@ -221,7 +235,8 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
             // Handle all content-bearing object types
             if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE &&
                 type != FPDF_PAGEOBJ_PATH && type != FPDF_PAGEOBJ_SHADING &&
-                type != FPDF_PAGEOBJ_FORM) continue;
+                type != FPDF_PAGEOBJ_FORM)
+                continue;
 
             float ol, ob, or_, ot;
             if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
@@ -288,7 +303,7 @@ static int32_t applyRedactRect(FPDF_PAGE page, float x, float y, float w, float 
 //   4. Regenerate the content stream (single FPDFPage_GenerateContent call).
 
 struct TextMatch {
-    std::vector<int> charIndices;   // text-page char indices for matched chars
+    std::vector<int> charIndices;      // text-page char indices for matched chars
     float bboxL, bboxB, bboxR, bboxT;  // tight aggregate bbox (PDF coords)
 };
 
@@ -296,8 +311,8 @@ struct TextMatch {
 // object.  Each fragment becomes its own independent FPDF_PAGEOBJECT, pinned
 // to the exact absolute coordinates obtained from FPDFText_GetCharOrigin.
 struct TextFragment {
-    std::vector<uint16_t> utf16;   // UTF-16LE null-terminated text
-    FS_MATRIX             matrix;  // hybrid: original a,b,c,d + charOrigin e,f
+    std::vector<uint16_t> utf16;  // UTF-16LE null-terminated text
+    FS_MATRIX matrix;             // hybrid: original a,b,c,d + charOrigin e,f
 };
 
 // Pre-computed fission plan for a single page object
@@ -310,34 +325,32 @@ struct FissionPlan {
     // correctly.
     std::vector<TextFragment> fragments;
 
-    FPDF_FONT              font;
-    float                  fontSize;
-    FPDF_TEXT_RENDERMODE    renderMode;
+    FPDF_FONT font;
+    float fontSize;
+    FPDF_TEXT_RENDERMODE renderMode;
 
     // Original text colors - copied to every new fragment
     unsigned int fillR, fillG, fillB, fillA;
     unsigned int strokeR, strokeG, strokeB, strokeA;
-    bool         hasStroke;
+    bool hasStroke;
 
-    bool                   removeEntirely;
+    bool removeEntirely;
 };
 
-static int32_t objectFissionRedact(
-    FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
-    const std::vector<TextMatch>& matches,
-    uint32_t argb, bool removeContent)
-{
+static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
+                                   const std::vector<TextMatch>& matches, uint32_t argb,
+                                   bool removeContent) {
     if (matches.empty()) return JPDFIUM_OK;
 
     unsigned int red = (argb >> 16) & 0xFF;
-    unsigned int grn = (argb >>  8) & 0xFF;
-    unsigned int blu =  argb        & 0xFF;
+    unsigned int grn = (argb >> 8) & 0xFF;
+    unsigned int blu = argb & 0xFF;
 
     // Visual-only fast path
     if (!removeContent) {
         for (auto& m : matches) {
-            FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
-                m.bboxL, m.bboxB, m.bboxR - m.bboxL, m.bboxT - m.bboxB);
+            FPDF_PAGEOBJECT rect =
+                FPDFPageObj_CreateNewRect(m.bboxL, m.bboxB, m.bboxR - m.bboxL, m.bboxT - m.bboxB);
             if (!rect) continue;
             FPDFPageObj_SetFillColor(rect, red, grn, blu, 255);
             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
@@ -379,8 +392,8 @@ static int32_t objectFissionRedact(
     }
 
     struct CharInfo {
-        int    ownerObj;   // index into page-object array (-1 = unmapped)
-        bool   isGenerated; // FPDFText_IsGenerated
+        int ownerObj;      // index into page-object array (-1 = unmapped)
+        bool isGenerated;  // FPDFText_IsGenerated
     };
     std::vector<CharInfo> charInfo(totalChars);
 
@@ -409,14 +422,12 @@ static int32_t objectFissionRedact(
     //    Forward pass: inherit from left neighbor.
     for (int ci = 1; ci < totalChars; ci++) {
         if (charInfo[ci].ownerObj >= 0) continue;
-        if (charInfo[ci - 1].ownerObj >= 0)
-            charInfo[ci].ownerObj = charInfo[ci - 1].ownerObj;
+        if (charInfo[ci - 1].ownerObj >= 0) charInfo[ci].ownerObj = charInfo[ci - 1].ownerObj;
     }
     //    Reverse pass: handle leading unmapped chars by inheriting from right.
     for (int ci = totalChars - 2; ci >= 0; ci--) {
         if (charInfo[ci].ownerObj >= 0) continue;
-        if (charInfo[ci + 1].ownerObj >= 0)
-            charInfo[ci].ownerObj = charInfo[ci + 1].ownerObj;
+        if (charInfo[ci + 1].ownerObj >= 0) charInfo[ci].ownerObj = charInfo[ci + 1].ownerObj;
     }
 
     // 4. Group characters by their owning object
@@ -443,8 +454,7 @@ static int32_t objectFissionRedact(
 
     // Helper: build a TextFragment from a contiguous run of char indices.
     // Returns true if a valid fragment was produced.
-    auto buildFragment = [&](const std::vector<int>& run,
-                             const FS_MATRIX& origMatrix,
+    auto buildFragment = [&](const std::vector<int>& run, const FS_MATRIX& origMatrix,
                              TextFragment& outFrag) -> bool {
         if (run.empty()) return false;
 
@@ -515,7 +525,10 @@ static int32_t objectFissionRedact(
             if (isGenSpace) {
                 inWord = false;
             } else {
-                if (!inWord) { wordCount++; inWord = true; }
+                if (!inWord) {
+                    wordCount++;
+                    inWord = true;
+                }
             }
         }
         hasMultipleWords = (wordCount > 1);
@@ -527,16 +540,16 @@ static int32_t objectFissionRedact(
         // Build per-word fragments, respecting both word boundaries AND
         // redaction boundaries.
         FissionPlan plan;
-        plan.originalObj    = obj;
+        plan.originalObj = obj;
         plan.removeEntirely = false;
-        plan.font           = FPDFTextObj_GetFont(obj);
+        plan.font = FPDFTextObj_GetFont(obj);
         if (!plan.font) continue;  // cannot fission without a font
         FPDFTextObj_GetFontSize(obj, &plan.fontSize);
-        plan.renderMode     = FPDFTextObj_GetTextRenderMode(obj);
+        plan.renderMode = FPDFTextObj_GetTextRenderMode(obj);
 
         FPDFPageObj_GetFillColor(obj, &plan.fillR, &plan.fillG, &plan.fillB, &plan.fillA);
         plan.hasStroke = FPDFPageObj_GetStrokeColor(obj, &plan.strokeR, &plan.strokeG,
-                                                     &plan.strokeB, &plan.strokeA);
+                                                    &plan.strokeB, &plan.strokeA);
 
         FS_MATRIX originalMatrix;
         FPDFPageObj_GetMatrix(obj, &originalMatrix);
@@ -598,8 +611,8 @@ static int32_t objectFissionRedact(
     // Subpath extraction and per-subpath redaction for path objects.
     // Each subpath starts with a MOVETO segment and ends before the next MOVETO.
     struct Subpath {
-        int startIdx;    // index of first segment (MOVETO)
-        int endIdx;      // index past last segment (exclusive)
+        int startIdx;                  // index of first segment (MOVETO)
+        int endIdx;                    // index past last segment (exclusive)
         float minX, minY, maxX, maxY;  // bounding box
     };
 
@@ -642,9 +655,7 @@ static int32_t objectFissionRedact(
     auto isSubpathRedacted = [&](const Subpath& sp, const FS_MATRIX& objMatrix) -> bool {
         // Transform subpath bbox corners through the object's matrix
         float corners[4][2] = {
-            {sp.minX, sp.minY}, {sp.maxX, sp.minY},
-            {sp.maxX, sp.maxY}, {sp.minX, sp.maxY}
-        };
+            {sp.minX, sp.minY}, {sp.maxX, sp.minY}, {sp.maxX, sp.maxY}, {sp.minX, sp.maxY}};
         float tMinX = 1e9f, tMinY = 1e9f, tMaxX = -1e9f, tMaxY = -1e9f;
         for (auto& c : corners) {
             float tx = objMatrix.a * c[0] + objMatrix.c * c[1] + objMatrix.e;
@@ -656,8 +667,7 @@ static int32_t objectFissionRedact(
         }
 
         for (auto& m : matches) {
-            if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY,
-                                 m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+            if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
                 return true;
             }
         }
@@ -666,8 +676,8 @@ static int32_t objectFissionRedact(
 
     // Recursive form XObject redaction: removes child objects inside redaction
     // rects, accounting for the cumulative transform from form-local to page space.
-    std::function<bool(FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage)>
-    redactFormContents = [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage) -> bool {
+    std::function<bool(FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage)> redactFormContents =
+        [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage) -> bool {
         int childCount = FPDFFormObj_CountObjects(formObj);
         if (childCount <= 0) return false;
 
@@ -683,9 +693,7 @@ static int32_t objectFissionRedact(
             if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
 
             // Transform child bounds through the parent-to-page matrix
-            float corners[4][2] = {
-                {cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}
-            };
+            float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
             float tMinX = 1e9f, tMinY = 1e9f, tMaxX = -1e9f, tMaxY = -1e9f;
             for (auto& c : corners) {
                 float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
@@ -701,10 +709,10 @@ static int32_t objectFissionRedact(
             for (auto& m : matches) {
                 if (childType == FPDF_PAGEOBJ_TEXT || childType == FPDF_PAGEOBJ_IMAGE ||
                     childType == FPDF_PAGEOBJ_PATH || childType == FPDF_PAGEOBJ_SHADING) {
-                    if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY,
-                                         m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
-                        overlapRatio(tMinX, tMinY, tMaxX, tMaxY,
-                                     m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                    if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                         m.bboxT) ||
+                        overlapRatio(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                     m.bboxT) > 0.70f) {
                         shouldRemove = true;
                         break;
                     }
@@ -717,7 +725,7 @@ static int32_t objectFissionRedact(
                 changed = true;
                 // Re-fetch count since we removed an object
                 childCount = FPDFFormObj_CountObjects(formObj);
-                ci = childCount; // will decrement to childCount-1
+                ci = childCount;  // will decrement to childCount-1
                 continue;
             }
 
@@ -731,11 +739,12 @@ static int32_t objectFissionRedact(
                     combined.b = childMatrix.a * parentToPage.b + childMatrix.b * parentToPage.d;
                     combined.c = childMatrix.c * parentToPage.a + childMatrix.d * parentToPage.c;
                     combined.d = childMatrix.c * parentToPage.b + childMatrix.d * parentToPage.d;
-                    combined.e = childMatrix.e * parentToPage.a + childMatrix.f * parentToPage.c + parentToPage.e;
-                    combined.f = childMatrix.e * parentToPage.b + childMatrix.f * parentToPage.d + parentToPage.f;
+                    combined.e = childMatrix.e * parentToPage.a + childMatrix.f * parentToPage.c +
+                                 parentToPage.e;
+                    combined.f = childMatrix.e * parentToPage.b + childMatrix.f * parentToPage.d +
+                                 parentToPage.f;
 
-                    if (redactFormContents(child, combined))
-                        changed = true;
+                    if (redactFormContents(child, combined)) changed = true;
                 }
             }
         }
@@ -771,8 +780,7 @@ static int32_t objectFissionRedact(
                     break;
                 }
             }
-        }
-        else if (type == FPDF_PAGEOBJ_PATH) {
+        } else if (type == FPDF_PAGEOBJ_PATH) {
             // Path: subpath-level granularity
             int segCount = FPDFPath_CountSegments(obj);
             if (segCount <= 0) continue;
@@ -833,7 +841,8 @@ static int32_t objectFissionRedact(
                             // PDFium stores bezier segments as 3 consecutive points.
                             if (s + 2 < sp.endIdx) {
                                 float c1x, c1y, c2x, c2y, ex, ey;
-                                c1x = sx; c1y = sy;
+                                c1x = sx;
+                                c1y = sy;
                                 FPDF_PATHSEGMENT seg2 = FPDFPath_GetPathSegment(obj, s + 1);
                                 FPDF_PATHSEGMENT seg3 = FPDFPath_GetPathSegment(obj, s + 2);
                                 if (seg2 && seg3) {
@@ -875,8 +884,7 @@ static int32_t objectFissionRedact(
                     FPDFPageObj_Destroy(newPath);
                 }
             }
-        }
-        else if (type == FPDF_PAGEOBJ_SHADING) {
+        } else if (type == FPDF_PAGEOBJ_SHADING) {
             // Shading: remove if fully contained in any redaction rect
             for (auto& m : matches) {
                 if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
@@ -884,8 +892,7 @@ static int32_t objectFissionRedact(
                     break;
                 }
             }
-        }
-        else if (type == FPDF_PAGEOBJ_FORM) {
+        } else if (type == FPDF_PAGEOBJ_FORM) {
             // Form XObject: first check if entire form is inside a redaction rect
             bool formFullyInside = false;
             for (auto& m : matches) {
@@ -950,8 +957,8 @@ static int32_t objectFissionRedact(
             if (FPDFFont_GetFontData(font, fontData.data(), buflen, &actual) && actual > 0) {
                 ensureFreeTypeInit();
                 FT_Face face;
-                if (FT_New_Memory_Face(g_ft_lib, fontData.data(),
-                                       static_cast<FT_Long>(actual), 0, &face) == 0) {
+                if (FT_New_Memory_Face(g_ft_lib, fontData.data(), static_cast<FT_Long>(actual), 0,
+                                       &face) == 0) {
                     // Select a Unicode cmap if available
                     for (int cm = 0; cm < face->num_charmaps; cm++) {
                         if (face->charmaps[cm]->encoding == FT_ENCODING_UNICODE) {
@@ -980,10 +987,13 @@ static int32_t objectFissionRedact(
         bool allOk = true;
 
         for (auto& frag : plan.fragments) {
-            if (frag.utf16.size() <= 1) continue;   // skip null-only
+            if (frag.utf16.size() <= 1) continue;  // skip null-only
 
             FPDF_PAGEOBJECT fragObj = FPDFPageObj_CreateTextObj(doc, plan.font, plan.fontSize);
-            if (!fragObj) { allOk = false; break; }
+            if (!fragObj) {
+                allOk = false;
+                break;
+            }
 
             auto boundsValid = [](FPDF_PAGEOBJECT obj) -> bool {
                 float fl, fb, fr, ft;
@@ -1002,23 +1012,25 @@ static int32_t objectFissionRedact(
             bool boundsOk = false;
 
             // Strategy A: SetText (Unicode -> font's CharCodeFromUnicode)
-            textOk = FPDFText_SetText(fragObj,
-                reinterpret_cast<FPDF_WIDESTRING>(frag.utf16.data()));
+            textOk =
+                FPDFText_SetText(fragObj, reinterpret_cast<FPDF_WIDESTRING>(frag.utf16.data()));
             if (textOk) boundsOk = boundsValid(fragObj);
 
 #ifdef JPDFIUM_HAS_FREETYPE
             // Strategy B: FreeType GID-based SetCharcodes
             if (!textOk || !boundsOk) {
                 if (textOk && !boundsOk) {
-                    if (!resetFragObj()) { allOk = false; break; }
+                    if (!resetFragObj()) {
+                        allOk = false;
+                        break;
+                    }
                 }
                 const auto& ftInfo = getFtMapping(plan.font);
                 if (ftInfo.valid) {
                     std::vector<uint32_t> codes;
                     bool allMapped = true;
                     for (size_t i = 0; i + 1 < frag.utf16.size(); i++) {
-                        auto git = ftInfo.unicodeToGid.find(
-                            static_cast<uint32_t>(frag.utf16[i]));
+                        auto git = ftInfo.unicodeToGid.find(static_cast<uint32_t>(frag.utf16[i]));
                         if (git != ftInfo.unicodeToGid.end() && git->second != 0) {
                             codes.push_back(git->second);
                         } else {
@@ -1027,8 +1039,7 @@ static int32_t objectFissionRedact(
                         }
                     }
                     if (allMapped && !codes.empty()) {
-                        textOk = FPDFText_SetCharcodes(
-                            fragObj, codes.data(), codes.size());
+                        textOk = FPDFText_SetCharcodes(fragObj, codes.data(), codes.size());
                         if (textOk) boundsOk = boundsValid(fragObj);
                     }
                 }
@@ -1038,7 +1049,10 @@ static int32_t objectFissionRedact(
             // Strategy C: WinAnsi SetCharcodes
             if (!textOk || !boundsOk) {
                 if (textOk && !boundsOk) {
-                    if (!resetFragObj()) { allOk = false; break; }
+                    if (!resetFragObj()) {
+                        allOk = false;
+                        break;
+                    }
                 }
                 std::vector<uint32_t> codes;
                 bool allMappable = true;
@@ -1052,8 +1066,7 @@ static int32_t objectFissionRedact(
                     }
                 }
                 if (allMappable && !codes.empty()) {
-                    textOk = FPDFText_SetCharcodes(
-                        fragObj, codes.data(), codes.size());
+                    textOk = FPDFText_SetCharcodes(fragObj, codes.data(), codes.size());
                     if (textOk) boundsOk = boundsValid(fragObj);
                 }
             }
@@ -1070,8 +1083,8 @@ static int32_t objectFissionRedact(
             // Restore original text colors
             FPDFPageObj_SetFillColor(fragObj, plan.fillR, plan.fillG, plan.fillB, plan.fillA);
             if (plan.hasStroke) {
-                FPDFPageObj_SetStrokeColor(fragObj, plan.strokeR, plan.strokeG,
-                                           plan.strokeB, plan.strokeA);
+                FPDFPageObj_SetStrokeColor(fragObj, plan.strokeR, plan.strokeG, plan.strokeB,
+                                           plan.strokeA);
             }
 
             createdObjs.push_back(fragObj);
@@ -1102,8 +1115,8 @@ static int32_t objectFissionRedact(
     //    the black box provides visual cover).
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
-        if (objsToDestroy.count(obj)) continue;       // already marked
-        if (fissionAttempted.count(obj)) continue;     // fission handled it
+        if (objsToDestroy.count(obj)) continue;     // already marked
+        if (fissionAttempted.count(obj)) continue;  // fission handled it
         int type = FPDFPageObj_GetType(obj);
         if (type != FPDF_PAGEOBJ_TEXT) continue;
 
@@ -1127,8 +1140,8 @@ static int32_t objectFissionRedact(
 
     // 10. Paint black rectangles for all match regions
     for (auto& m : matches) {
-        FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
-            m.bboxL, m.bboxB, m.bboxR - m.bboxL, m.bboxT - m.bboxB);
+        FPDF_PAGEOBJECT rect =
+            FPDFPageObj_CreateNewRect(m.bboxL, m.bboxB, m.bboxR - m.bboxL, m.bboxT - m.bboxB);
         if (!rect) continue;
         FPDFPageObj_SetFillColor(rect, red, grn, blu, 255);
         FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
@@ -1141,20 +1154,15 @@ static int32_t objectFissionRedact(
 
 // Helper: run regex over extracted text -> produce TextMatch vector.
 // wtext + idxMap must already be populated (see callers).
-static void collectRegexMatches(
-    FPDF_TEXTPAGE textPage,
-    const std::wstring& wtext,
-    const std::vector<int>& idxMap,
-    const std::wregex& wre,
-    float padding,
-    std::vector<TextMatch>& out)
-{
-    auto it  = std::wsregex_iterator(wtext.begin(), wtext.end(), wre);
+static void collectRegexMatches(FPDF_TEXTPAGE textPage, const std::wstring& wtext,
+                                const std::vector<int>& idxMap, const std::wregex& wre,
+                                float padding, std::vector<TextMatch>& out) {
+    auto it = std::wsregex_iterator(wtext.begin(), wtext.end(), wre);
     auto end = std::wsregex_iterator();
 
     for (; it != end; ++it) {
         int start = static_cast<int>((*it).position());
-        int len   = static_cast<int>((*it).length());
+        int len = static_cast<int>((*it).length());
         if (len == 0) continue;
 
         TextMatch tm;
@@ -1188,11 +1196,10 @@ static void collectRegexMatches(
 
 // Lifecycle
 
-
 // Redaction
 
-int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
-                              uint32_t argb, int32_t remove_content) {
+int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
+                              int32_t remove_content) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     return applyRedactRect(pw->page, x, y, w, h, argb, remove_content != 0);
@@ -1237,8 +1244,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
     }
 
     // Apply Object Fission redaction
-    int32_t rc = objectFissionRedact(
-        pw->doc, pw->page, tp, matches, argb, remove_content != 0);
+    int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, remove_content != 0);
 
     FPDFText_ClosePage(tp);
     return rc;
@@ -1259,18 +1265,18 @@ int32_t jpdfium_page_flatten(int64_t page) {
 // wholeWord: if non-zero, only match when surrounded by non-alphanumeric characters
 // useRegex: if non-zero, each word is treated as a regex pattern
 
-int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount,
-                              uint32_t argb, float padding, int32_t wholeWord,
-                              int32_t useRegex, int32_t remove_content) {
-    return jpdfium_redact_words_ex(page, words, wordCount, argb, padding,
-                                   wholeWord, useRegex, remove_content, 0, nullptr);
+int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount, uint32_t argb,
+                             float padding, int32_t wholeWord, int32_t useRegex,
+                             int32_t remove_content) {
+    return jpdfium_redact_words_ex(page, words, wordCount, argb, padding, wholeWord, useRegex,
+                                   remove_content, 0, nullptr);
 }
 
 // Extended version that reports match count back to the caller.
-int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount,
-                                 uint32_t argb, float padding, int32_t wholeWord,
-                                 int32_t useRegex, int32_t remove_content,
-                                 int32_t caseSensitive, int32_t* matchCount) {
+int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount, uint32_t argb,
+                                float padding, int32_t wholeWord, int32_t useRegex,
+                                int32_t remove_content, int32_t caseSensitive,
+                                int32_t* matchCount) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!words || wordCount <= 0) {
@@ -1309,10 +1315,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             // Escape regex special characters for literal matching
             std::wstring raw = utf8_to_wstring(words[wi]);
             for (wchar_t ch : raw) {
-                if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' ||
-                    ch == L'|' || ch == L'?' || ch == L'*' || ch == L'+' ||
-                    ch == L'(' || ch == L')' || ch == L'[' || ch == L']' ||
-                    ch == L'{' || ch == L'}') {
+                if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' || ch == L'|' ||
+                    ch == L'?' || ch == L'*' || ch == L'+' || ch == L'(' || ch == L')' ||
+                    ch == L'[' || ch == L']' || ch == L'{' || ch == L'}') {
                     wpattern += L'\\';
                 }
                 wpattern += ch;
@@ -1341,17 +1346,14 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
     }
 
     // Apply Object Fission redaction (all matches in one pass)
-    int32_t rc = objectFissionRedact(
-        pw->doc, pw->page, tp, matches, argb, remove_content != 0);
+    int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, remove_content != 0);
 
     FPDFText_ClosePage(tp);
     return rc;
 }
 
-
-int32_t jpdfium_annot_create_redact(int64_t page,
-                                     float x, float y, float w, float h,
-                                     uint32_t argb, int32_t* annot_index) {
+int32_t jpdfium_annot_create_redact(int64_t page, float x, float y, float w, float h, uint32_t argb,
+                                    int32_t* annot_index) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
 
@@ -1359,18 +1361,18 @@ int32_t jpdfium_annot_create_redact(int64_t page,
     if (!annot) return JPDFIUM_ERR_NATIVE;
 
     FS_RECTF rect;
-    rect.left   = x;
+    rect.left = x;
     rect.bottom = y;
-    rect.right  = x + w;
-    rect.top    = y + h;
+    rect.right = x + w;
+    rect.top = y + h;
     if (!FPDFAnnot_SetRect(annot, &rect)) {
         FPDFPage_CloseAnnot(annot);
         return JPDFIUM_ERR_NATIVE;
     }
 
     unsigned int r = (argb >> 16) & 0xFF;
-    unsigned int g = (argb >>  8) & 0xFF;
-    unsigned int b =  argb        & 0xFF;
+    unsigned int g = (argb >> 8) & 0xFF;
+    unsigned int b = argb & 0xFF;
     FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_InteriorColor, r, g, b, 255);
 
     // Return the annotation index (it's appended at the end)
@@ -1416,11 +1418,9 @@ int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) {
             if (FPDFAnnot_GetRect(a, &rect)) {
                 if (!first) os << ',';
                 first = false;
-                os << "{\"idx\":" << i
-                   << ",\"x\":" << rect.left
-                   << ",\"y\":" << rect.bottom
-                   << ",\"w\":" << (rect.right - rect.left)
-                   << ",\"h\":" << (rect.top - rect.bottom) << '}';
+                os << "{\"idx\":" << i << ",\"x\":" << rect.left << ",\"y\":" << rect.bottom
+                   << ",\"w\":" << (rect.right - rect.left) << ",\"h\":" << (rect.top - rect.bottom)
+                   << '}';
             }
         }
         FPDFPage_CloseAnnot(a);
@@ -1469,11 +1469,9 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) {
 }
 
 // Mark phase: find text matches and create REDACT annotations (no content mutation)
-int32_t jpdfium_redact_mark_words(int64_t page,
-                                   const char** words, int32_t wordCount,
-                                   float padding, int32_t wholeWord,
-                                   int32_t useRegex, int32_t caseSensitive,
-                                   uint32_t argb, int32_t* matchCount) {
+int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t wordCount,
+                                  float padding, int32_t wholeWord, int32_t useRegex,
+                                  int32_t caseSensitive, uint32_t argb, int32_t* matchCount) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!words || wordCount <= 0) {
@@ -1508,10 +1506,9 @@ int32_t jpdfium_redact_mark_words(int64_t page,
         } else {
             std::wstring raw = utf8_to_wstring(words[wi]);
             for (wchar_t ch : raw) {
-                if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' ||
-                    ch == L'|' || ch == L'?' || ch == L'*' || ch == L'+' ||
-                    ch == L'(' || ch == L')' || ch == L'[' || ch == L']' ||
-                    ch == L'{' || ch == L'}') {
+                if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' || ch == L'|' ||
+                    ch == L'?' || ch == L'*' || ch == L'+' || ch == L'(' || ch == L')' ||
+                    ch == L'[' || ch == L']' || ch == L'{' || ch == L'}') {
                     wpattern += L'\\';
                 }
                 wpattern += ch;
@@ -1520,7 +1517,11 @@ int32_t jpdfium_redact_mark_words(int64_t page,
         if (wholeWord) wpattern = L"\\b" + wpattern + L"\\b";
 
         std::wregex wre;
-        try { wre.assign(wpattern, rxFlags); } catch (...) { continue; }
+        try {
+            wre.assign(wpattern, rxFlags);
+        } catch (...) {
+            continue;
+        }
 
         collectRegexMatches(tp, wtext, idxMap, wre, padding, matches);
     }
@@ -1529,18 +1530,18 @@ int32_t jpdfium_redact_mark_words(int64_t page,
 
     // Create REDACT annotations from matches (zero content mutation)
     unsigned int r = (argb >> 16) & 0xFF;
-    unsigned int g = (argb >>  8) & 0xFF;
-    unsigned int b =  argb        & 0xFF;
+    unsigned int g = (argb >> 8) & 0xFF;
+    unsigned int b = argb & 0xFF;
 
     for (auto& m : matches) {
         FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
         if (!annot) continue;
 
         FS_RECTF rect;
-        rect.left   = m.bboxL;
+        rect.left = m.bboxL;
         rect.bottom = m.bboxB;
-        rect.right  = m.bboxR;
-        rect.top    = m.bboxT;
+        rect.right = m.bboxR;
+        rect.top = m.bboxT;
         FPDFAnnot_SetRect(annot, &rect);
         FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_InteriorColor, r, g, b, 255);
         FPDFPage_CloseAnnot(annot);
@@ -1551,8 +1552,8 @@ int32_t jpdfium_redact_mark_words(int64_t page,
 }
 
 // Commit phase: burn all REDACT annotations using Object Fission
-int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
-                               int32_t remove_content, int32_t* commitCount) {
+int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_content,
+                              int32_t* commitCount) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
 
@@ -1589,8 +1590,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
     if (!tp) {
         // Fallback to rect-based redaction if text page fails
         for (auto& r : redactRects) {
-            applyRedactRect(pw->page, r.left, r.bottom, r.right - r.left,
-                            r.top - r.bottom, argb, remove_content != 0);
+            applyRedactRect(pw->page, r.left, r.bottom, r.right - r.left, r.top - r.bottom, argb,
+                            remove_content != 0);
         }
         return JPDFIUM_OK;
     }
@@ -1622,8 +1623,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb,
         matches.push_back(std::move(tm));
     }
 
-    int32_t rc = objectFissionRedact(
-        pw->doc, pw->page, tp, matches, argb, remove_content != 0);
+    int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, remove_content != 0);
 
     FPDFText_ClosePage(tp);
     return rc;
@@ -1637,23 +1637,23 @@ int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) 
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* bw  = static_cast<BufWriter*>(self);
+            auto* bw = static_cast<BufWriter*>(self);
             auto* src = static_cast<const uint8_t*>(data);
             bw->buf.insert(bw->buf.end(), src, src + size);
             return 1;
         }
     } bw;
-    bw.version    = 1;
+    bw.version = 1;
     bw.WriteBlock = BufWriter::Write;
 
     if (!FPDF_SaveAsCopy(w->doc, &bw, FPDF_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
-    size_t   sz  = bw.buf.size();
+    size_t sz = bw.buf.size();
     uint8_t* out = static_cast<uint8_t*>(malloc(sz));
     if (!out) return JPDFIUM_ERR_NATIVE;
     memcpy(out, bw.buf.data(), sz);
     *data = out;
-    *len  = static_cast<int64_t>(sz);
+    *len = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 

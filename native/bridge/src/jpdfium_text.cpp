@@ -1,16 +1,16 @@
 // jpdfium_text.cpp - Text extraction and search.
 
-#include "jpdfium.h"
-#include "jpdfium_internal.h"
-
-#include <fpdfview.h>
 #include <fpdf_text.h>
+#include <fpdfview.h>
 
 #include <cstdlib>
 #include <cstring>
-#include <string>
 #include <sstream>
+#include <string>
 #include <vector>
+
+#include "jpdfium.h"
+#include "jpdfium_internal.h"
 
 // UTF-8 -> UTF-16LE for FPDFText_FindStart (PDFium expects UTF-16LE, not wchar_t)
 static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
@@ -18,12 +18,21 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
     while (*s) {
         uint32_t cp;
-        if      (*s < 0x80) { cp = *s++; }
-        else if (*s < 0xE0) { cp  = (*s++ & 0x1F) << 6;  cp |= (*s++ & 0x3F); }
-        else if (*s < 0xF0) { cp  = (*s++ & 0x0F) << 12; cp |= (*s++ & 0x3F) << 6;
-                               cp |= (*s++ & 0x3F); }
-        else                { cp  = (*s++ & 0x07) << 18; cp |= (*s++ & 0x3F) << 12;
-                               cp |= (*s++ & 0x3F) << 6; cp |= (*s++ & 0x3F); }
+        if (*s < 0x80) {
+            cp = *s++;
+        } else if (*s < 0xE0) {
+            cp = (*s++ & 0x1F) << 6;
+            cp |= (*s++ & 0x3F);
+        } else if (*s < 0xF0) {
+            cp = (*s++ & 0x0F) << 12;
+            cp |= (*s++ & 0x3F) << 6;
+            cp |= (*s++ & 0x3F);
+        } else {
+            cp = (*s++ & 0x07) << 18;
+            cp |= (*s++ & 0x3F) << 12;
+            cp |= (*s++ & 0x3F) << 6;
+            cp |= (*s++ & 0x3F);
+        }
         if (cp <= 0xFFFF) {
             result.push_back(static_cast<uint16_t>(cp));
         } else {
@@ -65,14 +74,8 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
 
         if (!first) os << ',';
         first = false;
-        os << "{\"i\":" << i
-           << ",\"u\":" << uni
-           << ",\"ox\":" << ox
-           << ",\"oy\":" << oy
-           << ",\"l\":" << l
-           << ",\"r\":" << r
-           << ",\"b\":" << b
-           << ",\"t\":" << t << '}';
+        os << "{\"i\":" << i << ",\"u\":" << uni << ",\"ox\":" << ox << ",\"oy\":" << oy
+           << ",\"l\":" << l << ",\"r\":" << r << ",\"b\":" << b << ",\"t\":" << t << '}';
     }
     os << ']';
 
@@ -111,13 +114,8 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
 
         if (!first) os << ',';
         first = false;
-        os << "{\"i\":" << i
-           << ",\"u\":" << uni
-           << ",\"x\":" << l
-           << ",\"y\":" << b
-           << ",\"w\":" << (r - l)
-           << ",\"h\":" << (t - b)
-           << ",\"font\":\"";
+        os << "{\"i\":" << i << ",\"u\":" << uni << ",\"x\":" << l << ",\"y\":" << b
+           << ",\"w\":" << (r - l) << ",\"h\":" << (t - b) << ",\"font\":\"";
         for (char c : std::string(fontbuf)) {
             if (c == '"' || c == '\\') os << '\\';
             os << c;
@@ -144,15 +142,14 @@ int32_t jpdfium_text_find(int64_t page, const char* query, char** json) {
     if (!tp) return JPDFIUM_ERR_NATIVE;
 
     auto wq = utf8_to_utf16le(query);
-    FPDF_SCHHANDLE sch = FPDFText_FindStart(
-        tp, reinterpret_cast<FPDF_WIDESTRING>(wq.data()), 0, 0);
+    FPDF_SCHHANDLE sch = FPDFText_FindStart(tp, reinterpret_cast<FPDF_WIDESTRING>(wq.data()), 0, 0);
 
     std::ostringstream os;
     os << '[';
     bool first = true;
     while (sch && FPDFText_FindNext(sch)) {
         int start = FPDFText_GetSchResultIndex(sch);
-        int cnt   = FPDFText_GetSchCount(sch);
+        int cnt = FPDFText_GetSchCount(sch);
         if (!first) os << ',';
         first = false;
         os << "{\"start\":" << start << ",\"len\":" << cnt << '}';
