@@ -71,7 +71,6 @@ public final class PdfPrint {
             sheetW = sheetH;
             sheetH = tmp;
         }
-        float halfW = sheetW / 2.0f;
 
         // Compute page order for saddle-stitch booklet
         // For each sheet, front has [last, first] and back has [first+1, last-1]
@@ -112,12 +111,12 @@ public final class PdfPrint {
 
             // Place left page (scaled to half width)
             if (leftIdx < srcPages) {
-                placePageContent(rawResult, rawSrc, leftIdx, result.pageCount() - 1, 0, halfW, sheetH);
+                placePageContent(rawResult, rawSrc, leftIdx);
             }
 
             // Place right page (scaled to half width, offset to right half)
             if (rightIdx < srcPages) {
-                placePageContent(rawResult, rawSrc, rightIdx, result.pageCount() - 1, halfW, halfW, sheetH);
+                placePageContent(rawResult, rawSrc, rightIdx);
             }
 
             try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(newPage); }
@@ -135,8 +134,7 @@ public final class PdfPrint {
      * Uses FPDF_ImportPages to copy the page, then relies on the N-up approach.
      */
     private static void placePageContent(MemorySegment rawDest, MemorySegment rawSrc,
-                                          int srcPageIndex, int destPageIndex,
-                                          float xOffset, float width, float height) {
+                                          int srcPageIndex) {
         // Use page import: import the source page, then it becomes the content
         // For booklet, we use the N-up approach via importNPagesToOne for each pair
         // But since importNPagesToOne creates a whole doc, we use direct import + transform

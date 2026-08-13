@@ -23,7 +23,7 @@ java {
 }
 
 checkstyle {
-    toolVersion = "10.21.0"
+    toolVersion = "13.10.0"
     configFile = rootProject.file("config/checkstyle/checkstyle.xml")
     isIgnoreFailures = true
     maxWarnings = Int.MAX_VALUE
@@ -38,7 +38,7 @@ tasks.withType<Checkstyle>().configureEach {
 }
 
 pmd {
-    toolVersion = "7.11.0"
+    toolVersion = "7.26.0"
     isConsoleOutput = true
     isIgnoreFailures = true
     ruleSets = emptyList()

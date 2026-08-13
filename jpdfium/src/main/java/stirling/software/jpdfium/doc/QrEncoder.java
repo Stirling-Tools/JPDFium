@@ -463,16 +463,15 @@ final class QrEncoder {
                     boolean goingUp = (stripIndex % 2 == 0);
                     int actualRow = goingUp ? (size - 1 - row) : row;
 
-                    if (actualRow >= 0 && actualRow < size &&
-                            actualCol >= 0 && actualCol < size &&
-                            !r[actualRow][actualCol]) {
-                        if (bitIdx < totalBits) {
+                    // actualRow/actualCol are derived from loop bounds that stay
+                    // within [0, size), so no range guard is needed before indexing.
+                    if (!r[actualRow][actualCol] && bitIdx < totalBits) {
                             int byteIdx = bitIdx / 8;
                             int bit = (codewords[byteIdx] >> (7 - (bitIdx % 8))) & 1;
                             m[actualRow][actualCol] = (bit == 1);
                             bitIdx++;
                         }
-                    }
+
                 }
             }
         }
@@ -511,14 +510,15 @@ final class QrEncoder {
     }
 
     private static boolean maskFunction(int mask, int row, int col) {
+        final int maskValue = (row * col) % 2 + (row * col) % 3;
         return switch (mask) {
             case 0 -> (row + col) % 2 == 0;
             case 1 -> row % 2 == 0;
             case 2 -> col % 3 == 0;
             case 3 -> (row + col) % 3 == 0;
             case 4 -> (row / 2 + col / 3) % 2 == 0;
-            case 5 -> (row * col) % 2 + (row * col) % 3 == 0;
-            case 6 -> ((row * col) % 2 + (row * col) % 3) % 2 == 0;
+            case 5 -> maskValue == 0;
+            case 6 -> (maskValue) % 2 == 0;
             case 7 -> ((row + col) % 2 + (row * col) % 3) % 2 == 0;
             default -> false;
         };

@@ -1,8 +1,6 @@
 package stirling.software.jpdfium.doc;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -24,7 +22,7 @@ final class QpdfHelper {
      */
     static boolean isAvailable() {
         try {
-            Process p = new ProcessBuilder("qpdf", "--version")
+            Process p = ExternalCommand.processBuilder("qpdf", "--version")
                     .redirectErrorStream(true)
                     .start();
             boolean finished = p.waitFor(5, TimeUnit.SECONDS);
@@ -48,9 +46,11 @@ final class QpdfHelper {
      * @throws RuntimeException if qpdf is not available, fails, or times out
      */
     static void run(String... args) {
-        List<String> command = new ArrayList<>();
-        command.add("qpdf");
-        Collections.addAll(command, args);
+        List<String> command = ExternalCommand.commandLine("qpdf", args);
+        if (command == null) {
+            throw new JPDFiumException("qpdf not found on PATH. Install qpdf: " +
+                    "apt install qpdf / brew install qpdf / choco install qpdf");
+        }
 
         try {
             Process p = new ProcessBuilder(command)
