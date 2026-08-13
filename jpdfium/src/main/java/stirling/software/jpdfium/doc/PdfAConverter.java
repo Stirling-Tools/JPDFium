@@ -201,7 +201,7 @@ public final class PdfAConverter {
 
         // Try to find via Ghostscript's resource directory
         try {
-            ProcessBuilder pb = new ProcessBuilder("gs", "-q", "-dNODISPLAY",
+            ProcessBuilder pb = ExternalCommand.processBuilder("gs", "-q", "-dNODISPLAY",
                     "-c", "(default_rgb.icc) findlibfile { pop print } if quit");
             pb.redirectErrorStream(true);
             Process p = pb.start();

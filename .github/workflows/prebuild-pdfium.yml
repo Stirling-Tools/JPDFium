@@ -36,8 +36,7 @@ on:
     branches: [publishing-setup]
 
 permissions:
-  contents: write         # create releases, push the pin-bump branch
-  pull-requests: write    # open the auto-PR
+  contents: read
 
 concurrency:
   group: prebuild-pdfium
@@ -148,7 +147,7 @@ jobs:
 
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
-        run: choco install -y cmake ninja python3
+        run: choco install -y cmake --version=4.4.2 ninja --version=1.13.2 python3 --version=3.14.7
 
       - name: Configure Windows depot_tools environment
         if: startsWith(matrix.platform, 'windows-')
@@ -213,6 +212,9 @@ jobs:
     # platforms, so a real breakage cannot slip through.
     if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write         # create releases, push the pin-bump branch
+      pull-requests: write    # open the auto-PR
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 

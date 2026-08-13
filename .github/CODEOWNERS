@@ -1,0 +1,4 @@
+# Code owners for mandatory code review.
+# See: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# Requests review from the listed maintainers for any change touching the repository.
+* @Frooodle @balazs-szucs

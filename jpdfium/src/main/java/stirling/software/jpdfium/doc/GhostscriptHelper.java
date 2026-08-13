@@ -3,7 +3,6 @@ package stirling.software.jpdfium.doc;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -38,7 +37,7 @@ final class GhostscriptHelper {
      */
     static boolean isAvailable() {
         try {
-            Process p = new ProcessBuilder("gs", "--version")
+            Process p = ExternalCommand.processBuilder("gs", "--version")
                     .redirectErrorStream(true)
                     .start();
             boolean finished = p.waitFor(5, TimeUnit.SECONDS);
@@ -126,9 +125,11 @@ final class GhostscriptHelper {
      * Run a Ghostscript command with the given arguments.
      */
     static void run(String... args) {
-        List<String> command = new ArrayList<>();
-        command.add("gs");
-        Collections.addAll(command, args);
+        List<String> command = ExternalCommand.commandLine("gs", args);
+        if (command == null) {
+            throw new JPDFiumException("gs not found on PATH. Install Ghostscript: " +
+                    "apt install ghostscript / brew install ghostscript");
+        }
 
         try {
             Process p = new ProcessBuilder(command)

@@ -10,8 +10,30 @@
 #include <string>
 #include <vector>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#endif
+
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
+
+namespace {
+
+// Open a file for writing, restricting the permissions of a newly created
+// file to owner read/write (0600) on POSIX so secrets written by the bridge
+// (e.g. saved PDFs) are not world-readable. On Windows the CRT default ACL
+// applies, as there is no POSIX mode argument.
+FILE* safe_fopen_write(const char* path) {
+#if defined(_WIN32)
+    return std::fopen(path, "wb");
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return nullptr;
+    return ::fdopen(fd, "wb");
+#endif
+}
+
+}  // namespace
 
 int32_t jpdfium_init() {
     FPDF_LIBRARY_CONFIG cfg{};
@@ -83,7 +105,7 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
 
-    FILE* f = fopen(path, "wb");
+    FILE* f = safe_fopen_write(path);
     if (!f) return JPDFIUM_ERR_IO;
 
     struct FileWriter : FPDF_FILEWRITE {
