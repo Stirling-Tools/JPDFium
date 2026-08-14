@@ -127,11 +127,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
             jpdfium_page_close(page);
         }
 
-        // Merge / N-up layout - imports pages of the same doc into a grid.
+        // Merge / N-up layout - imports pages of the same doc into a grid. The
+        // bridge takes the raw FPDF_DOCUMENT (the JVM passes it via
+        // jpdfium_doc_raw_handle), NOT the bridge's int64 doc handle - passing
+        // the handle here is a type confusion that crashes inside PDFium.
+        int64_t rawDoc = jpdfium_doc_raw_handle(doc);
         uint8_t* nup = nullptr;
         int64_t nupLen = 0;
-        if (jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(doc), 595.0f, 842.0f, 2, 2, &nup,
-                                          &nupLen) == JPDFIUM_OK) {
+        if (rawDoc != 0 && jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(rawDoc), 595.0f,
+                                                         842.0f, 2, 2, &nup, &nupLen) == JPDFIUM_OK) {
             freeBuffer(nup);
         }
 

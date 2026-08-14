@@ -35,7 +35,7 @@ bundle_linux() {
     # Always-present system libs we don't need to (and shouldn't) bundle.
     # Bundling libc/libpthread/etc. can crash because the dynamic linker
     # already has its own copy loaded into the process.
-    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+|ld-linux)\.so'
+    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux'
 
     # Recursive walk: queue of files to process; each file's ldd output gets
     # filtered and uncopied entries get copied + queued. We use file-existence

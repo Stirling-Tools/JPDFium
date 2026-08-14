@@ -24,7 +24,10 @@ fi
 # Core system libs guaranteed present on any Linux runtime. libstdc++/libgcc_s
 # are shipped by the toolchain; a minimal container still has them via glibc's
 # dependency. Keep this list intentionally conservative.
-CORE_RE='^(libc|libm|libdl|libpthread|libgcc_s|libstdc\+\+|librt|libresolv|libutil|ld-linux|linux-vdso)\.so'
+# ld-linux matches versioned loader names (ld-linux-x86-64.so.2,
+# ld-linux-aarch64.so.1); the libc-family entries require a `.so` so they don't
+# absorb lookalikes like libcrypto/libfreetype.
+CORE_RE='^(libc|libm|libdl|libpthread|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux'
 
 failures=0
 for f in "$DIST_DIR"/lib*.so*; do
