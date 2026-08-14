@@ -161,7 +161,7 @@ public final class PdfImageExtractor {
                     if (rawSize > 0) {
                         MemorySegment rawBuf = arena.allocate(rawSize);
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
-                        rawBytes = rawBuf.toArray(ValueLayout.JAVA_BYTE);
+                        rawBytes = rawBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable _) {}
 
@@ -172,7 +172,7 @@ public final class PdfImageExtractor {
                     if (decSize > 0) {
                         MemorySegment decBuf = arena.allocate(decSize);
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
-                        decodedBytes = decBuf.toArray(ValueLayout.JAVA_BYTE);
+                        decodedBytes = decBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable _) {}
             }
@@ -219,7 +219,7 @@ public final class PdfImageExtractor {
                 if (needed <= 1) return "none";
                 MemorySegment buf = arena.allocate(needed);
                 long written = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(obj, 0, buf, needed);
-                return FfmHelper.fromByteString(buf, needed);
+                return FfmHelper.fromByteString(buf, written);
             }
         } catch (Throwable t) { return "unknown"; }
     }

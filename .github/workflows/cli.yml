@@ -65,6 +65,31 @@ jobs:
       - name: Build real native bridge
         run: bash native/build-real.sh
 
+      - name: Stage binaries (bridge + PDFium siblings)
+        run: |
+          mkdir -p native/dist/linux-x64
+          find native/build-real -maxdepth 3 -type f \( \
+                -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
+             \) -exec cp -v {} native/dist/linux-x64/ \;
+          if [ -d native/pdfium/lib ]; then
+            find native/pdfium/lib -maxdepth 1 -type f \( \
+                  -name '*.dll' -o -name 'lib*.so' -o -name 'lib*.so.*' -o -name 'lib*.dylib' \
+               \) \
+               ! -name 'dbghelp.dll' ! -name 'dbgcore.dll' \
+               ! -name 'msdia*.dll'   ! -name 'symsrv.dll' \
+               ! -name 'vccorlib*.dll' \
+               -exec cp -v {} native/dist/linux-x64/ \;
+          fi
+
+      - name: Bundle runtime deps + strip
+        run: |
+          # Copies the bridge's runtime deps (ldd walk) next to it and applies
+          # RUNPATH=$ORIGIN via patchelf so NativeLoader's System.load can
+          # resolve transitive component-lib dependencies from the extracted
+          # temp dir. The natives jar must contain this corrected set.
+          bash native/bundle-runtime-deps.sh linux-x64
+          ls -la native/dist/linux-x64/
+
       - name: CLI correctness tests (JVM, real native)
         run: ./gradlew :jpdfium:cliTest -Pjpdfium.testNatives=linux-x64 --no-daemon --stacktrace
 
