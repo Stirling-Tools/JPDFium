@@ -83,18 +83,21 @@ jobs:
             exit 1
           }
 
-      - name: Smoke - fuzzer must start
+      - name: Smoke - fuzzer must start and run the seed corpus
         run: |
-          # -runs=1 proves the binary links and the PDFium deps resolve; without
-          # LD_LIBRARY_PATH the component libs can't be found and this fails.
-          # clang++ -print-runtime-dir is where libclang_rt.asan lives - it is
-          # NOT on the default loader path, so the binary won't start without it.
+          # Runs every seed PDF through the harness under ASan/UBSan. If the
+          # binary can't load, or any seed crashes, this fails and the tail of
+          # the fuzzer output (crash report / loader error) is printed so the
+          # cause is diagnosable - never swallowed.
           export LD_LIBRARY_PATH="$(clang++ -print-runtime-dir):$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          native/build-fuzz/jpdfium_fuzz -runs=1 native/build-fuzz/corpus >/dev/null 2>&1 || {
-            echo "ERROR: fuzzer failed to start (missing sanitizer/PDFium component libs or broken link)"
+          if ! native/build-fuzz/jpdfium_fuzz -runs=1 -print_final_stats=1 \
+                native/build-fuzz/corpus > /tmp/fuzz-smoke.log 2>&1; then
+            echo "::error::fuzzer failed (see log below)"
+            tail -n 40 /tmp/fuzz-smoke.log
             echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
             exit 1
-          }
+          fi
+          tail -n 5 /tmp/fuzz-smoke.log
 
       - name: Run fuzzer
         env:
