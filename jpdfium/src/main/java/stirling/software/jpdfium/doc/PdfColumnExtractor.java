@@ -155,14 +155,16 @@ public final class PdfColumnExtractor {
             if (charCount <= 0) return "";
 
             var buf = arena.allocate(ValueLayout.JAVA_SHORT, charCount + 1);
+            int written;
             try {
-                int written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
+                written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
                         textPage, left, top, right, bottom,
                         buf, charCount + 1);
             } catch (Throwable t) { return ""; }
 
-            char[] chars = new char[charCount];
-            for (int i = 0; i < charCount; i++) {
+            if (written <= 0) return "";
+            char[] chars = new char[written];
+            for (int i = 0; i < written; i++) {
                 chars[i] = (char) buf.getAtIndex(ValueLayout.JAVA_SHORT, i);
             }
             return new String(chars).replace("\0", "");

@@ -72,7 +72,7 @@ jobs:
         run: ./gradlew :jpdfium:nativeCliCompile -Pjpdfium.testNatives=linux-x64 --no-daemon
 
       - name: CLI native image smoke + no-corruption checks
-        run: bash native/cli-native-smoke.sh jpdfium/build/native/nativeCliCompile/jpdfium "$RUNNER_TEMP/cli-native-smoke"
+        run: bash native/cli-native-smoke.sh "$GITHUB_WORKSPACE/jpdfium/build/native/nativeCliCompile/jpdfium" "$RUNNER_TEMP/cli-native-smoke"
 
       - name: Upload CLI native binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

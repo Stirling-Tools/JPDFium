@@ -13,7 +13,7 @@
 # Usage: bash native/cli-native-smoke.sh <path-to-jpdfium-binary> <work-dir>
 set -euo pipefail
 
-BIN="${1:?usage: cli-native-smoke.sh <jpdfium-binary> <work-dir>}"
+BIN="$(cd "$(dirname "${1:?usage: cli-native-smoke.sh <jpdfium-binary> <work-dir>}")" && pwd)/$(basename "$1")"
 WORK="${2:?usage: cli-native-smoke.sh <jpdfium-binary> <work-dir>}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BASIC="${REPO}/jpdfium/src/test/resources/pdfs/general/basic-text.pdf"
