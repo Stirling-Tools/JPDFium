@@ -272,6 +272,11 @@ if(JPDFIUM_USE_PDFIUM)
             "/FORCE:MULTIPLE"
             "/IGNORE:4006"
             "/IGNORE:4088")
+        # Export the Rust-provided symbols from jpdfium.dll. Rust's
+        # #[no_mangle] extern "C" definitions don't carry __declspec(dllexport),
+        # so without a .def the import library would omit them and neither the
+        # CTest native_smoke test nor the Java FFM bindings could resolve them.
+        target_sources(jpdfium PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.def")
     else()
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)

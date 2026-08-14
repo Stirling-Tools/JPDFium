@@ -28,6 +28,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIN_FILE="${SCRIPT_DIR}/pdfium.version"
 TARGET_DIR="${SCRIPT_DIR}/pdfium"
 REPO="${GITHUB_REPOSITORY:-Stirling-Tools/JPDFium}"
+# PDFium prebuilds are produced by the 'Prebuild PDFium' workflow and published
+# to Stirling-Tools/JPDFium (the canonical upstream). Forks run this script with
+# GITHUB_REPOSITORY pointing at themselves but don't carry the release tarballs,
+# so when the pinned tag is missing in the current repo we fall back to upstream.
+UPSTREAM_REPO="Stirling-Tools/JPDFium"
 
 if [ ! -f "$PIN_FILE" ]; then
     echo "ERROR: pin file not found at $PIN_FILE" >&2
@@ -62,6 +67,17 @@ echo "Fetching $ASSET (mode=$JPDFIUM_BUILD_MODE) from release $TAG ($REPO)..."
 mkdir -p "$TARGET_DIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+
+if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    if [ "$REPO" != "$UPSTREAM_REPO" ]; then
+        echo "Release $TAG not found in $REPO - falling back to $UPSTREAM_REPO" >&2
+        REPO="$UPSTREAM_REPO"
+    else
+        echo "ERROR: release $TAG not found in $REPO." >&2
+        echo "       Run the 'Prebuild PDFium' workflow first and merge its auto-PR." >&2
+        exit 1
+    fi
+fi
 
 gh release download "$TAG" \
     --repo "$REPO" \
