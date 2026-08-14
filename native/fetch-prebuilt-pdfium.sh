@@ -68,24 +68,54 @@ mkdir -p "$TARGET_DIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Download $ASSET from release $TAG in $repo into $TMP.
+#
+# Primary path: gh CLI (honours GH_TOKEN). GitHub occasionally returns a
+# transient 401 for workflow GITHUB_TOKENs, so retry a few times.
+# Fallback: plain curl to the browser-download URL. Release assets on a public
+# repo need no authentication, so this sidesteps any token hiccup entirely.
+download_from() {
+    local repo="$1"
+    local attempt
+    for attempt in 1 2 3; do
+        if gh release download "$TAG" \
+            --repo "$repo" \
+            --pattern "$ASSET" \
+            --dir "$TMP" 2>/dev/null; then
+            return 0
+        fi
+        echo "  gh release download attempt $attempt/3 failed for $repo; retrying..." >&2
+        sleep 5
+    done
+    for attempt in 1 2 3; do
+        if curl -fL --retry 3 --retry-delay 3 \
+            "https://github.com/${repo}/releases/download/${TAG}/${ASSET}" \
+            -o "${TMP}/${ASSET}" 2>/dev/null; then
+            return 0
+        fi
+        echo "  direct download attempt $attempt/3 failed for $repo; retrying..." >&2
+        sleep 5
+    done
+    return 1
+}
+
 # Try the current repo first. Forks don't carry the prebuild releases, so if
-# the pinned tag can't be downloaded there (gh reports "release not found")
-# fall back to the upstream repo where the canonical prebuilds live.
-if ! gh release download "$TAG" \
-    --repo "$REPO" \
-    --pattern "$ASSET" \
-    --dir "$TMP"; then
+# the pinned tag can't be downloaded there fall back to the upstream repo where
+# the canonical prebuilds live.
+if ! download_from "$REPO"; then
     if [ "$REPO" != "$UPSTREAM_REPO" ]; then
         echo "Release $TAG not found in $REPO - falling back to $UPSTREAM_REPO" >&2
-        gh release download "$TAG" \
-            --repo "$UPSTREAM_REPO" \
-            --pattern "$ASSET" \
-            --dir "$TMP"
+        download_from "$UPSTREAM_REPO"
     else
         echo "ERROR: failed to download $ASSET from release $TAG in $REPO." >&2
         echo "       Run the 'Prebuild PDFium' workflow first and merge its auto-PR." >&2
         exit 1
     fi
+fi
+
+if [ ! -f "${TMP}/${ASSET}" ]; then
+    echo "ERROR: $ASSET not downloaded from release $TAG." >&2
+    exit 1
 fi
 
 tar -xzf "$TMP/$ASSET" -C "$TARGET_DIR"
