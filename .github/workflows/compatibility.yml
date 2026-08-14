@@ -80,23 +80,26 @@ jobs:
             --new "$CURR_JAR" \
             --only-modified \
             --ignore-missing-classes \
-            --error-on-incompatible \
+            --error-on-binary-incompatibility \
+            --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1
           rc=$?
           set -e
           cat /tmp/japicmp-report.txt
-          if grep -qE "BREAKING|INCOMPATIBLE|ERROR:" /tmp/japicmp-report.txt; then
-            echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
-            exit 1
-          fi
-          # A non-zero japicmp exit with no incompatibility marker means the
-          # comparison did not complete (crash, missing dep, etc). Never pass a
-          # gate whose check silently didn't run.
+          # rc is authoritative: with the --error-on-* flags japicmp exits 0 iff
+          # there are no binary/source incompatibilities. The report marker is
+          # only used to give a precise message; note the incompatibility line is
+          # lowercase ("E: There is at least one incompatibility: ..."), so grep
+          # case-insensitively on the "incompatib" prefix.
           if [ "$rc" -ne 0 ]; then
-            echo "::error::japicmp exited $rc without an incompatibility marker — treat as gate failure (check did not complete)"
+            if grep -qiE "incompatib|BREAKING|ERROR:" /tmp/japicmp-report.txt; then
+              echo "::error::Binary/source incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
+            else
+              echo "::error::japicmp exited $rc without an incompatibility marker — treat as gate failure (check did not complete)"
+            fi
             exit 1
           fi
-          echo "No binary incompatibilities vs ${{ steps.ver.outputs.tag }}."
+          echo "No binary/source incompatibilities vs ${{ steps.ver.outputs.tag }}."
 
   module-info:
     name: Module descriptor integrity

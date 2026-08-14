@@ -74,8 +74,17 @@ jobs:
           # Seed with real-world PDFs so mutation explores valid structures
           # instead of starting from random bytes (which the parser mostly
           # rejects in the first instruction). Missing seeds = broken harness.
-          find jpdfium/src/test/resources/pdfs -name '*.pdf' \
-            -exec cp {} native/build-fuzz/corpus/ \;
+          #
+          # Drop the handful of multi-hundred-KB / multi-MB fixtures (>512 KiB):
+          # the harness's heavy per-input ops (zopfli, qpdf recompress, render,
+          # save x2) are superlinear in input size, and those 7 files made the
+          # smoke gate take ~14 min. They stay covered by the Java test suite,
+          # and mutation fuzzing grows inputs past their size anyway. The
+          # remaining 143 seeds (4 MB total) keep every subdirectory + size
+          # bucket. Deterministic (sorted) so CI results are reproducible.
+          find jpdfium/src/test/resources/pdfs -name '*.pdf' -size -512k -print0 \
+            | sort -z \
+            | xargs -0 -I{} cp {} native/build-fuzz/corpus/
           COUNT="$(ls native/build-fuzz/corpus | wc -l | tr -d ' ')"
           echo "seeded $COUNT PDFs"
           [ "$COUNT" -gt 0 ] || {
