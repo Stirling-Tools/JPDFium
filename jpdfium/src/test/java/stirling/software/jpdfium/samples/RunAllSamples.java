@@ -24,6 +24,11 @@ import java.util.concurrent.TimeoutException;
  *
  * <p>All output lands in {@code samples-output/} next to the working directory.
  *
+ * <p><strong>Self-cleaning mode:</strong> {@code -Dsamples.selfClean=true} wipes
+ * {@code samples-output/} at startup and deletes each successful sample's output
+ * immediately, so only failed samples leave artifacts behind for inspection.
+ * Heap size is configurable via {@code -Psamples.xmx=6g} on the Gradle command line.
+ *
  * <p><strong>VM Options required in IntelliJ:</strong>
  * {@code --enable-native-access=ALL-UNNAMED}
  */
@@ -37,13 +42,19 @@ public class RunAllSamples {
         Path input = SampleBase.inputPdf(args);
 
         int timeoutSec = Integer.getInteger("sample.timeout", DEFAULT_TIMEOUT_SECONDS);
+        boolean selfClean = Boolean.getBoolean("samples.selfClean");
 
         System.out.println("JPDFium - Run All Samples");
         System.out.printf("  input:   %s%n", input.getFileName());
         System.out.printf("  output:  %s%n", "~/" + SampleBase.OUT_ROOT
                 .toString().replaceFirst(System.getProperty("user.home") + "/", ""));
         System.out.printf("  timeout: %s%n", timeoutSec + "s per sample");
+        System.out.printf("  self-clean: %s%n", selfClean);
         System.out.println();
+
+        if (selfClean) {
+            deleteRecursively(SampleBase.OUT_ROOT);
+        }
 
         String[] a = args.length > 0 ? args : EMPTY_ARGS;
         int passed = 0;
@@ -169,6 +180,11 @@ public class RunAllSamples {
                     future.get(timeoutSec, TimeUnit.SECONDS);
                     System.out.println("  -> " + s.name() + " OK");
                     passed++;
+                    if (selfClean) {
+                        // Discard a successful sample's output immediately so only
+                        // failed samples leave artifacts behind for inspection.
+                        deleteRecursively(SampleBase.OUT_ROOT);
+                    }
                 } catch (TimeoutException e) {
                     future.cancel(true);
                     System.err.println("  -> " + s.name() + " TIMEOUT (>" + timeoutSec + "s)");
@@ -205,6 +221,20 @@ public class RunAllSamples {
             }
         }
         System.out.println("Output: " + SampleBase.OUT_ROOT.toAbsolutePath());
+    }
+
+    private static void deleteRecursively(Path dir) {
+        try {
+            if (!java.nio.file.Files.exists(dir)) return;
+            try (var walk = java.nio.file.Files.walk(dir)) {
+                walk.sorted(java.util.Comparator.reverseOrder())
+                        .forEach(p -> {
+                            try {
+                                java.nio.file.Files.deleteIfExists(p);
+                            } catch (java.io.IOException _) { }
+                        });
+            }
+        } catch (java.io.IOException _) { }
     }
 
     @FunctionalInterface

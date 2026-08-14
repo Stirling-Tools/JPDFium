@@ -119,8 +119,10 @@ public final class PdfPrint {
                 placePageContent(rawResult, rawSrc, rightIdx);
             }
 
-            try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(newPage); }
-            catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
+            try {
+                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(newPage);
+                if (ok == 0) throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
 
             try { PageEditBindings.FPDF_ClosePage.invokeExact(newPage); }
             catch (Throwable _) {}

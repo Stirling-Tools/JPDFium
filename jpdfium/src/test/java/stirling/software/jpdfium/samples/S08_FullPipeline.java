@@ -107,7 +107,14 @@ public class S08_FullPipeline {
 
             SampleBase.section("Step 5: Render");
             try (PdfDocument doc = PdfDocument.open(redactedPdf)) {
-                List<BufferedImage> images = PageOps.renderAll(doc, RENDER_DPI);
+                List<BufferedImage> images;
+                try {
+                    images = PageOps.renderAll(doc, RENDER_DPI);
+                } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+                    // Render-bounds guard: corpus contains wall-sized pages.
+                    System.out.println("  [skip render] " + e.getMessage());
+                    images = List.of();
+                }
                 for (int i = 0; i < images.size(); i++) {
                     Path png = outDir.resolve(SampleBase.stem(input) + "-page-" + i + ".png");
                     ImageIO.write(images.get(i), "PNG", png.toFile());

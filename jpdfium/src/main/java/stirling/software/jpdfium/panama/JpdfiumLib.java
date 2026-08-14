@@ -210,6 +210,40 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Default upper bound on rendered pixel count (width x height) per page.
+     *
+     * <p>Untrusted PDFs can carry "wall sized" pages (e.g. 12608 x 16806 pt:
+     * 848 MB of RGBA at 72 dpi, ~14.7 GB at 300 dpi). Rendering such a page
+     * would exhaust the heap of any service that renders user-supplied PDFs,
+     * so renders exceeding this many pixels are refused with a clear
+     * {@link JPDFiumException} instead of allocating an unbounded bitmap.
+     * Override with {@code -Djpdfium.maxRenderPixels=N}; {@code 0} disables
+     * the bound entirely (restores unbounded behavior).
+     */
+    private static final long DEFAULT_MAX_RENDER_PIXELS = 100_000_000L;
+
+    private static long maxRenderPixels() {
+        return Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+    }
+
+    /** Refuse renders whose pixel dimensions exceed the configured bound. */
+    private static void checkRenderBounds(long page, int dpi) {
+        long cap = maxRenderPixels();
+        if (cap <= 0) return;
+        double scale = dpi / 72.0;
+        long w = Math.max(1, Math.round(pageWidth(page) * scale));
+        long h = Math.max(1, Math.round(pageHeight(page) * scale));
+        long pixels = w * h;
+        if (pixels > cap) {
+            throw new JPDFiumException(String.format(
+                    "refusing to render %dx%d pixels (page %.1fx%.1f pt at %d dpi) - "
+                            + "exceeds jpdfium.maxRenderPixels=%d. Reduce the DPI or raise "
+                            + "-Djpdfium.maxRenderPixels (0 disables the bound)",
+                    w, h, pageWidth(page), pageHeight(page), dpi, cap));
+        }
+    }
+
+    /**
      * Fast path that returns a heap {@link RenderResult}. Avoids the
      * {@link RenderedPageView} wrapper (object + {@link java.util.concurrent.atomic.AtomicBoolean}
      * + cleanup lambda) so the common {@code page.renderAt()} call stays allocation-lean;
@@ -219,6 +253,7 @@ public final class JpdfiumLib {
     public static RenderResult renderPage(long page, int dpi) {
         NativeGuard.acquire();
         try {
+            checkRenderBounds(page, dpi);
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 MemorySegment wSeg = a.allocate(JAVA_INT);
@@ -239,6 +274,7 @@ public final class JpdfiumLib {
     public static RenderedPageView renderPageView(long page, int dpi) {
         NativeGuard.acquire();
         try {
+            checkRenderBounds(page, dpi);
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 MemorySegment wSeg = a.allocate(JAVA_INT);

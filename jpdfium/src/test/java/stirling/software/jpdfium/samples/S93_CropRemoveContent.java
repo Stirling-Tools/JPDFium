@@ -51,7 +51,7 @@ import java.util.regex.Pattern;
  *   <li>Confirm the crop area is truly emptied (not just hidden) - every surviving word
  *       bbox must stay inside the cropped page size:
  *       <pre>{@code
- *       pdftotext -bbox *-hardcrop.pdf - | grep -o 'width="[0-9.]*" height="[0-9.]*"' 
+ *       pdftotext -bbox *-hardcrop.pdf - | grep -o 'width="[0-9.]*" height="[0-9.]*"'
  *       }</pre></li>
  *   <li>Confirm the output is structurally valid:
  *       <pre>{@code
@@ -138,8 +138,12 @@ public class S93_CropRemoveContent {
                         crop = new Rect(0, 0, w / 2.0f, h);
 
                         Path beforePng = outDir.resolve(stem + "-page" + p + "-before.png");
-                        ImageIO.write(page.renderAt(DPI).toBufferedImage(), "PNG", beforePng.toFile());
-                        produced.add(beforePng);
+                        var beforeRender = SampleBase.renderOrSkip(page, DPI,
+                                stem + " page " + p + " (before)");
+                        if (beforeRender != null) {
+                            ImageIO.write(beforeRender.toBufferedImage(), "PNG", beforePng.toFile());
+                            produced.add(beforePng);
+                        }
 
                         before = positions(page);
                     }
@@ -152,8 +156,12 @@ public class S93_CropRemoveContent {
 
                     try (PdfPage page = doc.page(p)) {
                         Path afterPng = outDir.resolve(stem + "-page" + p + "-after.png");
-                        ImageIO.write(page.renderAt(DPI).toBufferedImage(), "PNG", afterPng.toFile());
-                        produced.add(afterPng);
+                        var afterRender = SampleBase.renderOrSkip(page, DPI,
+                                stem + " page " + p + " (after)");
+                        if (afterRender != null) {
+                            ImageIO.write(afterRender.toBufferedImage(), "PNG", afterPng.toFile());
+                            produced.add(afterPng);
+                        }
                     }
                 }
 

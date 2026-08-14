@@ -69,7 +69,9 @@ public class S36_AnnotationBuilder {
                 // Re-open and render page 0 to PNG to visually verify annotations
                 try (PdfDocument annotatedDoc = PdfDocument.open(outPath)) {
                     try (PdfPage p0 = annotatedDoc.page(0)) {
-                        RenderResult render = p0.renderAt(150);
+                        RenderResult render = SampleBase.renderOrSkip(p0, 150,
+                                stem + " annotated page 0");
+                        if (render == null) continue;
                         Path pngPath = outDir.resolve(stem + "-annotated-p0.png");
                         ImageIO.write(render.toBufferedImage(), "PNG", pngPath.toFile());
                         produced.add(pngPath);

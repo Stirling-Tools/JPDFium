@@ -31,6 +31,10 @@ public final class EmbedPdfAnnotationBindings {
         return Symbols.downcallCritical(name, desc);
     }
 
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
+    }
+
     // FS_MATRIX layout: { float a, b, c, d, e, f }
     public static final StructLayout FS_MATRIX_LAYOUT = MemoryLayout.structLayout(
             JAVA_FLOAT.withName("a"), JAVA_FLOAT.withName("b"),
@@ -202,12 +206,14 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFPage_RemoveAnnotRaw = downcall("EPDFPage_RemoveAnnotRaw",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
-    /** Set annotation icon (Text/FileAttachment/Sound/Stamp). */
-    public static final MethodHandle EPDFAnnot_SetIcon = downcall("EPDFAnnot_SetIcon",
+    /** Set annotation icon (Text/FileAttachment/Sound/Stamp). Optional: the
+     *  bundled EmbedPDF fork does not export this symbol, so it degrades to
+     *  {@code null} in FULL mode instead of failing the whole class init. */
+    public static final MethodHandle EPDFAnnot_SetIcon = downcallOptional("EPDFAnnot_SetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    /** Get annotation icon. */
-    public static final MethodHandle EPDFAnnot_GetIcon = downcallCritical("EPDFAnnot_GetIcon",
+    /** Get annotation icon. Optional: same rationale as {@code EPDFAnnot_SetIcon}. */
+    public static final MethodHandle EPDFAnnot_GetIcon = downcallOptional("EPDFAnnot_GetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Resize stamp AP to match annotation rect. */

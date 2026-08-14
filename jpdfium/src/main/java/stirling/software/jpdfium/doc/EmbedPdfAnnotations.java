@@ -7,6 +7,7 @@ import stirling.software.jpdfium.panama.FfmHelper;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.util.Optional;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
@@ -303,7 +304,12 @@ public final class EmbedPdfAnnotations {
     public static void setIcon(MemorySegment page, int index, int icon) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
+            MethodHandle h = EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon;
+            if (h == null) {
+                throw new JPDFiumException(
+                        "EPDFAnnot_SetIcon is not available in this PDFium build");
+            }
+            int ok = (int) h.invokeExact(annot, icon);
             if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetIcon failed");
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
@@ -312,12 +318,14 @@ public final class EmbedPdfAnnotations {
     /**
      * Get the icon of an annotation.
      *
-     * @return icon code, or -1 if unknown
+     * @return icon code, or -1 if unknown or unsupported by this PDFium build
      */
     public static int getIcon(MemorySegment page, int index) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            return (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon.invokeExact(annot);
+            MethodHandle h = EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon;
+            if (h == null) return -1;
+            return (int) h.invokeExact(annot);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }

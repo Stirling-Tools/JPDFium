@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import stirling.software.jpdfium.doc.PdfPageImporter;
@@ -27,10 +28,10 @@ public final class PdfMerge {
     /**
      * Merge multiple open PDF documents into a new document.
      *
-     * <p>All pages from each source document are imported in order.
-     * The source documents must remain open during this call but
-     * can be closed afterwards. The caller owns the returned document
-     * and must close it.
+     * <p>All pages from each source document are imported in order. The source
+     * documents must remain open during this call but can be closed immediately
+     * afterwards - the returned document is fully self-contained. The caller owns
+     * the returned document and must close it.
      *
      * @throws IllegalArgumentException if the list is empty
      */
@@ -44,41 +45,63 @@ public final class PdfMerge {
             PdfPageImporter.importPages(rawDest, documents.get(i).rawHandle(), null, insertAt);
             insertAt = dest.pageCount();
         }
-        return dest;
+        // PDFium's FPDF_ImportPages leaves imported pages referencing objects owned
+        // by the source documents, so the live destination would be invalidated the
+        // moment a source is closed (saving it afterwards crashes the native layer).
+        // Detach it - save, close and reopen - while the sources are still open so
+        // the returned document is fully standalone.
+        byte[] detached = dest.saveBytes();
+        dest.close();
+        return PdfDocument.open(detached);
     }
 
     /**
      * Merge PDF files from paths into a new document.
      *
-     * <p>Opens each file, imports all pages, and closes the sources.
-     * The caller owns the returned document and must close it.
+     * <p>Opens each file, imports all pages, closes the sources, and returns a
+     * fully self-contained document. The caller owns the returned document and
+     * must close it.
      *
-     * <p><strong>Streaming:</strong> sources are imported one at a time - open a
-     * source, import its pages, close it before opening the next. At any instant
-     * exactly one source is open alongside the destination, so peak memory is
-     * bounded by (destination + one source) rather than scaling with the number
-     * of input files. This relies on PDFium's {@code FPDF_ImportPages} copying
-     * page content into the destination, which makes a source safe to close as
-     * soon as its import returns.
+     * <p>PDFium's {@code FPDF_ImportPages} leaves imported pages referencing
+     * objects owned by the source document, so a source can only be closed once
+     * the destination no longer depends on it. Every source therefore stays open
+     * until the whole merge is complete, and the destination is detached (full
+     * save, close and reopen) with a <em>single</em> save while all sources are
+     * still open. This keeps the work linear in the total output size instead of
+     * re-saving the growing document once per input, and guarantees the returned
+     * document survives the closing of every source. PDFium parses documents
+     * lazily, so holding the sources open costs their xref tables, not their page
+     * content.
      *
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument mergeFiles(List<Path> paths) {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (paths.size() == 1) { try (PdfDocument s = PdfDocument.open(paths.getFirst())) { return reopenViaBytes(s); } }
-        PdfDocument dest;
-        try (PdfDocument first = PdfDocument.open(paths.getFirst())) { dest = reopenViaBytes(first); }
-        MemorySegment rawDest = dest.rawHandle();
-        int insertAt = dest.pageCount();
-        for (int i = 1; i < paths.size(); i++) {
-            try (PdfDocument src = PdfDocument.open(paths.get(i))) {
+        List<PdfDocument> opened = new ArrayList<>(paths.size());
+        PdfDocument dest = null;
+        try {
+            dest = PdfDocument.open(paths.getFirst());
+            MemorySegment rawDest = dest.rawHandle();
+            int insertAt = dest.pageCount();
+            for (int i = 1; i < paths.size(); i++) {
+                PdfDocument src = PdfDocument.open(paths.get(i));
+                opened.add(src);
                 PdfPageImporter.importPages(rawDest, src.rawHandle(), null, insertAt);
                 insertAt = dest.pageCount();
             }
+            byte[] detached = dest.saveBytes();
+            dest.close();
+            dest = null;
+            return PdfDocument.open(detached);
+        } finally {
+            if (dest != null) {
+                try { dest.close(); } catch (RuntimeException _) { }
+            }
+            for (PdfDocument d : opened) {
+                try { d.close(); } catch (RuntimeException _) { }
+            }
         }
-        byte[] detached = dest.saveBytes();
-        dest.close();
-        return PdfDocument.open(detached);
     }
 
     private static PdfDocument reopenViaBytes(PdfDocument source) {

@@ -104,13 +104,21 @@ public class S90_Layers {
 
                 // Render with watermark only
                 if (doc.pageCount() > 0) {
-                    BufferedImage img = PdfLayers.renderWithLayers(doc, 0, 150,
-                            Set.of("Watermark"));
-                    Path imgOut = outDir.resolve(SampleBase.stem(input) + "-watermark-only.png");
-                    ImageIO.write(img, "PNG", imgOut.toFile());
-                    produced.add(imgOut);
-                    System.out.printf("  Rendered watermark-only: %dx%d px%n",
-                            img.getWidth(), img.getHeight());
+                    BufferedImage img;
+                    try {
+                        img = PdfLayers.renderWithLayers(doc, 0, 150, Set.of("Watermark"));
+                    } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+                        // Render-bounds guard: corpus contains wall-sized pages.
+                        System.out.println("  [skip render] " + e.getMessage());
+                        img = null;
+                    }
+                    if (img != null) {
+                        Path imgOut = outDir.resolve(SampleBase.stem(input) + "-watermark-only.png");
+                        ImageIO.write(img, "PNG", imgOut.toFile());
+                        produced.add(imgOut);
+                        System.out.printf("  Rendered watermark-only: %dx%d px%n",
+                                img.getWidth(), img.getHeight());
+                    }
                 }
 
                 Path toggledOut = outDir.resolve(SampleBase.stem(input) + "-toggled.pdf");

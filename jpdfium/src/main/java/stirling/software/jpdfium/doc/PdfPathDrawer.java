@@ -90,29 +90,37 @@ public final class PdfPathDrawer {
 
     public PdfPathDrawer moveTo(float x, float y) {
         ensurePath();
-        try { PageEditBindings.FPDFPath_MoveTo.invokeExact(currentPath, x, y); }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        try {
+            int ok = (int) PageEditBindings.FPDFPath_MoveTo.invokeExact(currentPath, x, y);
+            if (ok == 0) throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPath_MoveTo failed");
+        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
         return this;
     }
 
     public PdfPathDrawer lineTo(float x, float y) {
         ensurePath();
-        try { PageEditBindings.FPDFPath_LineTo.invokeExact(currentPath, x, y); }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        try {
+            int ok = (int) PageEditBindings.FPDFPath_LineTo.invokeExact(currentPath, x, y);
+            if (ok == 0) throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPath_LineTo failed");
+        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
         return this;
     }
 
     public PdfPathDrawer bezierTo(float x1, float y1, float x2, float y2, float x3, float y3) {
         ensurePath();
-        try { PageEditBindings.FPDFPath_BezierTo.invokeExact(currentPath, x1, y1, x2, y2, x3, y3); }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        try {
+            int ok = (int) PageEditBindings.FPDFPath_BezierTo.invokeExact(currentPath, x1, y1, x2, y2, x3, y3);
+            if (ok == 0) throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPath_BezierTo failed");
+        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
         return this;
     }
 
     public PdfPathDrawer closePath() {
         ensurePath();
-        try { PageEditBindings.FPDFPath_Close.invokeExact(currentPath); }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        try {
+            int ok = (int) PageEditBindings.FPDFPath_Close.invokeExact(currentPath);
+            if (ok == 0) throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPath_Close failed");
+        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
         return this;
     }
 
@@ -123,14 +131,17 @@ public final class PdfPathDrawer {
     public void commit() {
         ensurePath();
         try {
-            PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(currentPath, fillR, fillG, fillB, fillA);
-            PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(currentPath, strokeR, strokeG, strokeB, strokeA);
-            PageEditBindings.FPDFPageObj_SetStrokeWidth.invokeExact(currentPath, widthValue);
-            PageEditBindings.FPDFPageObj_SetLineCap.invokeExact(currentPath, capStyle);
-            PageEditBindings.FPDFPageObj_SetLineJoin.invokeExact(currentPath, joinStyle);
-            PageEditBindings.FPDFPath_SetDrawMode.invokeExact(currentPath, fillMode, isStroked ? 1 : 0);
+            int fillOk = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(currentPath, fillR, fillG, fillB, fillA);
+            int strokeOk = (int) PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(currentPath, strokeR, strokeG, strokeB, strokeA);
+            int widthOk = (int) PageEditBindings.FPDFPageObj_SetStrokeWidth.invokeExact(currentPath, widthValue);
+            int capOk = (int) PageEditBindings.FPDFPageObj_SetLineCap.invokeExact(currentPath, capStyle);
+            int joinOk = (int) PageEditBindings.FPDFPageObj_SetLineJoin.invokeExact(currentPath, joinStyle);
+            int drawOk = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(currentPath, fillMode, isStroked ? 1 : 0);
             PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, currentPath);
-            PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            int genOk = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (fillOk == 0 || strokeOk == 0 || widthOk == 0 || capOk == 0 || joinOk == 0 || drawOk == 0 || genOk == 0) {
+                throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to commit path");
+            }
         } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to commit path", t); }
         currentPath = null;
     }

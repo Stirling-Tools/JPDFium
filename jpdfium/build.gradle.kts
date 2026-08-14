@@ -235,6 +235,47 @@ tasks.register<Test>("integrationTest") {
     maxHeapSize = System.getProperty("jpdfium.bench.xmx", "2g")
 }
 
+// Run: ./gradlew :jpdfium:corpusTest -Pjpdfium.testNatives=<platform>
+// Corpus suite (downloaded + local + synthetic PDFs) against real PDFium.
+// Correctness assertions are hard; perf/alloc metrics are reported only, so
+// environment-sensitive timing can never fail the build.
+tasks.register<Test>("corpusTest") {
+    group       = "verification"
+    description = "Run the corpus test suite against real PDFium (downloads test PDFs)"
+    useJUnitPlatform {
+        includeTags("corpus")
+    }
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath       = sourceSets.test.get().runtimeClasspath
+    systemProperty("jpdfium.integration", "true")
+    systemProperty("jpdfium.corpus", "true")
+    // Forward corpus shard selection (used by the sharded CI job).
+    System.getProperties().forEach { k, v ->
+        val key = k.toString()
+        if (key.startsWith("jpdfium.corpus.")) systemProperty(key, v.toString())
+    }
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    maxHeapSize = System.getProperty("jpdfium.bench.xmx", "4g")
+}
+
+// Run: ./gradlew :jpdfium:generateCorpus -Pcorpus.count=3000 -Pcorpus.seed=42
+// Generates the synthetic PDF corpus with PDFBox (DiversePdfGenerator).
+tasks.register<JavaExec>("generateCorpus") {
+    group       = "verification"
+    description = "Generate the synthetic PDFBox corpus (count/seed via -Pcorpus.count/-Pcorpus.seed)"
+    dependsOn("compileTestJava")
+    mainClass.set("stirling.software.jpdfium.corpus.DiversePdfGenerator")
+    classpath = sourceSets.test.get().runtimeClasspath
+    args(
+        project.findProperty("corpus.outDir")?.toString()
+            ?: layout.buildDirectory.dir("test-corpus/generated").get().asFile.absolutePath,
+        (project.findProperty("corpus.count") as String? ?: "300").toString(),
+        (project.findProperty("corpus.seed") as String? ?: "42").toString()
+    )
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    maxHeapSize = "2g"
+}
+
 // Run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=<platform>
 // Fast per-platform functional check: load the bundled native via the
 // production NativeLoader path and open a PDF. Used by CI to verify each
