@@ -55,7 +55,6 @@ jobs:
 
       - name: Download baseline jar from Maven Central (or build stub if unavailable)
         if: steps.ver.outputs.skip != 'true'
-        continue-on-error: true
         run: |
           VER="${{ steps.ver.outputs.version }}"
           mkdir -p /tmp/japicmp-baseline
@@ -82,7 +81,7 @@ jobs:
             --report-only-filename \
             --ignore-missing-classes \
             --exclude-external-imports \
-            > /tmp/japicmp-report.txt || true
+            > /tmp/japicmp-report.txt
           cat /tmp/japicmp-report.txt
           if grep -qE "BREAKING|INCOMPATIBLE" /tmp/japicmp-report.txt; then
             echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
@@ -142,18 +141,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
-      - name: Regenerate FFM bindings and diff
+      - name: Regenerate FFM bindings and diff (strict - drift is a failure)
         run: |
           bash native/build-stub.sh
-          ./gradlew :jpdfium:generateBindings --no-daemon || echo "generateBindings skipped (jextract not found?)"
-          # Verify committed JpdfiumH.java matches regenerated output
+          ./gradlew :jpdfium:generateBindings :jpdfium:patchBindingsForCrossPlatform --no-daemon
+          # Verify the committed JpdfiumH.java files match the regenerated output.
           if git diff --quiet -- jpdfium/src/main/java/stirling/software/jpdfium/panama/; then
             echo "FFM bindings are in sync with native/bridge/include/jpdfium.h"
           else
-            echo "::warning::FFM bindings drift from jpdfium.h — run ./gradlew :jpdfium:generateBindings locally and commit"
+            echo "::error::FFM bindings drift from jpdfium.h — run ./gradlew :jpdfium:generateBindings :jpdfium:patchBindingsForCrossPlatform locally and commit the result"
             git diff -- jpdfium/src/main/java/stirling/software/jpdfium/panama/ | head -n 200
-            # Soft-fail first: change to exit 1 once baseline is committed
-            exit 0
+            exit 1
           fi
       - name: Verify pinned PDFium headers expose expected Skia symbol
         run: |

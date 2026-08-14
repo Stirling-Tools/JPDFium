@@ -409,10 +409,19 @@ if(JPDFIUM_USE_PDFIUM)
         POSITION_INDEPENDENT_CODE ON)
 
     # Platform-specific linker flags
+    # Under a sanitizer build the bridge references __asan_*/__ubsan_* runtime
+    # symbols that are only resolved at the final EXECUTABLE, so the shared lib
+    # must not demand them at its own link time (--no-undefined / -undefined,error
+    # would fail). The sanitizer build is a test/fuzz configuration only; the
+    # strict checks stay on for normal release builds.
     if(JPDFIUM_OS STREQUAL "linux")
-        target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
+        if(NOT JPDFIUM_SANITIZE)
+            target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
+        endif()
     elseif(JPDFIUM_OS STREQUAL "darwin")
-        target_link_options(jpdfium PRIVATE -Wl,-undefined,error)
+        if(NOT JPDFIUM_SANITIZE)
+            target_link_options(jpdfium PRIVATE -Wl,-undefined,error)
+        endif()
     endif()
 
     add_custom_command(TARGET jpdfium POST_BUILD

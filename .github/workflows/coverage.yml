@@ -31,31 +31,31 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - run: bash native/build-stub.sh
 
-      - name: Tests with JaCoCo
-        continue-on-error: true
+      - name: Tests with JaCoCo (strict - report must be produced)
         run: |
-          ./gradlew :jpdfium:test :jpdfium:jacocoTestReport --no-daemon || \
-            ./gradlew :jpdfium:test --no-daemon
-          ls -R jpdfium/build/reports/jacoco 2>/dev/null | head -n 60 || echo "No JaCoCo report — add jacoco plugin to buildSrc"
+          ./gradlew :jpdfium:test :jpdfium:jacocoTestReport --no-daemon
+          test -f jpdfium/build/reports/jacoco/test/jacocoTestReport.xml || {
+            echo "::error::JaCoCo report missing - coverage gate cannot run"
+            exit 1
+          }
 
-      - name: Coverage summary
-        if: always()
+      - name: Coverage summary + regression gate
         run: |
-          if [ -f jpdfium/build/reports/jacoco/test/jacocoTestReport.xml ]; then
-            python3 - << 'PY'
+          python3 - << 'PY'
           import xml.etree.ElementTree as ET, pathlib
           p = pathlib.Path("jpdfium/build/reports/jacoco/test/jacocoTestReport.xml")
           root = ET.parse(p).getroot()
           for c in root.findall("counter"):
               if c.get("type") == "LINE":
-                  m = int(c.get("missed")); cov = int(c.get("covered"))
-                  total = m+cov
-                  pct = 100*cov/total if total else 0
-                  print(f"Line coverage: {cov}/{total} ({pct:.1f}%)")
+                  missed = int(c.get("missed")); covered = int(c.get("covered"))
+                  total = missed + covered
+                  pct = 100 * covered / total if total else 0
+                  print(f"Line coverage: {covered}/{total} ({pct:.1f}%)")
+                  # Regression floor: well below the current baseline so it
+                  # catches real coverage drops without flaking on normal PRs.
+                  if pct < 20.0:
+                      raise SystemExit(f"::error::Line coverage dropped to {pct:.1f}% (< 20% floor)")
           PY
-          else
-            echo "No coverage XML — treat as informational until JaCoCo is wired"
-          fi
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
