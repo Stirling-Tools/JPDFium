@@ -68,21 +68,25 @@ mkdir -p "$TARGET_DIR"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+# Try the current repo first. Forks don't carry the prebuild releases, so if
+# the pinned tag can't be downloaded there (gh reports "release not found")
+# fall back to the upstream repo where the canonical prebuilds live.
+if ! gh release download "$TAG" \
+    --repo "$REPO" \
+    --pattern "$ASSET" \
+    --dir "$TMP"; then
     if [ "$REPO" != "$UPSTREAM_REPO" ]; then
         echo "Release $TAG not found in $REPO - falling back to $UPSTREAM_REPO" >&2
-        REPO="$UPSTREAM_REPO"
+        gh release download "$TAG" \
+            --repo "$UPSTREAM_REPO" \
+            --pattern "$ASSET" \
+            --dir "$TMP"
     else
-        echo "ERROR: release $TAG not found in $REPO." >&2
+        echo "ERROR: failed to download $ASSET from release $TAG in $REPO." >&2
         echo "       Run the 'Prebuild PDFium' workflow first and merge its auto-PR." >&2
         exit 1
     fi
 fi
-
-gh release download "$TAG" \
-    --repo "$REPO" \
-    --pattern "$ASSET" \
-    --dir "$TMP"
 
 tar -xzf "$TMP/$ASSET" -C "$TARGET_DIR"
 
