@@ -97,7 +97,7 @@ if ! command -v cmake >/dev/null 2>&1; then
 fi
 
 WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning qpdf ${QPDF_TAG}..."
 if ! git clone --depth 1 -b "$QPDF_TAG" "$QPDF_REPO" "$WORK/qpdf"; then

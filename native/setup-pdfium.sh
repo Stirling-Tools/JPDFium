@@ -51,7 +51,7 @@ esac
 
 if [ "${ACTION}" = "clean" ]; then
     echo "Cleaning everything..."
-    rm -rf "${TARGET_DIR}/lib" "${TARGET_DIR}/include"
+    rm -rf "${TARGET_DIR:?}/lib" "${TARGET_DIR:?}/include"
     rm -rf "${BUILD_DIR}"
 fi
 
@@ -452,6 +452,7 @@ case "$(uname -s)" in
         ;;
     MINGW*|MSYS*|CYGWIN*)
         LIB_EXT="dll"
+        # shellcheck disable=SC2034 # kept for parity with LIB_EXT (release wiring)
         STATIC_EXT="lib"
         MAIN_LIB_COMPONENT="pdfium.dll"
         MAIN_LIB_STATIC="pdfium.lib"

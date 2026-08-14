@@ -77,7 +77,7 @@ for tool in meson ninja pkg-config; do
 done
 
 WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning harfbuzz ${HB_TAG}..."
 if ! git clone --depth 1 -b "$HB_TAG" "$HB_REPO" "$WORK/harfbuzz" 2>&1 | tail -3; then

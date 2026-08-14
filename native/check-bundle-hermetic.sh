@@ -30,9 +30,11 @@ fi
 CORE_RE='^(libc|libm|libdl|libpthread|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux'
 
 failures=0
+lib_count=0
 for f in "$DIST_DIR"/lib*.so*; do
     [ -e "$f" ] || continue
     [ -L "$f" ] && continue  # symlink aliases share the target's deps
+    lib_count=$((lib_count + 1))
 
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
@@ -44,6 +46,12 @@ for f in "$DIST_DIR"/lib*.so*; do
         failures=$((failures + 1))
     done < <(readelf -d "$f" 2>/dev/null | awk '/NEEDED/{gsub(/\[|\]/,"",$5); print $5}')
 done
+
+if [ "$lib_count" -eq 0 ]; then
+    echo "ERROR: no ELF libraries found in $DIST_DIR - nothing to validate" >&2
+    echo "       (empty/broken staging makes this gate a no-op; refusing to pass)" >&2
+    exit 1
+fi
 
 if [ "$failures" -ne 0 ]; then
     echo "ERROR: $failures unresolved dependency(ies) - the bundle is not hermetic" >&2

@@ -113,6 +113,22 @@ jobs:
           bash native/bundle-runtime-deps.sh linux-x64
           echo "--- bundled libs ---"
           ls -la native/dist/linux-x64/
+      - name: Sanity - staged bridge + shared libs must exist
+        # Guards against a silently-empty staging: the execstack/hermeticity
+        # gates below only mean something when there are real ELF libs to
+        # inspect (the scripts themselves now hard-fail on zero libs, this
+        # makes the bridge's own presence explicit before that).
+        run: |
+          test -f native/dist/linux-x64/libjpdfium.so || {
+            echo "::error::libjpdfium.so was not staged - the bundle cannot be validated"
+            exit 1
+          }
+          COUNT=$(ls native/dist/linux-x64/lib*.so* | wc -l | tr -d ' ')
+          echo "staged $COUNT shared libraries"
+          [ "$COUNT" -gt 0 ] || {
+            echo "::error::no shared libraries staged in native/dist/linux-x64"
+            exit 1
+          }
       - name: Gate - no bundled lib may require an executable stack
         run: bash native/check-no-execstack.sh native/dist/linux-x64
       - name: Gate - bundle must be hermetic (deps bundled or core system libs)

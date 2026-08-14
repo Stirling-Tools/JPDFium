@@ -48,13 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - name: List pinned action versions
-        run: |
-          echo "Pinned actions (SHA + comment should match):"
-          grep -R "u""ses:" .github/workflows | sort
-          echo ""
-          echo "Unpinned actions (should be empty):"
-          grep -R "u""ses:.*@v[0-9]" .github/workflows || echo "(none — good)"
+      - name: Enforce pinned actions (fails on any unpinned/floating action)
+        run: bash .github/scripts/lint-action-pins.sh
 
   lockfile-check:
     name: Gradle lockfile freshness

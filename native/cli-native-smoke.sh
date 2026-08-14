@@ -25,6 +25,7 @@ cd "${WORK}"
 failures=0
 check() {
     # $1 = description, $2 = expected rc, rest = args
+    # shellcheck disable=SC2034 # expected is asserted implicitly (rc 0 = pass)
     local desc="$1" expected="$2"
     shift 2
     if "${BIN}" "$@" --quiet >/dev/null 2>&1; then

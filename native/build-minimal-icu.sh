@@ -54,7 +54,7 @@ echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 # the data straight out of the system .so by reading the icudt<MAJ>_dat ELF
 # symbol's bytes - that symbol IS the .dat file, byte-for-byte.
 WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 # Find the *real* libicudata.so.<MAJ>.<MIN> file (not the SONAME symlink) so
 # `cp` later actually overwrites the data carrier. Group the -name predicates
@@ -167,7 +167,7 @@ icupkg -x '*' -d "$EXTRACT" "$DAT_FILE" \
 # Compute the keep list (item names, no path prefix - relative to EXTRACT).
 # pkgdata wants line-separated items. Add pool.res implicitly because the
 # locale .res files reference it and icupkg warns when it's missing.
-> "$WORK/keep.lst"
+: > "$WORK/keep.lst"
 declare -A SEEN_KEEP=()
 echo "pool.res" >> "$WORK/keep.lst"
 SEEN_KEEP[pool.res]=1

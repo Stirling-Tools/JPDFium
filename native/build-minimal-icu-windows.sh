@@ -54,7 +54,7 @@ ICU_MINOR=1
 ICU_TAG_NEW="release-${ICU_VER}.${ICU_MINOR}"
 ICU_TAG_OLD="release-${ICU_VER}-${ICU_MINOR}"
 WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 # Step 1: Download upstream ICU's pre-assembled little-endian .dat. This is
 # the SAME byte sequence that ends up baked into icudt<MAJ>.dll on Windows,
@@ -115,7 +115,7 @@ KEEP=(
     '^brkitr/' '^root\.res$' '^en\.res$'
 )
 
-> "$WORK/keep.lst"
+: > "$WORK/keep.lst"
 declare -A SEEN_KEEP=()
 echo "pool.res" >> "$WORK/keep.lst"
 SEEN_KEEP[pool.res]=1

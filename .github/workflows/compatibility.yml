@@ -74,16 +74,26 @@ jobs:
           test -f "$CURR_JAR" || { echo "Current jar missing — $CURR_JAR"; exit 1; }
           JAPICMP_VER=0.23.0
           curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
+          set +e  # japicmp exits non-zero on incompatibilities; handle below
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
             --ignore-missing-classes \
             --error-on-incompatible \
-            > /tmp/japicmp-report.txt 2>&1 || true
+            > /tmp/japicmp-report.txt 2>&1
+          rc=$?
+          set -e
           cat /tmp/japicmp-report.txt
           if grep -qE "BREAKING|INCOMPATIBLE|ERROR:" /tmp/japicmp-report.txt; then
             echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
+            exit 1
+          fi
+          # A non-zero japicmp exit with no incompatibility marker means the
+          # comparison did not complete (crash, missing dep, etc). Never pass a
+          # gate whose check silently didn't run.
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::japicmp exited $rc without an incompatibility marker — treat as gate failure (check did not complete)"
             exit 1
           fi
           echo "No binary incompatibilities vs ${{ steps.ver.outputs.tag }}."
