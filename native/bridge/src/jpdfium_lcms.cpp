@@ -149,7 +149,15 @@ JPDFIUM_EXPORT int32_t jpdfium_generate_replacement_icc(int32_t numComponents,
 
     cmsUInt32Number len = 0;
     cmsSaveProfileToMem(hProfile, nullptr, &len);
+    if (len == 0) {
+        cmsCloseProfile(hProfile);
+        return JPDFIUM_ERR_NATIVE;
+    }
     *profileOutput = static_cast<uint8_t*>(malloc(len));
+    if (!*profileOutput) {
+        cmsCloseProfile(hProfile);
+        return JPDFIUM_ERR_NATIVE;
+    }
     cmsSaveProfileToMem(hProfile, *profileOutput, &len);
     *profileLen = static_cast<int64_t>(len);
 

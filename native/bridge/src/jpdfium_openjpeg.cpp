@@ -189,9 +189,24 @@ JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t* jpxData, int64_t jpxLen
     *width = static_cast<int32_t>(image->x1 - image->x0);
     *height = static_cast<int32_t>(image->y1 - image->y0);
     *components = static_cast<int32_t>(image->numcomps);
+    if (*width <= 0 || *height <= 0 || *components <= 0) {
+        opj_image_destroy(image);
+        return JPDFIUM_ERR_INVALID;
+    }
 
-    size_t pixelCount = static_cast<size_t>(*width) * (*height) * (*components);
-    *rawPixels = static_cast<uint8_t*>(malloc(pixelCount));
+    // Overflow-checked allocation: width * height * components must fit in
+    // both the pixel loop index arithmetic (int) and the malloc size_t.
+    uint64_t pixelCount = static_cast<uint64_t>(*width) * static_cast<uint64_t>(*height) *
+                          static_cast<uint64_t>(*components);
+    if (pixelCount > SIZE_MAX || pixelCount > static_cast<uint64_t>(INT32_MAX)) {
+        opj_image_destroy(image);
+        return JPDFIUM_ERR_INVALID;
+    }
+    *rawPixels = static_cast<uint8_t*>(malloc(static_cast<size_t>(pixelCount)));
+    if (!*rawPixels) {
+        opj_image_destroy(image);
+        return JPDFIUM_ERR_NATIVE;
+    }
 
     // Interleave component planes into contiguous pixel buffer
     for (int y = 0; y < *height; y++) {
