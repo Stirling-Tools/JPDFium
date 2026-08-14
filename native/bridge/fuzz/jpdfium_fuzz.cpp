@@ -68,28 +68,32 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     ensureInit();
 
     // Standalone pipelines over the raw bytes - the repair feature (qpdf,
-    // PDFio XRef recovery, Rust/lopdf) and Rust/zopfli compression.
+    // PDFio XRef recovery, Rust/lopdf) and Rust/zopfli compression. The repair
+    // functions report success as FIXED/PARTIAL (not JPDFIUM_OK) and still own
+    // the output buffer on those paths, so free it whenever it was produced
+    // (reset before every call - a failed call leaves the pointer untouched).
     {
         uint8_t* out = nullptr;
         int64_t outLen = 0;
-        if (jpdfium_repair_pdf(data, static_cast<int64_t>(size), &out, &outLen,
-                               JPDFIUM_REPAIR_NORMALIZE_XREF | JPDFIUM_REPAIR_FIX_STARTXREF) ==
-            JPDFIUM_OK) {
-            freeBuffer(out);
-        }
+        jpdfium_repair_pdf(data, static_cast<int64_t>(size), &out, &outLen,
+                           JPDFIUM_REPAIR_NORMALIZE_XREF | JPDFIUM_REPAIR_FIX_STARTXREF);
+        freeBuffer(out);
+
+        out = nullptr;
+        outLen = 0;
         int32_t pagesRecovered = 0;
-        if (jpdfium_pdfio_try_repair(data, static_cast<int64_t>(size), &out, &outLen,
-                                     &pagesRecovered) == JPDFIUM_OK) {
-            freeBuffer(out);
-        }
-        if (jpdfium_rust_repair_lopdf(data, static_cast<int64_t>(size), &out, &outLen) ==
-            JPDFIUM_OK) {
-            freeBuffer(out);
-        }
-        if (jpdfium_rust_compress_pdf(data, static_cast<int64_t>(size), &out, &outLen, 5) ==
-            JPDFIUM_OK) {
-            freeBuffer(out);
-        }
+        jpdfium_pdfio_try_repair(data, static_cast<int64_t>(size), &out, &outLen, &pagesRecovered);
+        freeBuffer(out);
+
+        out = nullptr;
+        outLen = 0;
+        jpdfium_rust_repair_lopdf(data, static_cast<int64_t>(size), &out, &outLen);
+        freeBuffer(out);
+
+        out = nullptr;
+        outLen = 0;
+        jpdfium_rust_compress_pdf(data, static_cast<int64_t>(size), &out, &outLen, 5);
+        freeBuffer(out);
     }
 
     int64_t doc = 0;
@@ -134,8 +138,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         int64_t rawDoc = jpdfium_doc_raw_handle(doc);
         uint8_t* nup = nullptr;
         int64_t nupLen = 0;
-        if (rawDoc != 0 && jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(rawDoc), 595.0f,
-                                                         842.0f, 2, 2, &nup, &nupLen) == JPDFIUM_OK) {
+        if (rawDoc != 0 &&
+            jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(rawDoc), 595.0f, 842.0f, 2, 2,
+                                          &nup, &nupLen) == JPDFIUM_OK) {
             freeBuffer(nup);
         }
 
