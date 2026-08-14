@@ -141,8 +141,8 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_doc_raw_handle {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            JpdfiumH.C_LONG_LONG,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_raw_handle");
@@ -201,8 +201,8 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_page_raw_handle {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            JpdfiumH.C_LONG_LONG,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_raw_handle");
@@ -261,8 +261,8 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_page_doc_raw_handle {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            JpdfiumH.C_LONG_LONG,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_doc_raw_handle");
@@ -384,7 +384,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -507,7 +507,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_doc_page_count {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -568,7 +568,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_doc_save {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -629,7 +629,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_doc_save_bytes {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -690,7 +690,7 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_doc_close {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_close");
@@ -750,7 +750,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_page_open {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
         );
@@ -812,7 +812,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_page_width {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -873,7 +873,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_page_height {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -933,7 +933,7 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_page_close {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_close");
@@ -993,7 +993,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_render_page {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
@@ -1116,7 +1116,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_text_get_chars {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -1177,7 +1177,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_text_find {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -1298,7 +1298,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_region {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
@@ -1364,7 +1364,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_pattern {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT
@@ -1427,7 +1427,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_words {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
@@ -1494,7 +1494,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_words_ex {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
@@ -1563,7 +1563,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_page_flatten {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_flatten");
@@ -1623,7 +1623,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_page_to_image {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT
         );
@@ -1685,7 +1685,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_text_get_char_positions {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -1746,7 +1746,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_annot_create_redact {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
@@ -1812,7 +1812,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_mark_words {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_FLOAT,
@@ -1880,7 +1880,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_annot_count_redacts {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -1941,7 +1941,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_annot_get_redacts_json {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -2002,7 +2002,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_annot_remove_redact {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT
         );
 
@@ -2063,7 +2063,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_annot_clear_redacts {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_annot_clear_redacts");
@@ -2123,7 +2123,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_commit {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
@@ -2186,7 +2186,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_doc_save_incremental {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -2310,7 +2310,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_pcre2_match_all {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -2371,7 +2371,7 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_pcre2_free {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_pcre2_free");
@@ -2551,7 +2551,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_flashtext_add_keyword {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -2613,7 +2613,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_flashtext_add_keywords_json {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -2674,7 +2674,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_flashtext_find {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -2735,7 +2735,7 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     private static class jpdfium_flashtext_free {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_flashtext_free");
@@ -2795,7 +2795,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_font_get_data {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
@@ -2859,7 +2859,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -2920,7 +2920,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_font_fix_tounicode {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
         );
@@ -2982,7 +2982,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_font_repair_widths {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
         );
@@ -3044,7 +3044,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_font_normalize_page {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
         );
@@ -3107,7 +3107,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
@@ -3172,7 +3172,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_redact_glyph_aware {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
@@ -3239,7 +3239,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_xmp_redact_patterns {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
@@ -3302,7 +3302,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_metadata_strip {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT
         );
@@ -3364,7 +3364,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_metadata_strip_all {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG
+            JpdfiumH.C_LONG
         );
 
         public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_strip_all");
@@ -3608,7 +3608,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT
@@ -3672,7 +3672,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -3734,7 +3734,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -3797,7 +3797,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -3860,7 +3860,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
@@ -3924,7 +3924,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER
         );
@@ -4049,7 +4049,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER
         );
 
@@ -4111,7 +4111,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
@@ -4177,7 +4177,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
@@ -4243,9 +4243,9 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_doc_add_image_page {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
@@ -4378,7 +4378,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_INT
@@ -4442,7 +4442,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_POINTER,
             JpdfiumH.C_POINTER
         );
@@ -4505,7 +4505,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
             JpdfiumH.C_POINTER,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,
             JpdfiumH.C_INT,

@@ -224,6 +224,21 @@ val patchBindingsForCrossPlatform by tasks.registering {
                 logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
             }
         }
+
+        // jextract maps int64_t to C_LONG_LONG on macOS but C_LONG on Linux
+        // (both are the same 8-byte layout on LP64). Normalize to C_LONG so the
+        // committed bindings are byte-identical no matter which host generated
+        // them - the ffm-layout CI check diffs regenerated vs committed output
+        // and must not see host-dependent churn.
+        val targetMain = committedDir.resolve("JpdfiumH.java")
+        if (targetMain.exists()) {
+            val before = targetMain.readText()
+            val normalized = before.replace("JpdfiumH.C_LONG_LONG", "JpdfiumH.C_LONG")
+            if (normalized != before) {
+                targetMain.writeText(normalized)
+                logger.lifecycle("Normalized JpdfiumH descriptors to C_LONG for cross-platform stability")
+            }
+        }
     }
 }
 

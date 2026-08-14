@@ -130,8 +130,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
         // Merge / N-up layout - imports pages of the same doc into a grid.
         uint8_t* nup = nullptr;
         int64_t nupLen = 0;
-        if (jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(doc), 595.0f, 842.0f, 2, 2,
-                                          &nup, &nupLen) == JPDFIUM_OK) {
+        if (jpdfium_import_n_pages_to_one(reinterpret_cast<void*>(doc), 595.0f, 842.0f, 2, 2, &nup,
+                                          &nupLen) == JPDFIUM_OK) {
             freeBuffer(nup);
         }
 

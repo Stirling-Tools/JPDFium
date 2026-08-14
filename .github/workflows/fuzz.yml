@@ -87,9 +87,12 @@ jobs:
         run: |
           # -runs=1 proves the binary links and the PDFium deps resolve; without
           # LD_LIBRARY_PATH the component libs can't be found and this fails.
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            native/build-fuzz/jpdfium_fuzz -runs=1 native/build-fuzz/corpus >/dev/null 2>&1 || {
-            echo "ERROR: fuzzer failed to start (missing PDFium component libs or broken link)"
+          # clang++ -print-runtime-dir is where libclang_rt.asan lives - it is
+          # NOT on the default loader path, so the binary won't start without it.
+          export LD_LIBRARY_PATH="$(clang++ -print-runtime-dir):$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          native/build-fuzz/jpdfium_fuzz -runs=1 native/build-fuzz/corpus >/dev/null 2>&1 || {
+            echo "ERROR: fuzzer failed to start (missing sanitizer/PDFium component libs or broken link)"
+            echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
             exit 1
           }
 
@@ -102,8 +105,8 @@ jobs:
           else
             DURATION="${INPUT_DURATION:-600}"
           fi
-          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-            native/build-fuzz/jpdfium_fuzz \
+          export LD_LIBRARY_PATH="$(clang++ -print-runtime-dir):$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          native/build-fuzz/jpdfium_fuzz \
             -max_total_time="$DURATION" \
             -max_len=4194304 \
             -print_final_stats=1 \

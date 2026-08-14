@@ -78,12 +78,11 @@ jobs:
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
-            --report-only-filename \
             --ignore-missing-classes \
-            --exclude-external-imports \
-            > /tmp/japicmp-report.txt
+            --error-on-incompatible \
+            > /tmp/japicmp-report.txt 2>&1 || true
           cat /tmp/japicmp-report.txt
-          if grep -qE "BREAKING|INCOMPATIBLE" /tmp/japicmp-report.txt; then
+          if grep -qE "BREAKING|INCOMPATIBLE|ERROR:" /tmp/japicmp-report.txt; then
             echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
             exit 1
           fi
