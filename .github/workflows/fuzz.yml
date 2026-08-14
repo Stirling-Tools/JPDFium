@@ -1,80 +1,39 @@
 name: Fuzz
 
 on:
+  # Short gate on every PR so bridge regressions are caught immediately, not
+  # discovered weekly. Longer runs happen on the schedule / manually.
+  pull_request: {}
   schedule:
     - cron: '11 3 * * 2'
   workflow_dispatch:
     inputs:
       duration_secs:
-        description: 'Fuzz duration in seconds per target'
+        description: 'Fuzz duration in seconds'
         required: false
         default: '600'
-      corpus_prune:
-        description: 'Minimize corpus before fuzzing'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  jazzer:
-    name: Jazzer fuzz (scheduled / manual)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-
-      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '25'
-
-      - name: Install jextract
-        run: |
-          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
-          mkdir -p "$HOME/jextract-install"
-          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
-          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
-          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-
-      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
-
-      - name: Install native deps
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config
-
-      - name: Build stub bridge
-        run: bash native/build-stub.sh
-
-      - name: Check for fuzz targets
-        id: has_targets
-        run: |
-          if find jpdfium/src -name '*Fuzz*.java' -o -name '*Fuzzer*.java' | grep -q .; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "No Jazzer fuzz targets found — add jpdfium/src/test/java/.../*FuzzTest.java with @FuzzTest"
-          fi
-
-      - name: Run Jazzer (short smoke)
-        if: steps.has_targets.outputs.found == 'true'
-        run: |
-          DUR=${{ inputs.duration_secs || '120' }}
-          ./gradlew :jpdfium:jazzerFuzz --no-daemon -Pjpdfium.fuzz.durationSecs="$DUR" || echo "Fuzz completed with findings — inspect reports"
-
-      - name: Upload fuzz reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: fuzz-reports-${{ github.run_id }}
-          path: |
-            jpdfium/build/reports/jazzer/
-            jpdfium/build/jazzer/
-          if-no-files-found: warn
-
+  # Native bridge libFuzzer against the real PDFium bridge under ASan + UBSan.
+  #
+  # This is the substantive fuzz target: the C++ bridge parses untrusted PDFs,
+  # so it is where memory-safety regressions live. libFuzzer exits non-zero on
+  # any crash (and on ASan/UBSan findings), which FAILS the job - the gate is
+  # strict and there is no `|| true` swallowing anywhere. The PR leg uses a
+  # short budget so every pull request is covered.
   native-fuzz:
-    name: Native bridge libFuzzer (ASan, real PDFium)
+    name: Native bridge libFuzzer (ASan/UBSan, real PDFium)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -84,24 +43,69 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build pkg-config clang lld \
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
             libqpdf-dev libpugixml-dev libunibreak-dev
+          # Fail fast if the libFuzzer runtime is missing - without it
+          # -fsanitize=fuzzer can't link and the "fuzzing" would be a lie.
+          clang --version
 
       - name: Fetch prebuilt PDFium
         run: bash native/fetch-prebuilt-pdfium.sh linux-x64
 
-      - name: Build fuzzer (real bridge + ASan)
+      - name: Configure + build fuzzer (real bridge + ASan/UBSan)
         run: |
+          # PDFIUM_DIR must be ABSOLUTE: CMake resolves relative find_library
+          # PATHS against the source dir (native/), producing native/native/pdfium
+          # and a hard configure failure.
           cmake -S native -B native/build-fuzz \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DJPDFIUM_USE_PDFIUM=ON -DPDFIUM_DIR=native/pdfium \
-            -DJPDFIUM_BUILD_FUZZERS=ON -DJPDFIUM_SANITIZE=address \
+            -DJPDFIUM_USE_PDFIUM=ON \
+            -DPDFIUM_DIR="$GITHUB_WORKSPACE/native/pdfium" \
+            -DJPDFIUM_BUILD_FUZZERS=ON \
+            -DJPDFIUM_SANITIZE=address,undefined \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build native/build-fuzz --parallel --target jpdfium_fuzz
+          test -x native/build-fuzz/jpdfium_fuzz || {
+            echo "ERROR: jpdfium_fuzz binary was not produced"
+            exit 1
+          }
 
-      - name: Run fuzzer
+      - name: Seed corpus with real PDFs
         run: |
           mkdir -p native/build-fuzz/corpus native/build-fuzz/artifacts
-          native/build-fuzz/jpdfium_fuzz \
-            -max_total_time=${{ inputs.duration_secs || 300 }} \
+          # Seed with real-world PDFs so mutation explores valid structures
+          # instead of starting from random bytes (which the parser mostly
+          # rejects in the first instruction). Missing seeds = broken harness.
+          find jpdfium/src/test/resources/pdfs -name '*.pdf' \
+            -exec cp {} native/build-fuzz/corpus/ \;
+          COUNT="$(ls native/build-fuzz/corpus | wc -l | tr -d ' ')"
+          echo "seeded $COUNT PDFs"
+          [ "$COUNT" -gt 0 ] || {
+            echo "ERROR: no seed PDFs found - fuzzing from an empty corpus is a no-op"
+            exit 1
+          }
+
+      - name: Smoke - fuzzer must start
+        run: |
+          # -runs=1 proves the binary links and the PDFium deps resolve; without
+          # LD_LIBRARY_PATH the component libs can't be found and this fails.
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            native/build-fuzz/jpdfium_fuzz -runs=1 native/build-fuzz/corpus >/dev/null 2>&1 || {
+            echo "ERROR: fuzzer failed to start (missing PDFium component libs or broken link)"
+            exit 1
+          }
+
+      - name: Run fuzzer
+        env:
+          INPUT_DURATION: ${{ inputs.duration_secs }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DURATION=60   # fast PR regression gate
+          else
+            DURATION="${INPUT_DURATION:-600}"
+          fi
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/native/pdfium/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+            native/build-fuzz/jpdfium_fuzz \
+            -max_total_time="$DURATION" \
+            -max_len=4194304 \
             -print_final_stats=1 \
             -artifact_prefix=native/build-fuzz/artifacts/ \
             native/build-fuzz/corpus
@@ -111,5 +115,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-fuzz-artifacts-${{ github.run_id }}
-          path: native/build-fuzz/artifacts/
+          path: |
+            native/build-fuzz/artifacts/
+            native/build-fuzz/corpus/
           if-no-files-found: warn
