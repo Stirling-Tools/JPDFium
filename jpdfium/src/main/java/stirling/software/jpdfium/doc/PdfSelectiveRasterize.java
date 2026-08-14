@@ -5,6 +5,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
@@ -126,7 +127,10 @@ public final class PdfSelectiveRasterize {
                 for (int i = objCount - 1; i >= 0; i--) {
                     try {
                         MemorySegment obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                        PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
+                        int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_RemoveObject failed");
+            }
                     } catch (Throwable _) {}
                 }
 
@@ -138,8 +142,11 @@ public final class PdfSelectiveRasterize {
 
                 // Set the bitmap on the image object
                 try {
-                    PageEditBindings.FPDFImageObj_SetBitmap.invokeExact(
+                    int ok = (int) PageEditBindings.FPDFImageObj_SetBitmap.invokeExact(
                             MemorySegment.NULL, 0, imgObj, bitmap);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFImageObj_SetBitmap failed");
+            }
                 } catch (Throwable t) { return; }
 
                 // Transform the image to cover the full page
@@ -156,7 +163,10 @@ public final class PdfSelectiveRasterize {
 
                 // Generate content
                 try {
-                    PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+                    int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
                 } catch (Throwable _) {}
             }
         } finally {

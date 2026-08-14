@@ -156,7 +156,7 @@ public final class PdfColumnExtractor {
 
             var buf = arena.allocate(ValueLayout.JAVA_SHORT, charCount + 1);
             try {
-                TextPageBindings.FPDFText_GetBoundedText.invokeExact(
+                int written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
                         textPage, left, top, right, bottom,
                         buf, charCount + 1);
             } catch (Throwable t) { return ""; }

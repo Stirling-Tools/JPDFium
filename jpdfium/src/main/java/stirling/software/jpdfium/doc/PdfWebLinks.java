@@ -217,7 +217,7 @@ public final class PdfWebLinks {
             if (charCount <= 0)
                 return "";
             MemorySegment buf = arena.allocate((long) charCount * 2);
-            WebLinkBindings.FPDFLink_GetURL.invokeExact(webLinks, index, buf, charCount);
+            int written = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(webLinks, index, buf, charCount);
             return FfmHelper.fromWideString(buf, (long) charCount * 2);
         } catch (Throwable t) {
             return "";

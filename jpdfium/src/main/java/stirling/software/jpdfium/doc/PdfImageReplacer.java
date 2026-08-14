@@ -4,6 +4,7 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.MemorySegment;
 
@@ -183,7 +184,10 @@ public final class PdfImageReplacer {
 
             // Generate content
             try {
-                PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
             } catch (Throwable t) { return false; }
 
             return true;

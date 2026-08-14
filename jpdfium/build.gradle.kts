@@ -20,6 +20,23 @@ graalvmNative {
             sharedLibrary.set(false)
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
         }
+        create("cli") {
+            imageName.set("jpdfium")
+            mainClass.set("stirling.software.jpdfium.JpdfiumCli")
+            sharedLibrary.set(false)
+            buildArgs.add("--enable-native-access=ALL-UNNAMED")
+            // Bundle the platform natives jar resources so NativeLoader can
+            // extract and load libjpdfium at runtime.
+            buildArgs.add("-H:IncludeResources=natives/.*")
+            // Native library loading and FFM symbol lookup must happen at runtime
+            // on the target host, never during image build.
+            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama.NativeLoader")
+            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama.Symbols")
+            // Only the C locale is needed; trims ~10 MB of locale data.
+            buildArgs.add("-H:IncludeLocales=en")
+            buildArgs.add("--no-fallback")
+            buildArgs.add("-H:+ReportExceptionStackTraces")
+        }
     }
 }
 
@@ -264,4 +281,25 @@ tasks.register<Exec>("graalvmNativeSmokeTest") {
     dependsOn("nativeCompile")
     val binaryFile = layout.buildDirectory.file("native/nativeCompile/jpdfium-native-smoke")
     executable(binaryFile.get().asFile.absolutePath)
+}
+
+// Run: ./gradlew :jpdfium:cliTest -Pjpdfium.testNatives=<platform>
+// End-to-end CLI regression + correctness gate: runs every operation through the
+// JVM-testable JpdfiumCli.run() seam against real PDFs and verifies each output
+// opens, keeps the expected page count, and reflects the mutation (removed text
+// stays removed, rotation swaps dimensions, merges sum, splits divide, renders
+// decode). Requires the real native on the classpath (-Djpdfium.smoke).
+tasks.register<Test>("cliTest") {
+    group       = "verification"
+    description = "Run JpdfiumCli end-to-end correctness tests against the real native"
+    useJUnitPlatform()
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath       = sourceSets.test.get().runtimeClasspath
+    systemProperty("jpdfium.smoke", "true")
+    filter { includeTestsMatching("*JpdfiumCliTest") }
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStackTraces = true
+        showCauses = true
+    }
 }

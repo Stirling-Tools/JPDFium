@@ -1,0 +1,83 @@
+name: CLI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Builds the real native bridge + the GraalVM native CLI, then verifies the
+  # CLI against real PDFs: every operation must succeed, its output must re-open
+  # (no corruption) and reflect the mutation (redaction removes terms, rotation
+  # swaps dimensions, page extraction reduces count, merge sums, split divides,
+  # render decodes). Runs once with the real native in JVM mode (the comprehensive
+  # correctness gate) and once through the compiled native binary.
+  cli-test:
+    name: CLI correctness & no-corruption tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: graalvm/setup-graalvm@5298d94fb55a4f185c602eeac5de1b553882abe2 # v1.6.4
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          native-image-job-reports: 'true'
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - name: Install build deps (Linux)
+        run: |
+          sudo sed -i \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential cmake ninja-build pkg-config \
+              libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
+              libqpdf-dev libpugixml-dev libunibreak-dev \
+              lld patchelf && exit 0
+            echo "apt install attempt $attempt failed; retrying in 30s..." >&2
+            sleep 30
+          done
+          echo "apt install failed after 3 attempts" >&2
+          exit 1
+
+      - name: Fetch prebuilt PDFium (pinned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh linux-x64
+
+      - name: Build real native bridge
+        run: bash native/build-real.sh
+
+      - name: CLI correctness tests (JVM, real native)
+        run: ./gradlew :jpdfium:cliTest -Pjpdfium.testNatives=linux-x64 --no-daemon --stacktrace
+
+      - name: Build CLI native image
+        run: ./gradlew :jpdfium:nativeCliCompile -Pjpdfium.testNatives=linux-x64 --no-daemon
+
+      - name: CLI native image smoke + no-corruption checks
+        run: bash native/cli-native-smoke.sh jpdfium/build/native/nativeCliCompile/jpdfium "$RUNNER_TEMP/cli-native-smoke"
+
+      - name: Upload CLI native binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: jpdfium-cli-linux-x64
+          path: jpdfium/build/native/nativeCliCompile/jpdfium
+          if-no-files-found: error
+          retention-days: 7

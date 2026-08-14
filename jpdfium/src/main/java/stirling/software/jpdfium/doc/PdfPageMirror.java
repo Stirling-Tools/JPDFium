@@ -52,7 +52,10 @@ public final class PdfPageMirror {
                 clip.set(ValueLayout.JAVA_FLOAT, 12, h);
 
                 try {
-                    PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
+                    int ok = (int) PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
+                    if (ok == 0) {
+                        throw new JPDFiumException("FPDFPage_TransFormWithClip returned false");
+                    }
                 } catch (Throwable t) {
                     throw new JPDFiumException("FPDFPage_TransFormWithClip failed", t);
                 }
@@ -86,7 +89,10 @@ public final class PdfPageMirror {
                 clip.set(ValueLayout.JAVA_FLOAT, 12, h);
 
                 try {
-                    PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
+                    int ok = (int) PageEditBindings.FPDFPage_TransFormWithClip.invokeExact(rawPage, matrix, clip);
+                    if (ok == 0) {
+                        throw new JPDFiumException("FPDFPage_TransFormWithClip returned false");
+                    }
                 } catch (Throwable t) {
                     throw new JPDFiumException("FPDFPage_TransFormWithClip failed", t);
                 }

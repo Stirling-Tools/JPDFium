@@ -98,16 +98,6 @@ public final class PdfTocGenerator {
             throw new JPDFiumException("FPDFPage_New failed", t);
         }
 
-        // Load a standard font
-        MemorySegment font;
-        try (var arena = Arena.ofConfined()) {
-            var fontName = arena.allocateFrom("Helvetica");
-            PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
-                rawDoc, fontName, 20.0f);
-        } catch (Throwable t) {
-            throw new JPDFiumException("Failed to create font", t);
-        }
-
         // Add title "Table of Contents"
         addText(rawDoc, tocPage, "Table of Contents", 72f, tocH - 60f, 20f);
 
@@ -138,7 +128,10 @@ public final class PdfTocGenerator {
 
         // Generate content
         try {
-            PageEditBindings.FPDFPage_GenerateContent.invokeExact(tocPage);
+            int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(tocPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
         } catch (Throwable t) {
             throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
         }
@@ -173,12 +166,18 @@ public final class PdfTocGenerator {
             utf16.setAtIndex(ValueLayout.JAVA_SHORT, text.length(), (short) 0);
 
             try {
-                PageEditBindings.FPDFText_SetText.invokeExact(textObj, utf16);
+                int ok = (int) PageEditBindings.FPDFText_SetText.invokeExact(textObj, utf16);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFText_SetText failed");
+            }
             } catch (Throwable t) { return; }
 
             // Set fill color (black)
             try {
-                PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(textObj, 0, 0, 0, 255);
+                int ok = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(textObj, 0, 0, 0, 255);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPageObj_SetFillColor failed");
+            }
             } catch (Throwable _) {}
 
             // Position the text
