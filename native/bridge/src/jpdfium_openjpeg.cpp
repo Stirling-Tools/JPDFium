@@ -196,8 +196,8 @@ JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t* jpxData, int64_t jpxLen
 
     // Overflow-checked allocation: width * height * components must fit in
     // both the pixel loop index arithmetic (int) and the malloc size_t.
-    uint64_t pixelCount =
-        static_cast<uint64_t>(*width) * static_cast<uint64_t>(*height) * static_cast<uint64_t>(*components);
+    uint64_t pixelCount = static_cast<uint64_t>(*width) * static_cast<uint64_t>(*height) *
+                          static_cast<uint64_t>(*components);
     if (pixelCount > SIZE_MAX || pixelCount > static_cast<uint64_t>(INT32_MAX)) {
         opj_image_destroy(image);
         return JPDFIUM_ERR_INVALID;

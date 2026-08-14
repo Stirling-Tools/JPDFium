@@ -18,8 +18,8 @@
 #include <regex>
 #include <set>
 #include <sstream>
-#include <type_traits>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -127,7 +127,7 @@ static std::wstring decomposeLigatures(const std::wstring& input) {
                 break;  // ffi
             case 0xFB04:
                 result += L"ffl";
-                break;  // ffl
+                break;    // ffl
             case 0xFB05:  // long-s t
             case 0xFB06:
                 result += L"st";
