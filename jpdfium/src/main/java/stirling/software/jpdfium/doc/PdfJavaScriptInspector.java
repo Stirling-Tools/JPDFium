@@ -146,7 +146,7 @@ public final class PdfJavaScriptInspector {
             MemorySegment buf = arena.allocate(needed);
             long written = (long) AnnotationBindings.FPDFAnnot_GetFormAdditionalActionJavaScript.invokeExact(
                     formHandle, annot, event, buf, needed);
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         } catch (Throwable t) { return ""; }
     }
 }

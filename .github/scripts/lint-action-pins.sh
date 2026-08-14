@@ -13,6 +13,8 @@ while IFS= read -r line; do
   FAIL=1
 done < <(grep -R -n "uses:" "$ROOT" 2>/dev/null || true)
 if [ "$FAIL" -ne 0 ]; then
-  echo "Action pin lint: warnings emitted (non-blocking). Pin new actions to SHA."
+  echo "Action pin lint: $FAIL unpinned action(s) - pin every action to a full commit SHA (with the version comment)."
+  exit 1
 fi
+echo "Action pin lint: all actions pinned to commit SHAs."
 exit 0

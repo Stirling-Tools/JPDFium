@@ -1,0 +1,15 @@
+; jpdfium.dll export definitions (MSVC only).
+;
+; The Rust-provided jpdfium_rust_* symbols are linked into the DLL from the
+; jpdfium_rust staticlib via /WHOLEARCHIVE, but Rust's #[no_mangle] extern "C"
+; definitions don't carry __declspec(dllexport). Without this .def the linker
+; omits them from the DLL export table, so neither the CTest native_smoke test
+; nor the Java FFM Symbols.lookup can resolve them at runtime.
+;
+; Keep in sync with the exported functions in native/rust/jpdfium-impl/src/lib.rs.
+EXPORTS
+    jpdfium_rust_compress_pdf
+    jpdfium_rust_repair_lopdf
+    jpdfium_rust_resize_pixels
+    jpdfium_rust_compress_png
+    jpdfium_rust_free

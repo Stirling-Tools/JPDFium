@@ -11,6 +11,7 @@ import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextLine;
 import stirling.software.jpdfium.text.TextWord;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import javax.imageio.ImageIO;
 import java.nio.file.Path;
@@ -137,7 +138,10 @@ public class S39_WebLinks {
 
                 // Flush page content
                 try {
-                    PageEditBindings.FPDFPage_GenerateContent.invokeExact(page.rawHandle());
+                    int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(page.rawHandle());
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
                 } catch (Throwable _) {
                 }
 

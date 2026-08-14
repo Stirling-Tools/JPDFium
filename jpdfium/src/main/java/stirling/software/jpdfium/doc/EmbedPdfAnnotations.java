@@ -7,6 +7,7 @@ import stirling.software.jpdfium.panama.FfmHelper;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.util.Optional;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
@@ -300,10 +301,15 @@ public final class EmbedPdfAnnotations {
      *
      * @param icon icon code from FPDF_ANNOT_ICON enum
      */
+    @SuppressWarnings("cast") // (int) is required for the invokeExact signature-polymorphic return typing
     public static void setIcon(MemorySegment page, int index, int icon) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon.invokeExact(annot, icon);
+            MethodHandle setIcon = EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon;
+            if (setIcon == null) {
+                throw new JPDFiumException("EPDFAnnot_SetIcon is not exported by this PDFium build");
+            }
+            int ok = (int) setIcon.invokeExact(annot, icon);
             if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetIcon failed");
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
@@ -314,10 +320,15 @@ public final class EmbedPdfAnnotations {
      *
      * @return icon code, or -1 if unknown
      */
+    @SuppressWarnings("cast") // (int) is required for the invokeExact signature-polymorphic return typing
     public static int getIcon(MemorySegment page, int index) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            return (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon.invokeExact(annot);
+            MethodHandle getIcon = EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon;
+            if (getIcon == null) {
+                throw new JPDFiumException("EPDFAnnot_GetIcon is not exported by this PDFium build");
+            }
+            return (int) getIcon.invokeExact(annot);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }

@@ -101,7 +101,7 @@ if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/lib" ]; then
 fi
 
 WORK=$(mktemp -d)
-trap "rm -rf '$WORK'" EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 # Wrap the .dat into a Mach-O dylib via a one-liner asm stub. Apple's
 # clang understands the GNU-style .incbin directive when fed a .S file.

@@ -272,6 +272,11 @@ if(JPDFIUM_USE_PDFIUM)
             "/FORCE:MULTIPLE"
             "/IGNORE:4006"
             "/IGNORE:4088")
+        # Export the Rust-provided symbols from jpdfium.dll. Rust's
+        # #[no_mangle] extern "C" definitions don't carry __declspec(dllexport),
+        # so without a .def the import library would omit them and neither the
+        # CTest native_smoke test nor the Java FFM bindings could resolve them.
+        target_sources(jpdfium PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.def")
     else()
         target_link_libraries(jpdfium PRIVATE
             -Wl,--whole-archive "${RUST_LIB}" -Wl,--no-whole-archive)
@@ -404,10 +409,19 @@ if(JPDFIUM_USE_PDFIUM)
         POSITION_INDEPENDENT_CODE ON)
 
     # Platform-specific linker flags
+    # Under a sanitizer build the bridge references __asan_*/__ubsan_* runtime
+    # symbols that are only resolved at the final EXECUTABLE, so the shared lib
+    # must not demand them at its own link time (--no-undefined / -undefined,error
+    # would fail). The sanitizer build is a test/fuzz configuration only; the
+    # strict checks stay on for normal release builds.
     if(JPDFIUM_OS STREQUAL "linux")
-        target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
+        if(NOT JPDFIUM_SANITIZE)
+            target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
+        endif()
     elseif(JPDFIUM_OS STREQUAL "darwin")
-        target_link_options(jpdfium PRIVATE -Wl,-undefined,error)
+        if(NOT JPDFIUM_SANITIZE)
+            target_link_options(jpdfium PRIVATE -Wl,-undefined,error)
+        endif()
     endif()
 
     add_custom_command(TARGET jpdfium POST_BUILD

@@ -55,7 +55,6 @@ jobs:
 
       - name: Download baseline jar from Maven Central (or build stub if unavailable)
         if: steps.ver.outputs.skip != 'true'
-        continue-on-error: true
         run: |
           VER="${{ steps.ver.outputs.version }}"
           mkdir -p /tmp/japicmp-baseline
@@ -75,20 +74,32 @@ jobs:
           test -f "$CURR_JAR" || { echo "Current jar missing — $CURR_JAR"; exit 1; }
           JAPICMP_VER=0.23.0
           curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
+          set +e  # japicmp exits non-zero on incompatibilities; handle below
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
-            --report-only-filename \
             --ignore-missing-classes \
-            --exclude-external-imports \
-            > /tmp/japicmp-report.txt || true
+            --error-on-binary-incompatibility \
+            --error-on-source-incompatibility \
+            > /tmp/japicmp-report.txt 2>&1
+          rc=$?
+          set -e
           cat /tmp/japicmp-report.txt
-          if grep -qE "BREAKING|INCOMPATIBLE" /tmp/japicmp-report.txt; then
-            echo "::error::Binary incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
+          # rc is authoritative: with the --error-on-* flags japicmp exits 0 iff
+          # there are no binary/source incompatibilities. The report marker is
+          # only used to give a precise message; note the incompatibility line is
+          # lowercase ("E: There is at least one incompatibility: ..."), so grep
+          # case-insensitively on the "incompatib" prefix.
+          if [ "$rc" -ne 0 ]; then
+            if grep -qiE "incompatib|BREAKING|ERROR:" /tmp/japicmp-report.txt; then
+              echo "::error::Binary/source incompatibility detected vs ${{ steps.ver.outputs.tag }} — review japicmp report"
+            else
+              echo "::error::japicmp exited $rc without an incompatibility marker — treat as gate failure (check did not complete)"
+            fi
             exit 1
           fi
-          echo "No binary incompatibilities vs ${{ steps.ver.outputs.tag }}."
+          echo "No binary/source incompatibilities vs ${{ steps.ver.outputs.tag }}."
 
   module-info:
     name: Module descriptor integrity
@@ -142,18 +153,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
-      - name: Regenerate FFM bindings and diff
+      - name: Regenerate FFM bindings and diff (strict - drift is a failure)
         run: |
           bash native/build-stub.sh
-          ./gradlew :jpdfium:generateBindings --no-daemon || echo "generateBindings skipped (jextract not found?)"
-          # Verify committed JpdfiumH.java matches regenerated output
+          ./gradlew :jpdfium:generateBindings :jpdfium:patchBindingsForCrossPlatform --no-daemon
+          # Verify the committed JpdfiumH.java files match the regenerated output.
           if git diff --quiet -- jpdfium/src/main/java/stirling/software/jpdfium/panama/; then
             echo "FFM bindings are in sync with native/bridge/include/jpdfium.h"
           else
-            echo "::warning::FFM bindings drift from jpdfium.h — run ./gradlew :jpdfium:generateBindings locally and commit"
+            echo "::error::FFM bindings drift from jpdfium.h — run ./gradlew :jpdfium:generateBindings :jpdfium:patchBindingsForCrossPlatform locally and commit the result"
             git diff -- jpdfium/src/main/java/stirling/software/jpdfium/panama/ | head -n 200
-            # Soft-fail first: change to exit 1 once baseline is committed
-            exit 0
+            exit 1
           fi
       - name: Verify pinned PDFium headers expose expected Skia symbol
         run: |

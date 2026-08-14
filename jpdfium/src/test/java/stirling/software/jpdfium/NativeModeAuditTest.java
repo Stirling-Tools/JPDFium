@@ -71,9 +71,16 @@ class NativeModeAuditTest {
         }
 
         if (NativeRuntime.isFull()) {
-            List<String> missing = Symbols.auditMissing();
-            assertTrue(missing.isEmpty(),
-                "In FULL native mode, all expected symbols must resolve. Missing: " + missing);
+            // EPDFAnnot_SetIcon / EPDFAnnot_GetIcon are legitimately absent from
+            // some PDFium builds (including the pinned prebuild); they are bound
+            // via downcallOptional and callers null-check. Everything else must
+            // resolve in FULL mode.
+            java.util.Set<String> knownOptional = java.util.Set.of("EPDFAnnot_SetIcon", "EPDFAnnot_GetIcon");
+            List<String> unexpected = Symbols.auditMissing().stream()
+                    .filter(symbol -> !knownOptional.contains(symbol))
+                    .toList();
+            assertTrue(unexpected.isEmpty(),
+                "In FULL native mode, all required symbols must resolve. Missing: " + unexpected);
         } else {
             System.out.println("  Skipped FULL-mode symbol audit (currently running against STUB bridge)");
         }

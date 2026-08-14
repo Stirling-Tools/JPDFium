@@ -61,7 +61,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: ludeeus/action-shellcheck@00b27aa7cb85167568cb48a3838b75f4265f2bca # 2.0.0
-        with:
-          scandir: '.github/scripts'
-          additional_args: --severity=warning
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Shellcheck all shell scripts (warnings are failures)
+        run: |
+          shellcheck --severity=warning .github/scripts/*.sh native/*.sh

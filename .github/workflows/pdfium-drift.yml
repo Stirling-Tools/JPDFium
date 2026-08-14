@@ -1,0 +1,107 @@
+name: PDFium Drift Check
+
+# Detects when the codebase's pinned PDFium (native/pdfium.version) is behind
+# the latest pdfium-* prebuilt release published in this repository by the
+# `Prebuild PDFium` workflow (.github/workflows/prebuild-pdfium.yml).
+#
+# The prebuild workflow builds the EmbedPDF fork weekly, publishes a
+# pdfium-YYYYMMDD-<sha> release, and opens a PR bumping the pin. Until that PR
+# is merged the codebase keeps building against the older prebuild. This
+# workflow surfaces that drift as a tracked GitHub issue (label: pdfium-drift)
+# so the bump isn't lost. Non-blocking: it never fails the build - it only
+# opens/updates the drift issue and closes it once the pin catches up.
+
+on:
+  # Monday 06:17 UTC - after the weekly Prebuild PDFium run (Mon 03:00 UTC)
+  # has had a chance to publish a new prebuilt release.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: pdfium-drift
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Compare pinned vs latest prebuilt PDFium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - name: Read pinned PDFium tag (codebase)
+        id: pin
+        run: |
+          PIN=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
+          echo "pin=${PIN}" >> "$GITHUB_OUTPUT"
+          echo "Codebase pins: $PIN"
+
+      - name: Resolve latest pdfium-* prebuilt release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 \
+                   --json tagName,publishedAt \
+                   --jq '[.[] | select(.tagName | startswith("pdfium-"))] | sort_by(.publishedAt) | reverse | .[0].tagName // empty' || true)
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "Latest prebuilt release: $LATEST"
+
+      - name: Manage drift issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PIN:    ${{ steps.pin.outputs.pin }}
+          LATEST: ${{ steps.latest.outputs.latest }}
+        run: |
+          set -euo pipefail
+
+          gh label create pdfium-drift \
+            --repo "$GITHUB_REPOSITORY" \
+            --description "PDFium prebuild pin is behind the latest prebuilt release" \
+            >/dev/null 2>&1 || true
+
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+            --label pdfium-drift --state open --json number \
+            --jq '.[0].number // empty' || true)
+
+          if [ -z "$PIN" ] || [ -z "$LATEST" ]; then
+            echo "Cannot compare: pin='$PIN' latest='$LATEST' - skipping."
+            exit 0
+          fi
+
+          if [ "$PIN" = "$LATEST" ]; then
+            echo "No drift: pinned $PIN == latest prebuilt $LATEST."
+            if [ -n "$EXISTING" ]; then
+              gh issue close "$EXISTING" --repo "$GITHUB_REPOSITORY" \
+                --comment "Pin $PIN now matches the latest prebuilt release - closing."
+              echo "Closed stale drift issue #$EXISTING."
+            fi
+            exit 0
+          fi
+
+          echo "DRIFT: codebase pins $PIN but latest prebuilt is $LATEST."
+          # Build the issue body with printf - a heredoc inside $(...) breaks
+          # bash's parser when the text contains a single quote (codebase's).
+          BODY=$(printf '%s\n' \
+            "The codebase's pinned PDFium (native/pdfium.version) is behind the latest prebuilt PDFium release in this repository." \
+            "" \
+            "- Pinned (codebase): $PIN" \
+            "- Latest prebuilt:   $LATEST" \
+            "" \
+            "Consumers (ci.yml, fuzz.yml, bundling.yml, snapshot.yml, release.yml) build against the pinned prebuild via native/fetch-prebuilt-pdfium.sh until the pin is bumped." \
+            "" \
+            "To fix: merge the auto-bump PR opened by the Prebuild PDFium workflow, or set native/pdfium.version to $LATEST. Re-run this workflow to confirm the issue closes itself.")
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+            echo "Updated drift issue #$EXISTING."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "PDFium prebuild drift: pinned $PIN vs latest $LATEST" \
+              --label pdfium-drift \
+              --body "$BODY"
+            echo "Opened drift issue."
+          fi

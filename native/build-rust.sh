@@ -68,7 +68,43 @@ echo "Using ${CARGO_VERSION}"
 # ── Build ───────────────────────────────────────────────────────────────────
 echo "Building Rust static library (release)..."
 cd "${RUST_DIR}"
-cargo build --release
+
+# darwin-x64 cross-compile: the macOS x64 publish/snapshot leg runs on an
+# arm64 (macos-14) host with CMAKE_OSX_ARCHITECTURES=x86_64, so the C++ bridge
+# is compiled for x86_64. Build the Rust staticlib for that same arch - an
+# arm64 libjpdfium_rust.a would be silently dropped at link time
+# ("found architecture arm64, required architecture x86_64") and leave the
+# jpdfium_rust_* symbols undefined.
+CROSS_TARGET=""
+if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
+    case "$(uname -m)" in
+        x86_64)        HOST_TRIPLE="x86_64-apple-darwin" ;;
+        arm64|aarch64) HOST_TRIPLE="aarch64-apple-darwin" ;;
+        *)             HOST_TRIPLE="" ;;
+    esac
+    DESIRED_TRIPLE=""
+    case "${CMAKE_OSX_ARCHITECTURES}" in
+        x86_64)        DESIRED_TRIPLE="x86_64-apple-darwin" ;;
+        arm64|aarch64) DESIRED_TRIPLE="aarch64-apple-darwin" ;;
+    esac
+    if [ -n "${DESIRED_TRIPLE}" ] && [ "${DESIRED_TRIPLE}" != "${HOST_TRIPLE}" ]; then
+        CROSS_TARGET="${DESIRED_TRIPLE}"
+    fi
+fi
+
+if [ -n "${CROSS_TARGET}" ]; then
+    echo "Cross-compiling Rust staticlib for ${CROSS_TARGET}..."
+    if command -v rustup >/dev/null 2>&1; then
+        rustup target add "${CROSS_TARGET}"
+    fi
+    cargo build --release --target "${CROSS_TARGET}"
+    # Cargo writes target-specific artifacts under target/<triple>/; the
+    # bridge expects the lib at the canonical target/release path, so copy it.
+    mkdir -p "$(dirname "${OUTPUT}")"
+    cp "${RUST_DIR}/target/${CROSS_TARGET}/release/libjpdfium_rust.a" "${OUTPUT}"
+else
+    cargo build --release
+fi
 
 echo ""
 echo "Built: ${OUTPUT}"
