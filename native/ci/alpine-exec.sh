@@ -28,7 +28,8 @@ IMAGE="eclipse-temurin:25-jdk-alpine"
 
 ENV_ARGS=()
 for var in GH_TOKEN GITHUB_REPOSITORY EMBEDPDF_PIN_SHA \
-           JPDFIUM_BUILD_MODE JPDFIUM_TARGET_PLATFORM JPDFIUM_LIBC; do
+           JPDFIUM_BUILD_MODE JPDFIUM_TARGET_PLATFORM JPDFIUM_LIBC \
+           JPDFIUM_SKIP_SIZE_BUDGET SIZE_GATE_STRICT; do
     if [ -n "${!var:-}" ]; then
         ENV_ARGS+=(-e "$var")
     fi

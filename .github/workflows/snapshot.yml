@@ -269,6 +269,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Shipped jar: the musl bundle must be held to the strict size gate too.
+          SIZE_GATE_STRICT: '1'
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
 
       - name: Skip musl natives (missing musl PDFium prebuild)
@@ -382,6 +384,9 @@ jobs:
           # PRs have no signing cert; unsigned is fine there because
           # publish-snapshot never runs on pull_request.
           MACOS_ALLOW_UNSIGNED: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          # Shipped jar: a platform with no size budget entry must FAIL, not
+          # silently disable the gate.
+          SIZE_GATE_STRICT: '1'
         run: |
           # Bridge runtime deps - walk the bridge's import table and copy
           # only what's actually referenced, skipping system libs. Also

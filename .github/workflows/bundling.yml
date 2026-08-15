@@ -109,6 +109,10 @@ jobs:
           find native/pdfium/lib -maxdepth 1 -type f -name 'lib*.so*' \
             -exec cp -v {} native/dist/linux-x64/ \;
       - name: Bundle runtime deps (runs both hermeticity gates)
+        env:
+          # This bundle is for the hermeticity gate (full system ICU), not a
+          # shipped jar - skip the shipped-jar size budget.
+          JPDFIUM_SKIP_SIZE_BUDGET: '1'
         run: |
           bash native/bundle-runtime-deps.sh linux-x64
           echo "--- bundled libs ---"

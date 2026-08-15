@@ -375,19 +375,6 @@ bundle_windows() {
             queue+=("$dest")
         done <<<"$deps"
     done
-
-    # The prebuilt PDFium component build ships PartitionAlloc DLLs that nothing
-    # links against (the allocator shim + raw_ptr). They are dead weight AND a
-    # JVM hazard: the shim's DllMain replaces the process allocator, which is
-    # catastrophic when the natives are loaded into the JVM (hard loader crash,
-    # e.g. STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). NativeLoader preloads
-    # every DLL in the manifest, so strip these orphans from the bundle.
-    for orphan in \
-        base_allocator_partition_allocator_src_partition_alloc_allocator_shim.dll \
-        base_allocator_partition_allocator_src_partition_alloc_raw_ptr.dll
-    do
-        [ -e "$DIST_DIR/$orphan" ] && rm -v "$DIST_DIR/$orphan"
-    done
 }
 
 case "$PLATFORM" in
@@ -434,12 +421,30 @@ case "$PLATFORM" in
         ;;
 esac
 
+# The prebuilt PDFium component build ships PartitionAlloc libraries that
+# NOTHING links against (the allocator shim + raw_ptr) on EVERY platform -
+# lib*.so on Linux/musl, lib*.dylib on macOS, *.dll on Windows. They are dead
+# weight AND a JVM hazard: the shim's DllMain replaces the process allocator,
+# which is catastrophic when the natives are loaded into the JVM (hard loader
+# crash, e.g. STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). NativeLoader
+# preloads every library in the manifest, so strip these orphans from the
+# bundle on all platforms.
+find "$DIST_DIR" -maxdepth 1 -type f \
+    \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
+
 # Orphaned / JVM-hostile library gate: every bundled lib must be imported by
 # something and none may be an allocator hook. The prebuilt PDFium component
 # build ships exactly such orphans (PartitionAlloc shim/raw_ptr) - preloading
 # them into the JVM hard-crashes it, so this fails the bundle rather than the
 # first consumer.
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR"
+
+# Leanness gate: no debug symbols, no stray artifact types, no duplicate
+# basenames (dead-weight collisions), plus a size report.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"
+
+# Size budget gate: fails when the bundle exceeds its per-platform budget.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-size.sh" "$DIST_DIR" "$PLATFORM"
 
 echo ""
 echo "Final bundle contents for $PLATFORM:"

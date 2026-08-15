@@ -178,6 +178,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Shipped jar: the musl bundle must be held to the strict size gate too.
+          SIZE_GATE_STRICT: '1'
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
 
       - name: Skip musl natives (missing musl PDFium prebuild)
@@ -240,7 +242,9 @@ jobs:
           # walks the bridge's import table per-platform (ldd / otool / dumpbin)
           # and copies only what's actually referenced, skipping system libs.
           # No more blanket vcpkg bin glob → no debug-helper bloat in the jar.
-          bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
+          # Shipped jar: SIZE_GATE_STRICT makes a missing budget entry fail
+          # rather than silently disable the size gate.
+          SIZE_GATE_STRICT=1 bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
       - name: Sanity check
