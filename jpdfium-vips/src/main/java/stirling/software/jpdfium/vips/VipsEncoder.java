@@ -4,6 +4,8 @@ import app.photofox.vipsffm.VBlob;
 import app.photofox.vipsffm.VImage;
 import app.photofox.vipsffm.Vips;
 import app.photofox.vipsffm.VipsOption;
+import app.photofox.vipsffm.enums.VipsForeignHeifCompression;
+import app.photofox.vipsffm.enums.VipsInterpretation;
 import stirling.software.jpdfium.internal.RenderedPageView;
 
 import java.io.IOException;
@@ -49,17 +51,19 @@ public final class VipsEncoder {
         if (view.format().name().contains("PREMUL")) {
             image = image.unpremultiply();
         }
-        return image;
+        // A raw newFromMemory image has an undefined colour interpretation.
+        // libjxl's encoder rejects a 4-band image with an undefined
+        // interpretation (JxlEncoderSetBasicInfo error) while the other savers
+        // silently accept it - and tagging sRGB lets every saver write correct
+        // colour metadata. Same thing a PNG/JPEG loader would produce.
+        return image.copy(
+                VipsOption.Enum("interpretation", VipsInterpretation.INTERPRETATION_sRGB));
     }
 
     private static VBlob encodeToBlob(VImage image, VipsEncodeOptions opts) {
         VipsOption[] options = buildOptions(opts);
         return switch (opts.format()) {
-            case HEIC, HEIF -> image.heifsaveBuffer(options);
-            case AVIF -> {
-                VipsOption[] withAv1 = append(options, VipsOption.String("compression", "av1"));
-                yield image.heifsaveBuffer(withAv1);
-            }
+            case HEIC, HEIF, AVIF -> image.heifsaveBuffer(options);
             case JXL -> image.jxlsaveBuffer(options);
             case WEBP -> image.webpsaveBuffer(options);
             case PNG -> image.pngsaveBuffer(options);
@@ -71,11 +75,7 @@ public final class VipsEncoder {
     private static void writeToFile(VImage image, String path, VipsEncodeOptions opts) {
         VipsOption[] options = buildOptions(opts);
         switch (opts.format()) {
-            case HEIC, HEIF -> image.heifsave(path, options);
-            case AVIF -> {
-                VipsOption[] withAv1 = append(options, VipsOption.String("compression", "av1"));
-                image.heifsave(path, withAv1);
-            }
+            case HEIC, HEIF, AVIF -> image.heifsave(path, options);
             case JXL -> image.jxlsave(path, options);
             case WEBP -> image.webpsave(path, options);
             case PNG -> image.pngsave(path, options);
@@ -101,9 +101,16 @@ public final class VipsEncoder {
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         list.add(VipsOption.Int("bitdepth", opts.bitdepth()));
         list.add(VipsOption.Int("effort", opts.effort()));
-        if (opts.format().compression() != null) {
-            list.add(VipsOption.String("compression", opts.format().compression()));
-        }
+        // The heif `compression` property is a VipsForeignHeifCompression enum
+        // (GType int), not a string - passing a gchararray makes GLib refuse the
+        // property and, for AV1, the save then fails. Use the enum option so the
+        // raw int reaches vips_heifsave.
+        VipsForeignHeifCompression codec = switch (opts.format()) {
+            case AVIF -> VipsForeignHeifCompression.FOREIGN_HEIF_COMPRESSION_AV1;
+            case HEIC, HEIF -> VipsForeignHeifCompression.FOREIGN_HEIF_COMPRESSION_HEVC;
+            default -> null;
+        };
+        if (codec != null) list.add(VipsOption.Enum("compression", codec));
         return list.toArray(VipsOption[]::new);
     }
 
@@ -140,18 +147,5 @@ public final class VipsEncoder {
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         return list.toArray(VipsOption[]::new);
-    }
-
-    private static VipsOption[] append(VipsOption[] base, VipsOption extra) {
-        VipsOption[] result = new VipsOption[base.length + 1];
-        System.arraycopy(base, 0, result, 0, base.length);
-        for (int i = 0; i < base.length; i++) {
-            if (base[i].key().equals(extra.key())) {
-                result[i] = extra;
-                return result;
-            }
-        }
-        result[base.length] = extra;
-        return result;
     }
 }

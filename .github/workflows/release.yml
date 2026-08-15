@@ -194,6 +194,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)
+        id: fetch
+        # The musl PDFium prebuilds are experimental (Prebuild PDFium's release
+        # sanity check treats linux-musl-* as warn-only). Until that workflow is
+        # green, a missing pdfium-linux-musl-*.tar.gz must SKIP the musl legs,
+        # not fail the release - the skip is surfaced by the step below.
+        continue-on-error: ${{ matrix.libc == 'musl' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -219,11 +225,18 @@ jobs:
       # the ~1 GB apk bootstrap happens once. The smoke INITS the native and
       # opens a PDF on the musl JVM - the linux-musl-* leg is red until both pass.
       - name: Build + smoke musl natives (Alpine container)
-        if: matrix.libc == 'musl'
+        id: musl
+        if: matrix.libc == 'musl' && steps.fetch.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
+
+      - name: Skip musl natives (missing musl PDFium prebuild)
+        if: matrix.libc == 'musl' && steps.fetch.outcome == 'failure'
+        run: |
+          echo "::warning::linux-musl-* natives skipped: pdfium-linux-musl-*.tar.gz is not in the pinned PDFium prebuild release yet."
+          echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
 
       - name: Build qpdf with native crypto (Linux + macOS)
         if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
@@ -366,6 +379,9 @@ jobs:
           retention-days: 7
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # musl: only upload when the in-container build actually staged natives
+        # (skipped legs - missing musl PDFium prebuild - have an empty dist dir).
+        if: always() && (matrix.libc != 'musl' || steps.musl.outcome == 'success')
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
