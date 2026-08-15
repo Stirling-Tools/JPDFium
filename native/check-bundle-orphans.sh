@@ -1,32 +1,39 @@
 #!/usr/bin/env bash
-# check-bundle-orphans.sh - verify no bundled native library is orphaned or
-# JVM-hostile.
+# check-bundle-orphans.sh - verify no bundled native library is orphaned.
 #
 # Orphaned: a bundled .so/.dylib/.dll that NOTHING in the bundle imports. Such
-# libraries are dead weight and are frequently a hazard - the prebuilt PDFium
-# component build ships PartitionAlloc DLLs (allocator_shim, raw_ptr) that
-# nothing links against, and preloading them into the JVM hard-crashes the
-# process (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64).
+# libraries are dead weight and are frequently a hazard.
 #
-# JVM-hostile: libraries that must never be loaded into a JVM (allocator
-# shims / malloc hooks / PartitionAlloc raw pointers).
+# The JVM-hostile check (allocator shim / raw_ptr) applies ONLY on Windows:
+# there the prebuilt PDFium component build ships PartitionAlloc DLLs that
+# nothing links against, and NativeLoader preloads every manifest DLL into the
+# JVM - the shim's DllMain replaces the process allocator and hard-crashes the
+# JVM (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). On Linux/macOS libpdfium
+# GENUINELY links raw_ptr AND the shim, so they are legitimate dependencies
+# there and must never be flagged.
 #
-# Runs per-platform on the matching host (Linux bundle -> readelf, macOS ->
-# otool, Windows -> dumpbin) from bundle-runtime-deps.sh. Bash 3.2 compatible
-# (macOS ships bash 3.2: no mapfile, no declare -A).
+# Accepts an explicit platform so a cross-built bundle can be inspected on any
+# host; OS is derived from the platform, falling back to the host's uname.
+# Runs per-platform from bundle-runtime-deps.sh. Bash 3.2 compatible.
 #
-# Usage: check-bundle-orphans.sh <dist-dir>
+# Usage: check-bundle-orphans.sh <dist-dir> [platform]
 set -euo pipefail
 
-DIST_DIR="${1:?usage: check-bundle-orphans.sh <dist-dir>}"
+DIST_DIR="${1:?usage: check-bundle-orphans.sh <dist-dir> [platform]}"
+PLATFORM="${2:-}"
 
-case "$(uname -s)" in
-    Linux*)  OS=linux ;;
-    Darwin*) OS=darwin ;;
-    MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+case "$PLATFORM" in
+    linux-*|vips-linux-*)   OS=linux ;;
+    darwin-*|vips-darwin-*) OS=darwin ;;
+    windows-*|vips-windows-*) OS=windows ;;
     *)
-        echo "check-bundle-orphans.sh: unsupported OS $(uname -s); skipping"
-        exit 0 ;;
+        case "$(uname -s)" in
+            Linux*) OS=linux ;;
+            Darwin*) OS=darwin ;;
+            MINGW*|MSYS*|CYGWIN*) OS=windows ;;
+            *) echo "check-bundle-orphans.sh: unsupported OS $(uname -s); skipping"; exit 0 ;;
+        esac
+        ;;
 esac
 
 if [ "$OS" = windows ]; then
@@ -81,10 +88,14 @@ while IFS= read -r f; do
     base="$(basename "$f")"
     lower="$(echo "$base" | tr 'A-Z' 'a-z')"
 
-    # JVM-hostile libraries must never ship.
-    if echo "$lower" | grep -qE 'allocator_shim|raw_ptr'; then
-        echo "FAIL: $base is a JVM-hostile library (allocator hook) - must never be bundled" >&2
-        failures=$((failures + 1))
+    # JVM-hostile libraries must never ship - but ONLY on Windows, where the
+    # allocator shim / raw_ptr are genuinely orphaned and NativeLoader preloads
+    # every DLL into the JVM. On Linux/macOS they are real libpdfium deps.
+    if [ "$OS" = windows ]; then
+        if echo "$lower" | grep -qE 'allocator_shim|raw_ptr'; then
+            echo "FAIL: $base is a JVM-hostile library (allocator hook) - must never be bundled" >&2
+            failures=$((failures + 1))
+        fi
     fi
 
     # Roots (the bridge / libvips) are entry points - nothing imports them.

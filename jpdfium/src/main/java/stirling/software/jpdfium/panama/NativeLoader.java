@@ -169,16 +169,18 @@ public final class NativeLoader {
     }
 
     /**
-     * DLLs that must never be {@link System#load}ed into the JVM. The prebuilt
-     * PDFium component build ships PartitionAlloc DLLs that nothing links against
-     * (the allocator shim + raw_ptr). Loading the shim into the JVM is
-     * catastrophic - its DllMain replaces the process allocator, which hard-crashes
-     * the process (e.g. STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). The UCRT
+     * DLLs that must never be {@link System#load}ed into the JVM. On Windows
+     * the prebuilt PDFium component build ships a PartitionAlloc allocator shim
+     * DLL that nothing imports; loading it into the JVM is catastrophic - its
+     * DllMain replaces the process allocator, which hard-crashes the process
+     * (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). Note: the raw_ptr DLL is
+     * NOT skipped - on Linux/macOS libpdfium genuinely links it, and the
+     * Windows bundle already strips both orphaned DLLs at build time. The UCRT
      * api-set stubs are always system-provided and are never bundled.
      */
     private static boolean isWindowsJvmHazardDll(String lib) {
         String l = lib.toLowerCase();
-        return l.contains("allocator_shim") || l.contains("raw_ptr")
+        return l.contains("allocator_shim")
                 || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-");
     }
 
