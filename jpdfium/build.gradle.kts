@@ -143,7 +143,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free"
 )
 
-val generateBindings by tasks.registering(Exec::class) {
+val generateBindings = tasks.register<Exec>("generateBindings") {
     description = "Generate FFM bindings from jpdfium.h using jextract"
     val outputDir = layout.buildDirectory.dir("generated/jextract/java")
     val headerFile = rootProject.file("native/bridge/include/jpdfium.h")
@@ -194,7 +194,7 @@ val generateBindings by tasks.registering(Exec::class) {
 // fix is to neutralize the platform-specific init. Patch the generated
 // source between jextract and compileJava so the published jar works on
 // both LP64 (Linux/macOS) and LLP64 (Windows) hosts.
-val patchBindingsForCrossPlatform by tasks.registering {
+val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatform") {
     description = "Make JpdfiumH\$shared.C_LONG init Windows-safe (OfInt vs OfLong)"
     dependsOn(generateBindings)
     val outputDir = layout.buildDirectory.dir("generated/jextract/java")
@@ -305,8 +305,8 @@ tasks.register<JavaExec>("generateCorpus") {
     args(
         project.findProperty("corpus.outDir")?.toString()
             ?: layout.buildDirectory.dir("test-corpus/generated").get().asFile.absolutePath,
-        (project.findProperty("corpus.count") as String? ?: "300").toString(),
-        (project.findProperty("corpus.seed") as String? ?: "42").toString()
+        project.findProperty("corpus.count")?.toString() ?: "300",
+        project.findProperty("corpus.seed")?.toString() ?: "42"
     )
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = "2g"
