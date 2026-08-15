@@ -148,7 +148,18 @@ jobs:
       # Walk the bridge's import table and copy every referenced third-party
       # .so into native/dist/linux-x64 (RUNPATH=$ORIGIN finds them at load).
       - name: Bundle runtime deps
-        run: bash native/bundle-runtime-deps.sh linux-x64
+        run: |
+          bash native/bundle-runtime-deps.sh linux-x64
+          echo "--- bundled libs ---"
+          ls -la native/dist/linux-x64/
+
+      - name: Sanity - bridge + shared libs must be present for the shards
+        run: |
+          test -n "$(ls -A native/dist/linux-x64/)" || {
+            echo "ERROR: no native binaries staged for linux-x64" >&2
+            exit 1
+          }
+          find native/dist/linux-x64 -name '*.so*' | wc -l
 
       - name: Upload native artifact for shards
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
