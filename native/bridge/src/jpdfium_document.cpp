@@ -42,7 +42,7 @@ int32_t jpdfium_init() {
     cfg.m_pIsolate = nullptr;
     cfg.m_v8EmbedderSlot = 0;
     cfg.m_pPlatform = nullptr;
-#ifdef PDF_USE_SKIA
+#ifdef JPDFIUM_HAS_SKIA
     cfg.m_RendererType = FPDF_RENDERERTYPE_SKIA;
 #else
     cfg.m_RendererType = FPDF_RENDERERTYPE_AGG;
@@ -56,6 +56,7 @@ void jpdfium_destroy() {
 }
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
+    if (!path || !handle) return JPDFIUM_ERR_INVALID;
     FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
     if (!doc) return translatePdfiumError();
 
@@ -66,8 +67,9 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
-    if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
-
+    // FPDF_LoadMemDocument takes a 32-bit int length; reject negative lengths
+    // and documents larger than PDFium's API can address before copying.
+    if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
     uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
     if (!copy) return JPDFIUM_ERR_NATIVE;
     memcpy(copy, data, static_cast<size_t>(len));
@@ -87,6 +89,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64_t* handle) {
+    if (!path || !handle) return JPDFIUM_ERR_INVALID;
     FPDF_DOCUMENT doc = FPDF_LoadDocument(path, password);
     if (!doc) return translatePdfiumError();
 

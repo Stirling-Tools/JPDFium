@@ -111,8 +111,19 @@ inline int32_t jpdfium_guarded(Fn&& fn) noexcept {
     }
 }
 
+// Allocate a width*height RGBA buffer with overflow checks. Returns nullptr
+// on overflow or allocation failure. The caller frees with free() (matching
+// the jpdfium_free_buffer FFI convention).
+inline uint8_t* allocRgbaChecked(int w, int h) {
+    if (w <= 0 || h <= 0) return nullptr;
+    size_t uw = static_cast<size_t>(w);
+    size_t uh = static_cast<size_t>(h);
+    if (uw > SIZE_MAX / uh / 4) return nullptr;
+    return static_cast<uint8_t*>(malloc(uw * uh * 4));
+}
+
 // Image placement position (matches JPDFIUM_POSITION_* constants in jpdfium.h)
-enum Position {
+enum Position : std::uint8_t {
     POSITION_TOP_LEFT = 0,
     POSITION_TOP_CENTER = 1,
     POSITION_TOP_RIGHT = 2,

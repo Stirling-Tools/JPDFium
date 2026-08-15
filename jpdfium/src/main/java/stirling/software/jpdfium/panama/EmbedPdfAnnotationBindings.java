@@ -206,13 +206,14 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFPage_RemoveAnnotRaw = downcall("EPDFPage_RemoveAnnotRaw",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
-    /** Set annotation icon (Text/FileAttachment/Sound/Stamp). Optional: the
-     *  bundled EmbedPDF fork does not export this symbol, so it degrades to
-     *  {@code null} in FULL mode instead of failing the whole class init. */
+    /** Set annotation icon (Text/FileAttachment/Sound/Stamp). Optional: not every
+     *  PDFium build exports this symbol (the bundled EmbedPDF fork does not), so
+     *  the handle may be null - callers must null-check before invoking. */
     public static final MethodHandle EPDFAnnot_SetIcon = downcallOptional("EPDFAnnot_SetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    /** Get annotation icon. Optional: same rationale as {@code EPDFAnnot_SetIcon}. */
+    /** Get annotation icon. Optional: same rationale as {@code EPDFAnnot_SetIcon} -
+     *  the handle may be null, so callers must null-check before invoking. */
     public static final MethodHandle EPDFAnnot_GetIcon = downcallOptional("EPDFAnnot_GetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 

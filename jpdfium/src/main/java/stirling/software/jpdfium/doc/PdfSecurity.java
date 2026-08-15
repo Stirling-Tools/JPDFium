@@ -310,12 +310,18 @@ public final class PdfSecurity {
             try { renderMode = (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj); }
             catch (Throwable t) { continue; }
             if (renderMode == 3) { // invisible
-                try { PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj); removed++; }
+                try { int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_RemoveObject failed");
+            } removed++; }
                 catch (Throwable _) {}
             }
         }
         if (removed > 0) {
-            try { PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage); }
+            try { int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            } }
             catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
         }
         return removed;

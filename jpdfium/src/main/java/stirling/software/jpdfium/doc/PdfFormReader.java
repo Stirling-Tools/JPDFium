@@ -152,7 +152,7 @@ public final class PdfFormReader {
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
             long written = (long) mh.invokeExact(formHandle, annot, buf, needed);
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         } catch (Throwable t) { return ""; }
     }
 
@@ -163,7 +163,7 @@ public final class PdfFormReader {
             if (needed <= 2) return "";
             MemorySegment buf = arena.allocate(needed);
             long written = (long) AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         } catch (Throwable t) { return ""; }
     }
 

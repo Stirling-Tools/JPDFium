@@ -57,14 +57,20 @@ public final class PdfBackground {
 
             // Set fill color
             try {
-                PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(rect, r, g, b, 255);
+                int ok = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(rect, r, g, b, 255);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPageObj_SetFillColor failed");
+            }
             } catch (Throwable t) {
                 throw new JPDFiumException("FPDFPageObj_SetFillColor failed", t);
             }
 
             // Set draw mode: fill only (FPDF_FILLMODE_ALTERNATE = 1), no stroke (0)
             try {
-                PageEditBindings.FPDFPath_SetDrawMode.invokeExact(rect, 1, 0);
+                int ok = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(rect, 1, 0);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPath_SetDrawMode failed");
+            }
             } catch (Throwable t) {
                 throw new JPDFiumException("FPDFPath_SetDrawMode failed", t);
             }
@@ -84,7 +90,10 @@ public final class PdfBackground {
             for (int i = existingCount - 1; i >= 0; i--) {
                 try {
                     existing[i] = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                    PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, existing[i]);
+                    int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, existing[i]);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_RemoveObject failed");
+            }
                 } catch (Throwable t) { existing[i] = null; }
             }
 
@@ -106,7 +115,10 @@ public final class PdfBackground {
 
             // Generate content
             try {
-                PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
             } catch (Throwable t) {
                 throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
             }

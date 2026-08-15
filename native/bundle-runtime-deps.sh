@@ -35,7 +35,7 @@ bundle_linux() {
     # Always-present system libs we don't need to (and shouldn't) bundle.
     # Bundling libc/libpthread/etc. can crash because the dynamic linker
     # already has its own copy loaded into the process.
-    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+|ld-linux)\.so'
+    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux'
 
     # Recursive walk: queue of files to process; each file's ldd output gets
     # filtered and uncopied entries get copied + queued. We use file-existence
@@ -87,16 +87,28 @@ bundle_linux() {
             [ -e "$f" ] || continue
             [ -L "$f" ] && continue  # symlinks don't carry RUNPATH; their target does
             patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-            # No bundled lib may demand an executable stack - LXC/hardened
-            # kernels refuse to load those (#6869).
+            # No bundled lib may demand an executable stack - LXC / hardened
+            # kernels refuse to load those (cannot enable executable stack).
+            # Clear it and fail hard if patchelf cannot: shipping a lib that
+            # still requires RWE breaks every container/Nix user downstream.
             if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
-                patchelf --clear-execstack "$f" 2>/dev/null \
-                    || echo "WARNING: $f demands executable stack and patchelf could not clear it" >&2
+                echo "Clearing executable stack on $f" >&2
+                patchelf --clear-execstack "$f" || {
+                    echo "ERROR: $f requires an executable stack and patchelf could not clear it" >&2
+                    exit 1
+                }
             fi
         done
     else
         echo "WARNING: patchelf not installed - transitive deps may not resolve at runtime" >&2
     fi
+
+    # Final gates: no bundled lib may ship with an executable stack, and every
+    # bundled lib's dependencies must be self-contained (bundled or core system
+    # libs). These are the same checks CI runs, so the published natives jar can
+    # be consumed in LXC / Proxmox / Nix sandboxes.
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
 }
 
 bundle_macos() {

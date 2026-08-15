@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.MemorySegment;
 import java.util.EnumSet;
@@ -73,7 +74,10 @@ public final class PdfSelectiveFlatten {
         // Regenerate content stream
         if (flattened > 0) {
             try {
-                PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
+            }
             } catch (Throwable _) {}
         }
 

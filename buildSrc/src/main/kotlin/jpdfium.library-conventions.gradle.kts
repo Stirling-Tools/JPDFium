@@ -7,9 +7,27 @@ plugins {
     signing
     checkstyle
     pmd
+    jacoco
+    id("com.github.spotbugs")
 }
 
 apply(plugin = "com.diffplug.spotless")
+
+// SpotBugs: run as part of `check` and generate a report. The plugin resolves
+// its own spotbugs core; keep it on a Java-25-capable version.
+spotbugs {
+    toolVersion.set("4.9.8")
+    ignoreFailures.set(true)   // report now; tighten to fail-on-findings once the
+                               // baseline is cleaned up (see static-analysis.yml)
+    effort.set(com.github.spotbugs.snom.Effort.MAX)
+    reportLevel.set(com.github.spotbugs.snom.Confidence.MEDIUM)
+}
+tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
+    reports {
+        create("xml") { required.set(true) }
+        create("html") { required.set(true) }
+    }
+}
 
 java {
     // Modern idiom: a JVM toolchain auto-selects (and can auto-provision via
@@ -95,6 +113,16 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+// JaCoCo coverage: emit the XML report CI consumes to enforce a coverage
+// regression gate (see coverage.yml).
+tasks.withType<JacocoReport>().configureEach {
+    reports {
+        xml.required.set(true)
+        csv.required.set(false)
+        html.required.set(true)
+    }
 }
 
 tasks.withType<JavaExec> {

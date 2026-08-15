@@ -301,15 +301,15 @@ public final class EmbedPdfAnnotations {
      *
      * @param icon icon code from FPDF_ANNOT_ICON enum
      */
+    @SuppressWarnings("cast") // (int) is required for the invokeExact signature-polymorphic return typing
     public static void setIcon(MemorySegment page, int index, int icon) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            MethodHandle h = EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon;
-            if (h == null) {
-                throw new JPDFiumException(
-                        "EPDFAnnot_SetIcon is not available in this PDFium build");
+            MethodHandle setIcon = EmbedPdfAnnotationBindings.EPDFAnnot_SetIcon;
+            if (setIcon == null) {
+                throw new JPDFiumException("EPDFAnnot_SetIcon is not available in this PDFium build");
             }
-            int ok = (int) h.invokeExact(annot, icon);
+            int ok = (int) setIcon.invokeExact(annot, icon);
             if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetIcon failed");
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
@@ -320,12 +320,13 @@ public final class EmbedPdfAnnotations {
      *
      * @return icon code, or -1 if unknown or unsupported by this PDFium build
      */
+    @SuppressWarnings("cast") // (int) is required for the invokeExact signature-polymorphic return typing
     public static int getIcon(MemorySegment page, int index) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            MethodHandle h = EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon;
-            if (h == null) return -1;
-            return (int) h.invokeExact(annot);
+            MethodHandle getIcon = EmbedPdfAnnotationBindings.EPDFAnnot_GetIcon;
+            if (getIcon == null) return -1;
+            return (int) getIcon.invokeExact(annot);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }

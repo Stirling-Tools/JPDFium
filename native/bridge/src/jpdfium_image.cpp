@@ -6,6 +6,7 @@
 #include <fpdf_edit.h>
 #include <fpdfview.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -131,7 +132,8 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
     // Copy row-by-row (PDFium bitmap stride may differ from tight pixel packing)
     int row_bytes = img_width * channels;
     for (int row = 0; row < img_height; ++row) {
-        memcpy(static_cast<uint8_t*>(bmp_buf) + row * stride, pixels + row * row_bytes, row_bytes);
+        memcpy(static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride,
+               pixels + static_cast<std::ptrdiff_t>(row) * row_bytes, row_bytes);
     }
 
     if (pixels_owned) free(pixels);
@@ -142,13 +144,13 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
 
     float scale = 1.0f;
     if (page_width > 0 && page_height > 0) {
-        float scale_w = available_width / img_width;
-        float scale_h = available_height / img_height;
+        float scale_w = available_width / static_cast<float>(img_width);
+        float scale_h = available_height / static_cast<float>(img_height);
         scale = (scale_w < scale_h) ? scale_w : scale_h;
     }
 
-    float scaled_width = img_width * scale;
-    float scaled_height = img_height * scale;
+    float scaled_width = static_cast<float>(img_width) * scale;
+    float scaled_height = static_cast<float>(img_height) * scale;
 
     // Calculate position offset
     float offset_x = margin;

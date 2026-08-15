@@ -14,6 +14,7 @@ import java.util.Map;
 
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Detect and report duplicate embedded resources (images) across pages.
@@ -161,7 +162,10 @@ public final class PdfResourceDedup {
                 var bb = arena.allocate(ValueLayout.JAVA_FLOAT);
                 var rb = arena.allocate(ValueLayout.JAVA_FLOAT);
                 var tb = arena.allocate(ValueLayout.JAVA_FLOAT);
-                PageEditBindings.FPDFPageObj_GetBounds.invokeExact(imgObj, lb, bb, rb, tb);
+                int ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(imgObj, lb, bb, rb, tb);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPageObj_GetBounds failed");
+            }
 
                 float left = lb.get(ValueLayout.JAVA_FLOAT, 0);
                 float bottom = bb.get(ValueLayout.JAVA_FLOAT, 0);

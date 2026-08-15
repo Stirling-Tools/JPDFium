@@ -57,3 +57,89 @@ jobs:
           find ~/.m2/repository/com/stirling -name "*.jar" ! -name "*-sources*" ! -name "*-javadoc*" -exec ls -lh {} \; | awk '{print $5, $9}' | sort -k2
       - name: Licenses check
         run: bash .github/scripts/check-licenses.sh || true
+
+  # The bundled natives jar must be consumable in restricted environments
+  # (Debian LXC, Proxmox, Nix sandboxes): no bundled ELF lib may demand an
+  # executable stack (GNU_STACK RWE - those kernels refuse to load it with
+  # "cannot enable executable stack"), and every bundled lib's dependencies
+  # must be self-contained (bundled or core system libs) so the whole thing
+  # loads when only libc is present. Regression gate: builds the real linux-x64
+  # natives, bundles the full dep set, runs both checks, and proves they load
+  # via the production NativeLoader.
+  restricted-env-compat:
+    name: Restricted-env compat (no execstack + hermetic bundle)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - name: Install build deps (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
+            libqpdf-dev libpugixml-dev libunibreak-dev \
+            lld patchelf binutils
+      - name: Fetch prebuilt PDFium (pinned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh linux-x64
+      - name: Build real native bridge
+        run: bash native/build-real.sh
+      - name: Stage binaries (bridge + PDFium siblings)
+        run: |
+          mkdir -p native/dist/linux-x64
+          find native/build-real -maxdepth 3 -type f \( \
+                -name 'libjpdfium.*' -o -name 'jpdfium.dll' \
+             \) -exec cp -v {} native/dist/linux-x64/ \;
+          find native/pdfium/lib -maxdepth 1 -type f -name 'lib*.so*' \
+            -exec cp -v {} native/dist/linux-x64/ \;
+      - name: Bundle runtime deps (runs both hermeticity gates)
+        run: |
+          bash native/bundle-runtime-deps.sh linux-x64
+          echo "--- bundled libs ---"
+          ls -la native/dist/linux-x64/
+      - name: Sanity - staged bridge + shared libs must exist
+        # Guards against a silently-empty staging: the execstack/hermeticity
+        # gates below only mean something when there are real ELF libs to
+        # inspect (the scripts themselves now hard-fail on zero libs, this
+        # makes the bridge's own presence explicit before that).
+        run: |
+          test -f native/dist/linux-x64/libjpdfium.so || {
+            echo "::error::libjpdfium.so was not staged - the bundle cannot be validated"
+            exit 1
+          }
+          COUNT=$(ls native/dist/linux-x64/lib*.so* | wc -l | tr -d ' ')
+          echo "staged $COUNT shared libraries"
+          [ "$COUNT" -gt 0 ] || {
+            echo "::error::no shared libraries staged in native/dist/linux-x64"
+            exit 1
+          }
+      - name: Gate - no bundled lib may require an executable stack
+        run: bash native/check-no-execstack.sh native/dist/linux-x64
+      - name: Gate - bundle must be hermetic (deps bundled or core system libs)
+        run: bash native/check-bundle-hermetic.sh native/dist/linux-x64
+      - name: Report GNU_STACK + dependency closure
+        run: |
+          for f in native/dist/linux-x64/lib*.so*; do
+            [ -e "$f" ] || continue
+            echo "$(basename "$f"): $(readelf -lW "$f" | awk '/GNU_STACK/{print $NF}')"
+          done
+          echo "--- ldd on the bridge (must resolve to the bundle) ---"
+          ldd native/dist/linux-x64/libjpdfium.so 2>&1 | head -n 40
+      - name: Load + operate smoke via production NativeLoader
+        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=linux-x64 --no-daemon --stacktrace

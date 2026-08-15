@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.AnnotationBindings;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -129,14 +130,20 @@ public final class PdfAnnotationExporter {
                         rect.set(ValueLayout.JAVA_FLOAT, 8, d.right());
                         rect.set(ValueLayout.JAVA_FLOAT, 12, d.top());
                         try {
-                            AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rect);
+                            int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rect);
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFAnnot_SetRect failed");
+            }
                         } catch (Throwable _) {}
                     }
 
                     // Set color
                     try {
-                        AnnotationBindings.FPDFAnnot_SetColor.invokeExact(
+                        int ok = (int) AnnotationBindings.FPDFAnnot_SetColor.invokeExact(
                                 annot, 0, d.r(), d.g(), d.b(), d.a());
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFAnnot_SetColor failed");
+            }
                     } catch (Throwable _) {}
 
                     created++;
