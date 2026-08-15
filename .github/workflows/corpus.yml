@@ -121,7 +121,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
-            libqpdf-dev libpugixml-dev libunibreak-dev lld
+            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf
 
       - name: Fetch prebuilt PDFium (pinned)
         env:
@@ -141,6 +141,14 @@ jobs:
             find native/pdfium/lib -maxdepth 1 -type f -name 'lib*.so*' \
               -exec cp -v {} native/dist/linux-x64/ \;
           fi
+
+      # The test shards run on runners WITHOUT the apt-installed dev packages
+      # (qpdf, pcre2, freetype, harfbuzz, icu, ...), so libjpdfium.so cannot be
+      # loaded there unless its runtime dependencies are bundled next to it.
+      # Walk the bridge's import table and copy every referenced third-party
+      # .so into native/dist/linux-x64 (RUNPATH=$ORIGIN finds them at load).
+      - name: Bundle runtime deps
+        run: bash native/bundle-runtime-deps.sh linux-x64
 
       - name: Upload native artifact for shards
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
