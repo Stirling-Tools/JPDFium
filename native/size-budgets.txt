@@ -1,0 +1,29 @@
+# Per-platform max total size (bytes) of the staged natives bundle at
+# native/dist/<platform>/ - the source of the published jpdfium-natives-* jars.
+#
+# Enforced by native/check-bundle-size.sh (warns at 75%, fails when exceeded)
+# as part of bundle-runtime-deps.sh on every native build. These are ~2.5x the
+# expected shipped size, so they catch gross bloat - debug symbols, bundling
+# the full 30 MB libicudata instead of the trimmed one, an accidental huge
+# dependency - without flaking on normal build-to-build variance. If a growth
+# is legitimate and reviewed, bump the value deliberately (don't widen it to
+# silence the check).
+#
+# Rough current sizes (Aug 2026): core bundles ~10-12 MB; vips bundles
+# ~13 MB (darwin) / ~37 MB (linux).
+
+linux-x64      34000000
+linux-arm64    34000000
+linux-musl-x64 34000000
+linux-musl-arm64 34000000
+darwin-x64     34000000
+darwin-arm64   34000000
+windows-x64    34000000
+windows-arm64  34000000
+
+vips-linux-x64   100000000
+vips-linux-arm64 100000000
+vips-darwin-x64  50000000
+vips-darwin-arm64 50000000
+vips-windows-x64 100000000
+vips-windows-arm64 100000000

@@ -18,6 +18,7 @@ public final class NativeLoader {
 
     private static volatile boolean loaded = false;
     private static volatile Throwable loadError = null;
+    private static volatile Boolean muslLibc = null;
 
     private NativeLoader() {}
 
@@ -140,6 +141,7 @@ public final class NativeLoader {
         List<String> remaining = new ArrayList<>();
         for (String lib : libs) {
             if (lib.equals(pdfiumName) || lib.equals(bridgeName)) continue;
+            if (isWindowsJvmHazardDll(lib)) continue;
             Path p = tmpDir.resolve(lib);
             if (Files.exists(p)) remaining.add(lib);
         }
@@ -166,6 +168,22 @@ public final class NativeLoader {
         maxPasses--;
     }
 
+    /**
+     * DLLs that must never be {@link System#load}ed into the JVM. On Windows
+     * the prebuilt PDFium component build ships a PartitionAlloc allocator shim
+     * DLL that nothing imports; loading it into the JVM is catastrophic - its
+     * DllMain replaces the process allocator, which hard-crashes the process
+     * (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). Note: the raw_ptr DLL is
+     * NOT skipped - on Linux/macOS libpdfium genuinely links it, and the
+     * Windows bundle already strips both orphaned DLLs at build time. The UCRT
+     * api-set stubs are always system-provided and are never bundled.
+     */
+    private static boolean isWindowsJvmHazardDll(String lib) {
+        String l = lib.toLowerCase();
+        return l.contains("allocator_shim")
+                || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-");
+    }
+
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {
         try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
             if (is == null) throw new NativeNotFoundException(detectPlatform());
@@ -178,8 +196,43 @@ public final class NativeLoader {
 
     public static String detectPlatform() {
         String os = System.getProperty("os.name").toLowerCase();
-        String osKey = os.contains("win") ? "windows" : os.contains("mac") ? "darwin" : "linux";
-        return osKey + "-" + Architecture.detect().key();
+        if (os.contains("win")) return "windows-" + Architecture.detect().key();
+        if (os.contains("mac")) return "darwin-" + Architecture.detect().key();
+        // Linux natives are libc-specific: musl (Alpine) cannot load glibc
+        // binaries, so a musl host must resolve the linux-musl-<arch> artifacts.
+        String libc = isMuslLibc() ? "musl-" : "";
+        return "linux-" + libc + Architecture.detect().key();
+    }
+
+    static boolean isMuslLibc() {
+        Boolean cached = muslLibc;
+        if (cached != null) return cached;
+        boolean result = detectMuslLibc();
+        muslLibc = result;
+        return result;
+    }
+
+    private static boolean detectMuslLibc() {
+        // Primary signal: musl ships its loader as /lib/ld-musl-<arch>.so.1
+        // (Alpine). Some distributions place it under /usr/lib instead.
+        String[] libDirs = {"/lib", "/usr/lib"};
+        for (String libDir : libDirs) {
+            try (var dir = Files.newDirectoryStream(Path.of(libDir), "ld-musl-*")) {
+                if (dir.iterator().hasNext()) return true;
+            } catch (IOException | RuntimeException ignored) {
+                // Directory missing or unreadable; try the next one
+            }
+        }
+        // Fallback: inspect /proc/self/maps. A musl-linked JVM (Alpine) maps the
+        // musl loader (ld-musl-<arch>.so.1) into its address space; glibc systems
+        // never do. File read only - this layer must not spawn external processes
+        // (see VerificationToolsAreTestOnlyTest).
+        try {
+            return Files.readString(Path.of("/proc/self/maps")).contains("ld-musl");
+        } catch (IOException | RuntimeException ignored) {
+            // /proc unavailable; assume glibc
+        }
+        return false;
     }
 
     static String nativeFilename(String lib) {

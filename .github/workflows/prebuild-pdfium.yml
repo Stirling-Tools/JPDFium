@@ -110,6 +110,17 @@ jobs:
           # how bblanchon/pdfium-binaries handles linux-arm64.
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
+          # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
+          # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
+          # from the host - GitHub cannot run JS actions in Alpine containers on
+          # arm64 runners, so there is no job-level container here. PDFium /
+          # Chromium has no official musl support, so this is the CI-proving part
+          # and may need EmbedPDF fork patches - see the JPDFIUM_LIBC branch in
+          # setup-pdfium.sh. arm64 uses a native arm64 runner.
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: component, libc: musl }
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: static,    libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: component, libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: static,    libc: musl }
           # darwin-x64 cross-compiles from macos-14 (arm64) - the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
@@ -136,7 +147,7 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Install build deps (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git
@@ -166,10 +177,12 @@ jobs:
           echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> "$GITHUB_ENV"
 
       - name: Build PDFium at pinned SHA
+        if: matrix.libc != 'musl'
         env:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           TARGET_CPU: ${{ matrix.target_cpu }}
           JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
+          JPDFIUM_LIBC: ${{ matrix.libc }}
         run: |
           # Override the branch pointer used by setup-pdfium.sh so every
           # matrix job builds the exact same commit even if embedpdf/main
@@ -178,6 +191,25 @@ jobs:
           export TARGET_CPU="$TARGET_CPU"
           export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
+
+      # musl: build PDFium inside an Alpine container via docker run (GitHub
+      # cannot host JS actions in Alpine containers on arm64 runners).
+      - name: Build PDFium at pinned SHA (musl, Alpine container)
+        if: matrix.libc == 'musl'
+        env:
+          EMBEDPDF_PIN_SHA: ${{ needs.resolve-sha.outputs.sha }}
+          JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
+          JPDFIUM_LIBC: musl
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium
+
+      # Real musl validation: the freshly-built PDFium must actually LOAD and RUN
+      # on Alpine/musl, not just compile. dlopen the .so and exercise the core
+      # FPDF API (init -> open a PDF -> page count). Component mode only (needs
+      # the shared lib). This is what proves musl support beyond the cheap
+      # detectPlatform() check in ci.yml.
+      - name: Smoke test musl PDFium (load + open a PDF)
+        if: matrix.libc == 'musl' && matrix.mode == 'component'
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium-smoke
 
       - name: Package artifacts
         # component mode keeps the historical tarball name
@@ -210,8 +242,9 @@ jobs:
 
   release:
     needs: [resolve-sha, build]
-    # always(): a failed build leg must not skip the release; the sanity check
-    # below still hard-fails on missing required platforms.
+    # always() so an unproven musl leg failing (matrix fail-fast is off) does not
+    # block the glibc/darwin/windows release. The sanity check below still hard-
+    # requires every non-musl platform; musl is warn-only until it goes green.
     if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && needs.resolve-sha.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -235,6 +268,12 @@ jobs:
           for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
             test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
             test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
+          done
+          # musl is experimental - warn but don't block the release if the Alpine
+          # PDFium build is not green yet. Once it is, promote these to hard fails.
+          for p in linux-musl-x64 linux-musl-arm64; do
+            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) - musl build not green yet";
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) - musl build not green yet";
           done
 
       - name: Create GitHub Release
@@ -261,6 +300,8 @@ jobs:
           |---------------|----------------------------------|------------------------------------------|
           | linux-x64     | pdfium-linux-x64.tar.gz          | pdfium-linux-x64-static.tar.gz           |
           | linux-arm64   | pdfium-linux-arm64.tar.gz        | pdfium-linux-arm64-static.tar.gz         |
+          | linux-musl-x64 | pdfium-linux-musl-x64.tar.gz    | pdfium-linux-musl-x64-static.tar.gz      |
+          | linux-musl-arm64 | pdfium-linux-musl-arm64.tar.gz | pdfium-linux-musl-arm64-static.tar.gz    |
           | darwin-x64    | pdfium-darwin-x64.tar.gz         | pdfium-darwin-x64-static.tar.gz          |
           | darwin-arm64  | pdfium-darwin-arm64.tar.gz       | pdfium-darwin-arm64-static.tar.gz        |
           | windows-x64   | pdfium-windows-x64.tar.gz        | pdfium-windows-x64-static.tar.gz         |
@@ -271,6 +312,10 @@ jobs:
           but bigger. Static tarballs hold a single libpdfium.{a,lib} containing
           PDFium + every bundled dep - picked up by release.yml so the final
           natives jars dead-strip aggressively across PDFium internals.
+
+          The `linux-musl-*` tarballs are built inside an Alpine container and are
+          musl-linked (for Alpine / musl runtimes); they are experimental until
+          the Prebuild PDFium workflow goes green on them.
 
           Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
           EOF

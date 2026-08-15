@@ -27,6 +27,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail fast BEFORE the ~25-min natives matrix if the pinned PDFium prebuild
+  # release is missing required assets. Without this, a missing
+  # pdfium-<platform>.tar.gz surfaces only after each leg's 20+ min build, and
+  # every PR burns the whole matrix before failing.
+  preflight-assets:
+    name: Preflight - pinned PDFium release assets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Verify prebuilt PDFium assets exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
+          [ -n "$TAG" ] || { echo "::error::native/pdfium.version is empty - run the Prebuild PDFium workflow first"; exit 1; }
+          echo "Pinned PDFium prebuild: $TAG"
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          # Required platforms (component + static): missing -> fail fast.
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
+            for suffix in "" -static; do
+              echo "$ASSETS" | grep -qx "pdfium-$p$suffix.tar.gz" || {
+                echo "::error::missing required prebuild asset pdfium-$p$suffix.tar.gz in release $TAG - run Prebuild PDFium / merge its pin PR"; exit 1;
+              }
+            done
+          done
+          # musl is experimental (Prebuild PDFium treats linux-musl-* as
+          # warn-only) - missing assets skip the musl legs, never fail.
+          for p in linux-musl-x64 linux-musl-arm64; do
+            if echo "$ASSETS" | grep -qx "pdfium-$p.tar.gz"; then
+              echo "musl prebuild $p: present"
+            else
+              echo "::warning::musl prebuild pdfium-$p.tar.gz missing - linux-musl-* natives will be skipped this run"
+            fi
+          done
+          echo "Preflight OK"
+
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
   # so the windows-x64 job can download it as an artifact during its own
   # build. The matrix can't have per-cell needs:, so we do this as a
@@ -72,7 +112,7 @@ jobs:
           retention-days: 1
 
   build-natives:
-    needs: prep-windows-icu
+    needs: [preflight-assets, prep-windows-icu]
     if: always()  # build even if prep failed; windows job falls back to vcpkg's full icudt78.dll
     strategy:
       fail-fast: false
@@ -80,6 +120,14 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
+          # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
+          # from the host - GitHub cannot run JS actions in Alpine containers on
+          # arm64 runners, so there is no job-level container here. Consumes the
+          # musl PDFium prebuilds from prebuild-pdfium.yml. arm64 uses a native
+          # arm64 runner.
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, libc: musl }
           # darwin-x64 cross-compiles from macos-14 (arm64 host) with an
           # x86_64 Homebrew installed at /usr/local under Rosetta.
           - { platform: darwin-x64,   runner: macos-14         }
@@ -94,6 +142,9 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        # The musl legs build + smoke inside an Alpine container which ships its
+        # own musl JDK - a glibc host JDK is neither needed nor usable there.
+        if: matrix.libc != 'musl'
         with:
           # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
           # Build of OpenJDK does, so use it on the windows-arm64 leg.
@@ -101,7 +152,7 @@ jobs:
           java-version: '25'
 
       - name: Install build deps (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
         # ports.ubuntu.com (the arm64 mirror) has multi-hour network outages
         # ~weekly (seen May 2026 - Connection failed [IP: 91.189.91.10x] across
         # 30+ min). Switch to the Azure mirror which is network-adjacent to GH
@@ -157,29 +208,47 @@ jobs:
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
 
+      - name: Cache vcpkg binary packages
+        if: startsWith(matrix.platform, 'windows-')
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-binary-${{ matrix.platform }}-${{ hashFiles('native/vcpkg-overlay/**', '.github/workflows/snapshot.yml') }}
+          restore-keys: vcpkg-binary-${{ matrix.platform }}-
+
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
           choco install -y cmake --version=4.4.2
           choco install -y ninja --version=1.13.2
           choco install -y pkgconfiglite --version=0.28
+          echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch so the bridge + bundler resolve the right
           # DLLs (arm64-windows on windows-11-arm runners, x64-windows on x64).
+          # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
+          # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
           else
             TRIPLET="x64-windows"
           fi
-          vcpkg install pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
-                        icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
-                        libunibreak:$TRIPLET
+          bash native/vcpkg-install.sh \
+            pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+            icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
+            libunibreak:$TRIPLET
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt PDFium (pinned)
+        id: fetch
+        # The musl PDFium prebuilds are experimental (Prebuild PDFium's release
+        # sanity check treats linux-musl-* as warn-only). Until that workflow is
+        # green, a missing pdfium-linux-musl-*.tar.gz must SKIP the musl legs,
+        # not fail every PR - the skip is surfaced by the step below.
+        continue-on-error: ${{ matrix.libc == 'musl' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -188,8 +257,31 @@ jobs:
           JPDFIUM_BUILD_MODE: ${{ inputs.build_mode || 'component' }}
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
+      # musl legs run the ENTIRE native build + smoke inside an Alpine container
+      # via docker run from the host (GitHub cannot host JS actions in Alpine
+      # containers on arm64 runners, so no job-level `container:`). One container
+      # run does bootstrap + rebuild deps + bridge + stage + bundle + smoke, so
+      # the ~1 GB apk bootstrap happens once. The smoke INITS the native and
+      # opens a PDF on the musl JVM - the linux-musl-* leg is red until both pass.
+      - name: Build + smoke musl natives (Alpine container)
+        id: musl
+        if: matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Shipped jar: the musl bundle must be held to the strict size gate too.
+          SIZE_GATE_STRICT: '1'
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
+
+      - name: Skip musl natives (missing musl PDFium prebuild)
+        if: matrix.libc == 'musl' && steps.fetch.outcome == 'failure'
+        run: |
+          echo "::warning::linux-musl-* natives skipped: pdfium-linux-musl-*.tar.gz is not in the pinned PDFium prebuild release yet."
+          echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
+          echo "The glibc/darwin/windows legs are unaffected."
+
       - name: Build qpdf with native crypto (Linux + macOS)
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
         # Rebuild libqpdf with --with-crypto=native to drop the crypto
         # transitive chain:
         #   Linux   apt libqpdf-dev is GNUTLS-built - drops libgnutls +
@@ -202,20 +294,25 @@ jobs:
         run: bash native/build-qpdf-native-crypto.sh
 
       - name: Build harfbuzz without GLib (Linux + macOS)
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
         # Rebuild libharfbuzz with all language bindings disabled to drop
         # libglib (~1.4 MB on Linux, ~1.25 MB + libintl ~230 KB on macOS).
         # apt's libharfbuzz0b and brew's harfbuzz both link glib for the
         # hb-glib bindings we don't use; the bridge calls plain hb_*.
         run: bash native/build-harfbuzz-no-glib.sh
 
-      - run: bash native/build-real.sh
+      - if: matrix.libc != 'musl'
+        run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
         # Strips ~25 MB of unused ICU data (locales, currencies, collations,
         # RBNF, ...) and repackages libicudata.so. The bundler step will then
-        # pick up the trimmed lib via ldd on the bridge.
+        # pick up the trimmed lib via ldd on the bridge. JPDFIUM_TARGET_PLATFORM
+        # makes the trimmed lib land in the right natives dist dir on the musl
+        # legs (linux-musl-*) too.
+        env:
+          JPDFIUM_TARGET_PLATFORM: ${{ matrix.platform }}
         run: bash native/build-minimal-icu.sh
 
       - name: Download bare trimmed ICU .dat (macOS)
@@ -249,6 +346,7 @@ jobs:
         run: bash native/import-macos-cert.sh
 
       - name: Stage binaries (bridge + PDFium siblings)
+        if: matrix.libc != 'musl'
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
           find native/build-real -maxdepth 3 -type f \( \
@@ -281,10 +379,14 @@ jobs:
           path: native/dist/windows-x64/
 
       - name: Bundle runtime deps + strip
+        if: matrix.libc != 'musl'
         env:
           # PRs have no signing cert; unsigned is fine there because
           # publish-snapshot never runs on pull_request.
           MACOS_ALLOW_UNSIGNED: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          # Shipped jar: a platform with no size budget entry must FAIL, not
+          # silently disable the gate.
+          SIZE_GATE_STRICT: '1'
         run: |
           # Bridge runtime deps - walk the bridge's import table and copy
           # only what's actually referenced, skipping system libs. Also
@@ -303,8 +405,11 @@ jobs:
       - name: Install jextract (for smoke build)
         # No windows-aarch64 jextract build exists (download.java.net ships
         # windows-x64 only), but the FFM bindings are committed in-repo, so the
-        # windows-arm64 smoke uses them directly and can skip jextract.
-        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        # windows-arm64 smoke uses them directly and can skip jextract. Same for
+        # musl: jextract only ships glibc builds, so the musl smoke uses the
+        # committed bindings (generateBindings is skipped when jextract is
+        # absent).
+        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && matrix.libc != 'musl' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         shell: bash
         run: |
           case "$RUNNER_OS" in
@@ -318,10 +423,53 @@ jobs:
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
       - name: Functional smoke test (load native + open a PDF)
-        if: matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
+      - name: Verify native smoke actually ran
+        if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
+      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /
+      # release the dylib is signed, so run its x86_64 smoke under Rosetta with
+      # an x86_64 JDK (skipped on PRs where macOS rejects the unsigned dylib).
+      - name: Functional smoke test - darwin-x64 (Rosetta)
+        if: matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          curl -fL --max-time 300 --retry 5 --retry-all-errors --retry-delay 3 \
+            "https://api.adoptium.net/v3/binary/latest/25/ga/mac/x64/jdk/hotspot/normal/eclipse?project=jdk" \
+            -o /tmp/x64-jdk.tar.gz
+          mkdir -p "$HOME/x64-jdk"
+          tar -xzf /tmp/x64-jdk.tar.gz -C "$HOME/x64-jdk" --strip-components=1
+          arch -x86_64 "$HOME/x64-jdk/Contents/Home/bin/java" -version
+          export JAVA_HOME="$HOME/x64-jdk/Contents/Home"
+          arch -x86_64 ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=darwin-x64 --no-daemon --stacktrace
+
+      - name: Verify darwin-x64 smoke actually ran
+        if: always() && matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
+      - name: Verify musl smoke actually ran
+        if: always() && matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
+      - name: Upload hs_err logs (smoke crash diagnostics)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hs_err-${{ matrix.platform }}-${{ github.run_id }}
+          path: |
+            jpdfium/hs_err_pid*.log
+            jpdfium-natives/**/hs_err_pid*.log
+            **/hs_err_pid*.log
+          if-no-files-found: warn
+          retention-days: 7
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # musl: only upload when the in-container build actually staged natives
+        # (skipped legs - missing musl PDFium prebuild - have an empty dist dir).
+        if: always() && (matrix.libc != 'musl' || steps.musl.outcome == 'success')
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -333,6 +481,9 @@ jobs:
   # blocked while the per-platform libvips bundle is being hardened. Publishes
   # nothing yet - add vips natives to publish-snapshot once staging is stable.
   build-vips-natives:
+    # The vips smoke renders a real PDF through the core natives, so it needs
+    # the per-platform PDFium bundle from build-natives.
+    needs: build-natives
     if: always()
     strategy:
       fail-fast: false
@@ -355,14 +506,32 @@ jobs:
           java-version: '25'
       - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
 
-      - name: Install libvips (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+      # The vips smoke test renders a PDF via the core PDFium natives, so stage
+      # that platform's natives bundle next to the vips one.
+      - name: Download core natives for ${{ matrix.platform }}
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        continue-on-error: true        # core leg may have failed on this PR
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+
+      - name: Build full-codec libvips (Linux + macOS)
+        # The distro libvips (apt/brew) lacks jxlsave/heifsave; build a copy
+        # with ALL major codecs so the smoke can render PDF -> every format.
+        if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'darwin-arm64'
+        continue-on-error: true
+        run: bash native/build-vips-full-codecs.sh
+      - name: Install libvips (Linux, fallback)
+        if: startsWith(matrix.platform, 'linux-') && !cancelled()
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libvips-dev patchelf
-      - name: Install libvips (macOS)
+          # Only needed if the source build above was skipped; keep the apt
+          # libvips around so build-vips.sh always finds something.
+          [ -f /usr/local/lib/libvips.so.42 ] || \
+            sudo apt-get install -y --no-install-recommends libvips-dev patchelf
+      - name: Install libvips (macOS, fallback)
         if: matrix.platform == 'darwin-arm64'
-        run: brew install vips
+        run: |
+          [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
       - name: Fetch prebuilt libvips (Windows)
         # Asset name/version may need updating to match a current
         # libvips/build-win64-mxe release. Non-blocking (job-level
@@ -388,6 +557,32 @@ jobs:
         if: steps.stage.outcome == 'success'
         continue-on-error: true
         run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
+
+      # Functional smoke gate: the bundled vips natives must RENDER a real PDF
+      # and encode it to every major format (HEIF, HEIC, AVIF, JXL, PNG, JPEG,
+      # WEBP, TIFF) before this vips package counts as good. Red (never green)
+      # until every format round-trips. Skipped on PRs for darwin (unsigned
+      # dylibs on PRs can't load on arm64 macOS).
+      - name: Vips smoke test (render PDF -> all major formats)
+        if: steps.stage.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
+        run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
+
+      - name: Verify vips smoke actually ran
+        if: always() && steps.stage.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
+        run: bash native/ci/check-smoke-ran.sh jpdfium-vips/build/test-results/vipsSmokeTest
+
+      - name: Upload hs_err logs (vips smoke crash diagnostics)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vips-hs_err-${{ matrix.platform }}-${{ github.run_id }}
+          path: |
+            jpdfium-vips/hs_err_pid*.log
+            jpdfium/hs_err_pid*.log
+            jpdfium-natives/**/hs_err_pid*.log
+            **/hs_err_pid*.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.stage.outcome == 'success'
@@ -452,6 +647,8 @@ jobs:
             :jpdfium-spring:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-linux-x64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-linux-arm64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-linux-musl-x64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-linux-musl-arm64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-darwin-x64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToCentralPortalRepository \

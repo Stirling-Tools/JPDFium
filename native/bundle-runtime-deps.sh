@@ -34,8 +34,10 @@ bundle_linux() {
 
     # Always-present system libs we don't need to (and shouldn't) bundle.
     # Bundling libc/libpthread/etc. can crash because the dynamic linker
-    # already has its own copy loaded into the process.
-    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux'
+    # already has its own copy loaded into the process. Also covers the musl
+    # names (libc.musl-<arch>.so.1, ld-musl-<arch>.so.1) on Alpine/Alpine-style
+    # runtimes - the linux-musl-* natives bundle against musl.
+    local skip_regex='^(linux-vdso|libc|libc\.musl|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux|^ld-musl'
 
     # Recursive walk: queue of files to process; each file's ldd output gets
     # filtered and uncopied entries get copied + queued. We use file-existence
@@ -378,6 +380,11 @@ bundle_windows() {
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
+        # The prebuilt PDFium component build ships a PartitionAlloc allocator
+        # shim that NOTHING links against on Linux (verified: libpdfium.so
+        # links raw_ptr but NOT the shim). It is dead weight AND a latent JVM
+        # hazard - strip it. raw_ptr stays: libpdfium.so genuinely needs it.
+        find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         # Strip debug symbols from the bridge to slash binary size. The
         # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
         # but Rust's #[no_mangle] + statically linked third-party crates still
@@ -395,6 +402,8 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
+        # macOS: libpdfium.dylib genuinely links BOTH the allocator shim and
+        # raw_ptr, so neither is stripped.
         # macOS strip wants -S (debug symbols only) to keep the symbol table
         # the loader needs. -x would strip non-global symbols which can
         # break dlsym lookups.
@@ -410,6 +419,19 @@ case "$PLATFORM" in
         ;;
     windows-*|vips-windows-*)
         bundle_windows
+        # The prebuilt PDFium component build ships PartitionAlloc DLLs that
+        # NOTHING links against on Windows (verified: no DLL imports the
+        # allocator shim or raw_ptr on windows-x64 / windows-arm64). They are
+        # dead weight AND a JVM hazard: the shim's DllMain replaces the process
+        # allocator, which hard-crashes the JVM when NativeLoader preloads the
+        # manifest (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). Strip them
+        # on Windows only. Dependency matrix (verified against the prebuilt
+        # tarballs): shim is orphaned on linux+windows but linked by
+        # libpdfium.dylib on macOS; raw_ptr is orphaned on windows but linked
+        # by libpdfium on linux+macOS. The linux leg strips the shim; macOS
+        # strips neither.
+        find "$DIST_DIR" -maxdepth 1 -type f \
+            \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
         # The MSVC linker strips PE files in Release config already; no
         # equivalent `strip` step needed.
         ;;
@@ -418,6 +440,19 @@ case "$PLATFORM" in
         exit 1
         ;;
 esac
+
+# Orphaned / JVM-hostile library gate: every bundled lib must be imported by
+# something. On Windows the prebuilt PDFium component build ships exactly such
+# orphans (PartitionAlloc shim/raw_ptr) - preloading them into the JVM
+# hard-crashes it, so this fails the bundle rather than the first consumer.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR" "$PLATFORM"
+
+# Leanness gate: no debug symbols, no stray artifact types, no duplicate
+# basenames (dead-weight collisions), plus a size report.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"
+
+# Size budget gate: fails when the bundle exceeds its per-platform budget.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-size.sh" "$DIST_DIR" "$PLATFORM"
 
 echo ""
 echo "Final bundle contents for $PLATFORM:"

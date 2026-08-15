@@ -71,6 +71,7 @@ jpdfium/                Java API (stirling.software.jpdfium): core API, panama/ 
                         bindings, doc/ inspection & editing, text/, redact/, transform/,
                         fonts/, model/, util/, plus runnable samples under src/test
 jpdfium-natives-<platform>/  native JARs: linux/darwin/windows × x64/arm64
+                        (+ linux-musl-{x64,arm64} for Alpine / musl runtimes)
 jpdfium-spring/         Spring Boot auto-configuration
 jpdfium-bom/            Maven BOM for dependency management
 ```
@@ -141,24 +142,6 @@ For Java-only development, `./gradlew buildStubBridge` provides a pass-through s
 - A `PdfDocument` and all handles derived from it must stay on one thread.
 - Independent `PdfDocument` instances on separate threads are safe.
 - `FPDF_InitLibrary` / `FPDF_DestroyLibrary` run once globally.
-
-## Redaction Design
-
-Object Fission removes text from the content stream rather than painting over it:
-
-1. Map each character to its owning page object via `FPDFText_GetTextObject`.
-2. Destroy objects fully covered by matches; for partial overlaps, split surviving characters into per-word fragments, each pinned to its original char origin so inter-word spacing is preserved.
-3. Validate fragment bounds; abort to fallback removal for degenerate cases (e.g. Type 3 fonts).
-4. Fallback: remove objects with >= 70% area overlap; paint a filled rectangle over every match; commit with a single `FPDFPage_GenerateContent`.
-
-Security levels (least to most secure):
-
-```
-removeContent=false       visual overlay only (not secure)
-removeContent=true        Object Fission, text removed from stream
-page.flatten()            bakes changes, prevents annotation recovery
-convertToImage(true)      rasterize, no text, vectors, or metadata survives
-```
 
 ## Testing
 

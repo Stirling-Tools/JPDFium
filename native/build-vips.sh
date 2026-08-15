@@ -46,10 +46,13 @@ mkdir -p "$DIST"
 
 # Resolve the source libvips. echoes either the lib path (POSIX) or, on
 # Windows, the prebuilt dist's bin/ dir (we copy its whole DLL tree).
+# Prefers the full-codec libvips built by build-vips-full-codecs.sh into
+# /usr/local (HEIF/HEIC/AVIF/JXL/WebP/PNG/JPEG/TIFF) over the distro package.
 resolve_libvips() {
     case "$OS" in
         linux)
             local p
+            [ -f /usr/local/lib/"$LIBVIPS_NAME" ] && { echo /usr/local/lib/"$LIBVIPS_NAME"; return 0; }
             p=$(ldconfig -p 2>/dev/null | awk -v n="$LIBVIPS_NAME" '$1==n{print $NF; exit}' || true)
             [ -n "$p" ] && [ -f "$p" ] && { echo "$p"; return 0; }
             p=$(find /usr/lib /usr/local/lib -name "$LIBVIPS_NAME" 2>/dev/null | head -n1 || true)
@@ -57,6 +60,7 @@ resolve_libvips() {
             ;;
         darwin)
             local prefix p
+            [ -f /usr/local/lib/"$LIBVIPS_NAME" ] && { echo /usr/local/lib/"$LIBVIPS_NAME"; return 0; }
             prefix="$(brew --prefix vips 2>/dev/null || true)"
             [ -n "$prefix" ] && [ -f "$prefix/lib/$LIBVIPS_NAME" ] && { echo "$prefix/lib/$LIBVIPS_NAME"; return 0; }
             p=$(find /opt/homebrew/lib /usr/local/lib -name "$LIBVIPS_NAME" 2>/dev/null | head -n1 || true)

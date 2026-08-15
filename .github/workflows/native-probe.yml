@@ -20,6 +20,11 @@ jobs:
             runner: ubuntu-latest
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
+          # linux-musl-* are NOT probed here: snapshot.yml builds and smokes the
+          # real musl natives on every PR (INIT + open-a-PDF), which supersedes
+          # this stub-based wiring probe. Also GitHub cannot run JS actions in
+          # Alpine containers on arm64 runners, so a container-based probe leg
+          # would need a full docker-run pipeline for little added signal.
           - platform: darwin-x64
             runner: macos-14
           - platform: darwin-arm64

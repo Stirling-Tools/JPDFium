@@ -30,6 +30,8 @@ All modules share a single version property `jpdfium.version` (defined in
 | `com.stirling:jpdfium-spring`             | jar           | Spring Boot starter                |
 | `com.stirling:jpdfium-natives-linux-x64`  | jar (natives) | Resource-only, `.so` + deps        |
 | `com.stirling:jpdfium-natives-linux-arm64`| jar (natives) | Resource-only, `.so` + deps        |
+| `com.stirling:jpdfium-natives-linux-musl-x64`   | jar (natives) | Resource-only, musl-linked `.so` + deps (Alpine) |
+| `com.stirling:jpdfium-natives-linux-musl-arm64` | jar (natives) | Resource-only, musl-linked `.so` + deps (Alpine) |
 | `com.stirling:jpdfium-natives-darwin-x64` | jar (natives) | Resource-only, `.dylib` + deps     |
 | `com.stirling:jpdfium-natives-darwin-arm64`| jar (natives)| Resource-only, `.dylib` + deps     |
 | `com.stirling:jpdfium-natives-windows-x64`| jar (natives) | Resource-only, `.dll` + deps       |

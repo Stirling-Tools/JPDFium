@@ -87,7 +87,9 @@ jobs:
           # RUNPATH=$ORIGIN via patchelf so NativeLoader's System.load can
           # resolve transitive component-lib dependencies from the extracted
           # temp dir. The natives jar must contain this corrected set.
-          bash native/bundle-runtime-deps.sh linux-x64
+          # The CLI embeds a test bundle (full system ICU), not a shipped jar -
+          # skip the shipped-jar size budget.
+          JPDFIUM_SKIP_SIZE_BUDGET=1 bash native/bundle-runtime-deps.sh linux-x64
           ls -la native/dist/linux-x64/
 
       - name: CLI correctness tests (JVM, real native)

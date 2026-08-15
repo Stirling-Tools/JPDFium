@@ -148,6 +148,10 @@ jobs:
       # Walk the bridge's import table and copy every referenced third-party
       # .so into native/dist/linux-x64 (RUNPATH=$ORIGIN finds them at load).
       - name: Bundle runtime deps
+        env:
+          # This bundle is for local test shards (full system ICU), not a
+          # shipped jar - skip the shipped-jar size budget.
+          JPDFIUM_SKIP_SIZE_BUDGET: '1'
         run: |
           bash native/bundle-runtime-deps.sh linux-x64
           echo "--- bundled libs ---"
