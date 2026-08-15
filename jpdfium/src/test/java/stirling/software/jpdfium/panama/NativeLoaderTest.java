@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NativeLoaderTest {
 
-    private static final Pattern PATTERN = Pattern.compile("(linux|darwin|windows)-(x64|arm64)");
+    private static final Pattern PATTERN = Pattern.compile("(linux(-musl)?|darwin|windows)-(x64|arm64)");
 
     @Test
     void detectsPlatformCorrectly() {

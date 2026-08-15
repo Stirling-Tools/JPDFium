@@ -25,9 +25,11 @@ fi
 # are shipped by the toolchain; a minimal container still has them via glibc's
 # dependency. Keep this list intentionally conservative.
 # ld-linux matches versioned loader names (ld-linux-x86-64.so.2,
-# ld-linux-aarch64.so.1); the libc-family entries require a `.so` so they don't
-# absorb lookalikes like libcrypto/libfreetype.
-CORE_RE='^(libc|libm|libdl|libpthread|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux'
+# ld-linux-aarch64.so.1); ld-musl covers the musl loader (ld-musl-x86_64.so.1,
+# ld-musl-aarch64.so.1) and libc.musl the musl libc on Alpine-style runtimes.
+# The libc-family entries require a `.so` so they don't absorb lookalikes like
+# libcrypto/libfreetype.
+CORE_RE='^(libc|libc\.musl|libm|libdl|libpthread|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux|^ld-musl'
 
 failures=0
 lib_count=0

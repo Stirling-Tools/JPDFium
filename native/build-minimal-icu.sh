@@ -311,6 +311,10 @@ case "$(uname -m)" in
     aarch64|arm64) PLATFORM="linux-arm64";;
     *) echo "build-minimal-icu.sh: unknown arch $(uname -m); skipping pre-stage" >&2; exit 0;;
 esac
+# CI sets JPDFIUM_TARGET_PLATFORM for the musl legs (linux-musl-x64 /
+# linux-musl-arm64) so the trimmed ICU lands in the correct natives dist dir;
+# uname only knows the arch, not the libc.
+PLATFORM="${JPDFIUM_TARGET_PLATFORM:-$PLATFORM}"
 PLATFORM_DIST="$(dirname "$0")/dist/$PLATFORM"
 mkdir -p "$PLATFORM_DIST"
 # Stage as libicudata.so.<MAJ> (the SONAME the bundler's ldd walk resolves to).

@@ -9,8 +9,8 @@
 # Usage:
 #   native/fetch-prebuilt-pdfium.sh <platform>
 #
-# Where <platform> is one of: linux-x64, linux-arm64, darwin-x64, darwin-arm64,
-# windows-x64, windows-arm64.
+# Where <platform> is one of: linux-x64, linux-arm64, linux-musl-x64,
+# linux-musl-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64.
 #
 # Requires:
 #   - gh CLI authenticated (GH_TOKEN env var is enough in GitHub Actions)
@@ -20,7 +20,7 @@ set -euo pipefail
 PLATFORM="${1:-}"
 if [ -z "$PLATFORM" ]; then
     echo "Usage: $0 <platform>" >&2
-    echo "  platform: linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64 | windows-x64 | windows-arm64" >&2
+    echo "  platform: linux-x64 | linux-arm64 | linux-musl-x64 | linux-musl-arm64 | darwin-x64 | darwin-arm64 | windows-x64 | windows-arm64" >&2
     exit 2
 fi
 

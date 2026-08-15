@@ -34,8 +34,10 @@ bundle_linux() {
 
     # Always-present system libs we don't need to (and shouldn't) bundle.
     # Bundling libc/libpthread/etc. can crash because the dynamic linker
-    # already has its own copy loaded into the process.
-    local skip_regex='^(linux-vdso|libc|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux'
+    # already has its own copy loaded into the process. Also covers the musl
+    # names (libc.musl-<arch>.so.1, ld-musl-<arch>.so.1) on Alpine/Alpine-style
+    # runtimes - the linux-musl-* natives bundle against musl.
+    local skip_regex='^(linux-vdso|libc|libc\.musl|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux|^ld-musl'
 
     # Recursive walk: queue of files to process; each file's ldd output gets
     # filtered and uncopied entries get copied + queued. We use file-existence
@@ -372,6 +374,19 @@ bundle_windows() {
             cp -v "$src" "$dest"
             queue+=("$dest")
         done <<<"$deps"
+    done
+
+    # The prebuilt PDFium component build ships PartitionAlloc DLLs that nothing
+    # links against (the allocator shim + raw_ptr). They are dead weight AND a
+    # JVM hazard: the shim's DllMain replaces the process allocator, which is
+    # catastrophic when the natives are loaded into the JVM (hard loader crash,
+    # e.g. STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). NativeLoader preloads
+    # every DLL in the manifest, so strip these orphans from the bundle.
+    for orphan in \
+        base_allocator_partition_allocator_src_partition_alloc_allocator_shim.dll \
+        base_allocator_partition_allocator_src_partition_alloc_raw_ptr.dll
+    do
+        [ -e "$DIST_DIR/$orphan" ] && rm -v "$DIST_DIR/$orphan"
     done
 }
 

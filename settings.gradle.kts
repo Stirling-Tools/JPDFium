@@ -7,6 +7,8 @@ include(
     "jpdfium-vips",
     "jpdfium-natives:jpdfium-natives-linux-x64",
     "jpdfium-natives:jpdfium-natives-linux-arm64",
+    "jpdfium-natives:jpdfium-natives-linux-musl-x64",
+    "jpdfium-natives:jpdfium-natives-linux-musl-arm64",
     "jpdfium-natives:jpdfium-natives-darwin-x64",
     "jpdfium-natives:jpdfium-natives-darwin-arm64",
     "jpdfium-natives:jpdfium-natives-windows-x64",
