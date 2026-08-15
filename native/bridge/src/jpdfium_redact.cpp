@@ -517,8 +517,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     //    already sorted). Indexed by allObjs index (page objects then form
     //    children); a flat vector of vectors instead of a map - O(objCount)
     //    and arena-friendly.
-    std::pmr::vector<std::pmr::vector<int>> objChars(allObjs.size(),
-                                                     std::pmr::vector<int>(mr), mr);
+    std::pmr::vector<std::pmr::vector<int>> objChars(allObjs.size(), std::pmr::vector<int>(mr), mr);
     for (int ci = 0; ci < totalChars; ci++) {
         int oi = charInfo[ci].ownerObj;
         if (oi >= 0) objChars[static_cast<size_t>(oi)].push_back(ci);

@@ -11,6 +11,18 @@
 extern "C" {
 #endif
 
+// The exported C ABI is exception-free: every entry point is wrapped in
+// jpdfium_guarded (jpdfium_internal.h) and cannot throw. We still declare the
+// functions noexcept when compiled as C++ (lets the compiler assume no throw
+// across the bridge), but jextract parses this header as C where `noexcept`
+// is not valid syntax, so it must expand to nothing there. This mirrors the
+// extern "C" guard above.
+#ifdef __cplusplus
+#define JPDFIUM_NOEXCEPT noexcept
+#else
+#define JPDFIUM_NOEXCEPT
+#endif
+
 // Return codes. 0 = success; all negative values are errors.
 #define JPDFIUM_OK (0)
 #define JPDFIUM_ERR_INVALID (-1)
@@ -75,7 +87,7 @@ JPDFIUM_EXPORT int32_t jpdfium_text_find(int64_t page, const char* query, char**
 JPDFIUM_EXPORT void jpdfium_free_string(char* str);
 
 JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
-                                             uint32_t argb, int32_t remove_content) noexcept;
+                                             uint32_t argb, int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Ghostscript-style hard crop: physically removes every page object (text,
 // image, path, shading, form) lying entirely outside the crop rectangle
 // [x,y,x+w,y+h] (PDF coords, y up). Text straddling the boundary is split at
@@ -85,17 +97,17 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
 // Non-finite (NaN/Inf) coordinates or non-positive sizes return
 // JPDFIUM_ERR_INVALID.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
-                                                   float h) noexcept;
+                                                   float h) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
-                                              int32_t remove_content) noexcept;
+                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount,
                                             uint32_t argb, float padding, int32_t wholeWord,
-                                            int32_t useRegex, int32_t remove_content) noexcept;
+                                            int32_t useRegex, int32_t remove_content) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount,
                                                uint32_t argb, float padding, int32_t wholeWord,
                                                int32_t useRegex, int32_t remove_content,
-                                               int32_t caseSensitive, int32_t* matchCount) noexcept;
-JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) noexcept;
+                                               int32_t caseSensitive, int32_t* matchCount) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
@@ -115,7 +127,7 @@ JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json
 // The annotation is stored in the page's annotation dictionary; the content
 // stream is NOT modified.  Returns the annotation index on success.
 JPDFIUM_EXPORT int32_t jpdfium_annot_create_redact(int64_t page, float x, float y, float w, float h,
-                                                   uint32_t argb, int32_t* annot_index) noexcept;
+                                                   uint32_t argb, int32_t* annot_index) JPDFIUM_NOEXCEPT;
 
 // Mark phase: find all word matches and create REDACT annotations for each.
 // Equivalent to jpdfium_redact_words_ex but ONLY creates annotations,
@@ -125,20 +137,20 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_mark_words(int64_t page, const char** word
                                                  int32_t wordCount, float padding,
                                                  int32_t wholeWord, int32_t useRegex,
                                                  int32_t caseSensitive, uint32_t argb,
-                                                 int32_t* matchCount) noexcept;
+                                                 int32_t* matchCount) JPDFIUM_NOEXCEPT;
 
 // Query: return the number of REDACT annotations on the page.
-JPDFIUM_EXPORT int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) noexcept;
+JPDFIUM_EXPORT int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) JPDFIUM_NOEXCEPT;
 
 // Query: return all REDACT annotation rects as JSON.
 // [{"idx":0,"x":10.0,"y":20.0,"w":50.0,"h":12.0}, ...]
-JPDFIUM_EXPORT int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) noexcept;
+JPDFIUM_EXPORT int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) JPDFIUM_NOEXCEPT;
 
 // Remove a specific REDACT annotation by its annotation index.
-JPDFIUM_EXPORT int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index) noexcept;
+JPDFIUM_EXPORT int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index) JPDFIUM_NOEXCEPT;
 
 // Remove all REDACT annotations from the page (undo all marks).
-JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept;
+JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page) JPDFIUM_NOEXCEPT;
 
 // Commit phase: burn all REDACT annotations on the page using Object Fission.
 // This permanently removes content under each REDACT rect and regenerates the
@@ -157,10 +169,11 @@ JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept;
 // remains valid - no reload required.
 // Returns the number of REDACT annotations that were committed in *commitCount.
 JPDFIUM_EXPORT int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_content,
-                                             int32_t* commitCount) noexcept;
+                                             int32_t* commitCount) JPDFIUM_NOEXCEPT;
 
 // Incremental save: writes only changed objects, document stays live.
-JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) noexcept;
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data,
+                                                    int64_t* len) JPDFIUM_NOEXCEPT;
 
 // Advanced Pattern Engine (PCRE2 JIT)
 //
