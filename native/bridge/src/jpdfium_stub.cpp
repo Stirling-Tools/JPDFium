@@ -20,6 +20,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -240,9 +241,10 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
+    if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
     std::vector<uint8_t> bytes;
-    if (data && len > 0) bytes.assign(data, data + len);
+    bytes.assign(data, data + len);
     g_docs[*handle] = {"", std::move(bytes)};
     return JPDFIUM_OK;
 }
@@ -417,20 +419,33 @@ void jpdfium_free_string(char* s) {
 
 // =====================  Redaction  ========================================
 
-int32_t jpdfium_redact_region(int64_t, float, float, float, float, uint32_t, int32_t) {
-    return JPDFIUM_OK;
+// Stub must reject the same degenerate geometry the real bridge rejects so
+// native_smoke can validate the contract against either build variant.
+namespace {
+bool stub_rect_invalid(float x, float y, float w, float h) {
+    return !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
+           w <= 0.0f || h <= 0.0f;
 }
-int32_t jpdfium_redact_pattern(int64_t, const char*, uint32_t, int32_t) {
+}  // namespace
+
+int32_t jpdfium_redact_region(int64_t, float x, float y, float w, float h, uint32_t,
+                              int32_t) noexcept {
+    return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
+}
+int32_t jpdfium_crop_remove_content(int64_t, float x, float y, float w, float h) noexcept {
+    return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
+}
+int32_t jpdfium_redact_pattern(int64_t, const char*, uint32_t, int32_t) noexcept {
     return JPDFIUM_OK;
 }
 int32_t jpdfium_redact_words(int64_t, const char**, int32_t, uint32_t, float, int32_t, int32_t,
-                             int32_t) {
+                             int32_t) noexcept {
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_count, uint32_t,
                                 float, int32_t, int32_t, int32_t, int32_t case_sensitive,
-                                int32_t* match_count) {
+                                int32_t* match_count) noexcept {
     int matches = 0;
     std::string_view text = STUB_TEXT;
     if (auto it = g_page_text.find(page); it != g_page_text.end()) text = it->second;
@@ -442,7 +457,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_c
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_page_flatten(int64_t) {
+int32_t jpdfium_page_flatten(int64_t) noexcept {
     return JPDFIUM_OK;
 }
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
@@ -693,7 +708,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
 // =====================  Annotation-Based Redaction (Mark -> Commit)  ======
 
 int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, uint32_t,
-                                    int32_t* annot_index) {
+                                    int32_t* annot_index) noexcept {
     int idx = g_page_annots[page]++;
     if (annot_index) *annot_index = idx;
     return JPDFIUM_OK;
@@ -701,7 +716,7 @@ int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, ui
 
 int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word_count, float,
                                   int32_t, int32_t, int32_t case_sensitive, uint32_t,
-                                  int32_t* match_count) {
+                                  int32_t* match_count) noexcept {
     int matches = 0;
     std::string_view text = STUB_TEXT;
     if (auto it = g_page_text.find(page); it != g_page_text.end()) text = it->second;
@@ -714,7 +729,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) {
+int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) noexcept {
     if (count) {
         if (auto it = g_page_annots.find(page); it != g_page_annots.end())
             *count = it->second;
@@ -724,23 +739,23 @@ int32_t jpdfium_annot_count_redacts(int64_t page, int32_t* count) {
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_annot_get_redacts_json(int64_t, char** json) {
+int32_t jpdfium_annot_get_redacts_json(int64_t, char** json) noexcept {
     *json = dup_cstring("[]");
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) {
+int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) noexcept {
     if (auto it = g_page_annots.find(page); it != g_page_annots.end() && it->second > 0)
         --it->second;
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_annot_clear_redacts(int64_t page) {
+int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
     g_page_annots.erase(page);
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commit_count) {
+int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commit_count) noexcept {
     int pending = 0;
     if (auto it = g_page_annots.find(page); it != g_page_annots.end()) pending = it->second;
     if (commit_count) *commit_count = pending;
@@ -748,7 +763,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commit_c
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) {
+int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 

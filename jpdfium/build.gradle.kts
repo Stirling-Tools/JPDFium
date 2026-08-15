@@ -97,7 +97,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_text_get_chars", "jpdfium_text_find", "jpdfium_free_string",
     "jpdfium_text_get_char_positions",
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
-    "jpdfium_redact_words_ex",
+    "jpdfium_redact_words_ex", "jpdfium_crop_remove_content",
     "jpdfium_page_flatten", "jpdfium_page_to_image",
     // Advanced Pattern Engine (PCRE2 JIT)
     "jpdfium_pcre2_compile", "jpdfium_pcre2_match_all", "jpdfium_pcre2_free",
@@ -143,7 +143,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free"
 )
 
-val generateBindings by tasks.registering(Exec::class) {
+val generateBindings = tasks.register<Exec>("generateBindings") {
     description = "Generate FFM bindings from jpdfium.h using jextract"
     val outputDir = layout.buildDirectory.dir("generated/jextract/java")
     val headerFile = rootProject.file("native/bridge/include/jpdfium.h")
@@ -194,7 +194,7 @@ val generateBindings by tasks.registering(Exec::class) {
 // fix is to neutralize the platform-specific init. Patch the generated
 // source between jextract and compileJava so the published jar works on
 // both LP64 (Linux/macOS) and LLP64 (Windows) hosts.
-val patchBindingsForCrossPlatform by tasks.registering {
+val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatform") {
     description = "Make JpdfiumH\$shared.C_LONG init Windows-safe (OfInt vs OfLong)"
     dependsOn(generateBindings)
     val outputDir = layout.buildDirectory.dir("generated/jextract/java")
@@ -213,15 +213,19 @@ val patchBindingsForCrossPlatform by tasks.registering {
         val targetShared = committedDir.resolve("JpdfiumH\$shared.java")
         if (targetShared.exists()) {
             val original = targetShared.readText()
-            val pattern = Regex(
-                """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
-            val patched = pattern.replace(original,
-                "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
-                "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
-                "this constant is unused by any jpdfium binding so a placeholder is fine */")
-            if (patched != original) {
-                targetShared.writeText(patched)
-                logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+            if (original.contains("/* patched: jextract emits a platform-specific cast")) {
+                logger.lifecycle("JpdfiumH\$shared.C_LONG already patched - skipping")
+            } else {
+                val pattern = Regex(
+                    """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
+                val patched = pattern.replace(original,
+                    "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
+                    "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
+                    "this constant is unused by any jpdfium binding so a placeholder is fine */")
+                if (patched != original) {
+                    targetShared.writeText(patched)
+                    logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+                }
             }
         }
 
@@ -265,6 +269,47 @@ tasks.register<Test>("integrationTest") {
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = System.getProperty("jpdfium.bench.xmx", "2g")
+}
+
+// Run: ./gradlew :jpdfium:corpusTest -Pjpdfium.testNatives=<platform>
+// Corpus suite (downloaded + local + synthetic PDFs) against real PDFium.
+// Correctness assertions are hard; perf/alloc metrics are reported only, so
+// environment-sensitive timing can never fail the build.
+tasks.register<Test>("corpusTest") {
+    group       = "verification"
+    description = "Run the corpus test suite against real PDFium (downloads test PDFs)"
+    useJUnitPlatform {
+        includeTags("corpus")
+    }
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath       = sourceSets.test.get().runtimeClasspath
+    systemProperty("jpdfium.integration", "true")
+    systemProperty("jpdfium.corpus", "true")
+    // Forward corpus shard selection (used by the sharded CI job).
+    System.getProperties().forEach { k, v ->
+        val key = k.toString()
+        if (key.startsWith("jpdfium.corpus.")) systemProperty(key, v.toString())
+    }
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    maxHeapSize = System.getProperty("jpdfium.bench.xmx", "4g")
+}
+
+// Run: ./gradlew :jpdfium:generateCorpus -Pcorpus.count=3000 -Pcorpus.seed=42
+// Generates the synthetic PDF corpus with PDFBox (DiversePdfGenerator).
+tasks.register<JavaExec>("generateCorpus") {
+    group       = "verification"
+    description = "Generate the synthetic PDFBox corpus (count/seed via -Pcorpus.count/-Pcorpus.seed)"
+    dependsOn("compileTestJava")
+    mainClass.set("stirling.software.jpdfium.corpus.DiversePdfGenerator")
+    classpath = sourceSets.test.get().runtimeClasspath
+    args(
+        project.findProperty("corpus.outDir")?.toString()
+            ?: layout.buildDirectory.dir("test-corpus/generated").get().asFile.absolutePath,
+        project.findProperty("corpus.count")?.toString() ?: "300",
+        project.findProperty("corpus.seed")?.toString() ?: "42"
+    )
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    maxHeapSize = "2g"
 }
 
 // Run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=<platform>

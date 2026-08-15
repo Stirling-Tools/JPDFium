@@ -33,7 +33,7 @@ val distDir = rootProject.layout.projectDirectory.dir("native/dist/$platform")
 val stagedRoot = layout.buildDirectory.dir("staged-natives")           // added as resources srcDir
 val stagedPlatformDir = stagedRoot.map { it.dir("natives/$platform") } // real files land here
 
-val stageNatives by tasks.registering(Copy::class) {
+val stageNatives = tasks.register<Copy>("stageNatives") {
     description = "Copy pre-built native libraries from native/dist/$platform/ into the jar resource tree"
     group = "build"
     from(distDir) {
@@ -59,7 +59,7 @@ val stageNatives by tasks.registering(Copy::class) {
     onlyIf { distDir.asFile.isDirectory && distDir.asFile.listFiles()?.isNotEmpty() == true }
 }
 
-val writeNativeManifest by tasks.registering {
+val writeNativeManifest = tasks.register("writeNativeManifest") {
     description = "Write native-libs.txt listing every file in the staged natives directory"
     group = "build"
     dependsOn(stageNatives)

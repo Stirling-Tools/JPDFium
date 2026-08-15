@@ -57,6 +57,9 @@ public final class PdfSplit {
     /**
      * Extract specific pages (by zero-based indices) into a new document.
      *
+     * <p>The source document must remain open during this call but can be closed
+     * immediately afterwards - the returned document is fully self-contained.
+     *
      * @param doc     source document (must remain open)
      * @param indices zero-based page indices to extract
      * @return new document containing only the specified pages
@@ -74,11 +77,14 @@ public final class PdfSplit {
         PdfPageImporter.importPagesByIndex(dest.rawHandle(), doc.rawHandle(),
                 pageIndices, 0);
 
-        return dest;
+        return detach(dest);
     }
 
     /**
      * Extract a contiguous range of pages into a new document.
+     *
+     * <p>The source document must remain open during this call but can be closed
+     * immediately afterwards - the returned document is fully self-contained.
      *
      * @param doc       source document (must remain open)
      * @param fromPage  first page index (inclusive, zero-based)
@@ -98,7 +104,20 @@ public final class PdfSplit {
         PdfDocument dest = createEmptyDocument();
         PdfPageImporter.importPages(dest.rawHandle(), doc.rawHandle(), range, 0);
 
-        return dest;
+        return detach(dest);
+    }
+
+    /**
+     * PDFium's {@code FPDF_ImportPages} leaves imported pages referencing objects
+     * owned by the source document, so the live destination is invalidated the
+     * moment the source closes (saving it afterwards crashes the native layer).
+     * Save, close and reopen while the source is still open so the returned
+     * document is fully standalone and safe to use after the source closes.
+     */
+    private static PdfDocument detach(PdfDocument dest) {
+        try (dest) {
+            return PdfDocument.open(dest.saveBytes());
+        }
     }
 
     /**

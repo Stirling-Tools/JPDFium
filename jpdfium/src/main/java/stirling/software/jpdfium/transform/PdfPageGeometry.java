@@ -5,6 +5,9 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.JpdfiumLib;
+
+import java.util.List;
 
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
@@ -68,6 +71,159 @@ public final class PdfPageGeometry {
             PdfPageEditor.setCropBox(page.rawHandle(),
                     rect.x(), rect.y(),
                     rect.x() + rect.width(), rect.y() + rect.height());
+        }
+    }
+
+    /**
+     * Hard crop: set the page MediaBox/CropBox to {@code rect}
+     * AND physically remove every page object (text, image, path, shading, form)
+     * that lies entirely outside it.
+     *
+     * <p>Text objects straddling the crop boundary are split at character level
+     * so only the glyphs inside the crop area survive (pinned to their original
+     * coordinates). Non-text objects straddling the boundary are preserved and
+     * clipped visually by the CropBox, mirroring crop-and-clip
+     * behaviour without ever dropping the visible part of a picture.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param rect      crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} has non-finite coordinates
+     *                                  or non-positive size
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
+        requireValidCrop(rect);
+        cropSingle(doc, pageIndex, rect);
+    }
+
+    /**
+     * Hard crop applied to a contiguous, inclusive page range.
+     *
+     * @param doc      open PDF document
+     * @param fromPage first page index (inclusive, zero-based)
+     * @param toPage   last page index (inclusive, zero-based)
+     * @param rect     crop rectangle in PDF points (x, y, width, height)
+     * @throws IndexOutOfBoundsException if the range is outside the document
+     * @throws IllegalArgumentException  if {@code rect} has non-finite coordinates
+     *                                   or non-positive size
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, int fromPage, int toPage, Rect rect) {
+        requireValidCrop(rect);
+        int pageCount = doc.pageCount();
+        if (fromPage < 0 || toPage < fromPage || toPage >= pageCount) {
+            throw new IndexOutOfBoundsException(
+                    "invalid page range [" + fromPage + ".." + toPage + "] for document with "
+                            + pageCount + " pages");
+        }
+        for (int i = fromPage; i <= toPage; i++) {
+            cropSingle(doc, i, rect);
+        }
+    }
+
+    /**
+     * Hard crop applied to an explicit set of pages.
+     *
+     * <pre>{@code
+     * PdfPageGeometry.cropAndRemoveContent(doc, new Rect(72, 72, 468, 648), 0, 2, 5);
+     * }</pre>
+     *
+     * @param doc         open PDF document
+     * @param rect        crop rectangle in PDF points (x, y, width, height)
+     * @param pageIndices zero-based page indices to crop
+     * @throws IndexOutOfBoundsException if any index is outside the document
+     * @throws IllegalArgumentException  if {@code rect} is invalid or no page
+     *                                   indices were given
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, Rect rect, int... pageIndices) {
+        requireValidCrop(rect);
+        if (pageIndices == null || pageIndices.length == 0) {
+            throw new IllegalArgumentException("at least one page index is required");
+        }
+        int pageCount = doc.pageCount();
+        for (int index : pageIndices) {
+            if (index < 0 || index >= pageCount) {
+                throw new IndexOutOfBoundsException(
+                        "page index " + index + " outside [0, " + (pageCount - 1) + "]");
+            }
+        }
+        for (int index : pageIndices) {
+            cropSingle(doc, index, rect);
+        }
+    }
+
+    /**
+     * Hard crop with a per-page rectangle: {@code rects.get(i)} applies to
+     * page {@code i}. {@code null} entries skip the corresponding page, so a
+     * single list can express "crop pages 0 and 2, leave page 1 untouched".
+     * Pages beyond the list's length are left unchanged.
+     *
+     * @param doc   open PDF document
+     * @param rects per-page crop rectangles (x, y, width, height), may contain
+     *              {@code null} entries to skip pages
+     * @throws IllegalArgumentException if {@code rects} is empty or a non-null
+     *                                  entry has non-finite coordinates or
+     *                                  non-positive size
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, List<Rect> rects) {
+        if (rects == null || rects.isEmpty()) {
+            throw new IllegalArgumentException("rects must not be empty");
+        }
+        for (Rect r : rects) {
+            if (r != null) {
+                requireValidCrop(r);
+            }
+        }
+        int pages = Math.min(rects.size(), doc.pageCount());
+        for (int i = 0; i < pages; i++) {
+            Rect r = rects.get(i);
+            if (r != null) {
+                cropSingle(doc, i, r);
+            }
+        }
+    }
+
+    /** The shared single-page hard-crop implementation. */
+    private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            JpdfiumLib.cropRemoveContent(page.nativeHandle(),
+                    rect.x(), rect.y(), rect.width(), rect.height());
+            PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
+            PdfPageBoxes.setCropBox(page.rawHandle(), rect);
+            PdfPageBoxes.setTrimBox(page.rawHandle(), rect);
+            PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
+            PdfPageBoxes.setArtBox(page.rawHandle(), rect);
+        }
+    }
+
+    /**
+     * Hard crop applied to every page.
+     *
+     * @param doc  open PDF document
+     * @param rect crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} has non-finite coordinates
+     *                                  or non-positive size
+     */
+    public static void cropAllAndRemoveContent(PdfDocument doc, Rect rect) {
+        requireValidCrop(rect);
+        int pageCount = doc.pageCount();
+        if (pageCount > 0) {
+            cropAndRemoveContent(doc, 0, pageCount - 1, rect);
+        }
+    }
+
+    /**
+     * NaN/Inf coordinates make every geometry comparison silently false, so a
+     * non-finite crop rect could remove all content (or nothing) depending on
+     * how each comparison happens to fall out. Reject it up front - before the
+     * native call - so the failure is loud and deterministic.
+     */
+    private static void requireValidCrop(Rect rect) {
+        if (rect == null
+                || !Float.isFinite(rect.x()) || !Float.isFinite(rect.y())
+                || !Float.isFinite(rect.width()) || !Float.isFinite(rect.height())
+                || rect.width() <= 0.0f || rect.height() <= 0.0f) {
+            throw new IllegalArgumentException(
+                    "crop rect must have finite coordinates and positive width/height: " + rect);
         }
     }
 

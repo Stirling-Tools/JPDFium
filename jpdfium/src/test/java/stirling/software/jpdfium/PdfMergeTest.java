@@ -48,4 +48,35 @@ class PdfMergeTest {
             merged.close();
         }
     }
+
+    /**
+     * Regression: {@code all_form_fields.pdf} (a form-heavy PDF) used to leave the
+     * merged destination referencing objects in the closed source document, and
+     * saving it crashed the native layer (SIGSEGV in CPDF_Creator). The merged
+     * document must be fully self-contained.
+     */
+    @Test
+    void mergeFilesSurvivesFormFieldSourceClosedBeforeSave() throws Exception {
+        byte[] mergedBytes;
+        PdfDocument merged;
+        try (PdfDocument m = PdfMerge.mergeFiles(List.of(
+                resource("minimal.pdf"),
+                resource("all_form_fields.pdf")))) {
+            mergedBytes = m.saveBytes();
+        }
+        try (PdfDocument a = PdfDocument.open(resource("minimal.pdf"));
+             PdfDocument b = PdfDocument.open(resource("all_form_fields.pdf"))) {
+            merged = PdfMerge.merge(List.of(a, b));
+        }
+        try {
+            assertTrue(mergedBytes.length > 0);
+            assertTrue(merged.pageCount() > 0);
+            Path tmp = Files.createTempFile("jpdfium-merge-form-", ".pdf");
+            tmp.toFile().deleteOnExit();
+            merged.save(tmp);
+            assertTrue(Files.size(tmp) > 0);
+        } finally {
+            merged.close();
+        }
+    }
 }

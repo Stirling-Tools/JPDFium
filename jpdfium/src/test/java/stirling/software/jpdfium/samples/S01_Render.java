@@ -64,7 +64,9 @@ public class S01_Render {
                 for (int i = 0; i < n; i++) {
                     try (PdfPage page = doc.page(i)) {
                         PageSize size = page.size();
-                        RenderResult result = page.renderAt(DPI);
+                        RenderResult result = SampleBase.renderOrSkip(page, DPI,
+                                input.getFileName() + " page " + i);
+                        if (result == null) continue;
 
                         Path png = outDir.resolve(SampleBase.stem(input) + "-page-" + i + ".png");
                         ImageIO.write(result.toBufferedImage(), "PNG", png.toFile());

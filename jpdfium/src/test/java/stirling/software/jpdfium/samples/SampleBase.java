@@ -145,6 +145,23 @@ final class SampleBase {
         return dot > 0 ? name.substring(0, dot) : name;
     }
 
+    /**
+     * Render a page, tolerating the render-bounds guard. Corpus PDFs include
+     * deliberately extreme pages (e.g. a 72000 x 800 pt redaction stress file:
+     * 1 GB of pixels at 150 dpi) that {@code renderAt} refuses by design.
+     * Samples log the refusal and continue; returns {@code null} when the page
+     * was refused.
+     */
+    static stirling.software.jpdfium.model.RenderResult renderOrSkip(
+            stirling.software.jpdfium.PdfPage page, int dpi, String what) {
+        try {
+            return page.renderAt(dpi);
+        } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+            System.out.println("  [skip render] " + what + ": " + e.getMessage());
+            return null;
+        }
+    }
+
     /** Prints a completion banner listing all produced output files. */
     static void done(String sampleName, Path... outputs) {
         System.out.println();

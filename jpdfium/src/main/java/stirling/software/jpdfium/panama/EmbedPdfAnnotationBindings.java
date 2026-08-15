@@ -207,13 +207,13 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
     /** Set annotation icon (Text/FileAttachment/Sound/Stamp). Optional: not every
-     *  PDFium build exports this symbol, so the handle may be null - callers must
-     *  null-check before invoking. */
+     *  PDFium build exports this symbol (the bundled EmbedPDF fork does not), so
+     *  the handle may be null - callers must null-check before invoking. */
     public static final MethodHandle EPDFAnnot_SetIcon = downcallOptional("EPDFAnnot_SetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    /** Get annotation icon. Optional: not every PDFium build exports this symbol,
-     *  so the handle may be null - callers must null-check before invoking. */
+    /** Get annotation icon. Optional: same rationale as {@code EPDFAnnot_SetIcon} -
+     *  the handle may be null, so callers must null-check before invoking. */
     public static final MethodHandle EPDFAnnot_GetIcon = downcallOptional("EPDFAnnot_GetIcon",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 

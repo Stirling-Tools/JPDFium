@@ -1361,6 +1361,70 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_crop_remove_content {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_crop_remove_content");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_crop_remove_content$descriptor() {
+        return jpdfium_crop_remove_content.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h)
+     * }
+     */
+    public static MethodHandle jpdfium_crop_remove_content$handle() {
+        return jpdfium_crop_remove_content.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h)
+     * }
+     */
+    public static MemorySegment jpdfium_crop_remove_content$address() {
+        return jpdfium_crop_remove_content.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h)
+     * }
+     */
+    public static int jpdfium_crop_remove_content(long page, float x, float y, float w, float h) {
+        var mh$ = jpdfium_crop_remove_content.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_crop_remove_content", page, x, y, w, h);
+            }
+            return (int)mh$.invokeExact(page, x, y, w, h);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_redact_pattern {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

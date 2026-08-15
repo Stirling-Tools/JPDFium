@@ -61,11 +61,14 @@ public final class Symbols {
     /**
      * Create a guarded downcall handle for an optional symbol, or return {@code null}
      * if the symbol is absent without throwing an exception even in FULL mode.
+     *
+     * <p>Optional symbols that are absent are not recorded in
+     * {@link #MISSING_SYMBOLS}: that list is reserved for <em>required</em>
+     * symbols that fail to resolve, so {@link #auditMissing()} stays meaningful.
      */
     public static MethodHandle downcallOptional(String name, FunctionDescriptor desc, Linker.Option... options) {
         Optional<MemorySegment> symbolOpt = find(name);
         if (symbolOpt.isEmpty()) {
-            MISSING_SYMBOLS.add(name);
             return null;
         }
         RESOLVED_SYMBOLS.add(name);

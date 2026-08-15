@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
@@ -109,8 +110,7 @@ final class GhostscriptHelper {
             args.add("-dColorImageFilter=/DCTEncode");
             args.add("-dAutoFilterGrayImages=false");
             args.add("-dGrayImageFilter=/DCTEncode");
-            // Map quality 1-100 to Ghostscript's 0.0-1.0 scale
-            String quality = String.format("%.2f", imageQuality / 100.0);
+            String quality = formatJpegQuality(imageQuality);
             args.add("-c");
             args.add("<< /ColorImageDict << /QFactor " + quality + " /Blend 1 /HSamples [2 1 1 2] /VSamples [2 1 1 2] >> >> setdistillerparams");
             args.add("<< /GrayImageDict << /QFactor " + quality + " /Blend 1 /HSamples [2 1 1 2] /VSamples [2 1 1 2] >> >> setdistillerparams");
@@ -119,6 +119,18 @@ final class GhostscriptHelper {
 
         args.add(input.toAbsolutePath().toString());
         run(args.toArray(String[]::new));
+    }
+
+    /**
+     * Map quality 1-100 to Ghostscript's 0.0-1.0 scale.
+     *
+     * <p>Formatted with {@link Locale#ROOT}: Ghostscript's PostScript parser
+     * requires '.' as the decimal separator, and {@code String.format} with the
+     * default locale would emit {@code 0,75} on locales such as hu_HU/de_DE,
+     * which Ghostscript rejects with an "undefined" PostScript error.
+     */
+    static String formatJpegQuality(int imageQuality) {
+        return String.format(Locale.ROOT, "%.2f", imageQuality / 100.0);
     }
 
     /**

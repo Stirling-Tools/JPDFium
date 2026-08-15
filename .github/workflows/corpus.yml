@@ -1,0 +1,230 @@
+name: Corpus Testing
+
+# Pipeline: corpus (generate once, cache) -> test (4 parallel shards)
+#
+# PR runs:         500 generated PDFs, fast feedback
+# Nightly/manual:  3000+ generated PDFs, full coverage
+#
+# The corpus (generated synthetic PDFs + downloaded real-world PDFs) is cached
+# across runs. The cache key includes the generator source hash, the download
+# list hash, seed and count, so changing any of these invalidates the cache
+# and triggers regeneration.
+
+on:
+  pull_request: {}
+  schedule:
+    - cron: '0 3 * * *'          # nightly at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      pdf-count:
+        description: 'Number of PDFs to generate and test'
+        default: '3000'
+        type: string
+      seed:
+        description: 'Corpus seed (change to fuzz with fresh PDFs)'
+        default: '42'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SEED: ${{ github.event.inputs.seed || '42' }}
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Stage 1: build the corpus (synthetic generation + real-world downloads),
+  # build the real native bridge once, and cache everything for the shards.
+  # ─────────────────────────────────────────────────────────────────────────
+  corpus:
+    name: Corpus (generate + native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      cache-key: ${{ steps.prep.outputs.cache-key }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - id: prep
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            COUNT=500
+          else
+            COUNT="${{ github.event.inputs.pdf-count || '3000' }}"
+          fi
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+          GEN_HASH=$(sha256sum jpdfium/src/test/java/stirling/software/jpdfium/corpus/DiversePdfGenerator.java \
+                     | cut -c1-12)
+          LIST_HASH=$(sha256sum jpdfium/src/test/java/stirling/software/jpdfium/PdfCorpus.java \
+                      | cut -c1-12)
+          echo "cache-key=corpus-v2-${GEN_HASH}-${LIST_HASH}-${{ env.SEED }}-${COUNT}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Restore corpus cache
+        id: cache
+        uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: jpdfium/build/test-corpus/
+          key: ${{ steps.prep.outputs.cache-key }}
+
+      - name: Generate synthetic corpus (PDFBox)
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./gradlew :jpdfium:generateCorpus \
+            -Pcorpus.count=${{ steps.prep.outputs.count }} \
+            -Pcorpus.seed=${{ env.SEED }} \
+            --no-daemon
+
+      - name: Prime real-world download corpus
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./gradlew :jpdfium:run -PmainClass=stirling.software.jpdfium.PdfCorpus --no-daemon || true
+
+      - name: Corpus stats
+        run: |
+          echo "PDFs: $(find jpdfium/build/test-corpus -name '*.pdf' | wc -l)"
+          echo "Size: $(du -sh jpdfium/build/test-corpus/ | cut -f1)"
+          echo "--- manifest head ---"
+          head -5 jpdfium/build/test-corpus/generated/manifest.tsv || true
+
+      - name: Sanity-check PDFs
+        run: |
+          CORRUPT=0
+          for f in jpdfium/build/test-corpus/generated/*.pdf; do
+            head -c 5 "$f" | grep -q "%PDF-" || { echo "CORRUPT: $f"; CORRUPT=1; }
+          done
+          [ "$CORRUPT" -eq 0 ] || exit 1
+
+      - name: Save corpus cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: jpdfium/build/test-corpus/
+          key: ${{ steps.prep.outputs.cache-key }}
+
+      # ── Real native bridge (built once, shared with the shards) ─────────
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
+            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf
+
+      - name: Fetch prebuilt PDFium (pinned)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh linux-x64
+
+      - name: Build real bridge
+        run: bash native/build-real.sh
+
+      - name: Stage natives
+        run: |
+          mkdir -p native/dist/linux-x64
+          find native/build-real -maxdepth 3 -type f -name 'libjpdfium.so' \
+            -exec cp -v {} native/dist/linux-x64/ \;
+          if [ -d native/pdfium/lib ]; then
+            find native/pdfium/lib -maxdepth 1 -type f -name 'lib*.so*' \
+              -exec cp -v {} native/dist/linux-x64/ \;
+          fi
+
+      # The test shards run on runners WITHOUT the apt-installed dev packages
+      # (qpdf, pcre2, freetype, harfbuzz, icu, ...), so libjpdfium.so cannot be
+      # loaded there unless its runtime dependencies are bundled next to it.
+      # Walk the bridge's import table and copy every referenced third-party
+      # .so into native/dist/linux-x64 (RUNPATH=$ORIGIN finds them at load).
+      - name: Bundle runtime deps
+        run: |
+          bash native/bundle-runtime-deps.sh linux-x64
+          echo "--- bundled libs ---"
+          ls -la native/dist/linux-x64/
+
+      - name: Sanity - bridge + shared libs must be present for the shards
+        run: |
+          test -n "$(ls -A native/dist/linux-x64/)" || {
+            echo "ERROR: no native binaries staged for linux-x64" >&2
+            exit 1
+          }
+          find native/dist/linux-x64 -name '*.so*' | wc -l
+
+      - name: Upload native artifact for shards
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-x64-natives
+          path: native/dist/linux-x64/
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Stage 2: sharded corpus tests (each shard covers 1/4 of the corpus).
+  # A native crash in one shard does not mask the other shards' results.
+  # ─────────────────────────────────────────────────────────────────────────
+  test:
+    name: Corpus tests (shard ${{ matrix.shard }}/4)
+    needs: corpus
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+
+      - name: Restore corpus
+        uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: jpdfium/build/test-corpus/
+          key: ${{ needs.corpus.outputs.cache-key }}
+
+      - name: Restore native artifact
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        with:
+          name: linux-x64-natives
+          path: native/dist/linux-x64/
+
+      - name: Run corpus tests (shard ${{ matrix.shard }})
+        run: |
+          ./gradlew :jpdfium:corpusTest \
+            -Pjpdfium.testNatives=linux-x64 \
+            -Djpdfium.corpus.shard.index=${{ matrix.shard }} \
+            -Djpdfium.corpus.shard.total=4 \
+            --no-daemon --stacktrace
+
+      - name: Upload corpus metrics reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corpus-reports-shard-${{ matrix.shard }}
+          path: |
+            jpdfium/build/reports/corpus/
+            jpdfium/build/reports/tests/corpusTest/
+          if-no-files-found: warn
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corpus-failures-shard-${{ matrix.shard }}
+          path: jpdfium/build/reports/tests/corpusTest/
+          retention-days: 14

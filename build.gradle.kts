@@ -60,8 +60,14 @@ tasks.register<JavaExec>("runAllSamples") {
                 files(jpdfiumCompileJava.outputs.files, jpdfiumCompileTest.outputs.files) +
                 files(project(":jpdfium").layout.buildDirectory.dir("resources/test"))
     jvmArgs("--enable-native-access=ALL-UNNAMED")
-    maxHeapSize = "2g"
+    maxHeapSize = findProperty("samples.xmx")?.toString() ?: "2g"
     workingDir = rootProject.projectDir
+    // Forward -Dsamples.* (e.g. -Dsamples.selfClean=true) from the Gradle
+    // invocation to the sample JVM. JavaExec does not inherit them otherwise.
+    for ((k, v) in System.getProperties()) {
+        val key = k.toString()
+        if (key.startsWith("samples.")) systemProperty(key, v.toString())
+    }
 }
 
 // Task to run a specific sample by number (e.g., ./gradlew runSample -Psample=01)
@@ -237,7 +243,7 @@ tasks.register("quickTry") {
     }
 }
 
-// ── Maven Central Publishing (Central Portal via OSSRH Staging API) ──────────
+// Maven Central Publishing (Central Portal via OSSRH Staging API)
 //
 // After running:  ./gradlew publishAllPublicationsToCentralPortalRepository
 // the artifacts sit in the OSSRH staging area.  You must then POST to finalize
