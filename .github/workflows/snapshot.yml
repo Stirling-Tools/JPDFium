@@ -80,13 +80,14 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          # musl / Alpine (linux-musl-*). Built natively inside a matching-arch
-          # Alpine container so the system toolchain + libc are musl; the
-          # eclipse-temurin:25-jdk-alpine image provides the musl JDK for the
-          # Gradle smoke test. Consumes the musl PDFium prebuilds from
-          # prebuild-pdfium.yml. arm64 uses a native arm64 runner.
-          - { platform: linux-musl-x64,   runner: ubuntu-latest,    libc: musl, container: 'eclipse-temurin:25-jdk-alpine' }
-          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, libc: musl, container: 'eclipse-temurin:25-jdk-alpine' }
+          # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
+          # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
+          # from the host - GitHub cannot run JS actions in Alpine containers on
+          # arm64 runners, so there is no job-level container here. Consumes the
+          # musl PDFium prebuilds from prebuild-pdfium.yml. arm64 uses a native
+          # arm64 runner.
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, libc: musl }
           # darwin-x64 cross-compiles from macos-14 (arm64 host) with an
           # x86_64 Homebrew installed at /usr/local under Rosetta.
           - { platform: darwin-x64,   runner: macos-14         }
@@ -94,9 +95,6 @@ jobs:
           - { platform: windows-x64,  runner: windows-latest   }
           - { platform: windows-arm64, runner: windows-11-arm  }
     runs-on: ${{ matrix.runner }}
-    # musl rows set matrix.container to an Alpine image; all others leave it
-    # unset (empty -> runs directly on the host runner).
-    container: ${{ matrix.container }}
     defaults:
       run:
         shell: bash
@@ -104,28 +102,14 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
-        # The musl legs run inside eclipse-temurin:25-jdk-alpine which already
-        # ships a musl JDK - setup-java would install a glibc one that cannot
-        # run there.
+        # The musl legs build + smoke inside an Alpine container which ships its
+        # own musl JDK - a glibc host JDK is neither needed nor usable there.
         if: matrix.libc != 'musl'
         with:
           # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
           # Build of OpenJDK does, so use it on the windows-arm64 leg.
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
-
-      # Alpine images have no bash/coreutils; bootstrap them (with sh) before any
-      # bash step runs. gcompat lets Chromium's glibc-built bundled clang run.
-      - name: Bootstrap Alpine (musl)
-        if: matrix.libc == 'musl'
-        shell: sh
-        run: |
-          apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
-            meson python3 git curl tar xz gcompat libstdc++ linux-headers \
-            sudo patchelf coreutils file binutils \
-            pcre2-dev freetype-dev harfbuzz-dev icu-dev icu icu-data-full \
-            qpdf-dev pugixml-dev libunibreak-dev zlib-dev libjpeg-turbo-dev \
-            rust cargo github-cli
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
@@ -215,8 +199,21 @@ jobs:
           JPDFIUM_BUILD_MODE: ${{ inputs.build_mode || 'component' }}
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
+      # musl legs run the ENTIRE native build + smoke inside an Alpine container
+      # via docker run from the host (GitHub cannot host JS actions in Alpine
+      # containers on arm64 runners, so no job-level `container:`). One container
+      # run does bootstrap + rebuild deps + bridge + stage + bundle + smoke, so
+      # the ~1 GB apk bootstrap happens once. The smoke INITS the native and
+      # opens a PDF on the musl JVM - the linux-musl-* leg is red until both pass.
+      - name: Build + smoke musl natives (Alpine container)
+        if: matrix.libc == 'musl'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
+
       - name: Build qpdf with native crypto (Linux + macOS)
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
         # Rebuild libqpdf with --with-crypto=native to drop the crypto
         # transitive chain:
         #   Linux   apt libqpdf-dev is GNUTLS-built - drops libgnutls +
@@ -229,17 +226,18 @@ jobs:
         run: bash native/build-qpdf-native-crypto.sh
 
       - name: Build harfbuzz without GLib (Linux + macOS)
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
         # Rebuild libharfbuzz with all language bindings disabled to drop
         # libglib (~1.4 MB on Linux, ~1.25 MB + libintl ~230 KB on macOS).
         # apt's libharfbuzz0b and brew's harfbuzz both link glib for the
         # hb-glib bindings we don't use; the bridge calls plain hb_*.
         run: bash native/build-harfbuzz-no-glib.sh
 
-      - run: bash native/build-real.sh
+      - if: matrix.libc != 'musl'
+        run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
-        if: startsWith(matrix.platform, 'linux-')
+        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
         # Strips ~25 MB of unused ICU data (locales, currencies, collations,
         # RBNF, ...) and repackages libicudata.so. The bundler step will then
         # pick up the trimmed lib via ldd on the bridge. JPDFIUM_TARGET_PLATFORM
@@ -280,6 +278,7 @@ jobs:
         run: bash native/import-macos-cert.sh
 
       - name: Stage binaries (bridge + PDFium siblings)
+        if: matrix.libc != 'musl'
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
           find native/build-real -maxdepth 3 -type f \( \
@@ -312,6 +311,7 @@ jobs:
           path: native/dist/windows-x64/
 
       - name: Bundle runtime deps + strip
+        if: matrix.libc != 'musl'
         env:
           # PRs have no signing cert; unsigned is fine there because
           # publish-snapshot never runs on pull_request.
@@ -352,7 +352,7 @@ jobs:
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
       - name: Functional smoke test (load native + open a PDF)
-        if: matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
       # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /

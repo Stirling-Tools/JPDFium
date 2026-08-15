@@ -20,18 +20,11 @@ jobs:
             runner: ubuntu-latest
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
-          # musl / Alpine (linux-musl-*). Built natively inside a matching-arch
-          # Alpine container so the system toolchain + libc are musl; the
-          # eclipse-temurin:25-jdk-alpine image provides the musl JDK for the
-          # stub build + smoke.
-          - platform: linux-musl-x64
-            runner: ubuntu-latest
-            libc: musl
-            container: 'eclipse-temurin:25-jdk-alpine'
-          - platform: linux-musl-arm64
-            runner: ubuntu-24.04-arm
-            libc: musl
-            container: 'eclipse-temurin:25-jdk-alpine'
+          # linux-musl-* are NOT probed here: snapshot.yml builds and smokes the
+          # real musl natives on every PR (INIT + open-a-PDF), which supersedes
+          # this stub-based wiring probe. Also GitHub cannot run JS actions in
+          # Alpine containers on arm64 runners, so a container-based probe leg
+          # would need a full docker-run pipeline for little added signal.
           - platform: darwin-x64
             runner: macos-14
           - platform: darwin-arm64
@@ -41,9 +34,6 @@ jobs:
           - platform: windows-arm64
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
-    # musl rows set matrix.container to an Alpine image; all others leave it
-    # unset (empty -> runs directly on the host runner).
-    container: ${{ matrix.container }}
     defaults:
       run:
         shell: bash
@@ -51,30 +41,14 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
-        # The musl legs run inside eclipse-temurin:25-jdk-alpine which already
-        # ships a musl JDK - setup-java would install a glibc one that cannot
-        # run there.
-        if: matrix.libc != 'musl'
         with:
           # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
           # Build of OpenJDK does, so use it on the windows-arm64 leg.
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
 
-      # Alpine images have no bash/coreutils; bootstrap them (with sh) before any
-      # bash step runs. cmake is needed for the stub bridge build.
-      - name: Bootstrap Alpine (musl)
-        if: matrix.libc == 'musl'
-        shell: sh
-        run: |
-          apk add --no-cache bash build-base cmake ninja pkgconf \
-            git curl tar xz gcompat libstdc++ linux-headers coreutils file
-
       - name: Install jextract
         continue-on-error: true
-        # jextract only ships glibc builds, so the musl smoke uses the committed
-        # bindings (generateBindings is skipped when jextract is absent).
-        if: matrix.libc != 'musl'
         run: |
           case "$RUNNER_OS" in
             Linux)   if [ "$(uname -m)" = aarch64 ]; then JX=openjdk-25-jextract+2-4_linux-aarch64_bin.tar.gz; else JX=openjdk-25-jextract+2-4_linux-x64_bin.tar.gz; fi ;;

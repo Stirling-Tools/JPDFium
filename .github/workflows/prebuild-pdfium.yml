@@ -110,16 +110,17 @@ jobs:
           # how bblanchon/pdfium-binaries handles linux-arm64.
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
           - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
-          # musl / Alpine (linux-musl-*). Built natively inside a matching-arch
-          # Alpine container so the system toolchain + libc are musl (no cross,
-          # no sysroot). PDFium/Chromium has no official musl support, so this is
-          # the CI-proving part and may need EmbedPDF fork patches - see the
-          # JPDFIUM_LIBC branch in setup-pdfium.sh. arm64 uses a native arm64
-          # runner to avoid musl cross-compile.
-          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: component, libc: musl, container: 'alpine:3.23' }
-          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: static,    libc: musl, container: 'alpine:3.23' }
-          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: component, libc: musl, container: 'alpine:3.23' }
-          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: static,    libc: musl, container: 'alpine:3.23' }
+          # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
+          # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
+          # from the host - GitHub cannot run JS actions in Alpine containers on
+          # arm64 runners, so there is no job-level container here. PDFium /
+          # Chromium has no official musl support, so this is the CI-proving part
+          # and may need EmbedPDF fork patches - see the JPDFIUM_LIBC branch in
+          # setup-pdfium.sh. arm64 uses a native arm64 runner.
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: component, libc: musl }
+          - { platform: linux-musl-x64,   runner: ubuntu-latest,    mode: static,    libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: component, libc: musl }
+          - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, mode: static,    libc: musl }
           # darwin-x64 cross-compiles from macos-14 (arm64) - the macos-13
           # free runner is constrained to the point of 24h queue timeouts.
           - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: component }
@@ -139,23 +140,11 @@ jobs:
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: component }
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: static    }
     runs-on: ${{ matrix.runner }}
-    # musl rows set matrix.container to an Alpine image; all others leave it
-    # unset (empty -> runs directly on the host runner).
-    container: ${{ matrix.container }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-
-      # Alpine images have no bash/coreutils; bootstrap them (with sh) before any
-      # bash step runs. gcompat lets Chromium's glibc-built bundled clang run.
-      - name: Bootstrap Alpine (musl)
-        if: matrix.libc == 'musl'
-        shell: sh
-        run: |
-          apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
-            python3 git curl tar xz gcompat libstdc++ linux-headers
 
       - name: Install build deps (Linux)
         if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
@@ -188,6 +177,7 @@ jobs:
           echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> "$GITHUB_ENV"
 
       - name: Build PDFium at pinned SHA
+        if: matrix.libc != 'musl'
         env:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           TARGET_CPU: ${{ matrix.target_cpu }}
@@ -202,6 +192,16 @@ jobs:
           export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
 
+      # musl: build PDFium inside an Alpine container via docker run (GitHub
+      # cannot host JS actions in Alpine containers on arm64 runners).
+      - name: Build PDFium at pinned SHA (musl, Alpine container)
+        if: matrix.libc == 'musl'
+        env:
+          EMBEDPDF_PIN_SHA: ${{ needs.resolve-sha.outputs.sha }}
+          JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
+          JPDFIUM_LIBC: musl
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium
+
       # Real musl validation: the freshly-built PDFium must actually LOAD and RUN
       # on Alpine/musl, not just compile. dlopen the .so and exercise the core
       # FPDF API (init -> open a PDF -> page count). Component mode only (needs
@@ -209,11 +209,7 @@ jobs:
       # detectPlatform() check in ci.yml.
       - name: Smoke test musl PDFium (load + open a PDF)
         if: matrix.libc == 'musl' && matrix.mode == 'component'
-        run: |
-          cc native/ci/pdfium_smoke.c -ldl -o /tmp/pdfium_smoke
-          LD_LIBRARY_PATH=native/pdfium/lib /tmp/pdfium_smoke \
-            native/pdfium/lib/libpdfium.so \
-            jpdfium/src/test/resources/pdfs/redact/redact-test-empty.pdf
+        run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium-smoke
 
       - name: Package artifacts
         # component mode keeps the historical tarball name
