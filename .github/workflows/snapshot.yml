@@ -27,6 +27,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Fail fast BEFORE the ~25-min natives matrix if the pinned PDFium prebuild
+  # release is missing required assets. Without this, a missing
+  # pdfium-<platform>.tar.gz surfaces only after each leg's 20+ min build, and
+  # every PR burns the whole matrix before failing.
+  preflight-assets:
+    name: Preflight - pinned PDFium release assets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Verify prebuilt PDFium assets exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
+          [ -n "$TAG" ] || { echo "::error::native/pdfium.version is empty - run the Prebuild PDFium workflow first"; exit 1; }
+          echo "Pinned PDFium prebuild: $TAG"
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          # Required platforms (component + static): missing -> fail fast.
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
+            for suffix in "" -static; do
+              echo "$ASSETS" | grep -qx "pdfium-$p$suffix.tar.gz" || {
+                echo "::error::missing required prebuild asset pdfium-$p$suffix.tar.gz in release $TAG - run Prebuild PDFium / merge its pin PR"; exit 1;
+              }
+            done
+          done
+          # musl is experimental (Prebuild PDFium treats linux-musl-* as
+          # warn-only) - missing assets skip the musl legs, never fail.
+          for p in linux-musl-x64 linux-musl-arm64; do
+            if echo "$ASSETS" | grep -qx "pdfium-$p.tar.gz"; then
+              echo "musl prebuild $p: present"
+            else
+              echo "::warning::musl prebuild pdfium-$p.tar.gz missing - linux-musl-* natives will be skipped this run"
+            fi
+          done
+          echo "Preflight OK"
+
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
   # so the windows-x64 job can download it as an artifact during its own
   # build. The matrix can't have per-cell needs:, so we do this as a
@@ -72,7 +112,7 @@ jobs:
           retention-days: 1
 
   build-natives:
-    needs: prep-windows-icu
+    needs: [preflight-assets, prep-windows-icu]
     if: always()  # build even if prep failed; windows job falls back to vcpkg's full icudt78.dll
     strategy:
       fail-fast: false
@@ -168,23 +208,35 @@ jobs:
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
 
+      - name: Cache vcpkg binary packages
+        if: startsWith(matrix.platform, 'windows-')
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-binary-${{ matrix.platform }}-${{ hashFiles('native/vcpkg-overlay/**', '.github/workflows/snapshot.yml') }}
+          restore-keys: vcpkg-binary-${{ matrix.platform }}-
+
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
           choco install -y cmake --version=4.4.2
           choco install -y ninja --version=1.13.2
           choco install -y pkgconfiglite --version=0.28
+          echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch so the bridge + bundler resolve the right
           # DLLs (arm64-windows on windows-11-arm runners, x64-windows on x64).
+          # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
+          # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
           else
             TRIPLET="x64-windows"
           fi
-          vcpkg install pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
-                        icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
-                        libunibreak:$TRIPLET
+          bash native/vcpkg-install.sh \
+            pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+            icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
+            libunibreak:$TRIPLET
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
@@ -369,6 +421,10 @@ jobs:
         if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
+      - name: Verify native smoke actually ran
+        if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
       # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /
       # release the dylib is signed, so run its x86_64 smoke under Rosetta with
       # an x86_64 JDK (skipped on PRs where macOS rejects the unsigned dylib).
@@ -384,6 +440,14 @@ jobs:
           arch -x86_64 "$HOME/x64-jdk/Contents/Home/bin/java" -version
           export JAVA_HOME="$HOME/x64-jdk/Contents/Home"
           arch -x86_64 ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=darwin-x64 --no-daemon --stacktrace
+
+      - name: Verify darwin-x64 smoke actually ran
+        if: always() && matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
+      - name: Verify musl smoke actually ran
+        if: always() && matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Upload hs_err logs (smoke crash diagnostics)
         if: failure()
@@ -497,6 +561,10 @@ jobs:
       - name: Vips smoke test (render PDF -> all major formats)
         if: steps.stage.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
         run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
+
+      - name: Verify vips smoke actually ran
+        if: always() && steps.stage.outcome == 'success' && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
+        run: bash native/ci/check-smoke-ran.sh jpdfium-vips/build/test-results/vipsSmokeTest
 
       - name: Upload hs_err logs (vips smoke crash diagnostics)
         if: failure()

@@ -434,6 +434,13 @@ case "$PLATFORM" in
         ;;
 esac
 
+# Orphaned / JVM-hostile library gate: every bundled lib must be imported by
+# something and none may be an allocator hook. The prebuilt PDFium component
+# build ships exactly such orphans (PartitionAlloc shim/raw_ptr) - preloading
+# them into the JVM hard-crashes it, so this fails the bundle rather than the
+# first consumer.
+bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR"
+
 echo ""
 echo "Final bundle contents for $PLATFORM:"
 ls -la "$DIST_DIR/"

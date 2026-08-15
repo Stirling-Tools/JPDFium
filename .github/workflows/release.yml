@@ -174,20 +174,32 @@ jobs:
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
 
+      - name: Cache vcpkg binary packages
+        if: startsWith(matrix.platform, 'windows-')
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-binary-${{ matrix.platform }}-${{ hashFiles('native/vcpkg-overlay/**', '.github/workflows/release.yml') }}
+          restore-keys: vcpkg-binary-${{ matrix.platform }}-
+
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
           choco install -y cmake ninja pkgconfiglite
+          echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch (arm64-windows on windows-11-arm runners).
+          # vcpkg-install.sh adds our freetype overlay port (GitHub mirror, the
+          # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
           else
             TRIPLET="x64-windows"
           fi
-          vcpkg install pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
-                        icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
-                        libunibreak:$TRIPLET
+          bash native/vcpkg-install.sh \
+            pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+            icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
+            libunibreak:$TRIPLET
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
@@ -350,6 +362,10 @@ jobs:
         if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64'
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
+      - name: Verify native smoke actually ran
+        if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
       # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
       # x86_64 smoke under Rosetta with an x86_64 JDK so it gets the same
       # INIT + open-a-PDF gate as every other release platform.
@@ -365,6 +381,14 @@ jobs:
           arch -x86_64 "$HOME/x64-jdk/Contents/Home/bin/java" -version
           export JAVA_HOME="$HOME/x64-jdk/Contents/Home"
           arch -x86_64 ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=darwin-x64 --no-daemon --stacktrace
+
+      - name: Verify darwin-x64 smoke actually ran
+        if: always() && matrix.platform == 'darwin-x64'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
+
+      - name: Verify musl smoke actually ran
+        if: always() && matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Upload hs_err logs (smoke crash diagnostics)
         if: failure()
