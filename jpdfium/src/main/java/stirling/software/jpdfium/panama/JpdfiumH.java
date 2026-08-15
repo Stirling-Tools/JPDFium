@@ -1364,7 +1364,7 @@ public class JpdfiumH extends JpdfiumH$shared {
     private static class jpdfium_crop_remove_content {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
-            JpdfiumH.C_LONG_LONG,
+            JpdfiumH.C_LONG,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,
             JpdfiumH.C_FLOAT,

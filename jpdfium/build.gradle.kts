@@ -213,15 +213,19 @@ val patchBindingsForCrossPlatform by tasks.registering {
         val targetShared = committedDir.resolve("JpdfiumH\$shared.java")
         if (targetShared.exists()) {
             val original = targetShared.readText()
-            val pattern = Regex(
-                """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
-            val patched = pattern.replace(original,
-                "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
-                "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
-                "this constant is unused by any jpdfium binding so a placeholder is fine */")
-            if (patched != original) {
-                targetShared.writeText(patched)
-                logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+            if (original.contains("/* patched: jextract emits a platform-specific cast")) {
+                logger.lifecycle("JpdfiumH\$shared.C_LONG already patched - skipping")
+            } else {
+                val pattern = Regex(
+                    """public\s+static\s+final\s+(?:java\.lang\.foreign\.)?ValueLayout\.OfLong\s+C_LONG\s*=\s*[^;]+;""")
+                val patched = pattern.replace(original,
+                    "public static final ValueLayout.OfLong C_LONG = ValueLayout.JAVA_LONG; " +
+                    "/* patched: jextract emits a platform-specific cast that crashes on Windows; " +
+                    "this constant is unused by any jpdfium binding so a placeholder is fine */")
+                if (patched != original) {
+                    targetShared.writeText(patched)
+                    logger.lifecycle("Patched JpdfiumH\$shared.C_LONG for cross-platform class init")
+                }
             }
         }
 

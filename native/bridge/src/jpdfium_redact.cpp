@@ -882,8 +882,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         auto it = ftCache.find(key);
         if (it != ftCache.end()) return it->second;
 
-        auto [eit, inserted] = ftCache.try_emplace(key, mr);
-        FtFontCache& cache = eit->second;
+        auto emplaced = ftCache.try_emplace(key, mr);
+        FtFontCache& cache = emplaced.first->second;
         size_t buflen = 0;
         if (FPDFFont_GetFontData(font, nullptr, 0, &buflen) && buflen > 0) {
             std::pmr::vector<uint8_t> fontData(buflen, mr);
