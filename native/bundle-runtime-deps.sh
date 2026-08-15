@@ -380,6 +380,11 @@ bundle_windows() {
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
+        # The prebuilt PDFium component build ships a PartitionAlloc allocator
+        # shim that NOTHING links against on Linux (verified: libpdfium.so
+        # links raw_ptr but NOT the shim). It is dead weight AND a latent JVM
+        # hazard - strip it. raw_ptr stays: libpdfium.so genuinely needs it.
+        find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         # Strip debug symbols from the bridge to slash binary size. The
         # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
         # but Rust's #[no_mangle] + statically linked third-party crates still
@@ -397,6 +402,8 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
+        # macOS: libpdfium.dylib genuinely links BOTH the allocator shim and
+        # raw_ptr, so neither is stripped.
         # macOS strip wants -S (debug symbols only) to keep the symbol table
         # the loader needs. -x would strip non-global symbols which can
         # break dlsym lookups.
@@ -418,8 +425,11 @@ case "$PLATFORM" in
         # dead weight AND a JVM hazard: the shim's DllMain replaces the process
         # allocator, which hard-crashes the JVM when NativeLoader preloads the
         # manifest (STATUS_ENTRYPOINT_NOT_FOUND on windows-arm64). Strip them
-        # from the Windows bundle only - on Linux/macOS libpdfium genuinely
-        # links raw_ptr AND the shim, so they must stay.
+        # on Windows only. Dependency matrix (verified against the prebuilt
+        # tarballs): shim is orphaned on linux+windows but linked by
+        # libpdfium.dylib on macOS; raw_ptr is orphaned on windows but linked
+        # by libpdfium on linux+macOS. The linux leg strips the shim; macOS
+        # strips neither.
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
         # The MSVC linker strips PE files in Release config already; no
