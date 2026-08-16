@@ -169,8 +169,8 @@ build_vips() {
         --buildtype=release \
         -Dauto_features=disabled \
         -Ddeprecated=false -Dexamples=false \
-        -Dmodules=disabled -Dintrospection=disabled -Dvapi=disabled \
-        -Dcplusplus=disabled \
+        -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
+        -Dcplusplus=false \
         -Dheif=enabled -Djpeg-xl=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
         -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \
