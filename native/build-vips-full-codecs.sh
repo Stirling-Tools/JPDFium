@@ -35,25 +35,70 @@ case "$(uname -s)" in
         ;;
 esac
 
+LIBHEIF_VERSION="${LIBHEIF_VERSION:-1.19.5}"
+
 install_deps() {
     echo "==> build-vips-full-codecs.sh: installing codec + build deps"
     if [ "$OS" = linux ]; then
-        # ubuntu 24.04: libjxl / libheif / libaom / libx265 all in universe.
+        # ubuntu 24.04: libjxl / libaom / libx265 / libde265 all in universe.
         # --no-install-recommends keeps the image lean (avoid pulling a second
         # system libvips via recommends).
+        # NOTE: libheif is NOT installed from apt - Ubuntu's libheif ships the
+        # HEVC/AV1 encoders as separate dlopened plugins (libheif-plugin-x265/
+        # aom) that the bundler can't ship, so we build it from source with the
+        # codecs statically linked (see build_libheif below).
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-            meson ninja-build pkg-config build-essential \
+            meson ninja-build pkg-config build-essential cmake \
             libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
-            libheif-dev libjxl-dev libaom-dev libx265-dev libde265-dev \
+            libjxl-dev libaom-dev libx265-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev
     else
-        brew install meson ninja pkg-config \
+        brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif lcms2 \
             libheif libjxl libaom libde265 x265 \
             libwebp libpng libjpeg-turbo libtiff
     fi
+}
+
+# Ubuntu's libheif is plugin-based: the HEVC (x265) / AV1 (aom) encoders are
+# separate .so plugins that libheif dlopens at runtime. The bundler only ships
+# ldd-referenced libraries, so the plugins would never reach the bundle and
+# heifsave would fail with "Unsupported compression". Build libheif from source
+# with ENABLE_PLUGIN_LOADING=OFF so the codecs are linked into libheif itself.
+# Linux only - brew's libheif already links x265/aom statically.
+build_libheif_linux() {
+    echo "==> build-vips-full-codecs.sh: building libheif ${LIBHEIF_VERSION} (static codecs)"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' EXIT
+
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://github.com/strukturag/libheif/archive/refs/tags/v${LIBHEIF_VERSION}.tar.gz" \
+        -o "$work/heif.tar.gz"
+    tar -xzf "$work/heif.tar.gz" -C "$work"
+    local src="$work/libheif-${LIBHEIF_VERSION}"
+
+    cmake -S "$src" -B "$work/build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DBUILD_SHARED_LIBS=ON \
+        -DENABLE_PLUGIN_LOADING=OFF \
+        -DWITH_LIBDE265=ON -DWITH_X265=ON \
+        -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
+        -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_KVAZAAR=OFF \
+        -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
+        || { echo "build-vips-full-codecs.sh: libheif cmake configure failed" >&2; exit 1; }
+
+    local nproc
+    nproc="$(nproc 2>/dev/null || echo 4)"
+    cmake --build "$work/build" --parallel "$nproc" \
+        || { echo "build-vips-full-codecs.sh: libheif build failed" >&2; exit 1; }
+    $SUDO cmake --install "$work/build"
+    $SUDO ldconfig 2>/dev/null || true
+    echo "==> build-vips-full-codecs.sh: libheif installed to $PREFIX/lib:"
+    ls -la "$PREFIX"/lib/libheif.so* 2>/dev/null || true
 }
 
 build_vips() {
@@ -98,5 +143,8 @@ build_vips() {
 }
 
 install_deps
+if [ "$OS" = linux ]; then
+    build_libheif_linux
+fi
 build_vips
 echo "build-vips-full-codecs.sh: done"
