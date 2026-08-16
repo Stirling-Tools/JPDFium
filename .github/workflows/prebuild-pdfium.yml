@@ -154,6 +154,8 @@ jobs:
 
       - name: Install build deps (macOS)
         if: startsWith(matrix.platform, 'darwin-')
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: brew install cmake ninja
 
       - name: Install build deps (Windows)

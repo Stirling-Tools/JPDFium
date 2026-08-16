@@ -393,15 +393,18 @@ bundle_windows() {
     redist_dir=$(find "/c/Program Files/Microsoft Visual Studio" -path "*VC/Redist/MSVC/*/${arch_dir}/Microsoft.VC*.CRT" -type d 2>/dev/null | sort | tail -1 || true)
     if [ -n "$redist_dir" ]; then
         echo "Resolving imported-but-missing CRT DLLs from: $redist_dir"
+        local work_dir
+        work_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'crt-imports')
+        local crt_imports="$work_dir/crt-imports.txt"
         # Collect every CRT DLL basename the bundled DLLs import.
-        : > "$WORK/crt-imports.txt"
+        : > "$crt_imports"
         for dll in "$DIST_DIR"/*.dll; do
             [ -e "$dll" ] || continue
             "$DUMPBIN" //dependents "$dll" 2>/dev/null \
                 | grep -oiE '(msvcp140|vcruntime140|concrt140)[a-z0-9_]*\.dll' \
-                >> "$WORK/crt-imports.txt" || true
+                >> "$crt_imports" || true
         done
-        sort -u "$WORK/crt-imports.txt" | while IFS= read -r crt; do
+        sort -u "$crt_imports" | while IFS= read -r crt; do
             [ -z "$crt" ] && continue
             [ -e "$DIST_DIR/$crt" ] && continue
             if [ -f "$redist_dir/$crt" ]; then
@@ -410,6 +413,7 @@ bundle_windows() {
                 echo "WARNING: $crt imported but not in VS redist or bundle" >&2
             fi
         done
+        rm -rf "$work_dir"
     else
         echo "WARNING: VC redist CRT dir not found - CRT DLLs may be missing from the bundle" >&2
     fi
