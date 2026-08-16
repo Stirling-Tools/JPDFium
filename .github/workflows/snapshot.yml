@@ -346,13 +346,21 @@ jobs:
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
-        # Signing is a publish concern; skip on PRs (the smoke loads the
-        # freshly-built unsigned dylib on the same runner just fine).
+        # Signing is a publish concern. Skip on PRs AND when no cert secret is
+        # configured (forks / dev) - the smoke loads the freshly-built unsigned
+        # dylib on the same runner just fine. On the upstream (with the cert)
+        # the import runs so the bundled dylibs are signed + notarizable.
         if: startsWith(matrix.platform, 'darwin-') && github.event_name != 'pull_request'
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: bash native/import-macos-cert.sh
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "::warning::no macOS signing cert configured - darwin natives will be UNSIGNED (fork/dev CI)"
+            echo "MACOS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            bash native/import-macos-cert.sh
+          fi
 
       - name: Stage binaries (bridge + PDFium siblings)
         if: matrix.libc != 'musl'
@@ -390,9 +398,10 @@ jobs:
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl'
         env:
-          # PRs have no signing cert; unsigned is fine there because
-          # publish-snapshot never runs on pull_request.
-          MACOS_ALLOW_UNSIGNED: ${{ github.event_name == 'pull_request' && '1' || '' }}
+          # PRs and cert-less (fork/dev) builds have no signing cert; unsigned
+          # is fine because the smoke loads the freshly-built dylib on the same
+          # runner. The upstream publish has the cert, so signing is enforced.
+          MACOS_ALLOW_UNSIGNED: ${{ (github.event_name == 'pull_request' || secrets.MACOS_CERTIFICATE_P12_BASE64 == '') && '1' || '' }}
           # Shipped jar: a platform with no size budget entry must FAIL, not
           # silently disable the gate.
           SIZE_GATE_STRICT: '1'

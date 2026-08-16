@@ -39,6 +39,19 @@ DEPOT_TOOLS_DIR="${BUILD_DIR}/depot_tools"
 EMBEDPDF_REPO="https://github.com/embedpdf/pdfium.git"
 EMBEDPDF_BRANCH="embedpdf/main"
 
+# ---------- musl / Alpine libc adjustments (must run before gclient sync) ----------
+# depot_tools' vpython wrapper downloads a GLIBC-built CPython and builds a venv
+# from it. That binary cannot run on musl even under gcompat - it imports
+# glibc-only symbols (preadv64v2 / pwritev64v2 / posix_fallocate64) which musl
+# does not export, so gclient sync dies with "Error relocating ... python3:
+# <symbol>: symbol not found". VPYTHON_BYPASS makes the wrapper exec the system
+# python3 (Alpine's musl build) instead. This must be exported BEFORE any
+# gclient invocation.
+if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
+    export VPYTHON_BYPASS="manually managed python not supported by chrome operations"
+    echo "  musl/Alpine: VPYTHON_BYPASS set - gclient will use the system python3"
+fi
+
 # ---------- argument handling ----------
 ACTION="build"
 case "${1:-}" in

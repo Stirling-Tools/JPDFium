@@ -19,7 +19,10 @@ linux-musl-arm64 34000000
 darwin-x64     34000000
 darwin-arm64   34000000
 windows-x64    34000000
-windows-arm64  34000000
+# windows-arm64 has no trimmed icudt78.dll yet (the trim script is x64-only),
+# so the full ~33 MB ICU data ships; budget allows for it. TODO: cross-build a
+# trimmed aarch64 ICU so arm64 can match x64's ~23 MB bundle.
+windows-arm64  150000000
 
 vips-linux-x64   100000000
 vips-linux-arm64 100000000

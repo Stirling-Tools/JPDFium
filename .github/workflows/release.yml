@@ -285,11 +285,20 @@ jobs:
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
+        # Signing is a publish concern. If no cert secret is configured (forks /
+        # dev) allow unsigned so the leg can build + smoke; the upstream (with
+        # the cert) signs + notarizes.
         if: startsWith(matrix.platform, 'darwin-')
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: bash native/import-macos-cert.sh
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "::warning::no macOS signing cert configured - darwin natives will be UNSIGNED (fork/dev CI)"
+            echo "MACOS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            bash native/import-macos-cert.sh
+          fi
 
       - name: Stage binaries for publish
         if: matrix.libc != 'musl'
@@ -310,6 +319,20 @@ jobs:
                ! -name 'vccorlib*.dll' \
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
+
+      # The trimmed icudt78.dll must replace the full 33 MB vcpkg one BEFORE
+      # the bundler's size gate runs, or the windows bundle fails its budget.
+      - name: Override icudt78.dll with trimmed copy (Windows only)
+        if: matrix.platform == 'windows-x64'
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/
+
+      - name: Bundle runtime deps + strip
+        if: matrix.libc != 'musl'
+        run: |
           # Bridge runtime deps - walk the bridge's import table per-platform
           # and copy only referenced libs, skipping system libs. Also strips
           # debug symbols. Shipped jar: SIZE_GATE_STRICT makes a missing budget
@@ -318,19 +341,9 @@ jobs:
           echo "--- staged ---"
           ls -la native/dist/${{ matrix.platform }}/
 
-      - name: Override icudt78.dll with trimmed copy (Windows only)
-        # Runs AFTER staging (which would have copied PDFium's full 33 MB
-        # icudt78.dll from vcpkg) and BEFORE upload, so the small trimmed
-        # copy from prep-icu-data wins. download-artifact@v4 extracts on
-        # top, overwriting the larger one.
-        if: matrix.platform == 'windows-x64'
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
-        continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
-        with:
-          name: windows-icu-trimmed
-          path: native/dist/windows-x64/
-
       - name: Sanity check
+        # Skipped musl legs (no musl PDFium prebuild yet) have no dist dir.
+        if: matrix.libc != 'musl' || steps.musl.outcome == 'success'
         run: |
           test -n "$(ls -A native/dist/${{ matrix.platform }}/)" || {
             echo "ERROR: no native binaries staged for ${{ matrix.platform }}"
