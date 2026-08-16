@@ -95,9 +95,9 @@ install_deps() {
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev
     else
         brew install meson ninja pkg-config cmake \
-            glib expat fftw orc libexif lcms2 \
-            libheif libjxl libaom libde265 x265 \
-            libwebp libpng libjpeg-turbo libtiff
+            glib expat fftw orc libexif little-cms2 \
+            libheif jpeg-xl aom libde265 x265 \
+            webp libpng jpeg-turbo libtiff
     fi
 }
 
@@ -145,6 +145,12 @@ build_vips() {
     local work
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
+
+    if [ "$OS" = darwin ]; then
+        local bp
+        bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+    fi
 
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/libvips/libvips/archive/refs/tags/${VIPS_TAG}.tar.gz" \
