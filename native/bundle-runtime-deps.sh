@@ -422,11 +422,11 @@ bundle_windows() {
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
-        # The prebuilt PDFium component build ships PartitionAlloc allocator
-        # libs that NOTHING links against on Linux (verified: libpdfium.so
-        # links raw_ptr but NOT allocator libs). It is dead weight AND a latent JVM
+        # The prebuilt PDFium component build ships a PartitionAlloc allocator
+        # shim that NOTHING links against on Linux (verified: libpdfium.so
+        # links raw_ptr but NOT the shim). It is dead weight AND a latent JVM
         # hazard - strip it. raw_ptr stays: libpdfium.so genuinely needs it.
-        find "$DIST_DIR" -maxdepth 1 -type f \( -name '*allocator*' -o -name '*partition_alloc*' \) -print -delete
+        find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         # Strip debug symbols from the bridge to slash binary size. The
         # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
         # but Rust's #[no_mangle] + statically linked third-party crates still
