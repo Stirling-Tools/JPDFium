@@ -47,7 +47,16 @@ jobs:
           TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
           [ -n "$TAG" ] || { echo "::error::native/pdfium.version is empty - run the Prebuild PDFium workflow first"; exit 1; }
           echo "Pinned PDFium prebuild: $TAG"
-          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          # PDFium prebuilds live in the UPSTREAM repo (this fork may not carry
+          # the pdfium-* release); fall back exactly like fetch-prebuilt-pdfium.sh.
+          ASSETS=""
+          for repo in "$GITHUB_REPOSITORY" "Stirling-Tools/JPDFium"; do
+            ASSETS=$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            [ -n "$ASSETS" ] && { echo "assets from $repo"; break; }
+          done
+          [ -n "$ASSETS" ] || {
+            echo "::error::release $TAG not found in $GITHUB_REPOSITORY or Stirling-Tools/JPDFium - run Prebuild PDFium / merge its pin PR"; exit 1;
+          }
           # Required platforms (component + static): missing -> fail fast.
           for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
             for suffix in "" -static; do

@@ -119,7 +119,6 @@ public final class VipsEncoder {
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         list.add(VipsOption.Int("effort", opts.effort()));
-        list.add(VipsOption.Int("bitdepth", opts.bitdepth()));
         return list.toArray(VipsOption[]::new);
     }
 
