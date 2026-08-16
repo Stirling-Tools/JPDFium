@@ -92,7 +92,7 @@ while IFS= read -r f; do
     # allocator shim / raw_ptr are genuinely orphaned and NativeLoader preloads
     # every DLL into the JVM. On Linux/macOS they are real libpdfium deps.
     if [ "$OS" = windows ]; then
-        if echo "$lower" | grep -qE 'allocator|partition_alloc|raw_ptr'; then
+        if echo "$lower" | grep -qE 'allocator_shim|raw_ptr'; then
             echo "FAIL: $base is a JVM-hostile library (allocator hook) - must never be bundled" >&2
             failures=$((failures + 1))
         fi

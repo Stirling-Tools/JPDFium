@@ -139,12 +139,23 @@ public final class NativeLoader {
     private static void preloadWindowsDeps(
             Path tmpDir, List<String> libs, String pdfiumName, String bridgeName) {
         List<String> remaining = new ArrayList<>();
+        List<String> priority = new ArrayList<>();
         for (String lib : libs) {
             if (lib.equals(pdfiumName) || lib.equals(bridgeName)) continue;
             if (isWindowsJvmHazardDll(lib)) continue;
             Path p = tmpDir.resolve(lib);
-            if (Files.exists(p)) remaining.add(lib);
+            if (Files.exists(p)) {
+                String l = lib.toLowerCase();
+                // Preload foundational runtimes first so dependent libraries resolve
+                // against the bundled copies in memory rather than incompatible PATH DLLs.
+                if (l.contains("libc++") || l.startsWith("vcruntime") || l.startsWith("msvcp") || l.startsWith("concrt")) {
+                    priority.add(lib);
+                } else {
+                    remaining.add(lib);
+                }
+            }
         }
+        remaining.addAll(0, priority);
 
         int maxPasses = 8;
         while (maxPasses > 0 && !remaining.isEmpty()) {
@@ -170,17 +181,16 @@ public final class NativeLoader {
 
     /**
      * DLLs that must never be {@link System#load}ed into the JVM. On Windows:
-     * 1. PartitionAlloc allocator / raw_ptr: their DllMain replaces the process allocator,
-     *    which hard-crashes the JVM (STATUS_ENTRYPOINT_NOT_FOUND / 0xc0000139 on windows-arm64).
+     * 1. PartitionAlloc allocator shim / raw_ptr: allocator_shim's DllMain replaces
+     *    the process allocator, which hard-crashes the JVM. raw_ptr is orphaned on Windows.
+     *    (Note: allocator_base and allocator_core are required by pdfium.dll and are NOT hazards).
      * 2. UCRT API set stubs (api-ms-win-*, ext-ms-*): system-provided forwarders and cannot be loaded directly.
-     * Note: VC Redist CRT DLLs (msvcp140*, vcruntime140*, concrt140*) ARE pre-loaded so that
-     * dependent libraries (like pdfium.dll and jpdfium.dll) can resolve them on hosts without
-     * the newest Visual C++ Redistributable installed.
+     * Note: VC Redist CRT DLLs (msvcp140*, vcruntime140*, concrt140*) and libc++.dll ARE pre-loaded
+     * so that dependent libraries (like allocator_base.dll and pdfium.dll) resolve against them in memory.
      */
     private static boolean isWindowsJvmHazardDll(String lib) {
         String l = lib.toLowerCase();
-        return l.contains("allocator")
-                || l.contains("partition_alloc")
+        return l.contains("allocator_shim")
                 || l.contains("raw_ptr")
                 || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-");
     }
