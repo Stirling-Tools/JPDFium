@@ -456,7 +456,6 @@ jobs:
         if: matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
         shell: bash
         run: |
-        timeout-minutes: 30
           curl -fL --max-time 300 --retry 5 --retry-all-errors --retry-delay 3 \
             "https://api.adoptium.net/v3/binary/latest/25/ga/mac/x64/jdk/hotspot/normal/eclipse?project=jdk" \
             -o /tmp/x64-jdk.tar.gz
@@ -465,6 +464,7 @@ jobs:
           arch -x86_64 "$HOME/x64-jdk/Contents/Home/bin/java" -version
           export JAVA_HOME="$HOME/x64-jdk/Contents/Home"
           arch -x86_64 ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=darwin-x64 --no-daemon --stacktrace
+        timeout-minutes: 30
 
       - name: Verify darwin-x64 smoke actually ran
         if: always() && matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
