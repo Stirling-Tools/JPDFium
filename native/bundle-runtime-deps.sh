@@ -29,6 +29,7 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 bundle_linux() {
+    export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
     [ -f "$bridge" ] || { echo "no libjpdfium.so to bundle for"; return 0; }
 

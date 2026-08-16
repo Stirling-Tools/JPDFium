@@ -113,6 +113,9 @@ build_libheif_linux() {
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
 
+    # Remove any distro libheif package so it cannot shadow our custom build
+    $SUDO apt-get remove -y libheif* 2>/dev/null || true
+
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/strukturag/libheif/archive/refs/tags/${LIBHEIF_TAG}.tar.gz" \
         -o "$work/heif.tar.gz"
@@ -122,6 +125,7 @@ build_libheif_linux() {
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DCMAKE_INSTALL_LIBDIR=lib \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
         -DWITH_LIBDE265=ON -DWITH_X265=ON \
@@ -135,6 +139,7 @@ build_libheif_linux() {
     cmake --build "$work/build" --parallel "$nproc" \
         || { echo "build-vips-full-codecs.sh: libheif build failed" >&2; exit 1; }
     $SUDO cmake --install "$work/build"
+    echo "$PREFIX/lib" | $SUDO tee /etc/ld.so.conf.d/00-local.conf >/dev/null
     $SUDO ldconfig 2>/dev/null || true
     echo "==> build-vips-full-codecs.sh: libheif installed to $PREFIX/lib:"
     ls -la "$PREFIX"/lib/libheif.so* 2>/dev/null || true
@@ -150,6 +155,9 @@ build_vips() {
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+    else
+        export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
     fi
 
     curl -fsSL --retry 3 --retry-delay 3 \

@@ -26,6 +26,7 @@ case "$PLATFORM" in
     linux-*)
         OS=linux
         LIBVIPS_NAME="libvips.so.42"
+        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
         ;;
     darwin-*)
         OS=darwin
