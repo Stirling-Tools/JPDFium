@@ -375,6 +375,44 @@ bundle_windows() {
             queue+=("$dest")
         done <<<"$deps"
     done
+
+    # The bridge is built with MSVC /MD, so it needs the FULL VC redist CRT set
+    # - including msvcp140_1.dll (iostreams), which vcpkg's bin does NOT ship
+    # (the import-table walk above skips it as "not found in any source dir").
+    # On windows-arm64 that missing DLL made System.load hard-crash the JVM
+    # (STATUS_ENTRYPOINT_NOT_FOUND, 0xc0000139): the bridge bound to the JVM's
+    # older CRT copy. Resolve any CRT DLL that the bundled DLLs import but that
+    # is still missing from the VS redist (same-arch triplet), copying exactly
+    # what is referenced - so nothing orphaned is added.
+    local arch_dir
+    case "$PLATFORM" in
+        windows-arm64|vips-windows-arm64) arch_dir="arm64" ;;
+        *) arch_dir="x64" ;;
+    esac
+    local redist_dir
+    redist_dir=$(find "/c/Program Files/Microsoft Visual Studio" -path "*VC/Redist/MSVC/*/${arch_dir}/Microsoft.VC*.CRT" -type d 2>/dev/null | sort | tail -1 || true)
+    if [ -n "$redist_dir" ]; then
+        echo "Resolving imported-but-missing CRT DLLs from: $redist_dir"
+        # Collect every CRT DLL basename the bundled DLLs import.
+        : > "$WORK/crt-imports.txt"
+        for dll in "$DIST_DIR"/*.dll; do
+            [ -e "$dll" ] || continue
+            "$DUMPBIN" //dependents "$dll" 2>/dev/null \
+                | grep -oiE '(msvcp140|vcruntime140|concrt140)[a-z0-9_]*\.dll' \
+                >> "$WORK/crt-imports.txt" || true
+        done
+        sort -u "$WORK/crt-imports.txt" | while IFS= read -r crt; do
+            [ -z "$crt" ] && continue
+            [ -e "$DIST_DIR/$crt" ] && continue
+            if [ -f "$redist_dir/$crt" ]; then
+                cp -v "$redist_dir/$crt" "$DIST_DIR/$crt"
+            else
+                echo "WARNING: $crt imported but not in VS redist or bundle" >&2
+            fi
+        done
+    else
+        echo "WARNING: VC redist CRT dir not found - CRT DLLs may be missing from the bundle" >&2
+    fi
 }
 
 case "$PLATFORM" in
