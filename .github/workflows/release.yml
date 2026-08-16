@@ -285,11 +285,20 @@ jobs:
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
+        # Signing is a publish concern. If no cert secret is configured (forks /
+        # dev) allow unsigned so the leg can build + smoke; the upstream (with
+        # the cert) signs + notarizes.
         if: startsWith(matrix.platform, 'darwin-')
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: bash native/import-macos-cert.sh
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "::warning::no macOS signing cert configured - darwin natives will be UNSIGNED (fork/dev CI)"
+            echo "MACOS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            bash native/import-macos-cert.sh
+          fi
 
       - name: Stage binaries for publish
         if: matrix.libc != 'musl'
@@ -331,6 +340,8 @@ jobs:
           path: native/dist/windows-x64/
 
       - name: Sanity check
+        # Skipped musl legs (no musl PDFium prebuild yet) have no dist dir.
+        if: matrix.libc != 'musl' || steps.musl.outcome == 'success'
         run: |
           test -n "$(ls -A native/dist/${{ matrix.platform }}/)" || {
             echo "ERROR: no native binaries staged for ${{ matrix.platform }}"

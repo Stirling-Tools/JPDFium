@@ -25,7 +25,8 @@ apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
   sudo patchelf coreutils file binutils \
   pcre2-dev freetype-dev harfbuzz-dev icu-dev icu icu-data-full \
   qpdf-dev pugixml-dev libunibreak-dev zlib-dev libjpeg-turbo-dev \
-  rust cargo github-cli
+  rust cargo github-cli \
+  py3-pip py3-httplib2 py3-six
 
 stage_and_bundle() {
     local plat="$1"
