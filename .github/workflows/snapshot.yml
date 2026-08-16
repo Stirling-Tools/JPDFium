@@ -195,6 +195,8 @@ jobs:
 
       - name: Install build deps (macOS, native arm64)
         if: matrix.platform == 'darwin-arm64'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           brew install cmake ninja \
             pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
@@ -203,6 +205,8 @@ jobs:
 
       - name: Install build deps (macOS, x86_64 cross-compile)
         if: matrix.platform == 'darwin-x64'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           sudo softwareupdate --install-rosetta --agree-to-license || true
           if [ ! -x /usr/local/bin/brew ]; then
@@ -550,6 +554,8 @@ jobs:
             sudo apt-get install -y --no-install-recommends libvips-dev patchelf
       - name: Install libvips (macOS, fallback)
         if: matrix.platform == 'darwin-arm64'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
       - name: Fetch prebuilt libvips (Windows)
