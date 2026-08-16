@@ -18,10 +18,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix so
-  # the windows-x64 job can download it and stay within its size budget (the
-  # full vcpkg icudt78.dll is ~33 MB; the trimmed one ~2 MB).
-  prep-windows-icu:
+  # Cross-build trimmed ICU data once on Linux, ahead of the matrix, so the
+  # darwin + windows legs can stay within their size budgets (the full ICU data
+  # is ~30-33 MB; the trimmed set ~2 MB). build-minimal-icu-windows.sh produces
+  # BOTH the trimmed windows icudt78.dll and the bare icudt78l.dat that macOS
+  # wraps into libicudata via clang. Mirrors snapshot/release prep-icu-data.
+  prep-icu-data:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -43,7 +45,7 @@ jobs:
             sleep 30
           done
           exit 1
-      - name: Cross-build minimal Windows icudt78.dll
+      - name: Cross-build minimal Windows icudt78.dll + bare trimmed .dat
         run: bash native/build-minimal-icu-windows.sh
       - name: Upload trimmed Windows icudt78.dll
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -52,9 +54,16 @@ jobs:
           path: native/dist/windows-x64/icudt78.dll
           if-no-files-found: warn  # script bailed -> windows job uses vcpkg's full 33 MB dll
           retention-days: 1
+      - name: Upload bare trimmed ICU .dat (for macOS wrap step)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/icudt*l.dat
+          if-no-files-found: warn  # macOS jobs fall back to brew's 33 MB libicudata
+          retention-days: 1
 
   build-natives:
-    needs: prep-windows-icu
+    needs: prep-icu-data
     strategy:
       fail-fast: false
       matrix:
@@ -242,6 +251,25 @@ jobs:
         env:
           JPDFIUM_TARGET_PLATFORM: ${{ matrix.platform }}
         run: bash native/build-minimal-icu.sh
+
+      - name: Download bare trimmed ICU .dat (macOS)
+        # brew icu4c@78 doesn't ship icupkg/pkgdata, so we can't trim locally;
+        # we download the pre-trimmed .dat produced once on Linux by the
+        # prep-icu-data job and wrap it on macOS via clang. The .dat is
+        # platform-agnostic.
+        if: startsWith(matrix.platform, 'darwin-')
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
+        with:
+          name: icu-data-trimmed
+          path: native/dist/icu-data/
+
+      - name: Build minimal ICU data (macOS)
+        if: startsWith(matrix.platform, 'darwin-')
+        # Wraps the downloaded icudt78l.dat into a libicudata.<MAJ>.dylib via a
+        # clang .incbin asm stub, pre-staged so the bundler picks it up instead
+        # of brew's full 33 MB copy - keeps the darwin bundles within budget.
+        run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
         # Signing is a publish concern. If no cert secret is configured (forks /
