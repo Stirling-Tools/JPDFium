@@ -170,24 +170,19 @@ public final class NativeLoader {
 
     /**
      * DLLs that must never be {@link System#load}ed into the JVM. On Windows:
-     * 1. PartitionAlloc allocator shim / raw_ptr: DllMain replaces the process allocator,
+     * 1. PartitionAlloc allocator / raw_ptr: their DllMain replaces the process allocator,
      *    which hard-crashes the JVM (STATUS_ENTRYPOINT_NOT_FOUND / 0xc0000139 on windows-arm64).
-     * 2. CRT runtime DLLs (msvcp140*, vcruntime140*, concrt140*, vcomp140*, ucrtbase*):
-     *    the JVM already has its host CRT loaded in process memory. Calling System.load() on
-     *    a second copy of the CRT triggers entrypoint / TLS reinitialization conflicts
-     *    (STATUS_ENTRYPOINT_NOT_FOUND in ntdll.dll). CRT resolution is handled automatically
-     *    by the OS loader when loading the dependent DLLs.
-     * 3. UCRT API set stubs (api-ms-win-*, ext-ms-*): system-provided and cannot be loaded directly.
+     * 2. UCRT API set stubs (api-ms-win-*, ext-ms-*): system-provided forwarders and cannot be loaded directly.
+     * Note: VC Redist CRT DLLs (msvcp140*, vcruntime140*, concrt140*) ARE pre-loaded so that
+     * dependent libraries (like pdfium.dll and jpdfium.dll) can resolve them on hosts without
+     * the newest Visual C++ Redistributable installed.
      */
     private static boolean isWindowsJvmHazardDll(String lib) {
         String l = lib.toLowerCase();
         return l.contains("allocator")
                 || l.contains("partition_alloc")
                 || l.contains("raw_ptr")
-                || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-")
-                || l.startsWith("vcruntime140") || l.startsWith("msvcp140")
-                || l.startsWith("concrt140") || l.startsWith("vcomp140")
-                || l.startsWith("ucrtbase");
+                || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-");
     }
 
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {
