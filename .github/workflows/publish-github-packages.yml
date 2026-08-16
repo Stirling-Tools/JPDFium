@@ -18,7 +18,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix so
+  # the windows-x64 job can download it and stay within its size budget (the
+  # full vcpkg icudt78.dll is ~33 MB; the trimmed one ~2 MB).
+  prep-windows-icu:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Install build deps (Linux + mingw-w64)
+        run: |
+          sudo sed -i \
+            -e 's|http://ports\.ubuntu\.com|http://azure.ports.ubuntu.com|g' \
+            -e 's|http://archive\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            -e 's|http://security\.ubuntu\.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+          for attempt in 1 2 3; do
+            sudo apt-get update && sudo apt-get install -y \
+              build-essential icu-devtools libicu-dev \
+              mingw-w64 binutils-mingw-w64 \
+              curl unzip && exit 0
+            sleep 30
+          done
+          exit 1
+      - name: Cross-build minimal Windows icudt78.dll
+        run: bash native/build-minimal-icu-windows.sh
+      - name: Upload trimmed Windows icudt78.dll
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/icudt78.dll
+          if-no-files-found: warn  # script bailed -> windows job uses vcpkg's full 33 MB dll
+          retention-days: 1
+
   build-natives:
+    needs: prep-windows-icu
     strategy:
       fail-fast: false
       matrix:
@@ -246,6 +282,21 @@ jobs:
                ! -name 'vccorlib*.dll' \
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
+
+      # The trimmed icudt78.dll (built by prep-windows-icu) must replace the
+      # full 33 MB vcpkg one BEFORE the bundler's size gate runs, or the
+      # windows bundle fails its size budget.
+      - name: Override icudt78.dll with trimmed copy (Windows only)
+        if: matrix.platform == 'windows-x64'
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        continue-on-error: true        # missing -> stay with vcpkg's full 33 MB icudt78.dll
+        with:
+          name: windows-icu-trimmed
+          path: native/dist/windows-x64/
+
+      - name: Bundle runtime deps + strip
+        if: matrix.libc != 'musl'
+        run: |
           # Bridge's own dynamic deps - pcre2-8, freetype, harfbuzz, icu, qpdf,
           # pugixml, libunibreak + transitive deps. bundle-runtime-deps.sh
           # walks the bridge's import table per-platform (ldd / otool / dumpbin)
@@ -253,6 +304,7 @@ jobs:
           # No more blanket vcpkg bin glob → no debug-helper bloat in the jar.
           # Shipped jar: SIZE_GATE_STRICT makes a missing budget entry fail
           # rather than silently disable the size gate.
+
           SIZE_GATE_STRICT=1 bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
