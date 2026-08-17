@@ -242,14 +242,32 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
     int fmt = FPDFBitmap_GetFormat(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
     void* buf = FPDFBitmap_GetBuffer(bmp);
-    if (!buf || w <= 0 || h <= 0) {
+    if (!buf || w <= 0 || h <= 0 || stride <= 0) {
         FPDFBitmap_Destroy(bmp);
         return false;
     }
-    int bpp = (fmt == FPDFBitmap_BGR) ? 3 : 4;
+    // PDFium bitmap formats:
+    // FPDFBitmap_Gray = 1 (1 byte per pixel)
+    // FPDFBitmap_BGR  = 2 (3 bytes per pixel, BGR)
+    // FPDFBitmap_BGRx = 3 (4 bytes per pixel, BGRx)
+    // FPDFBitmap_BGRA = 4 (4 bytes per pixel, BGRA)
+    int bpp = 0;
+    if (fmt == 1) {
+        bpp = 1;
+    } else if (fmt == 2) {
+        bpp = 3;
+    } else if (fmt == 3 || fmt == 4) {
+        bpp = 4;
+    } else {
+        // Unknown or 1-bit format: return false so caller falls back to removing the whole image
+        FPDFBitmap_Destroy(bmp);
+        return false;
+    }
+
     unsigned int r = (argb >> 16) & 0xFF;
     unsigned int g = (argb >> 8) & 0xFF;
     unsigned int b = argb & 0xFF;
+    uint8_t gray = static_cast<uint8_t>((r * 299 + g * 587 + b * 114) / 1000);
 
     // Image -> page transform (row-vector convention). Iterating image
     // pixels forward avoids inverse-matrix precision issues at edges.
@@ -264,12 +282,20 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
             double px = ux * ix + uy * iy + e;
             double py = vx * ix + vy * iy + f;
             if (px < rx || px > rr || py < ry || py > rt) continue;
-            uint8_t* p = static_cast<uint8_t*>(buf) + static_cast<size_t>(iy) * stride +
-                         static_cast<size_t>(ix) * bpp;
-            p[0] = static_cast<uint8_t>(b);
-            p[1] = static_cast<uint8_t>(g);
-            p[2] = static_cast<uint8_t>(r);
-            if (bpp == 4) p[3] = 255;
+            size_t offset = static_cast<size_t>(iy) * stride + static_cast<size_t>(ix) * bpp;
+            uint8_t* p = static_cast<uint8_t*>(buf) + offset;
+            if (bpp == 1) {
+                p[0] = gray;
+            } else if (bpp == 3) {
+                p[0] = static_cast<uint8_t>(b);
+                p[1] = static_cast<uint8_t>(g);
+                p[2] = static_cast<uint8_t>(r);
+            } else {
+                p[0] = static_cast<uint8_t>(b);
+                p[1] = static_cast<uint8_t>(g);
+                p[2] = static_cast<uint8_t>(r);
+                if (fmt == 4) p[3] = 255;
+            }
             changed = true;
         }
     }
@@ -2144,41 +2170,43 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
-        TextMatch m;
-        m.bboxL = cL;
-        m.bboxB = cB;
-        m.bboxR = cR;
-        m.bboxT = cT;
+        double pW = FPDF_GetPageWidth(pw->page);
+        double pH = FPDF_GetPageHeight(pw->page);
+        float pWf = std::max(static_cast<float>(pW), cR + 1000.0f);
+        float pHf = std::max(static_cast<float>(pH), cT + 1000.0f);
+        float minXf = std::min(0.0f, cL - 1000.0f);
+        float minYf = std::min(0.0f, cB - 1000.0f);
 
-        const int count = FPDFText_CountChars(tp);
-        for (int i = 0; i < count; ++i) {
-            double ox, oy;
-            if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
-            if (ox < cL || ox > cR || oy < cB || oy > cT) m.charIndices.push_back(i);
-        }
-
-        bool anythingToRemove = !m.charIndices.empty();
-        if (!anythingToRemove) {
-            const int objCount = FPDFPage_CountObjects(pw->page);
-            for (int i = 0; i < objCount; ++i) {
-                FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
-                if (!obj) continue;
-                if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;
-                float ol, ob, or_, ot;
-                if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
-                if (!rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT)) {
-                    anythingToRemove = true;
-                    break;
-                }
-            }
-        }
-        if (!anythingToRemove) {
-            FPDFText_ClosePage(tp);
-            return JPDFIUM_OK;
-        }
+        // 4 outer boxes surrounding the crop box:
+        // Left, Right, Bottom, Top
+        struct OuterBox {
+            float l, b, r, t;
+        };
+        OuterBox boxes[4] = {
+            {minXf, minYf, cL, pHf},  // Left
+            {cR, minYf, pWf, pHf},    // Right
+            {cL, minYf, cR, cB},      // Bottom
+            {cL, cT, cR, pHf}         // Top
+        };
 
         std::vector<TextMatch> matches;
-        matches.push_back(std::move(m));
+        const int count = FPDFText_CountChars(tp);
+        for (int b = 0; b < 4; b++) {
+            if (boxes[b].l >= boxes[b].r || boxes[b].b >= boxes[b].t) continue;
+            TextMatch tm;
+            tm.bboxL = boxes[b].l;
+            tm.bboxB = boxes[b].b;
+            tm.bboxR = boxes[b].r;
+            tm.bboxT = boxes[b].t;
+            for (int i = 0; i < count; ++i) {
+                double l, r, b2, t;
+                if (!FPDFText_GetCharBox(tp, i, &l, &r, &b2, &t)) continue;
+                if (charInRect(l, b2, r, t, tm.bboxL, tm.bboxB, tm.bboxR, tm.bboxT)) {
+                    tm.charIndices.push_back(i);
+                }
+            }
+            matches.push_back(std::move(tm));
+        }
 
         int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
 
