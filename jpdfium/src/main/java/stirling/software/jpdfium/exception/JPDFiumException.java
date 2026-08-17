@@ -65,4 +65,3 @@ public class JPDFiumException extends RuntimeException {
         return nativeCode == REDACT_UNVERIFIABLE;
     }
 }
-
