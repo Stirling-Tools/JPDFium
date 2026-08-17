@@ -159,8 +159,8 @@ static std::wstring buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
         auto it = cache.find(uni);
         if (it == cache.end()) {
             std::wstring in(1, static_cast<wchar_t>(uni));
-            icu::UnicodeString us = icu::UnicodeString::fromUTF32(
-                reinterpret_cast<const UChar32*>(in.data()), 1);
+            icu::UnicodeString us =
+                icu::UnicodeString::fromUTF32(reinterpret_cast<const UChar32*>(in.data()), 1);
             icu::UnicodeString out;
             UErrorCode err = U_ZERO_ERROR;
             nfkc->normalize(us, out, err);
@@ -421,12 +421,8 @@ static constexpr FS_MATRIX kIdentityMatrix{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
 // forms (see CharPositionFidelityTest / native verification harness).
 static FS_MATRIX concatMatrix(const FS_MATRIX& m, const FS_MATRIX& t) {
     return FS_MATRIX{
-        m.a * t.a + m.b * t.c,
-        m.a * t.b + m.b * t.d,
-        m.c * t.a + m.d * t.c,
-        m.c * t.b + m.d * t.d,
-        m.e * t.a + m.f * t.c + t.e,
-        m.e * t.b + m.f * t.d + t.f,
+        m.a * t.a + m.b * t.c, m.a * t.b + m.b * t.d,       m.c * t.a + m.d * t.c,
+        m.c * t.b + m.d * t.d, m.e * t.a + m.f * t.c + t.e, m.e * t.b + m.f * t.d + t.f,
     };
 }
 
@@ -440,8 +436,8 @@ static bool isStandard14Font(FPDF_FONT font) {
     if (FPDFFont_GetFontData(font, nullptr, 0, &len) && len > 0) return false;  // embedded
     char name[128] = {0};
     if (FPDFFont_GetBaseFontName(font, name, sizeof name) == 0) return false;
-    static const char* const kStandard[] = {
-        "Courier", "Helvetica", "Times", "Symbol", "ZapfDingbats"};
+    static const char* const kStandard[] = {"Courier", "Helvetica", "Times", "Symbol",
+                                            "ZapfDingbats"};
     for (const char* s : kStandard) {
         if (strncmp(name, s, strlen(s)) == 0) return true;
     }
@@ -509,8 +505,8 @@ struct TextMatch {
 // object.  Each fragment becomes its own independent FPDF_PAGEOBJECT, pinned
 // to the exact absolute page-space coordinates of its first character.
 struct TextFragment {
-    std::vector<uint16_t> utf16;  // UTF-16LE null-terminated text (original codepoints)
-    std::vector<uint16_t> utf16Ligated;  // origin-sharing pairs recombined into U+FB00-FB06
+    std::vector<uint16_t> utf16;            // UTF-16LE null-terminated text (original codepoints)
+    std::vector<uint16_t> utf16Ligated;     // origin-sharing pairs recombined into U+FB00-FB06
     std::vector<uint16_t> utf16Decomposed;  // ligature-decomposed variant (empty if identical)
     FS_MATRIX matrix;  // page space: linear part from FPDFText_GetMatrix (includes
                        // rotation, Tz and the form chain), e/f from FPDFText_GetCharOrigin
@@ -617,7 +613,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     std::unordered_map<uintptr_t, int> objPtrToIndex;
     objPtrToIndex.reserve(static_cast<size_t>(objCount) * 2);
 
-    std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, FPDF_PAGEOBJECT, int, int)> indexFormChildren;
+    std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, FPDF_PAGEOBJECT, int, int)>
+        indexFormChildren;
     indexFormChildren = [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& formToPage,
                             FPDF_PAGEOBJECT topFormObj, int topFormPageIndex, int depth) {
         // PDFium's own parser stops form recursion at 40 levels
@@ -681,8 +678,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     }
 
     struct CharInfo {
-        int ownerObj;      // index into allObjs (-1 = unmapped)
-        bool isGenerated;  // FPDFText_IsGenerated
+        int ownerObj;          // index into allObjs (-1 = unmapped)
+        bool isGenerated;      // FPDFText_IsGenerated
         unsigned int unicode;  // cached FPDFText_GetUnicode result
     };
     std::vector<CharInfo> charInfo(totalChars);
@@ -840,10 +837,14 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                         }
                     }
                     if (!lig) {
-                        if (pair == L"ff") lig = 0xFB00;
-                        else if (pair == L"fi") lig = 0xFB01;
-                        else if (pair == L"fl") lig = 0xFB02;
-                        else if (pair == L"st") lig = 0xFB06;
+                        if (pair == L"ff")
+                            lig = 0xFB00;
+                        else if (pair == L"fi")
+                            lig = 0xFB01;
+                        else if (pair == L"fl")
+                            lig = 0xFB02;
+                        else if (pair == L"st")
+                            lig = 0xFB06;
                     }
                 }
                 if (lig) {
@@ -1007,8 +1008,12 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
     auto extractSubpaths = [](FPDF_PAGEOBJECT path, int segCount) -> std::vector<Subpath> {
         std::vector<Subpath> subpaths;
-        Subpath current = {0, 0, std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+        Subpath current = {0,
+                           0,
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest()};
         bool started = false;
 
         for (int s = 0; s < segCount; s++) {
@@ -1023,8 +1028,12 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 // Finish previous subpath
                 current.endIdx = s;
                 subpaths.push_back(current);
-                current = {s, 0, std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+                current = {s,
+                           0,
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest()};
             }
 
             started = true;
@@ -1080,61 +1089,61 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // to the geometric rule.
     std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, int)> markFormContents =
         [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage, int depth) {
-        if (depth > kMaxFormNesting) return;
-        int childCount = FPDFFormObj_CountObjects(formObj);
-        if (childCount <= 0) return;
+            if (depth > kMaxFormNesting) return;
+            int childCount = FPDFFormObj_CountObjects(formObj);
+            if (childCount <= 0) return;
 
-        for (int ci = childCount - 1; ci >= 0; ci--) {
-            FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
-            if (!child) continue;
+            for (int ci = childCount - 1; ci >= 0; ci--) {
+                FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
+                if (!child) continue;
 
-            int childType = FPDFPageObj_GetType(child);
+                int childType = FPDFPageObj_GetType(child);
 
-            if (childType == FPDF_PAGEOBJ_FORM) {
-                FS_MATRIX childMatrix;
-                if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
-                    // The child form matrix applies FIRST, then the parent
-                    // chain (matches CPDF_TextPage::ProcessFormObject).
-                    markFormContents(child, concatMatrix(childMatrix, parentToPage), depth + 1);
+                if (childType == FPDF_PAGEOBJ_FORM) {
+                    FS_MATRIX childMatrix;
+                    if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
+                        // The child form matrix applies FIRST, then the parent
+                        // chain (matches CPDF_TextPage::ProcessFormObject).
+                        markFormContents(child, concatMatrix(childMatrix, parentToPage), depth + 1);
+                    }
+                }
+
+                // Text children with mapped chars are fission's responsibility.
+                if (childType == FPDF_PAGEOBJ_TEXT) {
+                    auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
+                    if (pit != objPtrToIndex.end() && !objChars[pit->second].empty()) continue;
+                }
+
+                float cl, cb, cr, ct;
+                if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
+
+                // Transform child bounds through the parent-to-page matrix
+                float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
+                float tMinX = std::numeric_limits<float>::max();
+                float tMinY = std::numeric_limits<float>::max();
+                float tMaxX = std::numeric_limits<float>::lowest();
+                float tMaxY = std::numeric_limits<float>::lowest();
+                for (auto& c : corners) {
+                    float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
+                    float ty = parentToPage.b * c[0] + parentToPage.d * c[1] + parentToPage.f;
+                    if (tx < tMinX) tMinX = tx;
+                    if (ty < tMinY) tMinY = ty;
+                    if (tx > tMaxX) tMaxX = tx;
+                    if (ty > tMaxY) tMaxY = ty;
+                }
+
+                // Check overlap with any match bbox
+                for (auto& m : matches) {
+                    if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                         m.bboxT) ||
+                        overlapRatio(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                     m.bboxT) > 0.70f) {
+                        objsToDestroy.insert(child);
+                        break;
+                    }
                 }
             }
-
-            // Text children with mapped chars are fission's responsibility.
-            if (childType == FPDF_PAGEOBJ_TEXT) {
-                auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
-                if (pit != objPtrToIndex.end() && !objChars[pit->second].empty()) continue;
-            }
-
-            float cl, cb, cr, ct;
-            if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
-
-            // Transform child bounds through the parent-to-page matrix
-            float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
-            float tMinX = std::numeric_limits<float>::max();
-            float tMinY = std::numeric_limits<float>::max();
-            float tMaxX = std::numeric_limits<float>::lowest();
-            float tMaxY = std::numeric_limits<float>::lowest();
-            for (auto& c : corners) {
-                float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
-                float ty = parentToPage.b * c[0] + parentToPage.d * c[1] + parentToPage.f;
-                if (tx < tMinX) tMinX = tx;
-                if (ty < tMinY) tMinY = ty;
-                if (tx > tMaxX) tMaxX = tx;
-                if (ty > tMaxY) tMaxY = ty;
-            }
-
-            // Check overlap with any match bbox
-            for (auto& m : matches) {
-                if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
-                                     m.bboxT) ||
-                    overlapRatio(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
-                                 m.bboxT) > 0.70f) {
-                    objsToDestroy.insert(child);
-                    break;
-                }
-            }
-        }
-    };
+        };
 
     // All page-level insertions (fission fragments, rebuilt paths) are
     // collected here and applied later in one pass, ordered by the original
@@ -1404,9 +1413,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Wholesale-marked ancestor suppression (Bug A2):
     // If an ancestor form was marked for destruction, erase any fission plans
     // for text within it so fragments of "surviving" text are not emitted on the page.
-    std::erase_if(plans, [&](const FissionPlan& plan) {
-        return hasMarkedAncestor(plan.originalObj);
-    });
+    std::erase_if(plans,
+                  [&](const FissionPlan& plan) { return hasMarkedAncestor(plan.originalObj); });
 
     // 7. Apply fission: create fragment objects BEFORE removing originals.
     //
@@ -1545,11 +1553,10 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // components), then the original codepoints, then the decomposed
             // variant.
             if (!frag.unicodeUnreliable) {
-                for (const auto* cand : {&frag.utf16Ligated, &frag.utf16,
-                                         &frag.utf16Decomposed}) {
+                for (const auto* cand : {&frag.utf16Ligated, &frag.utf16, &frag.utf16Decomposed}) {
                     if (cand->empty()) continue;
-                    textOk = FPDFText_SetText(
-                        fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
+                    textOk =
+                        FPDFText_SetText(fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
                     if (!textOk) continue;
                     emissionStatus = fragmentTextStatus(fragObj, *cand);
                     if (emissionStatus != 0) break;  // 1 verified, -1 width-gated
@@ -1570,8 +1577,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                         std::vector<uint32_t> codes;
                         bool allMapped = true;
                         for (size_t i = 0; i + 1 < cand->size(); i++) {
-                            auto git =
-                                ftInfo.unicodeToGid.find(static_cast<uint32_t>((*cand)[i]));
+                            auto git = ftInfo.unicodeToGid.find(static_cast<uint32_t>((*cand)[i]));
                             if (git != ftInfo.unicodeToGid.end() && git->second != 0) {
                                 if (!ftInfo.isCidKeyed && git->second > 0xFF) {
                                     allMapped = false;
@@ -1694,8 +1700,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 targetInsertIndex = plan.pageIndex;
             }
             for (size_t k = 0; k < createdObjs.size(); k++) {
-                insertions.push_back({createdObjs[k], targetInsertIndex, plan.ordinal,
-                                      static_cast<int>(k)});
+                insertions.push_back(
+                    {createdObjs[k], targetInsertIndex, plan.ordinal, static_cast<int>(k)});
             }
         } else {
             // Fission failed -> destroy created fragments, keep original.
@@ -1750,17 +1756,16 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Shallowest first: page-level objects (depth 0) before form children;
     // tie-break by global index so destruction order (and thus output bytes)
     // is deterministic across runs.
-    std::sort(destroyList.begin(), destroyList.end(),
-              [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
-                  auto ia = objPtrToIndex.find(reinterpret_cast<uintptr_t>(a));
-                  auto ib = objPtrToIndex.find(reinterpret_cast<uintptr_t>(b));
-                  int da = ia != objPtrToIndex.end() ? allObjs[ia->second].depth : 0;
-                  int db = ib != objPtrToIndex.end() ? allObjs[ib->second].depth : 0;
-                  if (da != db) return da < db;
-                  int ga = ia != objPtrToIndex.end() ? ia->second : 0;
-                  int gb = ib != objPtrToIndex.end() ? ib->second : 0;
-                  return ga < gb;
-              });
+    std::sort(destroyList.begin(), destroyList.end(), [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
+        auto ia = objPtrToIndex.find(reinterpret_cast<uintptr_t>(a));
+        auto ib = objPtrToIndex.find(reinterpret_cast<uintptr_t>(b));
+        int da = ia != objPtrToIndex.end() ? allObjs[ia->second].depth : 0;
+        int db = ib != objPtrToIndex.end() ? allObjs[ib->second].depth : 0;
+        if (da != db) return da < db;
+        int ga = ia != objPtrToIndex.end() ? ia->second : 0;
+        int gb = ib != objPtrToIndex.end() ? ib->second : 0;
+        return ga < gb;
+    });
 
     // Pre-compute the skip set while every pointer in the parent chain is
     // still alive (ancestors are destroyed first, so the chain cannot be
@@ -1954,8 +1959,8 @@ static void alignMatchesToGraphemes(const std::vector<uint32_t>& unicodeSeq,
 #ifdef JPDFIUM_HAS_UNIBREAK
     if (unicodeSeq.empty() || matches.empty()) return;
     std::vector<char> brks(unicodeSeq.size(), 0);
-    set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()),
-                             unicodeSeq.size(), "", brks.data());
+    set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()), unicodeSeq.size(),
+                             "", brks.data());
     // brks[i] = whether a break exists BEFORE char i.
     for (auto& m : matches) {
         int first = -1, last = -1;
@@ -1999,9 +2004,8 @@ static bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
         if (!obj || excluded.count(obj)) continue;
         int type = FPDFPageObj_GetType(obj);
-        if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE &&
-            type != FPDF_PAGEOBJ_PATH && type != FPDF_PAGEOBJ_SHADING &&
-            type != FPDF_PAGEOBJ_FORM)
+        if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE && type != FPDF_PAGEOBJ_PATH &&
+            type != FPDF_PAGEOBJ_SHADING && type != FPDF_PAGEOBJ_FORM)
             continue;
 
         // Clipping paths (draw mode none, no stroke) paint nothing and carry
@@ -2011,8 +2015,8 @@ static bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>
         if (type == FPDF_PAGEOBJ_PATH) {
             int fillMode = 0;
             FPDF_BOOL stroke = 0;
-            if (FPDFPath_GetDrawMode(obj, &fillMode, &stroke) &&
-                fillMode == FPDF_FILLMODE_NONE && !stroke) {
+            if (FPDFPath_GetDrawMode(obj, &fillMode, &stroke) && fillMode == FPDF_FILLMODE_NONE &&
+                !stroke) {
                 continue;
             }
         }
@@ -2073,8 +2077,8 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         matches.push_back(std::move(tm));
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
-                                         &paintedCovers);
+        int32_t rc =
+            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
         FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) return rc;
 
@@ -2176,8 +2180,7 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         std::vector<TextMatch> matches;
         matches.push_back(std::move(m));
 
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
 
         FPDFText_ClosePage(tp);
         return rc;
@@ -2257,8 +2260,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         collectRegexMatches(audit, wtext2, idxMap2, wre, 0.0f, remaining);
         std::wstring actualFp = survivingFingerprint(wtext2, idxMap2, {});
         FPDFText_ClosePage(audit);
-        if (!remaining.empty() || actualFp != expectedFp)
-            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (!remaining.empty() || actualFp != expectedFp) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
@@ -2555,7 +2557,8 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
 // Mark phase: find text matches and create REDACT annotations (no content mutation)
 int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t wordCount,
                                   float padding, int32_t wholeWord, int32_t useRegex,
-                                  int32_t caseSensitive, uint32_t argb, int32_t* matchCount) noexcept {
+                                  int32_t caseSensitive, uint32_t argb,
+                                  int32_t* matchCount) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!words || wordCount <= 0) {
@@ -2722,8 +2725,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
-                                         &paintedCovers);
+        int32_t rc =
+            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
         FPDFText_ClosePage(tp);
 
         if (rc != JPDFIUM_OK) return rc;  // keep the marks; content unchanged

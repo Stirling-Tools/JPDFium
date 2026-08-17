@@ -47,7 +47,7 @@ jobs:
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev
       - name: clang-format check
         run: |
-          FILES=$(find native/bridge -name "*.cpp" -o -name "*.h")
+          FILES=$(find native/bridge -type f \( -name "*.cpp" -o -name "*.h" \))
           clang-format --dry-run --Werror $FILES
 
       - name: cppcheck

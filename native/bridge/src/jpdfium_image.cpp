@@ -198,7 +198,8 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
     // Insert page at specified index
     FPDF_PAGE page = nullptr;
     if (page_index < 0 || page_index >= FPDF_GetPageCount(dw->core->doc)) {
-        page = FPDFPage_New(dw->core->doc, FPDF_GetPageCount(dw->core->doc), page_width, page_height);
+        page =
+            FPDFPage_New(dw->core->doc, FPDF_GetPageCount(dw->core->doc), page_width, page_height);
     } else {
         page = FPDFPage_New(dw->core->doc, page_index, page_width, page_height);
     }

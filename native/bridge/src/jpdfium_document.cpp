@@ -211,7 +211,9 @@ void jpdfium_page_close(int64_t page) {
 
 int64_t jpdfium_doc_raw_handle(int64_t doc) {
     DocWrapper* w = decodeDoc(doc);
-    return w && w->core && w->core->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->core->doc)) : 0;
+    return w && w->core && w->core->doc
+               ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->core->doc))
+               : 0;
 }
 
 int64_t jpdfium_page_raw_handle(int64_t page) {

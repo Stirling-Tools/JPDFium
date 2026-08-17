@@ -14,9 +14,9 @@
 #define JPDFIUM_ERR_IO (-2)
 #define JPDFIUM_ERR_PASSWORD (-3)
 #define JPDFIUM_ERR_NOT_FOUND (-4)
-#define JPDFIUM_ERR_REDACTED_SAVE (-5)   // incremental save refused after redaction
-#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)  // save refused: uncommitted REDACT annotations
-#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)  // post-redaction audit found remaining text
+#define JPDFIUM_ERR_REDACTED_SAVE (-5)        // incremental save refused after redaction
+#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
+#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_NATIVE (-99)
 
@@ -61,18 +61,19 @@ struct DocCore {
     // live uncommitted marks.
     int32_t unappliedRedactMarksCount = 0;
 
-    bool hasUnappliedRedactMarks() const { return unappliedRedactMarksCount > 0; }
+    bool hasUnappliedRedactMarks() const {
+        return unappliedRedactMarksCount > 0;
+    }
 };
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
-    return std::shared_ptr<DocCore>(new DocCore{doc},
-                                    [](DocCore* c) {
-                                        if (c->doc) {
-                                            FPDF_CloseDocument(c->doc);
-                                            c->doc = nullptr;
-                                        }
-                                        delete c;
-                                    });
+    return std::shared_ptr<DocCore>(new DocCore{doc}, [](DocCore* c) {
+        if (c->doc) {
+            FPDF_CloseDocument(c->doc);
+            c->doc = nullptr;
+        }
+        delete c;
+    });
 }
 
 struct DocWrapper {

@@ -440,7 +440,8 @@ bool stub_rect_invalid(float x, float y, float w, float h) {
 
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t,
                               int32_t remove_content) noexcept {
-    if (remove_content == 0 || stub_rect_invalid(x, y, w, h)) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (remove_content == 0 || stub_rect_invalid(x, y, w, h))
+        return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].hasMutatedRedaction = true;
     }
@@ -449,7 +450,8 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
 int32_t jpdfium_crop_remove_content(int64_t, float x, float y, float w, float h) noexcept {
     return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
-int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t, int32_t remove_content) noexcept {
+int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t,
+                               int32_t remove_content) noexcept {
     if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].hasMutatedRedaction = true;
@@ -796,6 +798,9 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].unappliedRedactMarksCount =
             std::max(0, g_docs[dit->second].unappliedRedactMarksCount - count);
+        if (count > 0) {
+            g_docs[dit->second].hasMutatedRedaction = true;
+        }
     }
     return JPDFIUM_OK;
 }
