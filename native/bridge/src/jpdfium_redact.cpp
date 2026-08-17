@@ -171,6 +171,7 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
                                           std::vector<int>& normIdxMap) {
     std::u32string norm;
     normIdxMap.clear();
+    if (count <= 0) return norm;
 #ifdef JPDFIUM_HAS_ICU
     static thread_local std::unordered_map<uint32_t, std::u32string> cache;
     static const icu::Normalizer2* nfkc = [] {
@@ -185,6 +186,11 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
         if (uni == 0) continue;
+        if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
+            norm += static_cast<char32_t>(0xFFFD);
+            normIdxMap.push_back(i);
+            continue;
+        }
         auto it = cache.find(uni);
         if (it == cache.end()) {
             std::u32string in(1, static_cast<char32_t>(uni));
@@ -198,9 +204,14 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
                 std::vector<UChar32> buf(out.length());
                 int32_t n32 = 0;
                 UErrorCode err2 = U_ZERO_ERROR;
-                out.toUTF32(buf.data(), buf.size(), err2);
+                out.toUTF32(buf.data(), static_cast<int32_t>(buf.size()), err2);
                 n32 = U_SUCCESS(err2) ? out.countChar32() : 0;
-                for (int32_t k = 0; k < n32; k++) mapped += static_cast<char32_t>(buf[k]);
+                for (int32_t k = 0; k < n32; k++) {
+                    uint32_t cp = static_cast<uint32_t>(buf[k]);
+                    if (cp <= 0x10FFFF && !(cp >= 0xD800 && cp <= 0xDFFF)) {
+                        mapped += static_cast<char32_t>(cp);
+                    }
+                }
             }
             if (mapped.empty()) mapped = in;
             it = cache.emplace(uni, std::move(mapped)).first;
@@ -217,7 +228,11 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
         if (uni == 0) continue;
-        norm += static_cast<char32_t>(uni);
+        if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
+            norm += static_cast<char32_t>(0xFFFD);
+        } else {
+            norm += static_cast<char32_t>(uni);
+        }
         normIdxMap.push_back(i);
     }
     return norm;
@@ -271,14 +286,29 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
     int fmt = FPDFBitmap_GetFormat(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
     void* buf = FPDFBitmap_GetBuffer(bmp);
-    if (!buf || w <= 0 || h <= 0) {
+    if (!buf || w <= 0 || h <= 0 || stride <= 0) {
         FPDFBitmap_Destroy(bmp);
         return false;
     }
-    int bpp = (fmt == FPDFBitmap_BGR) ? 3 : 4;
+    int bpp = 0;
+    if (fmt == FPDFBitmap_Gray) {
+        bpp = 1;
+    } else if (fmt == FPDFBitmap_BGR) {
+        bpp = 3;
+    } else if (fmt == FPDFBitmap_BGRx || fmt == FPDFBitmap_BGRA) {
+        bpp = 4;
+    } else {
+        FPDFBitmap_Destroy(bmp);
+        return false;
+    }
+    if (stride < w * bpp) {
+        FPDFBitmap_Destroy(bmp);
+        return false;
+    }
     unsigned int r = (argb >> 16) & 0xFF;
     unsigned int g = (argb >> 8) & 0xFF;
     unsigned int b = argb & 0xFF;
+    uint8_t gray = static_cast<uint8_t>((r * 299 + g * 587 + b * 114) / 1000);
 
     // Image -> page transform (row-vector convention). Iterating image
     // pixels forward avoids inverse-matrix precision issues at edges.
@@ -295,10 +325,14 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
             if (px < rx || px > rr || py < ry || py > rt) continue;
             uint8_t* p = static_cast<uint8_t*>(buf) + static_cast<size_t>(iy) * stride +
                          static_cast<size_t>(ix) * bpp;
-            p[0] = static_cast<uint8_t>(b);
-            p[1] = static_cast<uint8_t>(g);
-            p[2] = static_cast<uint8_t>(r);
-            if (bpp == 4) p[3] = 255;
+            if (bpp == 1) {
+                p[0] = gray;
+            } else {
+                p[0] = static_cast<uint8_t>(b);
+                p[1] = static_cast<uint8_t>(g);
+                p[2] = static_cast<uint8_t>(r);
+                if (bpp == 4) p[3] = 255;
+            }
             changed = true;
         }
     }
@@ -715,7 +749,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
     for (int ci = 0; ci < totalChars; ci++) {
         charInfo[ci] = {-1, false, 0};
-        charInfo[ci].unicode = FPDFText_GetUnicode(textPage, ci);
+        unsigned int u = FPDFText_GetUnicode(textPage, ci);
+        if (u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)) u = 0xFFFD;
+        charInfo[ci].unicode = u;
 
         // Skip generated (synthetic) characters - they don't correspond to
         // real text objects in the content stream and should not participate
@@ -1915,8 +1951,13 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // 10. Paint cover rectangles for all match regions (if alpha > 0)
     if (alf > 0) {
         for (auto& m : matches) {
-            FPDF_PAGEOBJECT rect =
-                FPDFPageObj_CreateNewRect(m.bboxL, m.bboxB, m.bboxR - m.bboxL, m.bboxT - m.bboxB);
+            float rw = m.bboxR - m.bboxL;
+            float rh = m.bboxT - m.bboxB;
+            if (!std::isfinite(m.bboxL) || !std::isfinite(m.bboxB) || !std::isfinite(rw) ||
+                !std::isfinite(rh) || rw <= 0.0f || rh <= 0.0f) {
+                continue;
+            }
+            FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(m.bboxL, m.bboxB, rw, rh);
             if (!rect) continue;
             FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
@@ -2047,6 +2088,7 @@ static bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
 // buffer into a TextMatch, computing the tight bbox.
 static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idxMap, int start,
                              int len, float padding, std::vector<TextMatch>& out) {
+    if (start < 0 || len <= 0 || start >= static_cast<int>(idxMap.size())) return;
     TextMatch tm;
     double xmin = std::numeric_limits<double>::max();
     double ymin = std::numeric_limits<double>::max();
@@ -2082,6 +2124,7 @@ static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idx
 static void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
                                 const std::vector<int>& idxMap, const Pcre2Pattern& pc,
                                 float padding, std::vector<TextMatch>& out) {
+    if (!pc.valid() || text.empty() || idxMap.empty()) return;
     size_t offset = 0;
     while (offset <= text.size()) {
         int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
@@ -2089,6 +2132,7 @@ static void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& te
         if (rc == PCRE2_ERROR_NOMATCH) break;
         if (rc < 0) break;  // error (limit exceeded): report what matched so far
         PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
+        if (!ov) break;
         PCRE2_SIZE start = ov[0];
         PCRE2_SIZE end = ov[1];
         if (end <= start) {
@@ -2175,6 +2219,7 @@ static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<ui
     for (auto& m : matches) {
         int first = -1, last = -1;
         for (int ci : m.charIndices) {
+            if (ci < 0 || ci >= static_cast<int>(unicodeSeq.size())) continue;
             if (first < 0 || ci < first) first = ci;
             if (ci > last) last = ci;
         }
@@ -2432,7 +2477,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
+            unsigned int u = FPDFText_GetUnicode(tp, i);
+            if (u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)) u = 0xFFFD;
+            unicodeSeq.push_back(u);
         }
 
         // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
@@ -2549,7 +2596,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
+            unsigned int u = FPDFText_GetUnicode(tp, i);
+            if (u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)) u = 0xFFFD;
+            unicodeSeq.push_back(u);
         }
 
         std::vector<TextMatch> matches;
@@ -2829,7 +2878,9 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
+            unsigned int u = FPDFText_GetUnicode(tp, i);
+            if (u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)) u = 0xFFFD;
+            unicodeSeq.push_back(u);
         }
 
         std::vector<TextMatch> matches;
