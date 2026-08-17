@@ -42,7 +42,7 @@ constexpr std::string_view STUB_TEXT =
     "Hello World Confidential DRAFT Dummy Redaction\n"
     "Introduction Bold item Gradient Row brown fox\n"
     "Contact: test@example.com Phone: (555) 123-4567\n"
-    "SSN: 123-45-6789 Size 10 Languages Rot Scale 6789\n"
+    "SSN: 123-45-6789 987-65-4321 Size 10 Languages Rot Scale 6789\n"
     "Card: 4111-1111-1111-1111 Consider Employ VM\n"
     "John Smith works at Acme Corp custom certificat";
 
