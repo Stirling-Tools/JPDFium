@@ -19,7 +19,8 @@ import stirling.software.jpdfium.PdfDocument;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A tight stamp form whose entire content is the target: the geometric pass marks the whole

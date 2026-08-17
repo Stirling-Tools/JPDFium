@@ -160,7 +160,7 @@ public class BenchmarkSuite {
     }
 
     @Benchmark
-    public static int pageOpenRenderClose(OpenDocState state) throws Exception {
+    public int pageOpenRenderClose(OpenDocState state) throws Exception {
         try (PdfPage page = state.doc.page(0)) {
             var result = page.renderAt(72);
             return result.rgba().length;
@@ -180,7 +180,7 @@ public class BenchmarkSuite {
      * jextract/Arena path is actually observable.
      */
     @Benchmark
-    public static int ffmDowncallOverheadBatch(OpenDocState state) {
+    public int ffmDowncallOverheadBatch(OpenDocState state) {
         int sum = 0;
         for (int i = 0; i < DOWNCCALL_BATCH; i++) {
             sum += state.doc.pageCount();
