@@ -274,6 +274,7 @@ public final class RedactionSession implements AutoCloseable {
      */
     public CommitResult commitAll(int argbColor, boolean removeContent) {
         ensureOpen();
+        requireContentRemoval(removeContent);
         List<CommitResult.PageCommit> pageCommits = new ArrayList<>();
         for (int pageIndex : new ArrayList<>(pendingMarks.keySet())) {
             int committed = commitPageInternal(pageIndex, argbColor, removeContent);
@@ -299,6 +300,7 @@ public final class RedactionSession implements AutoCloseable {
      */
     public int commitPage(int pageIndex, int argbColor, boolean removeContent) {
         ensureOpen();
+        requireContentRemoval(removeContent);
         int committed = commitPageInternal(pageIndex, argbColor, removeContent);
         pendingMarks.remove(pageIndex);
         return committed;
@@ -324,6 +326,12 @@ public final class RedactionSession implements AutoCloseable {
                     }
                 }
             }
+            // The mark phase created real REDACT annotations on the page as a
+            // preview. After replaying the marks the content is gone - drop
+            // the annotations BEFORE flattening so they are not baked into
+            // the page, and so the document does not carry uncommitted marks
+            // (the native save guard would refuse to save them).
+            page.clearPendingRedactions();
             page.flatten();
         }
         return totalCommitted;
@@ -352,6 +360,21 @@ public final class RedactionSession implements AutoCloseable {
 
     private void ensureOpen() {
         if (closed) throw new IllegalStateException("RedactionSession is already closed");
+    }
+
+    /**
+     * The visual-only cover mode (removeContent=false) is removed from the
+     * public API: painting over intact, extractable content is the banned
+     * "looks redacted" leak class. Every redaction ends verified-complete or
+     * in a loud error - never in a cover.
+     */
+    private static void requireContentRemoval(boolean removeContent) {
+        if (!removeContent) {
+            throw new IllegalArgumentException(
+                    "visual-only redaction (removeContent=false) was removed: "
+                            + "content removal is mandatory - every redaction must end "
+                            + "verified complete or in a loud error, never in a painted cover");
+        }
     }
 
     @Override

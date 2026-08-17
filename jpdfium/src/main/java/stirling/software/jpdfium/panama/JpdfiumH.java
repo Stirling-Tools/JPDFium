@@ -319,6 +319,66 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_create {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_create");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_create(int64_t *handle)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_create$descriptor() {
+        return jpdfium_doc_create.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_create(int64_t *handle)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_create$handle() {
+        return jpdfium_doc_create.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_create(int64_t *handle)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_create$address() {
+        return jpdfium_doc_create.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_create(int64_t *handle)
+     * }
+     */
+    public static int jpdfium_doc_create(MemorySegment handle) {
+        var mh$ = jpdfium_doc_create.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_create", handle);
+            }
+            return (int)mh$.invokeExact(handle);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_open {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

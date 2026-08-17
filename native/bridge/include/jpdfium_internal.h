@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <memory_resource>
 
 #define JPDFIUM_OK (0)
@@ -13,6 +14,10 @@
 #define JPDFIUM_ERR_IO (-2)
 #define JPDFIUM_ERR_PASSWORD (-3)
 #define JPDFIUM_ERR_NOT_FOUND (-4)
+#define JPDFIUM_ERR_REDACTED_SAVE (-5)        // incremental save refused after redaction
+#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
+#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
+#define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_NATIVE (-99)
 
 inline int translatePdfiumError() {
@@ -32,17 +37,52 @@ inline int translatePdfiumError() {
     }
 }
 
-struct DocWrapper {
+// Shared document core. Owns the FPDF_DOCUMENT handle and all document-scoped
+// redaction bookkeeping. Both DocWrapper and every PageWrapper hold a
+// shared_ptr: closing the DocWrapper while pages are still open must not
+// leave pages with a dangling owner, and PDFium requires every page to be
+// closed BEFORE the document (FPDF_CloseDocument with open pages is UB), so
+// the document handle is only closed when the LAST reference (doc wrapper or
+// any page wrapper) is released.
+struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
+
+    // Set when any content-removing redaction mutated the page content.
+    // An incremental save would append a new revision and keep the
+    // un-redacted original revision recoverable in the file body, so it is
+    // refused once this flag is set.
+    bool contentRedacted = false;
+
+    // Set when REDACT annotations were created (mark phase) and not yet
+    // committed. Saving in this state ships a document whose text is fully
+    // intact under the marks - the classic "marked but never applied" leak.
+    // Tracked as a document-scoped counter so that committing or clearing
+    // marks on one page does not clear the flag while other pages still have
+    // live uncommitted marks.
+    int32_t unappliedRedactMarksCount = 0;
+
+    bool hasUnappliedRedactMarks() const {
+        return unappliedRedactMarksCount > 0;
+    }
+};
+
+inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
+    return std::shared_ptr<DocCore>(new DocCore{doc}, [](DocCore* c) {
+        if (c->doc) {
+            FPDF_CloseDocument(c->doc);
+            c->doc = nullptr;
+        }
+        delete c;
+    });
+}
+
+struct DocWrapper {
+    std::shared_ptr<DocCore> core;  // document handle + redaction bookkeeping
     uint8_t* buf =
         nullptr;  // non-null when opened from bytes; PDFium requires it to outlive the doc
     int64_t blen = 0;
 
     ~DocWrapper() {
-        if (doc) {
-            FPDF_CloseDocument(doc);
-            doc = nullptr;
-        }
         if (buf) {
             free(buf);
             buf = nullptr;
@@ -54,8 +94,10 @@ struct PageWrapper {
     FPDF_PAGE page = nullptr;
     FPDF_DOCUMENT doc =
         nullptr;  // non-owning reference; needed by page-level APIs that also require the document
+    std::shared_ptr<DocCore> core;  // keeps the document (and bookkeeping) alive
 
-    PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d) : page(p), doc(d) {}
+    PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, std::shared_ptr<DocCore> o)
+        : page(p), doc(d), core(std::move(o)) {}
 
     ~PageWrapper() {
         if (page) {

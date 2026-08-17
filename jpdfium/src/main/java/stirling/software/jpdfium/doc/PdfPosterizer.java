@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
@@ -129,7 +130,7 @@ public final class PdfPosterizer {
                     // Import the original page to the end of the document
                     boolean ok = PdfPageImporter.importPagesByIndex(rawDoc, rawDoc,
                             new int[]{p}, doc.pageCount());
-                    if (!ok) throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to import page " + p);
+                    if (!ok) throw new JPDFiumException("Failed to import page " + p);
 
                     int newPageIndex = doc.pageCount() - 1;
 
@@ -159,7 +160,7 @@ public final class PdfPosterizer {
         for (int p = originalPageCount - 1; p >= 0; p--) {
             try {
                 PageEditBindings.FPDFPage_Delete.invokeExact(rawDoc, p);
-            } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPage_Delete failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_Delete failed", t); }
         }
     }
 }

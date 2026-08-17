@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import com.sun.management.ThreadMXBean;
+
 /**
  * Shared plumbing for the corpus test suite: gathers every available PDF
  * (downloaded corpus + locally bundled test resources + freshly generated
@@ -93,8 +95,8 @@ final class CorpusTestSupport {
 
     /** Time a single action and capture Java-heap allocations on this thread. */
     static Metrics measure(Runnable action) {
-        com.sun.management.ThreadMXBean tmx =
-                (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        ThreadMXBean tmx =
+                (ThreadMXBean) ManagementFactory.getThreadMXBean();
         long threadId = Thread.currentThread().threadId();
         boolean allocSupported = tmx.isThreadAllocatedMemorySupported();
         if (allocSupported) tmx.setThreadAllocatedMemoryEnabled(true);

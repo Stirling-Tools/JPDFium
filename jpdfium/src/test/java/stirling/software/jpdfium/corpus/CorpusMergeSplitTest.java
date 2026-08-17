@@ -92,7 +92,7 @@ class CorpusMergeSplitTest {
             chunks++;
         }
 
-        // ── Split back: extract the first page of every corpus PDF ────────
+        // Split back: extract the first page of every corpus PDF
         List<Path> extractables = corpus.stream()
                 .filter(p -> CorpusTestSupport.pageCount(p) > 0)
                 .toList();
@@ -118,7 +118,7 @@ class CorpusMergeSplitTest {
         }
         assertTrue(extracted > 0, "at least one PDF must split successfully");
 
-        // ── Report (soft - never asserted) ─────────────────────────────────
+        // Report (soft - never asserted)
         Path csv = CorpusTestSupport.REPORT_DIR.resolve("merge-split.csv");
         Files.writeString(csv, String.join("\n", report) + "\n", StandardCharsets.UTF_8);
         System.out.println("[CorpusMergeSplitTest] report: " + csv.toAbsolutePath()

@@ -4,6 +4,7 @@ import stirling.software.jpdfium.model.ColorSpaceType;
 import stirling.software.jpdfium.model.Rect;
 
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +31,7 @@ public record ExtractedImage(
             // Try to decode raw bytes via ImageIO as last resort
             if (rawBytes != null && rawBytes.length > 0) {
                 try {
-                    BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(rawBytes));
+                    BufferedImage img = ImageIO.read(new ByteArrayInputStream(rawBytes));
                     if (img != null) return img;
                 } catch (IOException ignored) {}
             }

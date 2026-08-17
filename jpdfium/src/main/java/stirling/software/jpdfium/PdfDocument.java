@@ -56,6 +56,18 @@ public final class PdfDocument implements AutoCloseable {
         return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
     }
 
+    /**
+     * Create a new, empty document.
+     *
+     * <p>This is the recommended base for page-import operations
+     * ({@link PdfPageImporter}): PDFium's page exporter leaves stale object
+     * references behind when importing into a document that already has
+     * content, which can crash the save path for large merges.
+     */
+    public static PdfDocument createEmpty() {
+        return new PdfDocument(JpdfiumLib.docCreate());
+    }
+
     public int pageCount() {
         ensureOpen();
         return JpdfiumLib.docPageCount(handle);

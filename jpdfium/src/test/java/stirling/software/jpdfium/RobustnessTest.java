@@ -99,9 +99,7 @@ class RobustnessTest {
             "Heap grew by " + growthMb + " MB after 500 bad-input open attempts -- possible leak");
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private static byte[] realPdf() throws IOException {
         try (InputStream in = RobustnessTest.class

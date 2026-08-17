@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.samples;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 import java.io.File;
@@ -156,7 +157,7 @@ final class SampleBase {
             stirling.software.jpdfium.PdfPage page, int dpi, String what) {
         try {
             return page.renderAt(dpi);
-        } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+        } catch (JPDFiumException e) {
             System.out.println("  [skip render] " + what + ": " + e.getMessage());
             return null;
         }

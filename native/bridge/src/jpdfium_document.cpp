@@ -1,5 +1,7 @@
 // jpdfium_document.cpp - Library lifecycle, document and page management.
 
+#include <fpdf_doc.h>
+#include <fpdf_edit.h>
 #include <fpdf_ppo.h>
 #include <fpdf_save.h>
 #include <fpdfview.h>
@@ -55,13 +57,24 @@ void jpdfium_destroy() {
     FPDF_DestroyLibrary();
 }
 
+int32_t jpdfium_doc_create(int64_t* handle) {
+    if (!handle) return JPDFIUM_ERR_INVALID;
+    FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
+    if (!doc) return JPDFIUM_ERR_NATIVE;
+
+    auto* w = new DocWrapper();
+    w->core = makeDocCore(doc);
+    *handle = encodeHandle(w);
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     if (!path || !handle) return JPDFIUM_ERR_INVALID;
     FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
     if (!doc) return translatePdfiumError();
 
     auto* w = new DocWrapper();
-    w->doc = doc;
+    w->core = makeDocCore(doc);
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }
@@ -81,7 +94,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     }
 
     auto* w = new DocWrapper();
-    w->doc = doc;
+    w->core = makeDocCore(doc);
     w->buf = copy;
     w->blen = len;
     *handle = encodeHandle(w);
@@ -94,21 +107,24 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
     if (!doc) return translatePdfiumError();
 
     auto* w = new DocWrapper();
-    w->doc = doc;
+    w->core = makeDocCore(doc);
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
-    *count = FPDF_GetPageCount(w->doc);
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    *count = FPDF_GetPageCount(w->core->doc);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_save(int64_t doc, const char* path) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    // Saving with uncommitted REDACT annotations would ship a document whose
+    // "redacted" text is fully intact under the marks.
+    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     FILE* f = safe_fopen_write(path);
     if (!f) return JPDFIUM_ERR_IO;
@@ -123,28 +139,33 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
     fw.WriteBlock = FileWriter::Write;
     fw.fp = f;
 
-    int ok = FPDF_SaveAsCopy(w->doc, &fw, FPDF_NO_INCREMENTAL);
+    int ok = FPDF_SaveAsCopy(w->core->doc, &fw, FPDF_NO_INCREMENTAL);
     fclose(f);
     return ok ? JPDFIUM_OK : JPDFIUM_ERR_IO;
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
             auto* bw = static_cast<BufWriter*>(self);
-            auto* src = static_cast<const uint8_t*>(data);
-            bw->buf.insert(bw->buf.end(), src, src + size);
-            return 1;
+            try {
+                auto* src = static_cast<const uint8_t*>(data);
+                bw->buf.insert(bw->buf.end(), src, src + size);
+                return 1;
+            } catch (...) {
+                return 0;  // never let exceptions cross the C callback
+            }
         }
     } bw;
     bw.version = 1;
     bw.WriteBlock = BufWriter::Write;
 
-    if (!FPDF_SaveAsCopy(w->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+    if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
     size_t sz = bw.buf.size();
     uint8_t* out = static_cast<uint8_t*>(malloc(sz));
@@ -161,12 +182,12 @@ void jpdfium_doc_close(int64_t doc) {
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
 
-    FPDF_PAGE page = FPDF_LoadPage(w->doc, idx);
+    FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
     if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-    *handle = encodeHandle(new PageWrapper(page, w->doc));
+    *handle = encodeHandle(new PageWrapper(page, w->core->doc, w->core));
     return JPDFIUM_OK;
 }
 
@@ -190,7 +211,9 @@ void jpdfium_page_close(int64_t page) {
 
 int64_t jpdfium_doc_raw_handle(int64_t doc) {
     DocWrapper* w = decodeDoc(doc);
-    return w && w->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->doc)) : 0;
+    return w && w->core && w->core->doc
+               ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->core->doc))
+               : 0;
 }
 
 int64_t jpdfium_page_raw_handle(int64_t page) {
@@ -218,9 +241,13 @@ int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth, float out
         std::vector<uint8_t> buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
             auto* bw = static_cast<BufWriter*>(self);
-            auto* src = static_cast<const uint8_t*>(data);
-            bw->buf.insert(bw->buf.end(), src, src + size);
-            return 1;
+            try {
+                auto* src = static_cast<const uint8_t*>(data);
+                bw->buf.insert(bw->buf.end(), src, src + size);
+                return 1;
+            } catch (...) {
+                return 0;  // never let exceptions cross the C callback
+            }
         }
     } bw;
     bw.version = 1;

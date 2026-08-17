@@ -196,7 +196,7 @@ public final class CropTestPdfGenerator {
         }
     }
 
-    // ---- helpers ----------------------------------------------------------
+    // helpers
 
     private static void addWordPage(PDDocument doc, String word, float x) throws IOException {
         PDPage page = new PDPage(LETTER);

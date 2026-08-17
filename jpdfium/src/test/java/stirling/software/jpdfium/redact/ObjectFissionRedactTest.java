@@ -10,6 +10,7 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -92,11 +93,13 @@ class ObjectFissionRedactTest {
     }
 
     @Test
-    void redactWordsExVisualOnlyDoesNotThrow() throws Exception {
+    void redactWordsExVisualOnlyModeIsRefused() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
-            // removeContent=false -> rects only, no object removal
-            assertDoesNotThrow(() -> page.redactWordsEx(
+            // Doctrine: visual-only cover (removeContent=false) is banned from
+            // the public API. Painting over intact, extractable content is the
+            // "looks redacted" leak class - the call must fail loudly.
+            assertThrows(IllegalArgumentException.class, () -> page.redactWordsEx(
                     new String[]{"Hello"},
                     0xFFFF0000, 1.5f,
                     false, false, false, false));

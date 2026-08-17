@@ -29,6 +29,7 @@ import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -374,7 +375,7 @@ public final class JpdfiumCli {
     private static void moveSafely(Path tmp, Path out) throws Exception {
         try {
             Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+        } catch (AtomicMoveNotSupportedException e) {
             Files.move(tmp, out, StandardCopyOption.REPLACE_EXISTING);
         }
     }

@@ -1,9 +1,11 @@
 package stirling.software.jpdfium.corpus;
 
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
 import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
@@ -151,7 +153,7 @@ public final class DiversePdfGenerator {
         generate(outDir, count, seed);
     }
 
-    // ---------------------------------------------------------------- document
+    // document
 
     private static void buildDocument(PDDocument doc, Random rng, int index, File ttf,
                                       DocFeatures f) throws IOException {
@@ -225,7 +227,7 @@ public final class DiversePdfGenerator {
         };
     }
 
-    // -------------------------------------------------------------------- page
+    // page
 
     private static void paintPage(PDDocument doc, PDPageContentStream cs, PDRectangle media,
                                   Random rng, PDFont unicodeFont, DocFeatures f) throws IOException {
@@ -253,7 +255,7 @@ public final class DiversePdfGenerator {
         }
     }
 
-    // ------------------------------------------------------------------ images
+    // images
 
     private static void drawRandomImage(PDDocument doc, PDPageContentStream cs, Random rng,
                                         float pw, float ph, DocFeatures f) throws IOException {
@@ -386,7 +388,7 @@ public final class DiversePdfGenerator {
         return bi;
     }
 
-    // ------------------------------------------------------------------ shapes
+    // shapes
 
     private static void drawRandomShape(PDPageContentStream cs, Random rng, float pw, float ph,
                                         DocFeatures f) throws IOException {
@@ -499,7 +501,7 @@ public final class DiversePdfGenerator {
         f.note("clip");
     }
 
-    // -------------------------------------------------------------------- text
+    // text
 
     private static void drawRandomText(PDPageContentStream cs, Random rng, float pw, float ph,
                                        PDFont unicodeFont, DocFeatures f) throws IOException {
@@ -572,7 +574,7 @@ public final class DiversePdfGenerator {
         f.note("rotated-text");
     }
 
-    // -------------------------------------------------- annotations and forms
+    // annotations and forms
 
     private static void maybeAddAnnotations(PDPage page, List<PDAnnotation> annots, Random rng,
                                             int index, DocFeatures f) {
@@ -607,9 +609,9 @@ public final class DiversePdfGenerator {
         acroForm.setNeedAppearances(true);              // let the consumer build appearances
         // PDFBox requires a default appearance + resources or constructAppearances
         // throws "/DA is a required entry".
-        org.apache.pdfbox.pdmodel.PDResources resources =
-                new org.apache.pdfbox.pdmodel.PDResources();
-        resources.put(org.apache.pdfbox.cos.COSName.getPDFName("Helv"),
+        PDResources resources =
+                new PDResources();
+        resources.put(COSName.getPDFName("Helv"),
                 new PDType1Font(Standard14Fonts.FontName.HELVETICA));
         acroForm.setDefaultResources(resources);
         acroForm.setDefaultAppearance("/Helv 12 Tf 0 g");
@@ -631,7 +633,7 @@ public final class DiversePdfGenerator {
         f.note("acroform");
     }
 
-    // ------------------------------------------------------------------ misc
+    // misc
 
     private static Color randomColor(Random rng) {
         return new Color(rng.nextInt(256), rng.nextInt(256), rng.nextInt(256));

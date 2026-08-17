@@ -37,7 +37,6 @@ public final class PdfCorpus {
             "https://raw.githubusercontent.com/pdfcpu/pdfcpu/master/pkg/samples/";
 
     private static final List<Entry> ENTRIES = List.of(
-        // ── pdf.js: core / document structure ─────────────────────────────
         entry("basicapi.pdf"),
         entry("tracemonkey.pdf"),
         entry("calrgb.pdf"),
@@ -48,7 +47,6 @@ public final class PdfCorpus {
         entry("Pages-tree-refs.pdf"),
         entry("90ms_rksj_h_sample.pdf"),
 
-        // ── pdf.js: fonts / text ──────────────────────────────────────────
         entry("ArabicCIDTrueType.pdf"),
         entry("XiaoBiaoSong.pdf"),
         entry("SimFang-variant.pdf"),
@@ -66,13 +64,11 @@ public final class PdfCorpus {
         entry("ShowText-ShadingPattern.pdf"),
         entry("Test-plusminus.pdf"),
 
-        // ── pdf.js: images / colorspaces ─────────────────────────────────
         entry("cmykjpeg.pdf"),
         entry("bug_jpx.pdf"),
         entry("image-rotated-black-white-ratio.pdf"),
         entry("images_1bit_grayscale.pdf"),
 
-        // ── pdf.js: forms ─────────────────────────────────────────────────
         entry("acroform_calculation_order.pdf"),
         entry("file_pdfjs_form.pdf"),
         entry("form_two_pages.pdf"),
@@ -81,7 +77,6 @@ public final class PdfCorpus {
         entry("annotation-choice-widget.pdf"),
         entry("annotation-text-widget.pdf"),
 
-        // ── pdf.js: annotations ───────────────────────────────────────────
         entry("annotation-border-styles.pdf"),
         entry("annotation-caret-ink.pdf"),
         entry("annotation-fileattachment.pdf"),
@@ -106,13 +101,11 @@ public final class PdfCorpus {
         entry("annotation_hidden_noview.pdf"),
         entry("annotation_hidden_print.pdf"),
 
-        // ── pdf.js: fuzzed / robustness ───────────────────────────────────
         entry("GHOSTSCRIPT-698804-1-fuzzed.pdf"),
         entry("PDFBOX-3148-2-fuzzed.pdf"),
         entry("PDFBOX-4352-0.pdf"),
         entry("REDHAT-1531897-0.pdf"),
 
-        // ── pdf.js: real-world bug regressions ────────────────────────────
         entry("bug1001080.pdf"),
         entry("bug1011159.pdf"),
         entry("bug1019475_1.pdf"),
@@ -148,7 +141,6 @@ public final class PdfCorpus {
         entry("bug894572.pdf"),
         entry("bug946506.pdf"),
 
-        // ── pdf.js: issue regressions ─────────────────────────────────────
         entry("issue1002.pdf"),
         entry("issue10084_reduced.pdf"),
         entry("issue10301.pdf"),
@@ -247,7 +239,6 @@ public final class PdfCorpus {
         entry("issue925.pdf"),
         entry("issue9278.pdf"),
 
-        // ── pdf.js: extended corpus (auto-added, sorted by size) ──
         entry("issue15590.pdf"),
         entry("bug1980958.pdf"),
         entry("extractPages_null_in_array.pdf"),
@@ -749,7 +740,6 @@ public final class PdfCorpus {
         entry("22060_A1_01_Plans.pdf"),
         entry("issue3188.pdf"),
 
-        // ── pdfcpu: annotations ───────────────────────────────────────────
         pdfcpu("annotations/Annotations.pdf"),
         pdfcpu("annotations/CaretAnnotation.pdf"),
         pdfcpu("annotations/FreeTextAnnotation.pdf"),
@@ -764,7 +754,6 @@ public final class PdfCorpus {
         pdfcpu("annotations/StrikeOutAnnotation.pdf"),
         pdfcpu("annotations/UnderlineAnnotation.pdf"),
 
-        // ── pdfcpu: fonts / text layout ───────────────────────────────────
         pdfcpu("basic/UserFont_Arabic.pdf"),
         pdfcpu("basic/UserFont_CJKV.pdf"),
         pdfcpu("basic/UserFont_Hebrew.pdf"),

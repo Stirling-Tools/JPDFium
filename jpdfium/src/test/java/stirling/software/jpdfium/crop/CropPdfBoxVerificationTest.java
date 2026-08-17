@@ -3,6 +3,7 @@ package stirling.software.jpdfium.crop;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.contentstream.PDFStreamEngine;
 import org.apache.pdfbox.contentstream.operator.Operator;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -44,7 +45,7 @@ class CropPdfBoxVerificationTest {
 
     private static final Rect LEFT_HALF = new Rect(0, 0, 306, 792);
 
-    // --- text grid ---------------------------------------------------------
+    // text grid
 
     @Test
     void textOutsideLeftHalfCropIsGoneAndInsideSurvivesAtSamePlace() throws Exception {
@@ -77,7 +78,7 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // --- images ------------------------------------------------------------
+    // images
 
     @Test
     void imageOutsideCropIsNotDrawnInsideAndStraddlingImagesSurvive() throws Exception {
@@ -111,7 +112,7 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // --- form XObjects -----------------------------------------------------
+    // form XObjects
 
     @Test
     void formEmbeddedTextOutsideCropIsRemoved() throws Exception {
@@ -125,7 +126,7 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // --- boxes -------------------------------------------------------------
+    // boxes
 
     @Test
     void pageBoxesAreSetToTheCropRect() throws Exception {
@@ -143,7 +144,7 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // --- never break -------------------------------------------------------
+    // never break
 
     @Test
     void outputStillRendersThroughPdfium() throws Exception {
@@ -154,7 +155,7 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // --- helpers -----------------------------------------------------------
+    // helpers
 
     private static byte[] cropFirstPage(byte[] input, Rect crop) {
         try (PdfDocument doc = PdfDocument.open(input)) {
@@ -211,7 +212,7 @@ class CropPdfBoxVerificationTest {
         Set<String> names = new HashSet<>();
         PDFStreamEngine engine = new PDFStreamEngine() {
             @Override
-            protected void processOperator(Operator operator, List<org.apache.pdfbox.cos.COSBase> operands) {
+            protected void processOperator(Operator operator, List<COSBase> operands) {
                 if ("Do".equals(operator.getName()) && !operands.isEmpty()) {
                     COSName name = (COSName) operands.get(0);
                     names.add(name.getName());

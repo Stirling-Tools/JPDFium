@@ -12,6 +12,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
+
+import com.sun.management.ThreadMXBean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -104,9 +107,9 @@ class MergePerfSanityTest {
         return new Stats(pages, outputBytes);
     }
 
-    private static Stats measure(java.util.function.Supplier<Stats> action) {
-        com.sun.management.ThreadMXBean tmx =
-                (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+    private static Stats measure(Supplier<Stats> action) {
+        ThreadMXBean tmx =
+                (ThreadMXBean) ManagementFactory.getThreadMXBean();
         if (!tmx.isThreadAllocatedMemorySupported()) {
             long t0 = System.nanoTime();
             Stats s = action.get();

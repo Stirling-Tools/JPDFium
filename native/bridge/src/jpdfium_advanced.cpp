@@ -648,9 +648,13 @@ static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
         std::vector<uint8_t>* buf;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
             auto* bw = static_cast<BufWriter*>(self);
-            const auto* src = static_cast<const uint8_t*>(data);
-            bw->buf->insert(bw->buf->end(), src, src + size);
-            return 1;
+            try {
+                const auto* src = static_cast<const uint8_t*>(data);
+                bw->buf->insert(bw->buf->end(), src, src + size);
+                return 1;
+            } catch (...) {
+                return 0;  // never let exceptions cross the C callback
+            }
         }
     } bw;
     bw.version = 1;
@@ -675,7 +679,7 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
 // Close the current FPDF_DOCUMENT inside a DocWrapper and reopen it from new bytes.
 // The DocWrapper pointer itself is unchanged, so the Java-side handle remains valid.
 static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newBytes) {
-    FPDF_CloseDocument(w->doc);
+    FPDF_CloseDocument(w->core->doc);
     if (w->buf) {
         free(w->buf);
         w->buf = nullptr;
@@ -692,7 +696,7 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
         return JPDFIUM_ERR_NATIVE;
     }
 
-    w->doc = newDoc;
+    w->core->doc = newDoc;
     w->buf = copy;
     w->blen = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
@@ -700,10 +704,10 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
 
 int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, int32_t key_count) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc || !keys || key_count <= 0) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core->doc || !keys || key_count <= 0) return JPDFIUM_ERR_INVALID;
 
     std::vector<uint8_t> pdfBytes;
-    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
 
     try {
         QPDF pdf;
@@ -731,10 +735,10 @@ int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, int32_t key_count
 
 int32_t jpdfium_metadata_strip_all(int64_t doc) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
 
     std::vector<uint8_t> pdfBytes;
-    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
 
     try {
         QPDF pdf;
@@ -758,10 +762,10 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
 
 int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
     DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->doc || !fonts_removed) return JPDFIUM_ERR_INVALID;
+    if (!w || !w->core->doc || !fonts_removed) return JPDFIUM_ERR_INVALID;
 
     std::vector<uint8_t> pdfBytes;
-    if (!qpdf_save_fpdf(w->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
 
     try {
         QPDF pdf;

@@ -127,9 +127,7 @@ class DeterminismTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Helper
-    // -------------------------------------------------------------------------
 
     private static byte[] pdfBytes() throws IOException {
         try (InputStream in = DeterminismTest.class

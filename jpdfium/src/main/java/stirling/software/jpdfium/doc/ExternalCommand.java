@@ -4,7 +4,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * Resolves external CLI tools to an absolute executable path before launching.
@@ -31,7 +33,7 @@ final class ExternalCommand {
         String pathEnv = System.getenv("PATH");
         if (pathEnv == null || pathEnv.isEmpty()) return null;
 
-        String[] dirs = pathEnv.split(java.util.regex.Pattern.quote(System.getProperty("path.separator")));
+        String[] dirs = pathEnv.split(Pattern.quote(System.getProperty("path.separator")));
         for (String dir : dirs) {
             if (dir == null || dir.isBlank()) continue;
             Path candidate = Path.of(dir).resolve(command);
@@ -57,7 +59,7 @@ final class ExternalCommand {
         if (exe == null) return null;
         List<String> cmd = new ArrayList<>(args.length + 1);
         cmd.add(exe.toAbsolutePath().toString());
-        java.util.Collections.addAll(cmd, args);
+        Collections.addAll(cmd, args);
         return cmd;
     }
 

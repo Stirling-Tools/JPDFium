@@ -2,6 +2,7 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
@@ -110,7 +111,7 @@ public class S08_FullPipeline {
                 List<BufferedImage> images;
                 try {
                     images = PageOps.renderAll(doc, RENDER_DPI);
-                } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+                } catch (JPDFiumException e) {
                     // Render-bounds guard: corpus contains wall-sized pages.
                     System.out.println("  [skip render] " + e.getMessage());
                     images = List.of();

@@ -4,6 +4,7 @@ import stirling.software.jpdfium.doc.PdfAConverter;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -40,7 +41,7 @@ public class S69_PdfAConversion {
         // Save to temp file first (Ghostscript works on files, not in-memory)
         Path tempInput = Files.createTempFile("pdfa-input-", ".pdf");
         try {
-            Files.copy(input, tempInput, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(input, tempInput, StandardCopyOption.REPLACE_EXISTING);
 
             // PDF/A-2b conversion
             Path outPath = outDir.resolve(stem + "-pdfa2b.pdf");

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.redact;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDFormContentStream;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -67,7 +68,7 @@ class StampFormRedactTest {
     }
 
     private static String textOf(byte[] pdf) throws IOException {
-        try (PDDocument doc = org.apache.pdfbox.Loader.loadPDF(pdf)) {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
             return new PDFTextStripper().getText(doc);
         }
     }

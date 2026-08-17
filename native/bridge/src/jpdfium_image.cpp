@@ -77,7 +77,7 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
                                       float margin, Position position, int32_t image_format,
                                       int32_t page_index) {
     DocWrapper* dw = decodeDoc(docHandle);
-    if (!dw || !dw->doc) return JPDFIUM_ERR_INVALID;
+    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
     int img_width = 0, img_height = 0;
     uint8_t* pixels = nullptr;
@@ -197,10 +197,11 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
 
     // Insert page at specified index
     FPDF_PAGE page = nullptr;
-    if (page_index < 0 || page_index >= FPDF_GetPageCount(dw->doc)) {
-        page = FPDFPage_New(dw->doc, FPDF_GetPageCount(dw->doc), page_width, page_height);
+    if (page_index < 0 || page_index >= FPDF_GetPageCount(dw->core->doc)) {
+        page =
+            FPDFPage_New(dw->core->doc, FPDF_GetPageCount(dw->core->doc), page_width, page_height);
     } else {
-        page = FPDFPage_New(dw->doc, page_index, page_width, page_height);
+        page = FPDFPage_New(dw->core->doc, page_index, page_width, page_height);
     }
 
     if (!page) {
@@ -209,7 +210,7 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
     }
 
     // Create image object
-    FPDF_PAGEOBJECT img_obj = FPDFPageObj_NewImageObj(dw->doc);
+    FPDF_PAGEOBJECT img_obj = FPDFPageObj_NewImageObj(dw->core->doc);
     if (!img_obj) {
         FPDF_ClosePage(page);
         FPDFBitmap_Destroy(bmp);
@@ -262,8 +263,8 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
 
     // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.)
     auto* dw = new DocWrapper();
-    dw->doc = FPDF_CreateNewDocument();
-    if (!dw->doc) {
+    dw->core = makeDocCore(FPDF_CreateNewDocument());
+    if (!dw->core->doc) {
         delete dw;
         return JPDFIUM_ERR_NATIVE;
     }
@@ -302,7 +303,7 @@ JPDFIUM_EXPORT int32_t jpdfium_embed_jpeg_direct(int64_t doc_handle, const uint8
                                                  float page_height, float margin, int32_t position,
                                                  int32_t insert_at_index) {
     DocWrapper* dw = decodeDoc(doc_handle);
-    if (!dw || !dw->doc) return JPDFIUM_ERR_INVALID;
+    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
     if (!is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
         return JPDFIUM_ERR_INVALID;

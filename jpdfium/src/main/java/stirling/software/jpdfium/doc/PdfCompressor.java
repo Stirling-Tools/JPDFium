@@ -4,6 +4,7 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -58,14 +59,14 @@ public final class PdfCompressor {
         try {
             originalProbe = Files.createTempFile("jpdfium-compress-probe-", ".pdf");
         } catch (IOException e) {
-            throw new java.io.UncheckedIOException("Failed to create original-size probe", e);
+            throw new UncheckedIOException("Failed to create original-size probe", e);
         }
         doc.save(originalProbe);
         long originalSize;
         try {
             originalSize = Files.size(originalProbe);
         } catch (IOException e) {
-            throw new java.io.UncheckedIOException("Failed to read probe size", e);
+            throw new UncheckedIOException("Failed to read probe size", e);
         } finally {
             try {
                 Files.deleteIfExists(originalProbe);

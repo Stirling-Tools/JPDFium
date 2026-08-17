@@ -41,6 +41,18 @@ cmake "${CMAKE_ARGS[@]}"
 # machines and cause `Can't find dependent libraries` at System.load time.
 cmake --build "${SCRIPT_DIR}/build-real" --parallel --config Release
 
+# Copy built library to native/dist/<platform> so Gradle stageNatives stays in sync
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+PLATFORM="darwin-arm64"
+if [ "$OS" = "darwin" ]; then
+    if [ "$ARCH" = "arm64" ]; then PLATFORM="darwin-arm64"; else PLATFORM="darwin-x64"; fi
+elif [ "$OS" = "linux" ]; then
+    if [ "$ARCH" = "aarch64" ]; then PLATFORM="linux-arm64"; else PLATFORM="linux-x64"; fi
+fi
+mkdir -p "${SCRIPT_DIR}/dist/${PLATFORM}"
+find "${SCRIPT_DIR}/build-real" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+
 echo ""
 echo "Built: $(find "${SCRIPT_DIR}/build-real" -name 'libjpdfium.*' -type f)"
 echo ""
