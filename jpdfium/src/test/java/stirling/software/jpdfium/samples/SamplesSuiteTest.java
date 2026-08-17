@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.samples;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -130,12 +131,12 @@ class SamplesSuiteTest {
         if (url != null) {
             try {
                 return new String[]{Path.of(url.toURI()).toString()};
-            } catch (Exception ignored) {}
+            } catch (Exception _) {}
         }
         return EMPTY_ARGS;
     }
 
-    @org.junit.jupiter.api.AfterEach
+    @AfterEach
     void cleanup() {
         System.gc();
     }
