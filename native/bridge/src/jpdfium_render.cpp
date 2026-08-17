@@ -114,9 +114,9 @@ void jpdfium_free_buffer(uint8_t* buffer) {
 
 int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi) {
     DocWrapper* dw = decodeDoc(docHandle);
-    if (!dw || !dw->doc) return JPDFIUM_ERR_INVALID;
+    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
-    FPDF_PAGE page = FPDF_LoadPage(dw->doc, pageIndex);
+    FPDF_PAGE page = FPDF_LoadPage(dw->core->doc, pageIndex);
     if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
     double w_pt = FPDF_GetPageWidth(page);
@@ -141,14 +141,14 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
 
     FPDF_ClosePage(page);
 
-    FPDFPage_Delete(dw->doc, pageIndex);
-    FPDF_PAGE newPage = FPDFPage_New(dw->doc, pageIndex, w_pt, h_pt);
+    FPDFPage_Delete(dw->core->doc, pageIndex);
+    FPDF_PAGE newPage = FPDFPage_New(dw->core->doc, pageIndex, w_pt, h_pt);
     if (!newPage) {
         FPDFBitmap_Destroy(bmp);
         return JPDFIUM_ERR_NATIVE;
     }
 
-    FPDF_PAGEOBJECT imgObj = FPDFPageObj_NewImageObj(dw->doc);
+    FPDF_PAGEOBJECT imgObj = FPDFPageObj_NewImageObj(dw->core->doc);
     if (!imgObj) {
         FPDFBitmap_Destroy(bmp);
         FPDF_ClosePage(newPage);

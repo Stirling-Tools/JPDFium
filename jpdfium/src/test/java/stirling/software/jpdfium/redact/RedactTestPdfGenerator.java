@@ -2,17 +2,23 @@ package stirling.software.jpdfium.redact;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
 
@@ -24,7 +30,6 @@ import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
  *   ./gradlew :jpdfium:generateTestPdfs
  * }</pre>
  *
- * <p>Requires Apache PDFBox 3.x on the test classpath.
  */
 public class RedactTestPdfGenerator {
 
@@ -128,6 +133,17 @@ public class RedactTestPdfGenerator {
         generateMixedPositioning();
         generateQuoteOps();
         generateSingleChar();
+
+        // 12. Form XObject text (nested content streams)
+        generateFormText();
+        generateFormNested();
+        generateFormShared();
+        generateTjKerning();
+        generatePartialImage();
+        generateFormOpaqueBackground();
+        generateFormWholesaleAncestor();
+        generateBezierPathBelly();
+        generateDashClipPaths();
 
         System.out.println("All test PDFs generated in " + OUT_DIR);
     }
@@ -1261,6 +1277,34 @@ public class RedactTestPdfGenerator {
         }
     }
 
+    /** An image whose LEFT half is red and RIGHT half is blue, for partial
+     * image redaction (pixel erasure) tests. */
+    private static void generatePartialImage() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            var img = new java.awt.image.BufferedImage(200, 100,
+                    java.awt.image.BufferedImage.TYPE_INT_RGB);
+            var g = img.createGraphics();
+            g.setColor(new java.awt.Color(200, 30, 30));
+            g.fillRect(0, 0, 100, 100);
+            g.setColor(new java.awt.Color(30, 30, 200));
+            g.fillRect(100, 0, 100, 100);
+            g.dispose();
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(PDImageXObject.createFromByteArray(doc, encodePng(img), "img.png"),
+                        50, 600, 200, 100);
+            }
+            save(doc, "redact-test-partial-image.pdf");
+        }
+    }
+
+    private static byte[] encodePng(java.awt.image.BufferedImage img) throws Exception {
+        var bos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", bos);
+        return bos.toByteArray();
+    }
+
     private static void generateSingleChar() throws Exception {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
@@ -1273,6 +1317,230 @@ public class RedactTestPdfGenerator {
                 cs.endText();
             }
             save(doc, "redact-test-single-char.pdf");
+        }
+    }
+
+        // Form XObject text (regression: redaction must remove form-nested text
+        // from the content stream, not just paint over it).
+
+    private static PDFormXObject formWithText(PDDocument doc, String content, float w, float h)
+            throws IOException {
+        PDFormXObject form = new PDFormXObject(doc);
+        form.setBBox(new PDRectangle(0, 0, w, h));
+        form.setResources(new PDResources());
+        form.getResources().put(COSName.getPDFName("F1"),
+                new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+        try (OutputStream os = form.getStream().createOutputStream(COSName.FLATE_DECODE)) {
+            os.write(content.getBytes(StandardCharsets.ISO_8859_1));
+        }
+        return form;
+    }
+
+    /** Page text plus one rotated Form XObject containing "FORM SECRET TEXT". */
+    @SuppressWarnings("deprecation")
+    private static void generateFormText() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            page.getResources().put(COSName.getPDFName("Fm0"),
+                    formWithText(doc, "BT /F1 12 Tf 1 0 0 1 10 20 Tm (FORM SECRET TEXT) Tj ET",
+                            300, 100));
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("PAGE LEVEL SECRET ANCHOR");
+                cs.endText();
+                cs.appendRawCommands("q 0.866 0.5 -0.5 0.866 200 300 cm /Fm0 Do Q");
+            }
+            save(doc, "redact-test-form-text.pdf");
+        }
+    }
+
+    /** Form nested in a form (outer scale, inner rotation) with "DEEP SECRET". */
+    @SuppressWarnings("deprecation")
+    private static void generateFormNested() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            PDFormXObject inner =
+                    formWithText(doc, "BT /F1 12 Tf 1 0 0 1 5 10 Tm (DEEP SECRET) Tj ET", 200, 80);
+            inner.setMatrix(new java.awt.geom.AffineTransform(0.866, 0.5, -0.5, 0.866, 10, 10));
+
+            PDFormXObject outer = new PDFormXObject(doc);
+            outer.setBBox(new PDRectangle(0, 0, 400, 200));
+            outer.setResources(new PDResources());
+            outer.getResources().put(COSName.getPDFName("FmInner"), inner);
+            try (OutputStream os = outer.getStream().createOutputStream(COSName.FLATE_DECODE)) {
+                os.write("q 1 0 0 1 0 0 cm /FmInner Do Q".getBytes(StandardCharsets.ISO_8859_1));
+            }
+
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("FmOuter"), outer);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.appendRawCommands("q 2 0 0 2 40 40 cm /FmOuter Do Q");
+            }
+            save(doc, "redact-test-form-nested.pdf");
+        }
+    }
+
+    /** The same form Do'd twice with different matrices ("SHARED SECRET"). */
+    @SuppressWarnings("deprecation")
+    private static void generateFormShared() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("Fm0"),
+                    formWithText(doc, "BT /F1 12 Tf 1 0 0 1 10 20 Tm (SHARED SECRET) Tj ET",
+                            300, 100));
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.appendRawCommands(
+                        "q 1 0 0 1 30 400 cm /Fm0 Do Q "
+                        + "q 0.707 0.707 -0.707 0.707 400 150 cm /Fm0 Do Q");
+            }
+            save(doc, "redact-test-form-shared.pdf");
+        }
+    }
+
+    /**
+     * A TJ-kerned line whose kerning must survive an unrelated redaction
+     * (GenerateContent preserves TJ arrays; fission must not pre-split
+     * unredacted objects).
+     */
+    @SuppressWarnings("deprecation")
+    private static void generateTjKerning() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("REDACT THIS WORD ONLY");
+                cs.endText();
+                cs.appendRawCommands(
+                        "BT /F1 12 Tf 1 0 0 1 72 680 Tm "
+                        + "[(A) -180 (VA) -120 (TAR) -90 (X) -160 (WIDE) 40 (KERNED)] TJ ET");
+            }
+            save(doc, "redact-test-tj-kerning.pdf");
+        }
+    }
+
+    /** Form XObject with an opaque background rectangle + text to test Z-order after fission (Bug A1). */
+    @SuppressWarnings("deprecation")
+    private static void generateFormOpaqueBackground() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            // Form has a dark background fill (0.2 0.2 0.2 rg 0 0 300 100 re f) followed by white text
+            PDFormXObject form = formWithText(doc,
+                    "0.2 0.2 0.2 rg 0 0 300 100 re f " +
+                    "BT /F1 14 Tf 1 1 1 rg 1 0 0 1 10 40 Tm (ALPHA SECRET BETA) Tj ET",
+                    300, 100);
+            page.getResources().put(COSName.getPDFName("Fm0"), form);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.appendRawCommands("q 1 0 0 1 100 400 cm /Fm0 Do Q");
+            }
+            save(doc, "redact-test-form-opaque-bg.pdf");
+        }
+    }
+
+    /** Wholesale form with nested child form to test marked ancestor suppression (Bug A2). */
+    @SuppressWarnings("deprecation")
+    private static void generateFormWholesaleAncestor() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+
+            PDFormXObject inner =
+                    formWithText(doc, "BT /F1 12 Tf 1 0 0 1 10 20 Tm (NESTED SECRET SURVIVOR) Tj ET", 250, 80);
+            PDFormXObject outer = new PDFormXObject(doc);
+            outer.setBBox(new PDRectangle(0, 0, 300, 100));
+            outer.setResources(new PDResources());
+            outer.getResources().put(COSName.getPDFName("FmInner"), inner);
+            try (OutputStream os = outer.getStream().createOutputStream(COSName.FLATE_DECODE)) {
+                os.write("q 1 0 0 1 0 0 cm /FmInner Do Q".getBytes(StandardCharsets.ISO_8859_1));
+            }
+
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("FmOuter"), outer);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.appendRawCommands("q 1 0 0 1 50 500 cm /FmOuter Do Q");
+            }
+            save(doc, "redact-test-form-wholesale-ancestor.pdf");
+        }
+    }
+
+    /** Path with a cubic Bezier curve whose control points extend far into the redaction area (Bug B5). */
+    @SuppressWarnings("deprecation")
+    private static void generateBezierPathBelly() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                // Start at (100, 100), curve up to (100, 200) and (200, 200), end at (200, 100)
+                appendRaw(cs, "100 100 m 100 200 200 200 200 100 c S");
+            }
+            save(doc, "redact-test-bezier-belly.pdf");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static void appendRaw(PDPageContentStream cs, String cmd) throws IOException {
+        cs.appendRawCommands(cmd);
+    }
+
+    /**
+     * Dash + clip fidelity: a dashed stroked line that overlaps the redaction
+     * region, a clipping path whose removal would UNHIDE clipped content, and
+     * a redactable word. The fission must preserve the dash pattern and must
+     * never touch the clipping path.
+     */
+    private static void generateDashClipPaths() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                // Dashed path with TWO subpaths: subpath 1 (245..295 at y 600)
+                // sits fully inside the redaction region (240..300, 580..620),
+                // subpath 2 (360..440 at y 600) survives. The rebuilt path must
+                // keep the [6 4] dash - a solid survivor would be a fidelity
+                // regression.
+                appendRaw(cs, "[6 4] 0 d 0 0 0 RG 2 w\n"
+                        + "245 600 m 295 600 l\n"
+                        + "360 600 m 440 600 l S\n");
+                // Clipping path: clip to the box (100..300, 100..300), then
+                // paint a large red square (50..450) and text. Everything
+                // outside the clip must stay invisible. Fission must NEVER
+                // touch this path (draw mode none + no stroke): removing it
+                // would unhide the clipped square.
+                appendRaw(cs, "q 100 100 200 200 re W n\n");
+                appendRaw(cs, "1 0 0 rg 50 50 400 400 re f\n");
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 18);
+                cs.newLineAtOffset(120, 150);
+                cs.showText("CLIPPED CONTENT");
+                cs.endText();
+                appendRaw(cs, "Q\n");
+                // Redactable word next to the paths (outside the clip).
+                // NOTE: Td is relative to the last text position, so this
+                // offset is (120+60, 150+680-150) - place it explicitly.
+                // Absolute text matrix (Tm): PDFBox Td offsets are relative
+                // to the persisted line matrix; Tm is explicit and robust.
+                appendRaw(cs, "BT /F2 12 Tf 1 0 0 1 60 680 Tm "
+                        + "(SECRET REDACT ME) Tj ET\n");
+            }
+            save(doc, "redact-test-dash-clip.pdf");
         }
     }
 }

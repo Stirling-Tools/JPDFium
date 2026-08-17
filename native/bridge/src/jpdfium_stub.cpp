@@ -203,6 +203,8 @@ int count_occurrences(std::string_view haystack, std::string_view needle, bool c
 struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
+    int32_t unappliedRedactMarksCount = 0;
+    bool hasMutatedRedaction = false;
 };
 
 struct StubPattern {
@@ -234,9 +236,16 @@ int32_t jpdfium_init() {
 }
 void jpdfium_destroy() {}
 
+int32_t jpdfium_doc_create(int64_t* handle) {
+    if (!handle) return JPDFIUM_ERR_INVALID;
+    *handle = g_next_doc++;
+    g_docs[*handle] = {"", {}, 0, false};
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}};
+    g_docs[*handle] = {path ? path : "", {}, 0, false};
     return JPDFIUM_OK;
 }
 
@@ -245,13 +254,13 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     *handle = g_next_doc++;
     std::vector<uint8_t> bytes;
     bytes.assign(data, data + len);
-    g_docs[*handle] = {"", std::move(bytes)};
+    g_docs[*handle] = {"", std::move(bytes), 0, false};
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}};
+    g_docs[*handle] = {path ? path : "", {}, 0, false};
     return JPDFIUM_OK;
 }
 
@@ -264,6 +273,7 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return JPDFIUM_OK;
     const auto& doc = it->second;
+    if (doc.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     if (!doc.path.empty()) {
         FilePtr in(std::fopen(doc.path.c_str(), "rb"));
@@ -294,6 +304,7 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return return_stub();
     const auto& doc = it->second;
+    if (doc.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     if (!doc.bytes.empty()) {
         *len = static_cast<int64_t>(doc.bytes.size());
@@ -343,7 +354,6 @@ int32_t jpdfium_page_height(int64_t, float* h) {
 
 void jpdfium_page_close(int64_t handle) {
     g_page_text.erase(handle);
-    g_page_annots.erase(handle);
     g_page_doc.erase(handle);
 }
 
@@ -428,24 +438,40 @@ bool stub_rect_invalid(float x, float y, float w, float h) {
 }
 }  // namespace
 
-int32_t jpdfium_redact_region(int64_t, float x, float y, float w, float h, uint32_t,
-                              int32_t) noexcept {
-    return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
+int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t,
+                              int32_t remove_content) noexcept {
+    if (remove_content == 0 || stub_rect_invalid(x, y, w, h)) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
+    return JPDFIUM_OK;
 }
 int32_t jpdfium_crop_remove_content(int64_t, float x, float y, float w, float h) noexcept {
     return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
-int32_t jpdfium_redact_pattern(int64_t, const char*, uint32_t, int32_t) noexcept {
+int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t, int32_t remove_content) noexcept {
+    if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
     return JPDFIUM_OK;
 }
-int32_t jpdfium_redact_words(int64_t, const char**, int32_t, uint32_t, float, int32_t, int32_t,
-                             int32_t) noexcept {
+int32_t jpdfium_redact_words(int64_t page, const char**, int32_t, uint32_t, float, int32_t, int32_t,
+                             int32_t remove_content) noexcept {
+    if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_count, uint32_t,
-                                float, int32_t, int32_t, int32_t, int32_t case_sensitive,
-                                int32_t* match_count) noexcept {
+                                float, int32_t, int32_t, int32_t remove_content,
+                                int32_t case_sensitive, int32_t* match_count) noexcept {
+    if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
     int matches = 0;
     std::string_view text = STUB_TEXT;
     if (auto it = g_page_text.find(page); it != g_page_text.end()) text = it->second;
@@ -711,6 +737,9 @@ int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, ui
                                     int32_t* annot_index) noexcept {
     int idx = g_page_annots[page]++;
     if (annot_index) *annot_index = idx;
+    if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
+        g_docs[it->second].unappliedRedactMarksCount++;
+    }
     return JPDFIUM_OK;
 }
 
@@ -726,6 +755,9 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     }
     g_page_annots[page] += matches;
     if (match_count) *match_count = matches;
+    if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
+        g_docs[it->second].unappliedRedactMarksCount += matches;
+    }
     return JPDFIUM_OK;
 }
 
@@ -745,25 +777,52 @@ int32_t jpdfium_annot_get_redacts_json(int64_t, char** json) noexcept {
 }
 
 int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) noexcept {
-    if (auto it = g_page_annots.find(page); it != g_page_annots.end() && it->second > 0)
+    if (auto it = g_page_annots.find(page); it != g_page_annots.end() && it->second > 0) {
         --it->second;
+        if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+            g_docs[dit->second].unappliedRedactMarksCount =
+                std::max(0, g_docs[dit->second].unappliedRedactMarksCount - 1);
+        }
+    }
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
-    g_page_annots.erase(page);
+    int count = 0;
+    if (auto it = g_page_annots.find(page); it != g_page_annots.end()) {
+        count = it->second;
+        g_page_annots.erase(it);
+    }
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].unappliedRedactMarksCount =
+            std::max(0, g_docs[dit->second].unappliedRedactMarksCount - count);
+    }
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t, int32_t* commit_count) noexcept {
+int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t remove_content,
+                              int32_t* commit_count) noexcept {
+    if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
     int pending = 0;
-    if (auto it = g_page_annots.find(page); it != g_page_annots.end()) pending = it->second;
+    if (auto it = g_page_annots.find(page); it != g_page_annots.end()) {
+        pending = it->second;
+        g_page_annots.erase(it);
+    }
     if (commit_count) *commit_count = pending;
-    g_page_annots.erase(page);
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].unappliedRedactMarksCount =
+            std::max(0, g_docs[dit->second].unappliedRedactMarksCount - pending);
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
+    auto it = g_docs.find(handle);
+    if (it != g_docs.end()) {
+        if (it->second.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
+    }
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 

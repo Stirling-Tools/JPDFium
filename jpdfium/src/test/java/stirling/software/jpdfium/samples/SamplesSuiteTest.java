@@ -8,6 +8,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.URL;
+import java.nio.file.Path;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -123,13 +125,29 @@ class SamplesSuiteTest {
         );
     }
 
+    private static String[] sampleArgs() {
+        URL url = SamplesSuiteTest.class.getResource("/pdfs/redact/redact-test-helvetica.pdf");
+        if (url != null) {
+            try {
+                return new String[]{Path.of(url.toURI()).toString()};
+            } catch (Exception ignored) {}
+        }
+        return EMPTY_ARGS;
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void cleanup() {
+        System.gc();
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("sampleClasses")
     void sampleRunsWithoutException(String name, Class<?> sampleClass) throws Exception {
         Method main = sampleClass.getMethod("main", String[].class);
+        String[] args = sampleArgs();
         assertDoesNotThrow(() -> {
             try {
-                main.invoke(null, (Object) EMPTY_ARGS);
+                main.invoke(null, (Object) args);
             } catch (InvocationTargetException e) {
                 throw e.getCause();
             }

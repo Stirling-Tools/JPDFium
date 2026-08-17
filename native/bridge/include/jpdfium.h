@@ -29,6 +29,10 @@ extern "C" {
 #define JPDFIUM_ERR_IO (-2)
 #define JPDFIUM_ERR_PASSWORD (-3)
 #define JPDFIUM_ERR_NOT_FOUND (-4)
+#define JPDFIUM_ERR_REDACTED_SAVE (-5)
+#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)
+#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)
+#define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // PDF Repair pipeline status codes
@@ -62,6 +66,13 @@ JPDFIUM_EXPORT int64_t jpdfium_doc_raw_handle(int64_t doc);
 JPDFIUM_EXPORT int64_t jpdfium_page_raw_handle(int64_t page);
 JPDFIUM_EXPORT int64_t jpdfium_page_doc_raw_handle(int64_t page);
 
+// Create a new, empty document. Caller owns the returned handle
+// (jpdfium_doc_close). Unlike merging into a document opened from an
+// existing file, page imports into a freshly created document are the
+// only reliable base (PDFium's page exporter leaves stale object
+// references behind when importing into a document that already has
+// content, which can crash the save path).
+JPDFIUM_EXPORT int32_t jpdfium_doc_create(int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open(const char* path, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* password,

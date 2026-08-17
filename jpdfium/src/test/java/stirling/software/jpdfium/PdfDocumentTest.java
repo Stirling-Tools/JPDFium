@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
@@ -12,6 +13,7 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -151,11 +153,10 @@ class PdfDocumentTest {
     void redactWordsExWithPadding() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {
-            // Visual-only redaction (removeContent=false)
             int matches = page.redactWordsEx(
                     new String[]{"Hello"},
                     0xFFFF0000, 2.0f,
-                    false, false, false, false);
+                    false, false, true, false);
             assertTrue(matches >= 0);
         }
     }
@@ -281,7 +282,10 @@ class PdfDocumentTest {
                 assertTrue(matches >= 0);
             }
 
-            byte[] bytes = doc.saveBytesIncremental();
+            // Incremental save is refused after content redaction (it would
+            // keep the original revision recoverable); the full save works.
+            assertThrows(JPDFiumException.class, doc::saveBytesIncremental);
+            byte[] bytes = doc.saveBytes();
             assertTrue(bytes.length > 0);
         }
     }
@@ -289,7 +293,7 @@ class PdfDocumentTest {
     @Test
     void fontNormalizeThenMarkCommit() throws Exception {
         try (var doc = PdfDocument.open(pdfPath())) {
-            // Normalize -> Mark -> Commit -> Incremental save
+            // Normalize -> Mark -> Commit -> full save
             FontNormalizer.normalizeAll(doc);
 
             try (var page = doc.page(0)) {
@@ -299,7 +303,8 @@ class PdfDocumentTest {
                 assertTrue(committed >= 0);
             }
 
-            byte[] bytes = doc.saveBytesIncremental();
+            assertThrows(JPDFiumException.class, doc::saveBytesIncremental);
+            byte[] bytes = doc.saveBytes();
             assertTrue(bytes.length > 0);
         }
     }

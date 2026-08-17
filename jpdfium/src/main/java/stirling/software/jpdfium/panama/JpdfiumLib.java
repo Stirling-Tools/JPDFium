@@ -3,6 +3,10 @@ package stirling.software.jpdfium.panama;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
+import stirling.software.jpdfium.exception.RedactIncompleteException;
+import stirling.software.jpdfium.exception.RedactUnverifiableException;
+import stirling.software.jpdfium.exception.RedactedSaveException;
+import stirling.software.jpdfium.exception.UncommittedMarksException;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.RenderResult;
@@ -32,11 +36,15 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  */
 public final class JpdfiumLib {
 
-    public static final int OK            =   0;
-    public static final int ERR_INVALID   =  -1;
-    public static final int ERR_IO        =  -2;
-    public static final int ERR_PASSWORD  =  -3;
-    public static final int ERR_NOT_FOUND =  -4;
+    public static final int OK                     =   0;
+    public static final int ERR_INVALID            =  -1;
+    public static final int ERR_IO                 =  -2;
+    public static final int ERR_PASSWORD           =  -3;
+    public static final int ERR_NOT_FOUND          =  -4;
+    public static final int ERR_REDACTED_SAVE      =  -5;
+    public static final int ERR_UNCOMMITTED_MARKS  =  -6;
+    public static final int ERR_REDACT_INCOMPLETE  =  -7;
+    public static final int ERR_REDACT_UNVERIFIABLE =  -8;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
@@ -63,11 +71,19 @@ public final class JpdfiumLib {
     static void check(int rc, String ctx) {
         if (rc == OK) return;
         throw switch (rc) {
-            case ERR_PASSWORD  -> new PdfPasswordException("Password required/incorrect - " + ctx);
-            case ERR_IO        -> new JPDFiumException("IO error - " + ctx);
-            case ERR_INVALID   -> new PdfCorruptException("Invalid/corrupt PDF - " + ctx);
-            case ERR_NOT_FOUND -> new JPDFiumException("Resource not found - " + ctx);
-            default            -> new JPDFiumException("Native error " + rc + " - " + ctx);
+            case ERR_PASSWORD          -> new PdfPasswordException("Password required/incorrect - " + ctx);
+            case ERR_IO                -> new JPDFiumException("IO error - " + ctx);
+            case ERR_INVALID           -> new PdfCorruptException("Invalid/corrupt PDF - " + ctx);
+            case ERR_NOT_FOUND         -> new JPDFiumException("Resource not found - " + ctx);
+            case ERR_REDACTED_SAVE     -> new RedactedSaveException(
+                    "Incremental save refused after content redaction (use full save) - " + ctx);
+            case ERR_UNCOMMITTED_MARKS -> new UncommittedMarksException(
+                    "Save refused: document contains uncommitted REDACT annotations - " + ctx);
+            case ERR_REDACT_INCOMPLETE -> new RedactIncompleteException(
+                    "Redaction incomplete: the post-redaction audit found content it could not remove - " + ctx);
+            case ERR_REDACT_UNVERIFIABLE -> new RedactUnverifiableException(
+                    "Redaction could not run or could not be verified; no silent fallback was applied - " + ctx);
+            default                    -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
 
@@ -84,8 +100,20 @@ public final class JpdfiumLib {
         }
     }
 
-    public static long docOpenBytes(byte[] data) {
+    public static long docCreate() {
         NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment hSeg = a.allocate(JAVA_LONG);
+                check(JpdfiumH.jpdfium_doc_create(hSeg), "docCreate");
+                return hSeg.get(JAVA_LONG, 0);
+            }
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static long docOpenBytes(byte[] data) {        NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment hSeg = a.allocate(JAVA_LONG);

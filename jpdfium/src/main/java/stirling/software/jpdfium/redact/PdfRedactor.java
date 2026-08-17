@@ -2,6 +2,7 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.panama.FlashTextLib;
 import stirling.software.jpdfium.redact.pii.EntityRedactor;
@@ -173,11 +174,23 @@ public final class PdfRedactor {
 
                 if (!words.isEmpty()) {
                     String[] wordArray = words.toArray(String[]::new);
-                    matchesOnPage = page.redactWordsEx(
-                            wordArray, options.boxColor(), options.padding(),
-                            options.wholeWord(), options.useRegex(),
-                            options.removeContent(), options.caseSensitive());
-                    totalWordMatches += matchesOnPage;
+                    try {
+                        matchesOnPage = page.redactWordsEx(
+                                wordArray, options.boxColor(), options.padding(),
+                                options.wholeWord(), options.useRegex(),
+                                options.removeContent(), options.caseSensitive());
+                        totalWordMatches += matchesOnPage;
+                    } catch (JPDFiumException e) {
+                        if (e.isRedactIncomplete()) {
+                            // The post-redaction audit found content that
+                            // could not be removed (e.g. fonts without a
+                            // usable Unicode mapping). The page keeps its
+                            // original content and the caller is told.
+                            matchesOnPage = -1;
+                        } else {
+                            throw e;
+                        }
+                    }
                 }
 
                 page.flatten();

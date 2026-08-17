@@ -110,6 +110,7 @@ val jextractBin: String = run {
 val jpdfiumFunctions = listOf(
     "jpdfium_init", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_protected",
+    "jpdfium_doc_create",
     "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_close",
     "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
     "jpdfium_render_page", "jpdfium_free_buffer",
@@ -273,6 +274,17 @@ tasks.named<JavaExec>("run") {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
+// Run: ./gradlew :jpdfium:generateTestPdfs
+tasks.register<JavaExec>("generateTestPdfs") {
+    group       = "verification"
+    description = "Generate test PDFs for redaction and coordinate tests"
+    dependsOn(":jpdfium:compileTestJava")
+    mainClass.set("stirling.software.jpdfium.redact.RedactTestPdfGenerator")
+    classpath = sourceSets.test.get().runtimeClasspath
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    systemProperty("pdfgen.outdir", file("src/test/resources/pdfs/redact").absolutePath)
+}
+
 // Run: ./gradlew :jpdfium:integrationTest
 tasks.register<Test>("integrationTest") {
     group       = "verification"
@@ -286,8 +298,9 @@ tasks.register<Test>("integrationTest") {
         val key = k.toString()
         if (key.startsWith("jpdfium.bench")) systemProperty(key, v.toString())
     }
-    jvmArgs("--enable-native-access=ALL-UNNAMED")
-    maxHeapSize = System.getProperty("jpdfium.bench.xmx", "2g")
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-Xmx4g")
+    maxHeapSize = "4g"
+    setForkEvery(20)
 }
 
 // Run: ./gradlew :jpdfium:corpusTest -Pjpdfium.testNatives=<platform>

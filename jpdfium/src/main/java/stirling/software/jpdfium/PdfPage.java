@@ -81,10 +81,18 @@ public final class PdfPage implements AutoCloseable {
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
     }
 
-    /** Redact a region with configurable content removal. */
+    /**
+     * Redact a region with configurable content removal.
+     *
+     * <p><strong>Removed:</strong> the visual-only mode ({@code removeContent=false})
+     * painted a cover rectangle over intact, extractable content - the classic
+     * "looks redacted" leak. It is refused with
+     * {@link IllegalArgumentException}; content removal is mandatory.
+     */
     public void redactRegion(Rect rect, int argbColor, boolean removeContent) {
         ensureOpen();
-        JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, removeContent);
+        requireContentRemoval(removeContent);
+        JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
     }
 
     public void redactPattern(String regexPattern, int argbColor) {
@@ -92,10 +100,16 @@ public final class PdfPage implements AutoCloseable {
         JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
     }
 
-    /** Redact by pattern with configurable content removal. */
+    /**
+     * Redact by pattern with configurable content removal.
+     *
+     * <p><strong>Removed:</strong> the visual-only mode ({@code removeContent=false})
+     * is refused - see {@link #redactRegion(Rect, int, boolean)}.
+     */
     public void redactPattern(String regexPattern, int argbColor, boolean removeContent) {
         ensureOpen();
-        JpdfiumLib.redactPattern(handle, regexPattern, argbColor, removeContent);
+        requireContentRemoval(removeContent);
+        JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
     }
 
     /**
@@ -111,7 +125,8 @@ public final class PdfPage implements AutoCloseable {
     public void redactWords(String[] words, int argbColor, float padding,
                              boolean wholeWord, boolean useRegex, boolean removeContent) {
         ensureOpen();
-        JpdfiumLib.redactWords(handle, words, argbColor, padding, wholeWord, useRegex, removeContent);
+        requireContentRemoval(removeContent);
+        JpdfiumLib.redactWords(handle, words, argbColor, padding, wholeWord, useRegex, true);
     }
 
     /**
@@ -147,8 +162,24 @@ public final class PdfPage implements AutoCloseable {
                               boolean wholeWord, boolean useRegex, boolean removeContent,
                               boolean caseSensitive) {
         ensureOpen();
+        requireContentRemoval(removeContent);
         return JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
-                wholeWord, useRegex, removeContent, caseSensitive);
+                wholeWord, useRegex, true, caseSensitive);
+    }
+
+    /**
+     * The visual-only cover mode (removeContent=false) is removed from the
+     * public API: painting over intact, extractable content is the banned
+     * "looks redacted" leak class. Every redaction ends verified-complete or
+     * in a loud error - never in a cover.
+     */
+    private static void requireContentRemoval(boolean removeContent) {
+        if (!removeContent) {
+            throw new IllegalArgumentException(
+                    "visual-only redaction (removeContent=false) was removed: "
+                            + "content removal is mandatory - every redaction must end "
+                            + "verified complete or in a loud error, never in a painted cover");
+        }
     }
 
     /**
