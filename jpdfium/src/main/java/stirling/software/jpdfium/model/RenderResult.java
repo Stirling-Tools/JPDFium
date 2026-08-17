@@ -5,7 +5,7 @@ import java.awt.image.BufferedImage;
 public record RenderResult(int width, int height, byte[] rgba) {
 
     public BufferedImage toBufferedImage() {
-        var img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         int[] pixels = new int[width * height];
         for (int i = 0; i < pixels.length; i++) {
             int r = rgba[i * 4]     & 0xFF;

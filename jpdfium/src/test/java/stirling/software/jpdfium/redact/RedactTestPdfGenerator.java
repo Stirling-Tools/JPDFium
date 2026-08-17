@@ -37,7 +37,8 @@ import org.apache.pdfbox.util.Matrix;
  * }</pre>
  *
  */
-public class RedactTestPdfGenerator {
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes", "PMD.AvoidCatchingGenericException"})
+public final class RedactTestPdfGenerator {
 
     private static final String OUT_DIR_PROP = "pdfgen.outdir";
     private static Path OUT_DIR;
@@ -297,7 +298,7 @@ public class RedactTestPdfGenerator {
                 } else {
                     font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
                 }
-            } catch (Exception e) {
+            } catch (IOException e) {
                 font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
             }
             try (var cs = new PDPageContentStream(doc, page)) {
@@ -1138,8 +1139,8 @@ public class RedactTestPdfGenerator {
         try (var doc = new PDDocument()) {
             PDPage page = new PDPage(new PDRectangle(72000, 800));
             doc.addPage(page);
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < 500; i++) sb.append("word").append(i).append(" ");
+            StringBuilder sb = new StringBuilder(4096);
+            for (int i = 0; i < 500; i++) sb.append("word").append(i).append(' ');
             sb.append(SSN1).append(" end.");
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();

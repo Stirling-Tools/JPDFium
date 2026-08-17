@@ -26,6 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * form while the char pass claims its child text, and removal must not free the child twice.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class StampFormRedactTest {
 
     private static final int BLACK = 0xFF000000;

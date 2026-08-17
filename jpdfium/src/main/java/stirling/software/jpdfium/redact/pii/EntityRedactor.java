@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -51,7 +52,7 @@ public final class EntityRedactor implements AutoCloseable {
     private final PatternEngine patternEngine;
     private final int coreferenceWindow;
     private final List<String> coreferencePronouns;
-    private volatile boolean closed = false;
+    private volatile boolean closed;
 
     private EntityRedactor(Builder b) {
         this.flashtextHandle = FlashTextLib.create();
@@ -59,10 +60,10 @@ public final class EntityRedactor implements AutoCloseable {
             FlashTextLib.addKeyword(flashtextHandle, entity.keyword, entity.label);
         }
 
-        if (!b.patterns.isEmpty()) {
-            this.patternEngine = PatternEngine.create(b.patterns);
-        } else {
+        if (b.patterns.isEmpty()) {
             this.patternEngine = null;
+        } else {
+            this.patternEngine = PatternEngine.create(b.patterns);
         }
 
         this.coreferenceWindow = b.coreferenceWindow;
@@ -132,7 +133,7 @@ public final class EntityRedactor implements AutoCloseable {
                 Sentence s = sentences.get(idx);
                 String sentenceText = text.substring(s.start, Math.min(s.end, text.length()));
                 for (String pronoun : coreferencePronouns) {
-                    if (sentenceText.toLowerCase().contains(pronoun.toLowerCase())) {
+                    if (sentenceText.toLowerCase(Locale.ROOT).contains(pronoun.toLowerCase(Locale.ROOT))) {
                         allTargets.add(new RedactionTarget(page.pageIndex(), s.start, s.end,
                                 sentenceText, RedactionReason.COREFERENCE_CONTEXT, pronoun));
                         break;

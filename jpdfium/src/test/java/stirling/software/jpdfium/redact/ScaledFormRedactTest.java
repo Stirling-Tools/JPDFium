@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * transform into their matrix or they render at the wrong size and position.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class ScaledFormRedactTest {
 
     private static final int BLACK = 0xFF000000;

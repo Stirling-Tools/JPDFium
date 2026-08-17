@@ -24,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Unit tests for the two-phase {@link RedactionSession} API.
  * Runs against the stub native library.
  */
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class RedactionSessionTest {
 
     private static Path pdfPath() throws Exception {

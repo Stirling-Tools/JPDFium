@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * </ul>
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class UnicodeMatchingRedactTest {
 
     private static Path testPdf(String name) throws Exception {

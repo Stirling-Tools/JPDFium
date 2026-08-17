@@ -62,7 +62,7 @@ public final class RedactionSession implements AutoCloseable {
 
     private final PdfDocument document;
     private final boolean ownsDocument;
-    private volatile boolean closed = false;
+    private volatile boolean closed;
 
     // Pending marks stored in Java memory (PDFium REDACT annotations don't
     // survive page close/reopen, so we store and replay during commit).
