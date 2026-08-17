@@ -7,6 +7,7 @@ import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -176,7 +177,7 @@ public final class PdfPrint {
         sb.append(String.format("%010d 00000 n \n", obj2));
         sb.append(String.format("%010d 00000 n \n", obj3));
         sb.append("trailer<</Root 1 0 R/Size 4>>\nstartxref\n").append(xrefPos).append("\n%%EOF");
-        return sb.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        return sb.toString().getBytes(StandardCharsets.US_ASCII);
     }
 
     /**

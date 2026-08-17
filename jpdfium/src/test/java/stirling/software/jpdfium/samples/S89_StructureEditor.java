@@ -37,7 +37,7 @@ public class S89_StructureEditor {
             SampleBase.pdfHeader("S89_StructureEditor", input, fi + 1, inputs.size());
             Path outDir = SampleBase.out("S89_structure-editor", input);
 
-            // --- Part 1: Manual Tagging ---
+            // Part 1: Manual Tagging
             SampleBase.section("Manual Tagging");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 PdfStructureEditor.Builder builder = PdfStructureEditor.tag(doc)
@@ -77,7 +77,7 @@ public class S89_StructureEditor {
                 }
             }
 
-            // --- Part 2: Auto-Tagging ---
+            // Part 2: Auto-Tagging
             SampleBase.section("Auto-Tagging");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 TagResult result = PdfStructureEditor.autoTag(doc);
@@ -89,7 +89,7 @@ public class S89_StructureEditor {
                 produced.add(autoOut);
             }
 
-            // --- Part 3: Read Existing Structure Tree ---
+            // Part 3: Read Existing Structure Tree
             SampleBase.section("Read Structure Tree");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int p = 0; p < Math.min(doc.pageCount(), 3); p++) {

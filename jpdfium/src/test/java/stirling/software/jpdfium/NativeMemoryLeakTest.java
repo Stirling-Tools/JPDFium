@@ -98,9 +98,7 @@ class NativeMemoryLeakTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
 
     private static void warmUp(byte[] src, int n) throws Exception {
         for (int i = 0; i < n; i++) {

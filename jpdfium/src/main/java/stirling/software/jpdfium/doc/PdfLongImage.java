@@ -5,6 +5,8 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -68,8 +70,8 @@ public final class PdfLongImage {
         BufferedImage result = new BufferedImage(maxWidth, totalHeight, BufferedImage.TYPE_INT_RGB);
 
         // Fill background white
-        java.awt.Graphics2D g = result.createGraphics();
-        g.setColor(java.awt.Color.WHITE);
+        Graphics2D g = result.createGraphics();
+        g.setColor(Color.WHITE);
         g.fillRect(0, 0, maxWidth, totalHeight);
 
         int yOffset = 0;
@@ -124,7 +126,7 @@ public final class PdfLongImage {
 
             yOffset += pageHeights[i];
             if (separator && i < pageCount - 1) {
-                g.setColor(java.awt.Color.LIGHT_GRAY);
+                g.setColor(Color.LIGHT_GRAY);
                 g.fillRect(0, yOffset, maxWidth, separatorHeight);
                 yOffset += separatorHeight;
             }

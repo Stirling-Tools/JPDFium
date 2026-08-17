@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 
 /**
  * SAMPLE 94 - Crop-remove-content performance harness (hard numbers, not vibes).
@@ -87,7 +88,7 @@ public class S94_CropPerf {
     /** Collects per-op wall-time samples plus the open/close baseline for subtraction. */
     private static final class Sample {
         private final byte[] pdf;
-        private final java.util.LinkedHashMap<String, double[]> totals = new java.util.LinkedHashMap<>();
+        private final LinkedHashMap<String, double[]> totals = new LinkedHashMap<>();
         private double[] baseline;
 
         Sample(byte[] pdf) { this.pdf = pdf; }

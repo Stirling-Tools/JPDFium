@@ -58,7 +58,7 @@ class CropStructuralGateTest {
         assertGhostscriptRenders(out);
     }
 
-    // --- helpers -----------------------------------------------------------
+    // helpers
 
     private static Path produce(byte[] input, Rect crop) throws IOException {
         Path dir = Files.createTempDirectory("crop-gate");

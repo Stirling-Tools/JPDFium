@@ -1536,7 +1536,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // text page is still valid here (all removals happen later).
             //
             // Returns: 1 = verified match, 0 = verified mismatch,
-            // -1 = cannot decode (inline fonts without a usable encoding) -
+            // 1 = cannot decode (inline fonts without a usable encoding)
             // in that case only the bounds check validates the fragment.
             auto fragmentTextStatus = [&](FPDF_PAGEOBJECT obj,
                                           const std::vector<uint16_t>& expected) -> int {

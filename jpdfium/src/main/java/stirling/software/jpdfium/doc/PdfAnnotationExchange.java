@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -152,7 +153,7 @@ public final class PdfAnnotationExchange {
 
         sb.append("] >> >>\nendobj\n");
         sb.append("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
-        return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /**
@@ -247,7 +248,7 @@ public final class PdfAnnotationExchange {
      */
     public static ImportResult importFdf(PdfDocument doc, byte[] fdf) {
         // Parse the simplified FDF format
-        String fdfStr = new String(fdf, java.nio.charset.StandardCharsets.UTF_8);
+        String fdfStr = new String(fdf, StandardCharsets.UTF_8);
         int annotationsImported = 0;
         List<String> warnings = new ArrayList<>();
 

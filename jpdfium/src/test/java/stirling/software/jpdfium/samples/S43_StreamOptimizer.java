@@ -4,6 +4,7 @@ import stirling.software.jpdfium.doc.PdfStreamOptimizer;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 
 /**
@@ -50,7 +51,7 @@ public class S43_StreamOptimizer {
             String stem = SampleBase.stem(input);
             System.out.println("  (qpdf not found - copying original as fallback)");
             Path fallback = outDir.resolve(stem + "-original.pdf");
-            Files.copy(input, fallback, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(input, fallback, StandardCopyOption.REPLACE_EXISTING);
             System.out.printf("  Copied: %s (%d bytes)%n", fallback.getFileName(), Files.size(fallback));
             SampleBase.done("S43_StreamOptimizer", fallback);
         }

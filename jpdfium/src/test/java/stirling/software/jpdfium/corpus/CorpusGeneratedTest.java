@@ -184,7 +184,7 @@ class CorpusGeneratedTest {
         return sb.toString();
     }
 
-    // ── Native memory stability (Linux only; reported, generously bounded) ──
+    // Native memory stability (Linux only; reported, generously bounded)
 
     @Test
     @Timeout(value = 20, unit = TimeUnit.MINUTES)

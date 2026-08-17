@@ -75,7 +75,7 @@ public final class PdfPathDrawer {
     public PdfPathDrawer beginPath(float x, float y) {
         try {
             currentPath = (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewPath.invokeExact(x, y);
-        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to create path", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Failed to create path", t); }
         return this;
     }
 
@@ -85,7 +85,7 @@ public final class PdfPathDrawer {
     public PdfPathDrawer rect(float x, float y, float w, float h) {
         try {
             currentPath = (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewRect.invokeExact(x, y, w, h);
-        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to create rect", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Failed to create rect", t); }
         return this;
     }
 
@@ -95,7 +95,7 @@ public final class PdfPathDrawer {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPath_MoveTo failed");
             } }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        catch (Throwable t) { throw new JPDFiumException(t); }
         return this;
     }
 
@@ -105,7 +105,7 @@ public final class PdfPathDrawer {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPath_LineTo failed");
             } }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        catch (Throwable t) { throw new JPDFiumException(t); }
         return this;
     }
 
@@ -115,7 +115,7 @@ public final class PdfPathDrawer {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPath_BezierTo failed");
             } }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        catch (Throwable t) { throw new JPDFiumException(t); }
         return this;
     }
 
@@ -125,7 +125,7 @@ public final class PdfPathDrawer {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPath_Close failed");
             } }
-        catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException(t); }
+        catch (Throwable t) { throw new JPDFiumException(t); }
         return this;
     }
 
@@ -151,13 +151,13 @@ public final class PdfPathDrawer {
             PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, currentPath);
             requireOk((int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage),
                     "FPDFPage_GenerateContent");
-        } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("Failed to commit path", t); }
+        } catch (Throwable t) { throw new JPDFiumException("Failed to commit path", t); }
         currentPath = null;
     }
 
     private static void requireOk(int ok, String what) {
         if (ok == 0) {
-            throw new stirling.software.jpdfium.exception.JPDFiumException(what + " failed");
+            throw new JPDFiumException(what + " failed");
         }
     }
 

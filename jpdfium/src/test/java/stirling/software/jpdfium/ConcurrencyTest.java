@@ -74,9 +74,7 @@ class ConcurrencyTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Original tests (preserved)
-    // -------------------------------------------------------------------------
 
     @Test
     @Timeout(180)
@@ -129,9 +127,7 @@ class ConcurrencyTest {
         assertThrows(IllegalStateException.class, doc::pageCount);
     }
 
-    // -------------------------------------------------------------------------
     // High-parallelism test (16 threads)
-    // -------------------------------------------------------------------------
 
     @Test
     @Timeout(240)
@@ -150,9 +146,7 @@ class ConcurrencyTest {
         assertNull(failure, () -> "16-thread concurrent open/render failed: " + failure);
     }
 
-    // -------------------------------------------------------------------------
     // Determinism under concurrency
-    // -------------------------------------------------------------------------
 
     /**
      * Each thread renders the same page independently. All results must be
@@ -192,9 +186,7 @@ class ConcurrencyTest {
             "Concurrent renders produced non-identical output: " + mismatchDetail.get());
     }
 
-    // -------------------------------------------------------------------------
     // Repeated open stress (@RepeatedTest catches 1-in-N native handle bugs)
-    // -------------------------------------------------------------------------
 
     @RepeatedTest(value = 5, name = "open/render/close cycle {currentRepetition}/{totalRepetitions}")
     @Timeout(60)
@@ -212,9 +204,7 @@ class ConcurrencyTest {
         }
     }
 
-    // -------------------------------------------------------------------------
     // Concurrent redaction
-    // -------------------------------------------------------------------------
 
     @Test
     @Timeout(180)

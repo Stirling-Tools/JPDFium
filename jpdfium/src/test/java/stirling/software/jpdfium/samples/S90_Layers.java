@@ -6,6 +6,7 @@ import stirling.software.jpdfium.doc.PdfLayers;
 import stirling.software.jpdfium.doc.PdfLayers.Layer;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.doc.AnnotationType;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.Rect;
 
 import javax.imageio.ImageIO;
@@ -39,7 +40,7 @@ public class S90_Layers {
             SampleBase.pdfHeader("S90_Layers", input, fi + 1, inputs.size());
             Path outDir = SampleBase.out("S90_layers", input);
 
-            // --- Part 1: List Existing Layers ---
+            // Part 1: List Existing Layers
             SampleBase.section("List Layers");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 List<Layer> layers = PdfLayers.list(doc);
@@ -50,7 +51,7 @@ public class S90_Layers {
                 }
             }
 
-            // --- Part 2: Create Layers ---
+            // Part 2: Create Layers
             SampleBase.section("Create Layers");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 // Create annotated layers
@@ -92,7 +93,7 @@ public class S90_Layers {
                 produced.add(layeredOut);
             }
 
-            // --- Part 3: Toggle Visibility ---
+            // Part 3: Toggle Visibility
             SampleBase.section("Toggle Visibility");
             try (PdfDocument doc = PdfDocument.open(
                     outDir.resolve(SampleBase.stem(input) + "-layered.pdf"))) {
@@ -107,7 +108,7 @@ public class S90_Layers {
                     BufferedImage img;
                     try {
                         img = PdfLayers.renderWithLayers(doc, 0, 150, Set.of("Watermark"));
-                    } catch (stirling.software.jpdfium.exception.JPDFiumException e) {
+                    } catch (JPDFiumException e) {
                         // Render-bounds guard: corpus contains wall-sized pages.
                         System.out.println("  [skip render] " + e.getMessage());
                         img = null;
@@ -126,7 +127,7 @@ public class S90_Layers {
                 produced.add(toggledOut);
             }
 
-            // --- Part 4: Flatten Layers ---
+            // Part 4: Flatten Layers
             SampleBase.section("Flatten Layers");
             try (PdfDocument doc = PdfDocument.open(
                     outDir.resolve(SampleBase.stem(input) + "-layered.pdf"))) {

@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
@@ -125,7 +126,7 @@ public final class PdfPageSplitter {
             // Delete the original (unmodified) page
             try {
                 PageEditBindings.FPDFPage_Delete.invokeExact(rawDoc, currentIdx);
-            } catch (Throwable t) { throw new stirling.software.jpdfium.exception.JPDFiumException("FPDFPage_Delete failed", t); }
+            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_Delete failed", t); }
 
             splitCount++;
         }

@@ -1,7 +1,10 @@
 package stirling.software.jpdfium.samples;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -225,16 +228,16 @@ public class RunAllSamples {
 
     private static void deleteRecursively(Path dir) {
         try {
-            if (!java.nio.file.Files.exists(dir)) return;
-            try (var walk = java.nio.file.Files.walk(dir)) {
-                walk.sorted(java.util.Comparator.reverseOrder())
+            if (!Files.exists(dir)) return;
+            try (var walk = Files.walk(dir)) {
+                walk.sorted(Comparator.reverseOrder())
                         .forEach(p -> {
                             try {
-                                java.nio.file.Files.deleteIfExists(p);
-                            } catch (java.io.IOException _) { }
+                                Files.deleteIfExists(p);
+                            } catch (IOException _) { }
                         });
             }
-        } catch (java.io.IOException _) { }
+        } catch (IOException _) { }
     }
 
     @FunctionalInterface

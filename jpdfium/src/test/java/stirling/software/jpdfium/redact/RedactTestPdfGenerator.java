@@ -1,11 +1,17 @@
 package stirling.software.jpdfium.redact;
 
+import java.awt.Color;
+import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+
+import javax.imageio.ImageIO;
 
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -21,6 +27,7 @@ import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
+import org.apache.pdfbox.util.Matrix;
 
 /**
  * Generates every test PDF required by {@link ObjectFissionCoordinateTest}.
@@ -530,7 +537,7 @@ public class RedactTestPdfGenerator {
                 float cos = (float) Math.cos(rad);
                 float sin = (float) Math.sin(rad);
                 float fs = 12;
-                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(
+                cs.setTextMatrix(new Matrix(
                         cos * fs, sin * fs, -sin * fs, cos * fs, 200, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Rotated: " + SSN1 + " confidential.");
@@ -546,7 +553,7 @@ public class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(24, 0, 0, 6, 72, 400));
+                cs.setTextMatrix(new Matrix(24, 0, 0, 6, 72, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Scaled: " + SSN1 + " confidential.");
                 cs.endText();
@@ -561,7 +568,7 @@ public class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(12, 0, 3, 12, 72, 400));
+                cs.setTextMatrix(new Matrix(12, 0, 3, 12, 72, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Skewed: " + SSN1 + " confidential.");
                 cs.endText();
@@ -576,7 +583,7 @@ public class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(-12, 0, 0, 12, 500, 400));
+                cs.setTextMatrix(new Matrix(-12, 0, 0, 12, 500, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Mirror: " + SSN1 + " confidential.");
                 cs.endText();
@@ -647,7 +654,7 @@ public class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.saveGraphicsState();
-                cs.transform(new org.apache.pdfbox.util.Matrix(1, 0, 0, 1, 50, 50));
+                cs.transform(new Matrix(1, 0, 0, 1, 50, 50));
                 cs.beginText();
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
                 cs.newLineAtOffset(72, 600);
@@ -1230,7 +1237,7 @@ public class RedactTestPdfGenerator {
             PDPage page = letterPage();
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
-                cs.beginMarkedContent(org.apache.pdfbox.cos.COSName.getPDFName("Span"));
+                cs.beginMarkedContent(COSName.getPDFName("Span"));
                 cs.beginText();
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
                 cs.newLineAtOffset(72, 700);
@@ -1283,12 +1290,12 @@ public class RedactTestPdfGenerator {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
             doc.addPage(page);
-            var img = new java.awt.image.BufferedImage(200, 100,
-                    java.awt.image.BufferedImage.TYPE_INT_RGB);
+            var img = new BufferedImage(200, 100,
+                    BufferedImage.TYPE_INT_RGB);
             var g = img.createGraphics();
-            g.setColor(new java.awt.Color(200, 30, 30));
+            g.setColor(new Color(200, 30, 30));
             g.fillRect(0, 0, 100, 100);
-            g.setColor(new java.awt.Color(30, 30, 200));
+            g.setColor(new Color(30, 30, 200));
             g.fillRect(100, 0, 100, 100);
             g.dispose();
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
@@ -1299,9 +1306,9 @@ public class RedactTestPdfGenerator {
         }
     }
 
-    private static byte[] encodePng(java.awt.image.BufferedImage img) throws Exception {
-        var bos = new java.io.ByteArrayOutputStream();
-        javax.imageio.ImageIO.write(img, "png", bos);
+    private static byte[] encodePng(BufferedImage img) throws Exception {
+        var bos = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", bos);
         return bos.toByteArray();
     }
 
@@ -1368,7 +1375,7 @@ public class RedactTestPdfGenerator {
             doc.addPage(page);
             PDFormXObject inner =
                     formWithText(doc, "BT /F1 12 Tf 1 0 0 1 5 10 Tm (DEEP SECRET) Tj ET", 200, 80);
-            inner.setMatrix(new java.awt.geom.AffineTransform(0.866, 0.5, -0.5, 0.866, 10, 10));
+            inner.setMatrix(new AffineTransform(0.866, 0.5, -0.5, 0.866, 10, 10));
 
             PDFormXObject outer = new PDFormXObject(doc);
             outer.setBBox(new PDRectangle(0, 0, 400, 200));

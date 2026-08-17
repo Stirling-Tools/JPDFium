@@ -103,7 +103,7 @@ public class S93_CropRemoveContent {
             String stem = SampleBase.stem(input);
             Path outDir = SampleBase.out("S93_crop-remove-content", input);
 
-            // ---- Pass 1: 1-inch margin crop (typical case) ----
+            // Pass 1: 1-inch margin crop (typical case)
             try (PdfDocument doc = PdfDocument.open(input)) {
                 int n = doc.pageCount();
                 for (int p = 0; p < Math.min(n, 2); p++) {
@@ -126,7 +126,7 @@ public class S93_CropRemoveContent {
                 produced.add(outPath);
             }
 
-            // ---- Pass 2: hard crop to the LEFT half (guaranteed to cut content) ----
+            // Pass 2: hard crop to the LEFT half (guaranteed to cut content)
             try (PdfDocument doc = PdfDocument.open(input)) {
                 int n = doc.pageCount();
                 for (int p = 0; p < Math.min(n, 2); p++) {

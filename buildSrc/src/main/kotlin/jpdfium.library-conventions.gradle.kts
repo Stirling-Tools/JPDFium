@@ -1,4 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
+import com.github.spotbugs.snom.Confidence
+import com.github.spotbugs.snom.Effort
+import com.github.spotbugs.snom.SpotBugsTask
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 plugins {
@@ -19,10 +22,10 @@ spotbugs {
     toolVersion.set("4.9.8")
     ignoreFailures.set(true)   // report now; tighten to fail-on-findings once the
                                // baseline is cleaned up (see static-analysis.yml)
-    effort.set(com.github.spotbugs.snom.Effort.MAX)
-    reportLevel.set(com.github.spotbugs.snom.Confidence.MEDIUM)
+    effort.set(Effort.MAX)
+    reportLevel.set(Confidence.MEDIUM)
 }
-tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
+tasks.withType<SpotBugsTask>().configureEach {
     reports {
         create("xml") { required.set(true) }
         create("html") { required.set(true) }

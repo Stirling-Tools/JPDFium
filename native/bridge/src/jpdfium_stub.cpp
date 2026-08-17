@@ -46,9 +46,7 @@ constexpr std::string_view STUB_TEXT =
     "Card: 4111-1111-1111-1111 Consider Employ VM\n"
     "John Smith works at Acme Corp custom certificat";
 
-// ---------------------------------------------------------------------------
 // RAII handles
-// ---------------------------------------------------------------------------
 
 struct FileCloser {
     void operator()(std::FILE* f) const noexcept {
@@ -67,12 +65,10 @@ static FilePtr safe_fopen_write(const char* path) {
 #endif
 }
 
-// ---------------------------------------------------------------------------
 // FFI-safe allocators
 //
 // The JVM frees every buffer via jpdfium_free_string / jpdfium_free_buffer
 // (free()), so anything returned across the boundary MUST come from malloc.
-// ---------------------------------------------------------------------------
 
 [[nodiscard]] char* dup_cstring(std::string_view sv) noexcept {
     char* p = static_cast<char*>(std::malloc(sv.size() + 1));
@@ -93,7 +89,6 @@ static FilePtr safe_fopen_write(const char* path) {
     return static_cast<uint8_t*>(std::calloc(len, 1));
 }
 
-// ---------------------------------------------------------------------------
 // JsonBuf - minimal, allocation-cheap JSON writer.
 //
 // Backed by std::string with std::to_chars for numerics: no iostream, no
@@ -101,7 +96,6 @@ static FilePtr safe_fopen_write(const char* path) {
 // JVM reads them through Double/Float.parseFloat (which accepts scientific
 // notation), so output is safe across libstdc++/libc++/MSVC float-to-chars
 // differences.
-// ---------------------------------------------------------------------------
 
 class JsonBuf {
     std::string s_;
@@ -196,7 +190,6 @@ int count_occurrences(std::string_view haystack, std::string_view needle, bool c
     return JPDFIUM_ERR_NATIVE;
 }
 
-// ---------------------------------------------------------------------------
 struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
@@ -235,7 +228,7 @@ int64_t g_next_flash = 88001;
 
 }  // namespace
 
-// =====================  Core Document Functions  ===========================
+// Core Document Functions
 
 int32_t jpdfium_init() {
     return JPDFIUM_OK;
@@ -340,7 +333,7 @@ void jpdfium_doc_close(int64_t handle) {
     g_docs.erase(handle);
 }
 
-// =====================  Page Functions  ===================================
+// Page Functions
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
     *handle = g_next_page++;
@@ -388,7 +381,7 @@ void jpdfium_free_buffer(uint8_t* buf) {
     std::free(buf);
 }
 
-// =====================  Text Extraction  ==================================
+// Text Extraction
 
 // The fake text JSON depends only on STUB_TEXT, never on the page handle, so
 // build it once and hand out copies. Rebuilding ~40 KB of JSON per call made
@@ -441,7 +434,7 @@ void jpdfium_free_string(char* s) {
     std::free(s);
 }
 
-// =====================  Redaction  ========================================
+// Redaction
 
 // Stub must reject the same degenerate geometry the real bridge rejects so
 // native_smoke can validate the contract against either build variant.
@@ -531,7 +524,7 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     return JPDFIUM_OK;
 }
 
-// =====================  PCRE2 Pattern Engine (std::regex stand-in)  =======
+// PCRE2 Pattern Engine (std::regex stand-in)
 
 int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t, int64_t* handle) {
     *handle = g_next_pcre++;
@@ -570,7 +563,7 @@ void jpdfium_pcre2_free(int64_t handle) {
     g_pcre.erase(handle);
 }
 
-// =====================  Luhn  =============================================
+// Luhn
 
 int32_t jpdfium_luhn_validate(const char* number) {
     if (!number) return 0;
@@ -596,7 +589,7 @@ int32_t jpdfium_luhn_validate(const char* number) {
     return (sum % 10 == 0) ? 1 : 0;
 }
 
-// =====================  FlashText Dictionary NER  ==========================
+// FlashText Dictionary NER
 
 int32_t jpdfium_flashtext_create(int64_t* handle) {
     *handle = g_next_flash++;
@@ -645,7 +638,7 @@ void jpdfium_flashtext_free(int64_t handle) {
     g_flash.erase(handle);
 }
 
-// =====================  Font Normalization Pipeline stubs  =================
+// Font Normalization Pipeline stubs
 
 int32_t jpdfium_font_get_data(int64_t, int32_t, uint8_t** data, int64_t* len) {
     if (!data || !len) return JPDFIUM_ERR_INVALID;
@@ -693,7 +686,7 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
     return *out_data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-// =====================  Glyph-Level Redaction stub  =======================
+// Glyph-Level Redaction stub
 
 int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
                                    int32_t* match_count, char** result_json) {
@@ -702,7 +695,7 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
     return JPDFIUM_OK;
 }
 
-// =====================  XMP Metadata Redaction stubs  =====================
+// XMP Metadata Redaction stubs
 
 int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* fields_redacted) {
     if (fields_redacted) *fields_redacted = 0;
@@ -722,7 +715,7 @@ int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
     return JPDFIUM_OK;
 }
 
-// =====================  ICU4C stubs  ======================================
+// ICU4C stubs
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     *result = dup_cstring(text ? text : "");
@@ -747,7 +740,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-// =====================  Annotation-Based Redaction (Mark -> Commit)  ======
+// Annotation-Based Redaction (Mark -> Commit)
 
 int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, uint32_t,
                                     int32_t* annot_index) noexcept {

@@ -3,10 +3,10 @@ package stirling.software.jpdfium;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import stirling.software.jpdfium.panama.NativeRuntime;
-import stirling.software.jpdfium.panama.Symbols;
+import stirling.software.jpdfium.panama.*;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -37,34 +37,34 @@ class NativeModeAuditTest {
         // Touch all binding and helper classes in stirling.software.jpdfium.panama
         // to ensure static initializers trigger downcalls for every native symbol.
         Class<?>[] bindingClasses = {
-            stirling.software.jpdfium.panama.ActionBindings.class,
-            stirling.software.jpdfium.panama.AnnotationBindings.class,
-            stirling.software.jpdfium.panama.AttachmentBindings.class,
-            stirling.software.jpdfium.panama.BookmarkBindings.class,
-            stirling.software.jpdfium.panama.DocBindings.class,
-            stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings.class,
-            stirling.software.jpdfium.panama.EmbedPdfDocumentBindings.class,
-            stirling.software.jpdfium.panama.FlashTextLib.class,
-            stirling.software.jpdfium.panama.FontLib.class,
-            stirling.software.jpdfium.panama.FormFillBindings.class,
-            stirling.software.jpdfium.panama.GlyphLib.class,
-            stirling.software.jpdfium.panama.IcuLib.class,
-            stirling.software.jpdfium.panama.ImageObjBindings.class,
-            stirling.software.jpdfium.panama.JavaScriptBindings.class,
-            stirling.software.jpdfium.panama.JpdfiumLib.class,
-            stirling.software.jpdfium.panama.LinkBindings.class,
-            stirling.software.jpdfium.panama.PageEditBindings.class,
-            stirling.software.jpdfium.panama.PageImportBindings.class,
-            stirling.software.jpdfium.panama.Pcre2Lib.class,
-            stirling.software.jpdfium.panama.RenderBindings.class,
-            stirling.software.jpdfium.panama.RepairLib.class,
-            stirling.software.jpdfium.panama.RustBridgeBindings.class,
-            stirling.software.jpdfium.panama.SignatureBindings.class,
-            stirling.software.jpdfium.panama.StructureBindings.class,
-            stirling.software.jpdfium.panama.TextPageBindings.class,
-            stirling.software.jpdfium.panama.ThumbnailBindings.class,
-            stirling.software.jpdfium.panama.WebLinkBindings.class,
-            stirling.software.jpdfium.panama.XmpLib.class
+            ActionBindings.class,
+            AnnotationBindings.class,
+            AttachmentBindings.class,
+            BookmarkBindings.class,
+            DocBindings.class,
+            EmbedPdfAnnotationBindings.class,
+            EmbedPdfDocumentBindings.class,
+            FlashTextLib.class,
+            FontLib.class,
+            FormFillBindings.class,
+            GlyphLib.class,
+            IcuLib.class,
+            ImageObjBindings.class,
+            JavaScriptBindings.class,
+            JpdfiumLib.class,
+            LinkBindings.class,
+            PageEditBindings.class,
+            PageImportBindings.class,
+            Pcre2Lib.class,
+            RenderBindings.class,
+            RepairLib.class,
+            RustBridgeBindings.class,
+            SignatureBindings.class,
+            StructureBindings.class,
+            TextPageBindings.class,
+            ThumbnailBindings.class,
+            WebLinkBindings.class,
+            XmpLib.class
         };
         for (Class<?> clazz : bindingClasses) {
             Class.forName(clazz.getName());
@@ -75,7 +75,7 @@ class NativeModeAuditTest {
             // some PDFium builds (including the pinned prebuild); they are bound
             // via downcallOptional and callers null-check. Everything else must
             // resolve in FULL mode.
-            java.util.Set<String> knownOptional = java.util.Set.of("EPDFAnnot_SetIcon", "EPDFAnnot_GetIcon");
+            Set<String> knownOptional = Set.of("EPDFAnnot_SetIcon", "EPDFAnnot_GetIcon");
             List<String> unexpected = Symbols.auditMissing().stream()
                     .filter(symbol -> !knownOptional.contains(symbol))
                     .toList();

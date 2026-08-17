@@ -14,7 +14,9 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -46,7 +48,7 @@ public class CropBenchmark {
     public void openDoc() throws Exception {
         byte[] bytes;
         try (var in = CropBenchmark.class.getResourceAsStream("/pdfs/general/minimal.pdf")) {
-            bytes = java.util.Objects.requireNonNull(in).readAllBytes();
+            bytes = Objects.requireNonNull(in).readAllBytes();
         }
         doc = PdfDocument.open(bytes);
         page = doc.page(0);
@@ -68,7 +70,7 @@ public class CropBenchmark {
         long h = pageHandle;
         int n = 0;
         for (int i = 0; i < BATCH; i++) {
-            stirling.software.jpdfium.panama.JpdfiumLib.cropRemoveContent(h, 0, 0, 612, 792);
+            JpdfiumLib.cropRemoveContent(h, 0, 0, 612, 792);
             n++;
         }
         return n;

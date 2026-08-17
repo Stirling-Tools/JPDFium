@@ -20,8 +20,6 @@ java {
     withJavadocJar()
 }
 
-// ── Native binary staging ────────────────────────────────────────────────────
-//
 // Convention: CI builds the per-platform native libraries and drops them into
 //   native/dist/<platform>/
 // where <platform> matches the module suffix (e.g. linux-x64, darwin-arm64).

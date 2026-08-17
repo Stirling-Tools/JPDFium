@@ -102,7 +102,7 @@ class CorpusMetricsTest {
                 return;
             }
 
-            // ── Render + text extraction ──────────────────────────────────
+            // Render + text extraction
             long renderMs = 0;
             long renderAlloc = 0;
             int rendered = 0;
@@ -129,7 +129,7 @@ class CorpusMetricsTest {
             }
             renderedPages.addAndGet(rendered);
 
-            // ── Save round-trip ────────────────────────────────────────────
+            // Save round-trip
             final byte[][] saved = new byte[1][];
             CorpusTestSupport.Metrics saveMetrics = CorpusTestSupport.measure(
                     () -> saved[0] = doc.saveBytes());

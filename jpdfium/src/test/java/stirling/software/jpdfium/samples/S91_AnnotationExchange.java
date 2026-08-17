@@ -40,7 +40,7 @@ public class S91_AnnotationExchange {
             SampleBase.pdfHeader("S91_AnnotationExchange", input, fi + 1, inputs.size());
             Path outDir = SampleBase.out("S91_annotation-exchange", input);
 
-            // --- Part 1: Create annotated document ---
+            // Part 1: Create annotated document
             SampleBase.section("Create Annotated Document");
             Path annotatedPath = outDir.resolve(SampleBase.stem(input) + "-annotated.pdf");
             boolean hasAnnotated = false;
@@ -96,7 +96,7 @@ public class S91_AnnotationExchange {
 
             if (!hasAnnotated) continue;
 
-            // --- Part 2: Export to XFDF ---
+            // Part 2: Export to XFDF
             SampleBase.section("Export XFDF");
             try (PdfDocument doc = PdfDocument.open(annotatedPath)) {
                 String xfdf = PdfAnnotationExchange.exportXfdf(doc);
@@ -112,7 +112,7 @@ public class S91_AnnotationExchange {
                 if (lines.length > 15) System.out.println("    ... (" + (lines.length - 15) + " more lines)");
             }
 
-            // --- Part 3: Export to FDF ---
+            // Part 3: Export to FDF
             SampleBase.section("Export FDF");
             try (PdfDocument doc = PdfDocument.open(annotatedPath)) {
                 byte[] fdf = PdfAnnotationExchange.exportFdf(doc);
@@ -122,7 +122,7 @@ public class S91_AnnotationExchange {
                 System.out.printf("  FDF exported: %d bytes%n", fdf.length);
             }
 
-            // --- Part 4: Page-filtered export ---
+            // Part 4: Page-filtered export
             SampleBase.section("Page-Filtered Export");
             try (PdfDocument doc = PdfDocument.open(annotatedPath)) {
                 String xfdfPage0 = PdfAnnotationExchange.exportXfdf(doc, Set.of(0));
@@ -132,7 +132,7 @@ public class S91_AnnotationExchange {
                 System.out.printf("  Page 0 XFDF: %d bytes%n", xfdfPage0.length());
             }
 
-            // --- Part 5: Import XFDF into clean document ---
+            // Part 5: Import XFDF into clean document
             SampleBase.section("Import XFDF");
             try (PdfDocument target = PdfDocument.open(input)) {
                 String xfdf = Files.readString(
@@ -152,7 +152,7 @@ public class S91_AnnotationExchange {
                 produced.add(importedPath);
             }
 
-            // --- Part 6: Import FDF ---
+            // Part 6: Import FDF
             SampleBase.section("Import FDF");
             try (PdfDocument target = PdfDocument.open(input)) {
                 byte[] fdf = Files.readAllBytes(
@@ -167,7 +167,7 @@ public class S91_AnnotationExchange {
                 produced.add(fdfImportedPath);
             }
 
-            // --- Part 7: Round-trip verification ---
+            // Part 7: Round-trip verification
             SampleBase.section("Round-Trip Verification");
             try (PdfDocument original = PdfDocument.open(annotatedPath);
                  PdfDocument imported = PdfDocument.open(
@@ -191,7 +191,7 @@ public class S91_AnnotationExchange {
                         importCount >= origCount ? "OK" : "PARTIAL (some unsupported types)");
             }
 
-            // --- Part 8: Form XFDF ---
+            // Part 8: Form XFDF
             SampleBase.section("Form Fields XFDF");
             try (PdfDocument doc = PdfDocument.open(input)) {
                 String formXfdf = PdfAnnotationExchange.exportFormXfdf(doc);

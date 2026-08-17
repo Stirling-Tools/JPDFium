@@ -8,6 +8,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -190,7 +191,7 @@ public final class PdfLinkValidator {
                 return new LinkResult(pageIndex, url, LinkStatus.REDIRECT, status, location, elapsed);
             }
             return new LinkResult(pageIndex, url, LinkStatus.BROKEN, status, null, elapsed);
-        } catch (java.net.http.HttpTimeoutException e) {
+        } catch (HttpTimeoutException e) {
             return new LinkResult(pageIndex, url, LinkStatus.TIMEOUT, 0, null,
                     System.currentTimeMillis() - start);
         } catch (InterruptedException e) {
