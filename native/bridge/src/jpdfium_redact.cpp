@@ -118,7 +118,8 @@ static std::vector<uint16_t> u32_to_utf16le(const std::u32string& us) {
 // wchar_t width (16-bit on Windows, 32-bit elsewhere).
 static std::u32string fpdfWcharBufToU32(const FPDF_WCHAR* buf, size_t n) {
     std::u32string out;
-    for (size_t i = 0; i < n; i++) {
+    size_t i = 0;
+    while (i < n) {
         if (buf[i] == 0) break;
         uint32_t u = static_cast<uint32_t>(static_cast<std::make_unsigned_t<wchar_t>>(buf[i]));
         if (u >= 0xD800 && u <= 0xDBFF && i + 1 < n) {
@@ -126,11 +127,12 @@ static std::u32string fpdfWcharBufToU32(const FPDF_WCHAR* buf, size_t n) {
                 static_cast<uint32_t>(static_cast<std::make_unsigned_t<wchar_t>>(buf[i + 1]));
             if (lo >= 0xDC00 && lo <= 0xDFFF) {
                 out += static_cast<char32_t>(0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00));
-                i++;
+                i += 2;
                 continue;
             }
         }
         out += static_cast<char32_t>(u);
+        i++;
     }
     return out;
 }
@@ -1588,18 +1590,20 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 std::u32string gotW = fpdfWcharBufToU32(buf.data(), numChars);
                 if (gotW.empty()) return -1;  // cannot decode (inline fonts w/o encoding)
                 std::u32string expW;
-                for (size_t i = 0; i < expected.size(); i++) {
+                size_t i = 0;
+                while (i < expected.size()) {
                     if (expected[i] == 0) break;
                     if (expected[i] >= 0xD800 && expected[i] <= 0xDBFF && i + 1 < expected.size()) {
                         uint16_t lo = expected[i + 1];
                         if (lo >= 0xDC00 && lo <= 0xDFFF) {
                             expW += static_cast<char32_t>(0x10000 + ((expected[i] - 0xD800) << 10) +
                                                           (lo - 0xDC00));
-                            i++;
+                            i += 2;
                             continue;
                         }
                     }
                     expW += static_cast<char32_t>(expected[i]);
+                    i++;
                 }
                 return decomposeLigatures(gotW) == decomposeLigatures(expW) ? 1 : 0;
             };
