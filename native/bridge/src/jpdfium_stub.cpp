@@ -194,14 +194,10 @@ struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
     bool hasMutatedRedaction = false;
-    std::unordered_map<int64_t, int32_t> pagePendingMarks;
+    int32_t unappliedRedactMarksCount = 0;
 
     int32_t unappliedMarks() const {
-        int32_t sum = 0;
-        for (const auto& [page, count] : pagePendingMarks) {
-            sum += count;
-        }
-        return sum;
+        return unappliedRedactMarksCount;
     }
 };
 
@@ -238,13 +234,13 @@ void jpdfium_destroy() {}
 int32_t jpdfium_doc_create(int64_t* handle) {
     if (!handle) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
-    g_docs[*handle] = {"", {}, false, {}};
+    g_docs[*handle] = {"", {}, false, 0};
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}, false, {}};
+    g_docs[*handle] = {path ? path : "", {}, false, 0};
     return JPDFIUM_OK;
 }
 
@@ -253,13 +249,13 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     *handle = g_next_doc++;
     std::vector<uint8_t> bytes;
     bytes.assign(data, data + len);
-    g_docs[*handle] = {"", std::move(bytes), false, {}};
+    g_docs[*handle] = {"", std::move(bytes), false, 0};
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}, false, {}};
+    g_docs[*handle] = {path ? path : "", {}, false, 0};
     return JPDFIUM_OK;
 }
 
@@ -747,9 +743,7 @@ int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, ui
     int idx = g_page_annots[page]++;
     if (annot_index) *annot_index = idx;
     if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
-        if (auto pidx = g_page_idx.find(page); pidx != g_page_idx.end()) {
-            g_docs[it->second].pagePendingMarks[pidx->second] = g_page_annots[page];
-        }
+        g_docs[it->second].unappliedRedactMarksCount++;
     }
     return JPDFIUM_OK;
 }
@@ -767,9 +761,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     g_page_annots[page] += matches;
     if (match_count) *match_count = matches;
     if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
-        if (auto pidx = g_page_idx.find(page); pidx != g_page_idx.end()) {
-            g_docs[it->second].pagePendingMarks[pidx->second] = g_page_annots[page];
-        }
+        g_docs[it->second].unappliedRedactMarksCount += matches;
     }
     return JPDFIUM_OK;
 }
@@ -793,9 +785,8 @@ int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) noexcept {
     if (auto it = g_page_annots.find(page); it != g_page_annots.end() && it->second > 0) {
         --it->second;
         if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
-            if (auto pidx = g_page_idx.find(page); pidx != g_page_idx.end()) {
-                g_docs[dit->second].pagePendingMarks[pidx->second] = it->second;
-            }
+            g_docs[dit->second].unappliedRedactMarksCount =
+                std::max(0, g_docs[dit->second].unappliedRedactMarksCount - 1);
         }
     }
     return JPDFIUM_OK;
@@ -808,12 +799,8 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
         g_page_annots.erase(it);
     }
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
-        if (auto pidx = g_page_idx.find(page); pidx != g_page_idx.end()) {
-            if (count == 0) {
-                count = g_docs[dit->second].pagePendingMarks[pidx->second];
-            }
-            g_docs[dit->second].pagePendingMarks.erase(pidx->second);
-        }
+        g_docs[dit->second].unappliedRedactMarksCount =
+            std::max(0, g_docs[dit->second].unappliedRedactMarksCount - count);
         if (count > 0) {
             g_docs[dit->second].hasMutatedRedaction = true;
         }
@@ -830,12 +817,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t remove_content,
         g_page_annots.erase(it);
     }
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
-        if (auto pidx = g_page_idx.find(page); pidx != g_page_idx.end()) {
-            if (pending == 0) {
-                pending = g_docs[dit->second].pagePendingMarks[pidx->second];
-            }
-            g_docs[dit->second].pagePendingMarks.erase(pidx->second);
-        }
+        g_docs[dit->second].unappliedRedactMarksCount =
+            std::max(0, g_docs[dit->second].unappliedRedactMarksCount - pending);
         g_docs[dit->second].hasMutatedRedaction = true;
     }
     if (commit_count) *commit_count = pending;

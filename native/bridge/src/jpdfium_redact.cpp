@@ -19,7 +19,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <regex>
+
 #include <set>
 #include <sstream>
 #include <string>
@@ -39,6 +39,15 @@
 #include <graphemebreak.h>
 #endif
 
+#ifdef JPDFIUM_HAS_PCRE2
+// 32-bit code units: the redaction text pipeline is char32_t end-to-end
+// (wchar_t is platform-dependent - 32-bit on POSIX, 16-bit on Windows - and
+// was silently wrong on Windows before). PCRE2 32-bit matches char32_t
+// buffers directly (PCRE2_SPTR32 = const uint32_t*).
+#define PCRE2_CODE_UNIT_WIDTH 32
+#include <pcre2.h>
+#endif
+
 #ifdef JPDFIUM_HAS_FREETYPE
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -52,12 +61,11 @@ static void ensureFreeTypeInit() {
 }
 #endif
 
-// UTF-8 -> std::wstring (wchar_t is 32-bit on Linux/macOS - one code unit per
-// codepoint). Decodes DEFENSIVELY: a truncated multi-byte sequence at the end
-// of the buffer (FFI input from Java strings) must never read past the NUL
-// terminator; invalid sequences are dropped.
-static std::wstring utf8_to_wstring(const char* utf8) {
-    std::wstring result;
+// UTF-8 -> std::u32string. Decodes DEFENSIVELY: a truncated multi-byte
+// sequence at the end of the buffer (FFI input from Java strings) must never
+// read past the NUL terminator; invalid sequences are dropped.
+static std::u32string utf8_to_u32(const char* utf8) {
+    std::u32string result;
     const auto* s = reinterpret_cast<const uint8_t*>(utf8);
     while (*s) {
         uint32_t cp;
@@ -84,16 +92,16 @@ static std::wstring utf8_to_wstring(const char* utf8) {
             s++;  // invalid lead byte: skip
             continue;
         }
-        result += static_cast<wchar_t>(cp);
+        result += static_cast<char32_t>(cp);
     }
     return result;
 }
 
-// std::wstring -> UTF-16LE (for FPDFText_SetText on new text objects)
-static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
+// std::u32string -> UTF-16LE (for FPDFText_SetText on new text objects)
+static std::vector<uint16_t> u32_to_utf16le(const std::u32string& us) {
     std::vector<uint16_t> result;
-    for (wchar_t wc : ws) {
-        uint32_t cp = static_cast<uint32_t>(static_cast<std::make_unsigned_t<wchar_t>>(wc));
+    for (char32_t c : us) {
+        uint32_t cp = static_cast<uint32_t>(c);
         if (cp <= 0xFFFF) {
             result.push_back(static_cast<uint16_t>(cp));
         } else {
@@ -104,6 +112,28 @@ static std::vector<uint16_t> wstring_to_utf16le(const std::wstring& ws) {
     }
     result.push_back(0);  // null terminator
     return result;
+}
+
+// FPDFTextObj_GetText returns UTF-16LE code units in FPDF_WCHAR elements
+// (FPDF_WCHAR is wchar_t). Decode to char32_t regardless of the platform's
+// wchar_t width (16-bit on Windows, 32-bit elsewhere).
+static std::u32string fpdfWcharBufToU32(const FPDF_WCHAR* buf, size_t n) {
+    std::u32string out;
+    for (size_t i = 0; i < n; i++) {
+        if (buf[i] == 0) break;
+        uint32_t u = static_cast<uint32_t>(static_cast<std::make_unsigned_t<wchar_t>>(buf[i]));
+        if (u >= 0xD800 && u <= 0xDBFF && i + 1 < n) {
+            uint32_t lo = static_cast<uint32_t>(
+                static_cast<std::make_unsigned_t<wchar_t>>(buf[i + 1]));
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                out += static_cast<char32_t>(0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00));
+                i++;
+                continue;
+            }
+        }
+        out += static_cast<char32_t>(u);
+    }
+    return out;
 }
 
 // Shared redaction primitives
@@ -138,12 +168,12 @@ static float overlapRatio(float al, float ab, float ar, float at, float bl, floa
 // match text whose extraction produces ligature codepoints. Case semantics
 // are intentionally NOT touched here (the regex engine's icase flag keeps
 // its existing behavior).
-static std::wstring buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
-                                        std::vector<int>& normIdxMap) {
-    std::wstring norm;
+static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
+                                           std::vector<int>& normIdxMap) {
+    std::u32string norm;
     normIdxMap.clear();
 #ifdef JPDFIUM_HAS_ICU
-    static thread_local std::unordered_map<uint32_t, std::wstring> cache;
+    static thread_local std::unordered_map<uint32_t, std::u32string> cache;
     static const icu::Normalizer2* nfkc = [] {
         UErrorCode err = U_ZERO_ERROR;
         const icu::Normalizer2* n = icu::Normalizer2::getNFKCInstance(err);
@@ -158,26 +188,26 @@ static std::wstring buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
         if (uni == 0) continue;
         auto it = cache.find(uni);
         if (it == cache.end()) {
-            std::wstring in(1, static_cast<wchar_t>(uni));
-            icu::UnicodeString us =
-                icu::UnicodeString::fromUTF32(reinterpret_cast<const UChar32*>(in.data()), 1);
+            std::u32string in(1, static_cast<char32_t>(uni));
+            icu::UnicodeString us = icu::UnicodeString::fromUTF32(
+                reinterpret_cast<const UChar32*>(in.data()), 1);
             icu::UnicodeString out;
             UErrorCode err = U_ZERO_ERROR;
             nfkc->normalize(us, out, err);
-            std::wstring mapped;
+            std::u32string mapped;
             if (U_SUCCESS(err) && out.length() > 0) {
                 std::vector<UChar32> buf(out.length());
                 int32_t n32 = 0;
                 UErrorCode err2 = U_ZERO_ERROR;
                 out.toUTF32(buf.data(), buf.size(), err2);
                 n32 = U_SUCCESS(err2) ? out.countChar32() : 0;
-                for (int32_t k = 0; k < n32; k++) mapped += static_cast<wchar_t>(buf[k]);
+                for (int32_t k = 0; k < n32; k++) mapped += static_cast<char32_t>(buf[k]);
             }
             if (mapped.empty()) mapped = in;
             it = cache.emplace(uni, std::move(mapped)).first;
         }
-        for (wchar_t wc : it->second) {
-            norm += wc;
+        for (char32_t c : it->second) {
+            norm += c;
             normIdxMap.push_back(i);
         }
     }
@@ -188,7 +218,7 @@ static std::wstring buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
     for (int i = 0; i < count; ++i) {
         unsigned int uni = FPDFText_GetUnicode(textPage, i);
         if (uni == 0) continue;
-        norm += static_cast<wchar_t>(uni);
+        norm += static_cast<char32_t>(uni);
         normIdxMap.push_back(i);
     }
     return norm;
@@ -202,15 +232,15 @@ static std::wstring buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
 // character the font can only render as part of a ligature) changes the
 // fingerprint and is reported as an incomplete redaction instead of being
 // shipped as damaged text.
-static std::wstring survivingFingerprint(const std::wstring& normalizedText,
-                                         const std::vector<int>& normIdxMap,
-                                         const std::vector<char>& redactSet) {
-    std::wstring fp;
+static std::u32string survivingFingerprint(const std::u32string& normalizedText,
+                                            const std::vector<int>& normIdxMap,
+                                            const std::vector<char>& redactSet) {
+    std::u32string fp;
     fp.reserve(normIdxMap.size());
     for (size_t k = 0; k < normIdxMap.size(); k++) {
         int ci = normIdxMap[k];
         if (!redactSet.empty() && redactSet[ci]) continue;
-        wchar_t wc = normalizedText[k];
+        char32_t wc = normalizedText[k];
         // Printable, excluding guaranteed non-characters (U+FFFE/U+FFFF) and
         // the private-use area (U+E000-U+F8FF): PUA codepoints have no
         // portable meaning - most fonts cannot re-emit them, so fragments
@@ -242,32 +272,14 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
     int fmt = FPDFBitmap_GetFormat(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
     void* buf = FPDFBitmap_GetBuffer(bmp);
-    if (!buf || w <= 0 || h <= 0 || stride <= 0) {
+    if (!buf || w <= 0 || h <= 0) {
         FPDFBitmap_Destroy(bmp);
         return false;
     }
-    // PDFium bitmap formats:
-    // FPDFBitmap_Gray = 1 (1 byte per pixel)
-    // FPDFBitmap_BGR  = 2 (3 bytes per pixel, BGR)
-    // FPDFBitmap_BGRx = 3 (4 bytes per pixel, BGRx)
-    // FPDFBitmap_BGRA = 4 (4 bytes per pixel, BGRA)
-    int bpp = 0;
-    if (fmt == 1) {
-        bpp = 1;
-    } else if (fmt == 2) {
-        bpp = 3;
-    } else if (fmt == 3 || fmt == 4) {
-        bpp = 4;
-    } else {
-        // Unknown or 1-bit format: return false so caller falls back to removing the whole image
-        FPDFBitmap_Destroy(bmp);
-        return false;
-    }
-
+    int bpp = (fmt == FPDFBitmap_BGR) ? 3 : 4;
     unsigned int r = (argb >> 16) & 0xFF;
     unsigned int g = (argb >> 8) & 0xFF;
     unsigned int b = argb & 0xFF;
-    uint8_t gray = static_cast<uint8_t>((r * 299 + g * 587 + b * 114) / 1000);
 
     // Image -> page transform (row-vector convention). Iterating image
     // pixels forward avoids inverse-matrix precision issues at edges.
@@ -282,20 +294,12 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
             double px = ux * ix + uy * iy + e;
             double py = vx * ix + vy * iy + f;
             if (px < rx || px > rr || py < ry || py > rt) continue;
-            size_t offset = static_cast<size_t>(iy) * stride + static_cast<size_t>(ix) * bpp;
-            uint8_t* p = static_cast<uint8_t*>(buf) + offset;
-            if (bpp == 1) {
-                p[0] = gray;
-            } else if (bpp == 3) {
-                p[0] = static_cast<uint8_t>(b);
-                p[1] = static_cast<uint8_t>(g);
-                p[2] = static_cast<uint8_t>(r);
-            } else {
-                p[0] = static_cast<uint8_t>(b);
-                p[1] = static_cast<uint8_t>(g);
-                p[2] = static_cast<uint8_t>(r);
-                if (fmt == 4) p[3] = 255;
-            }
+            uint8_t* p = static_cast<uint8_t*>(buf) + static_cast<size_t>(iy) * stride +
+                         static_cast<size_t>(ix) * bpp;
+            p[0] = static_cast<uint8_t>(b);
+            p[1] = static_cast<uint8_t>(g);
+            p[2] = static_cast<uint8_t>(r);
+            if (bpp == 4) p[3] = 255;
             changed = true;
         }
     }
@@ -328,29 +332,29 @@ static bool charInRect(double l, double b, double r, double t, float rl, float r
 // component characters. This prevents encoding round-trip failures where
 // FPDFText_GetUnicode returns a ligature codepoint that can't be reverse-
 // mapped back to a charcode by the font's encoding dictionary.
-static std::wstring decomposeLigatures(const std::wstring& input) {
-    std::wstring result;
+static std::u32string decomposeLigatures(const std::u32string& input) {
+    std::u32string result;
     result.reserve(input.size() + 8);
-    for (wchar_t wc : input) {
+    for (char32_t wc : input) {
         switch (static_cast<uint32_t>(wc)) {
             case 0xFB00:
-                result += L"ff";
+                result += U"ff";
                 break;  // ff
             case 0xFB01:
-                result += L"fi";
+                result += U"fi";
                 break;  // fi
             case 0xFB02:
-                result += L"fl";
+                result += U"fl";
                 break;  // fl
             case 0xFB03:
-                result += L"ffi";
+                result += U"ffi";
                 break;  // ffi
             case 0xFB04:
-                result += L"ffl";
+                result += U"ffl";
                 break;    // ffl
             case 0xFB05:  // long-s t
             case 0xFB06:
-                result += L"st";
+                result += U"st";
                 break;  // st
             default:
                 result += wc;
@@ -447,8 +451,12 @@ static constexpr FS_MATRIX kIdentityMatrix{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
 // forms (see CharPositionFidelityTest / native verification harness).
 static FS_MATRIX concatMatrix(const FS_MATRIX& m, const FS_MATRIX& t) {
     return FS_MATRIX{
-        m.a * t.a + m.b * t.c, m.a * t.b + m.b * t.d,       m.c * t.a + m.d * t.c,
-        m.c * t.b + m.d * t.d, m.e * t.a + m.f * t.c + t.e, m.e * t.b + m.f * t.d + t.f,
+        m.a * t.a + m.b * t.c,
+        m.a * t.b + m.b * t.d,
+        m.c * t.a + m.d * t.c,
+        m.c * t.b + m.d * t.d,
+        m.e * t.a + m.f * t.c + t.e,
+        m.e * t.b + m.f * t.d + t.f,
     };
 }
 
@@ -462,8 +470,8 @@ static bool isStandard14Font(FPDF_FONT font) {
     if (FPDFFont_GetFontData(font, nullptr, 0, &len) && len > 0) return false;  // embedded
     char name[128] = {0};
     if (FPDFFont_GetBaseFontName(font, name, sizeof name) == 0) return false;
-    static const char* const kStandard[] = {"Courier", "Helvetica", "Times", "Symbol",
-                                            "ZapfDingbats"};
+    static const char* const kStandard[] = {
+        "Courier", "Helvetica", "Times", "Symbol", "ZapfDingbats"};
     for (const char* s : kStandard) {
         if (strncmp(name, s, strlen(s)) == 0) return true;
     }
@@ -531,8 +539,8 @@ struct TextMatch {
 // object.  Each fragment becomes its own independent FPDF_PAGEOBJECT, pinned
 // to the exact absolute page-space coordinates of its first character.
 struct TextFragment {
-    std::vector<uint16_t> utf16;            // UTF-16LE null-terminated text (original codepoints)
-    std::vector<uint16_t> utf16Ligated;     // origin-sharing pairs recombined into U+FB00-FB06
+    std::vector<uint16_t> utf16;  // UTF-16LE null-terminated text (original codepoints)
+    std::vector<uint16_t> utf16Ligated;  // origin-sharing pairs recombined into U+FB00-FB06
     std::vector<uint16_t> utf16Decomposed;  // ligature-decomposed variant (empty if identical)
     FS_MATRIX matrix;  // page space: linear part from FPDFText_GetMatrix (includes
                        // rotation, Tz and the form chain), e/f from FPDFText_GetCharOrigin
@@ -639,8 +647,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     std::unordered_map<uintptr_t, int> objPtrToIndex;
     objPtrToIndex.reserve(static_cast<size_t>(objCount) * 2);
 
-    std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, FPDF_PAGEOBJECT, int, int)>
-        indexFormChildren;
+    std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, FPDF_PAGEOBJECT, int, int)> indexFormChildren;
     indexFormChildren = [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& formToPage,
                             FPDF_PAGEOBJECT topFormObj, int topFormPageIndex, int depth) {
         // PDFium's own parser stops form recursion at 40 levels
@@ -704,8 +711,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     }
 
     struct CharInfo {
-        int ownerObj;          // index into allObjs (-1 = unmapped)
-        bool isGenerated;      // FPDFText_IsGenerated
+        int ownerObj;      // index into allObjs (-1 = unmapped)
+        bool isGenerated;  // FPDFText_IsGenerated
         unsigned int unicode;  // cached FPDFText_GetUnicode result
     };
     std::vector<CharInfo> charInfo(totalChars);
@@ -787,7 +794,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         }
         if (lastPrintable <= firstNonWS) return std::nullopt;
 
-        std::wstring ws;
+        std::u32string ws;
         bool unicodeUnreliable = false;
         double eMinX = std::numeric_limits<double>::max();
         double eMinY = std::numeric_limits<double>::max();
@@ -798,7 +805,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // U+FFFE/U+FFFF are guaranteed non-characters (no Unicode mapping,
             // no glyph to reproduce) - they cannot be carried into a fragment
             // by any of the three encoding strategies.
-            if (uni >= 0x20 && uni < 0xFFFE) ws += static_cast<wchar_t>(uni);
+            if (uni >= 0x20 && uni < 0xFFFE) ws += static_cast<char32_t>(uni);
             // A broken ToUnicode mapping makes the extracted codepoint
             // unreliable: SetText cannot round-trip it, so the fragment
             // creation skips Strategy A for this run.
@@ -822,10 +829,10 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         // Keep the original codepoints (ligatures included - they render with
         // the ligature glyph and advance) and carry a decomposed variant as
         // a fallback for fonts that only map the component characters.
-        std::wstring wsDecomposed = decomposeLigatures(ws);
-        outFrag.utf16 = wstring_to_utf16le(ws);
+        std::u32string wsDecomposed = decomposeLigatures(ws);
+        outFrag.utf16 = u32_to_utf16le(ws);
         if (wsDecomposed != ws) {
-            outFrag.utf16Decomposed = wstring_to_utf16le(wsDecomposed);
+            outFrag.utf16Decomposed = u32_to_utf16le(wsDecomposed);
         }
 
         // Characters that SHARE an origin come from one glyph (a ligature
@@ -835,7 +842,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         {
             std::vector<size_t> runIdx;
             for (size_t i = firstNonWS; i < lastPrintable; i++) runIdx.push_back(i);
-            std::wstring ligated = ws;
+            std::u32string ligated = ws;
             size_t li = 0;
             while (li + 1 < ligated.size()) {
                 size_t ri = runIdx[li], ri2 = runIdx[li + 1];
@@ -847,30 +854,26 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     li++;
                     continue;
                 }
-                std::wstring pair = ligated.substr(li, 2);
-                wchar_t lig = 0;
+                std::u32string pair = ligated.substr(li, 2);
+                char32_t lig = 0;
                 size_t n = 2;
-                if (pair == L"ff" || pair == L"fi" || pair == L"fl" || pair == L"st") {
+                if (pair == U"ff" || pair == U"fi" || pair == U"fl" || pair == U"st") {
                     // Check for the three-char forms (ffi/ffl) first: all
                     // three components must share the origin.
-                    if ((pair == L"ff") && li + 2 < ligated.size() &&
-                        (ligated[li + 2] == L'i' || ligated[li + 2] == L'l')) {
+                    if ((pair == U"ff") && li + 2 < ligated.size() &&
+                        (ligated[li + 2] == U'i' || ligated[li + 2] == U'l')) {
                         double ox3, oy3;
                         if (FPDFText_GetCharOrigin(textPage, run[runIdx[li + 2]], &ox3, &oy3) &&
                             std::abs(ox1 - ox3) <= 0.01 && std::abs(oy1 - oy3) <= 0.01) {
-                            lig = (ligated[li + 2] == L'i') ? 0xFB03 : 0xFB04;
+                            lig = (ligated[li + 2] == U'i') ? 0xFB03 : 0xFB04;
                             n = 3;
                         }
                     }
                     if (!lig) {
-                        if (pair == L"ff")
-                            lig = 0xFB00;
-                        else if (pair == L"fi")
-                            lig = 0xFB01;
-                        else if (pair == L"fl")
-                            lig = 0xFB02;
-                        else if (pair == L"st")
-                            lig = 0xFB06;
+                        if (pair == U"ff") lig = 0xFB00;
+                        else if (pair == U"fi") lig = 0xFB01;
+                        else if (pair == U"fl") lig = 0xFB02;
+                        else if (pair == U"st") lig = 0xFB06;
                     }
                 }
                 if (lig) {
@@ -882,7 +885,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 }
             }
             if (ligated != ws) {
-                outFrag.utf16Ligated = wstring_to_utf16le(ligated);
+                outFrag.utf16Ligated = u32_to_utf16le(ligated);
             }
         }
         outFrag.unicodeUnreliable = unicodeUnreliable;
@@ -1034,12 +1037,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
     auto extractSubpaths = [](FPDF_PAGEOBJECT path, int segCount) -> std::vector<Subpath> {
         std::vector<Subpath> subpaths;
-        Subpath current = {0,
-                           0,
-                           std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::lowest(),
-                           std::numeric_limits<float>::lowest()};
+        Subpath current = {0, 0, std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
         bool started = false;
 
         for (int s = 0; s < segCount; s++) {
@@ -1054,12 +1053,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 // Finish previous subpath
                 current.endIdx = s;
                 subpaths.push_back(current);
-                current = {s,
-                           0,
-                           std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::max(),
-                           std::numeric_limits<float>::lowest(),
-                           std::numeric_limits<float>::lowest()};
+                current = {s, 0, std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
             }
 
             started = true;
@@ -1115,61 +1110,61 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // to the geometric rule.
     std::function<void(FPDF_PAGEOBJECT, const FS_MATRIX&, int)> markFormContents =
         [&](FPDF_PAGEOBJECT formObj, const FS_MATRIX& parentToPage, int depth) {
-            if (depth > kMaxFormNesting) return;
-            int childCount = FPDFFormObj_CountObjects(formObj);
-            if (childCount <= 0) return;
+        if (depth > kMaxFormNesting) return;
+        int childCount = FPDFFormObj_CountObjects(formObj);
+        if (childCount <= 0) return;
 
-            for (int ci = childCount - 1; ci >= 0; ci--) {
-                FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
-                if (!child) continue;
+        for (int ci = childCount - 1; ci >= 0; ci--) {
+            FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(formObj, ci);
+            if (!child) continue;
 
-                int childType = FPDFPageObj_GetType(child);
+            int childType = FPDFPageObj_GetType(child);
 
-                if (childType == FPDF_PAGEOBJ_FORM) {
-                    FS_MATRIX childMatrix;
-                    if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
-                        // The child form matrix applies FIRST, then the parent
-                        // chain (matches CPDF_TextPage::ProcessFormObject).
-                        markFormContents(child, concatMatrix(childMatrix, parentToPage), depth + 1);
-                    }
-                }
-
-                // Text children with mapped chars are fission's responsibility.
-                if (childType == FPDF_PAGEOBJ_TEXT) {
-                    auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
-                    if (pit != objPtrToIndex.end() && !objChars[pit->second].empty()) continue;
-                }
-
-                float cl, cb, cr, ct;
-                if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
-
-                // Transform child bounds through the parent-to-page matrix
-                float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
-                float tMinX = std::numeric_limits<float>::max();
-                float tMinY = std::numeric_limits<float>::max();
-                float tMaxX = std::numeric_limits<float>::lowest();
-                float tMaxY = std::numeric_limits<float>::lowest();
-                for (auto& c : corners) {
-                    float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
-                    float ty = parentToPage.b * c[0] + parentToPage.d * c[1] + parentToPage.f;
-                    if (tx < tMinX) tMinX = tx;
-                    if (ty < tMinY) tMinY = ty;
-                    if (tx > tMaxX) tMaxX = tx;
-                    if (ty > tMaxY) tMaxY = ty;
-                }
-
-                // Check overlap with any match bbox
-                for (auto& m : matches) {
-                    if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
-                                         m.bboxT) ||
-                        overlapRatio(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
-                                     m.bboxT) > 0.70f) {
-                        objsToDestroy.insert(child);
-                        break;
-                    }
+            if (childType == FPDF_PAGEOBJ_FORM) {
+                FS_MATRIX childMatrix;
+                if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
+                    // The child form matrix applies FIRST, then the parent
+                    // chain (matches CPDF_TextPage::ProcessFormObject).
+                    markFormContents(child, concatMatrix(childMatrix, parentToPage), depth + 1);
                 }
             }
-        };
+
+            // Text children with mapped chars are fission's responsibility.
+            if (childType == FPDF_PAGEOBJ_TEXT) {
+                auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
+                if (pit != objPtrToIndex.end() && !objChars[pit->second].empty()) continue;
+            }
+
+            float cl, cb, cr, ct;
+            if (!FPDFPageObj_GetBounds(child, &cl, &cb, &cr, &ct)) continue;
+
+            // Transform child bounds through the parent-to-page matrix
+            float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
+            float tMinX = std::numeric_limits<float>::max();
+            float tMinY = std::numeric_limits<float>::max();
+            float tMaxX = std::numeric_limits<float>::lowest();
+            float tMaxY = std::numeric_limits<float>::lowest();
+            for (auto& c : corners) {
+                float tx = parentToPage.a * c[0] + parentToPage.c * c[1] + parentToPage.e;
+                float ty = parentToPage.b * c[0] + parentToPage.d * c[1] + parentToPage.f;
+                if (tx < tMinX) tMinX = tx;
+                if (ty < tMinY) tMinY = ty;
+                if (tx > tMaxX) tMaxX = tx;
+                if (ty > tMaxY) tMaxY = ty;
+            }
+
+            // Check overlap with any match bbox
+            for (auto& m : matches) {
+                if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                     m.bboxT) ||
+                    overlapRatio(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                 m.bboxT) > 0.70f) {
+                    objsToDestroy.insert(child);
+                    break;
+                }
+            }
+        }
+    };
 
     // All page-level insertions (fission fragments, rebuilt paths) are
     // collected here and applied later in one pass, ordered by the original
@@ -1439,8 +1434,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Wholesale-marked ancestor suppression (Bug A2):
     // If an ancestor form was marked for destruction, erase any fission plans
     // for text within it so fragments of "surviving" text are not emitted on the page.
-    std::erase_if(plans,
-                  [&](const FissionPlan& plan) { return hasMarkedAncestor(plan.originalObj); });
+    std::erase_if(plans, [&](const FissionPlan& plan) {
+        return hasMarkedAncestor(plan.originalObj);
+    });
 
     // 7. Apply fission: create fragment objects BEFORE removing originals.
     //
@@ -1536,7 +1532,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // text page is still valid here (all removals happen later).
             //
             // Returns: 1 = verified match, 0 = verified mismatch,
-            // 1 = cannot decode (inline fonts without a usable encoding)
+            // -1 = cannot decode (inline fonts without a usable encoding) -
             // in that case only the bounds check validates the fragment.
             auto fragmentTextStatus = [&](FPDF_PAGEOBJECT obj,
                                           const std::vector<uint16_t>& expected) -> int {
@@ -1546,16 +1542,21 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 std::vector<FPDF_WCHAR> buf(numChars, 0);
                 if (FPDFTextObj_GetText(obj, textPage, buf.data(), needBytes) != needBytes)
                     return -1;
-                std::wstring gotW;
-                for (size_t i = 0; i < numChars; i++) {
-                    if (buf[i] == 0) break;  // NUL before content: nothing decoded
-                    gotW += static_cast<wchar_t>(buf[i]);
-                }
+                std::u32string gotW = fpdfWcharBufToU32(buf.data(), numChars);
                 if (gotW.empty()) return -1;  // cannot decode (inline fonts w/o encoding)
-                std::wstring expW;
+                std::u32string expW;
                 for (size_t i = 0; i < expected.size(); i++) {
                     if (expected[i] == 0) break;
-                    expW += static_cast<wchar_t>(expected[i]);
+                    if (expected[i] >= 0xD800 && expected[i] <= 0xDBFF && i + 1 < expected.size()) {
+                        uint16_t lo = expected[i + 1];
+                        if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                            expW += static_cast<char32_t>(0x10000 + ((expected[i] - 0xD800) << 10) +
+                                                          (lo - 0xDC00));
+                            i++;
+                            continue;
+                        }
+                    }
+                    expW += static_cast<char32_t>(expected[i]);
                 }
                 return decomposeLigatures(gotW) == decomposeLigatures(expW) ? 1 : 0;
             };
@@ -1579,10 +1580,11 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // components), then the original codepoints, then the decomposed
             // variant.
             if (!frag.unicodeUnreliable) {
-                for (const auto* cand : {&frag.utf16Ligated, &frag.utf16, &frag.utf16Decomposed}) {
+                for (const auto* cand : {&frag.utf16Ligated, &frag.utf16,
+                                         &frag.utf16Decomposed}) {
                     if (cand->empty()) continue;
-                    textOk =
-                        FPDFText_SetText(fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
+                    textOk = FPDFText_SetText(
+                        fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
                     if (!textOk) continue;
                     emissionStatus = fragmentTextStatus(fragObj, *cand);
                     if (emissionStatus != 0) break;  // 1 verified, -1 width-gated
@@ -1603,7 +1605,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                         std::vector<uint32_t> codes;
                         bool allMapped = true;
                         for (size_t i = 0; i + 1 < cand->size(); i++) {
-                            auto git = ftInfo.unicodeToGid.find(static_cast<uint32_t>((*cand)[i]));
+                            auto git =
+                                ftInfo.unicodeToGid.find(static_cast<uint32_t>((*cand)[i]));
                             if (git != ftInfo.unicodeToGid.end() && git->second != 0) {
                                 if (!ftInfo.isCidKeyed && git->second > 0xFF) {
                                     allMapped = false;
@@ -1726,8 +1729,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 targetInsertIndex = plan.pageIndex;
             }
             for (size_t k = 0; k < createdObjs.size(); k++) {
-                insertions.push_back(
-                    {createdObjs[k], targetInsertIndex, plan.ordinal, static_cast<int>(k)});
+                insertions.push_back({createdObjs[k], targetInsertIndex, plan.ordinal,
+                                      static_cast<int>(k)});
             }
         } else {
             // Fission failed -> destroy created fragments, keep original.
@@ -1782,16 +1785,17 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Shallowest first: page-level objects (depth 0) before form children;
     // tie-break by global index so destruction order (and thus output bytes)
     // is deterministic across runs.
-    std::sort(destroyList.begin(), destroyList.end(), [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
-        auto ia = objPtrToIndex.find(reinterpret_cast<uintptr_t>(a));
-        auto ib = objPtrToIndex.find(reinterpret_cast<uintptr_t>(b));
-        int da = ia != objPtrToIndex.end() ? allObjs[ia->second].depth : 0;
-        int db = ib != objPtrToIndex.end() ? allObjs[ib->second].depth : 0;
-        if (da != db) return da < db;
-        int ga = ia != objPtrToIndex.end() ? ia->second : 0;
-        int gb = ib != objPtrToIndex.end() ? ib->second : 0;
-        return ga < gb;
-    });
+    std::sort(destroyList.begin(), destroyList.end(),
+              [&](FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
+                  auto ia = objPtrToIndex.find(reinterpret_cast<uintptr_t>(a));
+                  auto ib = objPtrToIndex.find(reinterpret_cast<uintptr_t>(b));
+                  int da = ia != objPtrToIndex.end() ? allObjs[ia->second].depth : 0;
+                  int db = ib != objPtrToIndex.end() ? allObjs[ib->second].depth : 0;
+                  if (da != db) return da < db;
+                  int ga = ia != objPtrToIndex.end() ? ia->second : 0;
+                  int gb = ib != objPtrToIndex.end() ? ib->second : 0;
+                  return ga < gb;
+              });
 
     // Pre-compute the skip set while every pointer in the parent chain is
     // still alive (ancestors are destroyed first, so the chain cannot be
@@ -1929,64 +1933,240 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     return JPDFIUM_OK;
 }
 
-// Helper: run regex over extracted text -> produce TextMatch vector.
-// wtext + idxMap must already be populated (see callers).
-static void collectRegexMatches(FPDF_TEXTPAGE textPage, const std::wstring& wtext,
-                                const std::vector<int>& idxMap, const std::wregex& wre,
+// PCRE2 matching layer (replaces std::wregex entirely).
+//
+// ReDoS hardening: match_limit caps backtracking work (default 1M), depth_limit
+// caps recursion depth (default 1000), and JIT matching enforces the limits
+// via the match context. PCRE2_UTF|PCRE2_UCP make \w/\d/\b Unicode-correct
+// (fixes e.g. "Müller" whole-word false-positives).
+#ifdef JPDFIUM_HAS_PCRE2
+struct Pcre2Pattern {
+    pcre2_code* code = nullptr;
+    pcre2_match_data* md = nullptr;
+    pcre2_match_context* mctx = nullptr;
+    pcre2_jit_stack* jst = nullptr;
+
+    Pcre2Pattern() = default;
+    Pcre2Pattern(const Pcre2Pattern&) = delete;
+    Pcre2Pattern& operator=(const Pcre2Pattern&) = delete;
+    Pcre2Pattern(Pcre2Pattern&& o) noexcept
+        : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst) {
+        o.code = nullptr;
+        o.md = nullptr;
+        o.mctx = nullptr;
+        o.jst = nullptr;
+    }
+    ~Pcre2Pattern() {
+        if (jst) pcre2_jit_stack_free(jst);
+        if (mctx) pcre2_match_context_free(mctx);
+        if (md) pcre2_match_data_free(md);
+        if (code) pcre2_code_free(code);
+    }
+    bool valid() const { return code && md && mctx; }
+};
+
+static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
+static constexpr uint32_t kPcre2DepthLimit = 1'000u;
+
+// Compile a u32 pattern. caseless==true adds PCRE2_CASELESS. JIT-compiles the
+// complete match. Returns false (and fills err) on compile failure.
+static bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& out,
+                         std::string& err) {
+    int errcode = 0;
+    PCRE2_SIZE erroffset = 0;
+    uint32_t flags = PCRE2_UTF | PCRE2_UCP;
+    if (caseless) flags |= PCRE2_CASELESS;
+    pcre2_code* code = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(pattern.data()),
+                                     pattern.size(), flags, &errcode, &erroffset, nullptr);
+    if (!code) {
+        PCRE2_UCHAR msg[256];
+        pcre2_get_error_message(errcode, msg, sizeof(msg) / sizeof(msg[0]));
+        err.assign(reinterpret_cast<char*>(msg));
+        return false;
+    }
+    if (pcre2_jit_compile(code, PCRE2_JIT_COMPLETE) < 0) {
+        // JIT failure is not fatal: the interpreter fallback still respects
+        // the match limits, just slower.
+        err = "JIT unavailable";
+    }
+    pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
+    if (!md) {
+        pcre2_code_free(code);
+        return false;
+    }
+    pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+    if (!mctx) {
+        pcre2_match_data_free(md);
+        pcre2_code_free(code);
+        return false;
+    }
+    pcre2_set_match_limit(mctx, kPcre2MatchLimit);
+    pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+    // JIT stack 32KB initial / 512KB max; freed by the Pcre2Pattern destructor.
+    pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
+    if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
+    out.code = code;
+    out.md = md;
+    out.mctx = mctx;
+    out.jst = jst;
+    return true;
+}
+#endif
+
+// Rebuild a TextMatch bbox from its char indices (used after grapheme or
+// cluster extension so the painted cover encloses everything removed).
+static bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
+    double xmin = std::numeric_limits<double>::max();
+    double ymin = std::numeric_limits<double>::max();
+    double xmax = std::numeric_limits<double>::lowest();
+    double ymax = std::numeric_limits<double>::lowest();
+    bool any = false;
+    for (int ci : m.charIndices) {
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;
+        any = true;
+        if (l < xmin) xmin = l;
+        if (b < ymin) ymin = b;
+        if (r > xmax) xmax = r;
+        if (t > ymax) ymax = t;
+    }
+    if (!any) return false;
+    m.bboxL = static_cast<float>(xmin);
+    m.bboxB = static_cast<float>(ymin);
+    m.bboxR = static_cast<float>(xmax);
+    m.bboxT = static_cast<float>(ymax);
+    return true;
+}
+
+// Append the chars covered by a PCRE2 match [start,start+len) of the search
+// buffer into a TextMatch, computing the tight bbox.
+static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idxMap, int start,
+                             int len, float padding, std::vector<TextMatch>& out) {
+    TextMatch tm;
+    double xmin = std::numeric_limits<double>::max();
+    double ymin = std::numeric_limits<double>::max();
+    double xmax = std::numeric_limits<double>::lowest();
+    double ymax = std::numeric_limits<double>::lowest();
+    bool anyBox = false;
+    for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
+        int ci = idxMap[k];
+        tm.charIndices.push_back(ci);
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;  // skip unmapped
+        anyBox = true;
+        if (l < xmin) xmin = l;
+        if (b < ymin) ymin = b;
+        if (r > xmax) xmax = r;
+        if (t > ymax) ymax = t;
+    }
+    if (!anyBox) return;
+    xmin -= padding;
+    ymin -= padding;
+    xmax += padding;
+    ymax += padding;
+    tm.bboxL = static_cast<float>(xmin);
+    tm.bboxB = static_cast<float>(ymin);
+    tm.bboxR = static_cast<float>(xmax);
+    tm.bboxT = static_cast<float>(ymax);
+    out.push_back(std::move(tm));
+}
+
+#ifdef JPDFIUM_HAS_PCRE2
+// Run a compiled PCRE2 pattern over the search buffer -> TextMatch vector.
+// Non-overlapping matches (same iteration model as wsregex_iterator).
+static void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
+                                const std::vector<int>& idxMap, const Pcre2Pattern& pc,
                                 float padding, std::vector<TextMatch>& out) {
-    auto it = std::wsregex_iterator(wtext.begin(), wtext.end(), wre);
-    auto end = std::wsregex_iterator();
-
-    for (; it != end; ++it) {
-        int start = static_cast<int>((*it).position());
-        int len = static_cast<int>((*it).length());
-        if (len == 0) continue;
-
-        TextMatch tm;
-        double xmin = std::numeric_limits<double>::max();
-        double ymin = std::numeric_limits<double>::max();
-        double xmax = std::numeric_limits<double>::lowest();
-        double ymax = std::numeric_limits<double>::lowest();
-
-        for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
-            int ci = idxMap[k];
-            tm.charIndices.push_back(ci);
-
-            double l, r, b, t;
-            if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;  // skip unmapped
-            if (l < xmin) xmin = l;
-            if (b < ymin) ymin = b;
-            if (r > xmax) xmax = r;
-            if (t > ymax) ymax = t;
+    size_t offset = 0;
+    while (offset <= text.size()) {
+        int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
+                             offset, 0, pc.md, pc.mctx);
+        if (rc == PCRE2_ERROR_NOMATCH) break;
+        if (rc < 0) break;  // error (limit exceeded): report what matched so far
+        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
+        PCRE2_SIZE start = ov[0];
+        PCRE2_SIZE end = ov[1];
+        if (end <= start) {
+            // Zero-length match: advance one code unit (regex_iterator model).
+            offset = start + 1;
+            continue;
         }
-
-        if (xmin > xmax || ymin > ymax) continue;
-
-        // Apply padding
-        xmin -= padding;
-        ymin -= padding;
-        xmax += padding;
-        ymax += padding;
-
-        tm.bboxL = static_cast<float>(xmin);
-        tm.bboxB = static_cast<float>(ymin);
-        tm.bboxR = static_cast<float>(xmax);
-        tm.bboxT = static_cast<float>(ymax);
-        out.push_back(std::move(tm));
+        appendMatchChars(textPage, idxMap, static_cast<int>(start),
+                         static_cast<int>(end - start), padding, out);
+        offset = end;
     }
 }
+
+// Escape regex metacharacters for literal matching.
+static std::u32string escapeLiteral(const std::u32string& raw) {
+    std::u32string out;
+    for (char32_t ch : raw) {
+        if (ch == U'\\' || ch == U'^' || ch == U'$' || ch == U'.' || ch == U'|' || ch == U'?' ||
+            ch == U'*' || ch == U'+' || ch == U'(' || ch == U')' || ch == U'[' || ch == U']' ||
+            ch == U'{' || ch == U'}') {
+            out += U'\\';
+        }
+        out += ch;
+    }
+    return out;
+}
+
+// Build ONE combined alternation for a literal word list, using capturing
+// groups so the matched alternative is recoverable from the ovector.
+// groupToWord maps group numbers (1-based) to word indices. Returns false if
+// no literal could be embedded.
+// Decimal digits of |v| as u32 chars (std::to_wstring is wchar_t-based and
+// platform-width dependent).
+static std::u32string u32Digits(uint32_t v) {
+    if (v == 0) return U"0";
+    std::u32string out;
+    while (v > 0) {
+        out.insert(out.begin(), static_cast<char32_t>(U'0' + (v % 10)));
+        v /= 10;
+    }
+    return out;
+}
+
+static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool wholeWord,
+                                    std::u32string& pattern, std::vector<int>& groupToWord) {
+    std::u32string body;
+    groupToWord.clear();
+    for (int32_t wi = 0; wi < wordCount; wi++) {
+        if (!words[wi]) continue;
+        std::u32string esc = escapeLiteral(utf8_to_u32(words[wi]));
+        if (esc.empty()) continue;
+        body += U"(?<w";
+        body += u32Digits(static_cast<uint32_t>(wi));
+        body += U">";
+        body += esc;
+        body += U")|";
+        groupToWord.push_back(wi);
+    }
+    if (groupToWord.empty()) return false;
+    body.pop_back();  // trailing '|'
+    pattern.clear();
+    if (wholeWord) pattern += U"\\b";
+    pattern += U"(?:";
+    pattern += body;
+    pattern += U")";
+    if (wholeWord) pattern += U"\\b";
+    return true;
+}
+#endif
 
 // Snap each match span to grapheme-cluster boundaries: a redaction boundary
 // that splits a grapheme (base + combining mark, emoji ZWJ sequences) leaves
 // dangling marks in the surviving fragments. Expanding to the full cluster is
-// the secure default.
-static void alignMatchesToGraphemes(const std::vector<uint32_t>& unicodeSeq,
+// the secure default. The match bbox is recomputed so the painted cover
+// encloses everything removed.
+static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage,
+                                    const std::vector<uint32_t>& unicodeSeq,
                                     std::vector<TextMatch>& matches) {
 #ifdef JPDFIUM_HAS_UNIBREAK
     if (unicodeSeq.empty() || matches.empty()) return;
     std::vector<char> brks(unicodeSeq.size(), 0);
-    set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()), unicodeSeq.size(),
-                             "", brks.data());
+    set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()),
+                             unicodeSeq.size(), "", brks.data());
     // brks[i] = whether a break exists BEFORE char i.
     for (auto& m : matches) {
         int first = -1, last = -1;
@@ -2004,7 +2184,12 @@ static void alignMatchesToGraphemes(const std::vector<uint32_t>& unicodeSeq,
         // Rebuild the (possibly extended) char index list.
         m.charIndices.clear();
         for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
+        recomputeMatchBbox(textPage, m);
     }
+#else
+    (void)textPage;
+    (void)unicodeSeq;
+    (void)matches;
 #endif
 }
 
@@ -2030,8 +2215,9 @@ static bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
         if (!obj || excluded.count(obj)) continue;
         int type = FPDFPageObj_GetType(obj);
-        if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE && type != FPDF_PAGEOBJ_PATH &&
-            type != FPDF_PAGEOBJ_SHADING && type != FPDF_PAGEOBJ_FORM)
+        if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE &&
+            type != FPDF_PAGEOBJ_PATH && type != FPDF_PAGEOBJ_SHADING &&
+            type != FPDF_PAGEOBJ_FORM)
             continue;
 
         // Clipping paths (draw mode none, no stroke) paint nothing and carry
@@ -2041,8 +2227,8 @@ static bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>
         if (type == FPDF_PAGEOBJ_PATH) {
             int fillMode = 0;
             FPDF_BOOL stroke = 0;
-            if (FPDFPath_GetDrawMode(obj, &fillMode, &stroke) && fillMode == FPDF_FILLMODE_NONE &&
-                !stroke) {
+            if (FPDFPath_GetDrawMode(obj, &fillMode, &stroke) &&
+                fillMode == FPDF_FILLMODE_NONE && !stroke) {
                 continue;
             }
         }
@@ -2103,8 +2289,8 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         matches.push_back(std::move(tm));
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                         &paintedCovers);
         FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) return rc;
 
@@ -2170,45 +2356,44 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
-        double pW = FPDF_GetPageWidth(pw->page);
-        double pH = FPDF_GetPageHeight(pw->page);
-        float pWf = std::max(static_cast<float>(pW), cR + 1000.0f);
-        float pHf = std::max(static_cast<float>(pH), cT + 1000.0f);
-        float minXf = std::min(0.0f, cL - 1000.0f);
-        float minYf = std::min(0.0f, cB - 1000.0f);
+        TextMatch m;
+        m.bboxL = cL;
+        m.bboxB = cB;
+        m.bboxR = cR;
+        m.bboxT = cT;
 
-        // 4 outer boxes surrounding the crop box:
-        // Left, Right, Bottom, Top
-        struct OuterBox {
-            float l, b, r, t;
-        };
-        OuterBox boxes[4] = {
-            {minXf, minYf, cL, pHf},  // Left
-            {cR, minYf, pWf, pHf},    // Right
-            {cL, minYf, cR, cB},      // Bottom
-            {cL, cT, cR, pHf}         // Top
-        };
-
-        std::vector<TextMatch> matches;
         const int count = FPDFText_CountChars(tp);
-        for (int b = 0; b < 4; b++) {
-            if (boxes[b].l >= boxes[b].r || boxes[b].b >= boxes[b].t) continue;
-            TextMatch tm;
-            tm.bboxL = boxes[b].l;
-            tm.bboxB = boxes[b].b;
-            tm.bboxR = boxes[b].r;
-            tm.bboxT = boxes[b].t;
-            for (int i = 0; i < count; ++i) {
-                double l, r, b2, t;
-                if (!FPDFText_GetCharBox(tp, i, &l, &r, &b2, &t)) continue;
-                if (charInRect(l, b2, r, t, tm.bboxL, tm.bboxB, tm.bboxR, tm.bboxT)) {
-                    tm.charIndices.push_back(i);
-                }
-            }
-            matches.push_back(std::move(tm));
+        for (int i = 0; i < count; ++i) {
+            double ox, oy;
+            if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
+            if (ox < cL || ox > cR || oy < cB || oy > cT) m.charIndices.push_back(i);
         }
 
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
+        bool anythingToRemove = !m.charIndices.empty();
+        if (!anythingToRemove) {
+            const int objCount = FPDFPage_CountObjects(pw->page);
+            for (int i = 0; i < objCount; ++i) {
+                FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
+                if (!obj) continue;
+                if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;
+                float ol, ob, or_, ot;
+                if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
+                if (!rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT)) {
+                    anythingToRemove = true;
+                    break;
+                }
+            }
+        }
+        if (!anythingToRemove) {
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_OK;
+        }
+
+        std::vector<TextMatch> matches;
+        matches.push_back(std::move(m));
+
+        int32_t rc =
+            objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
 
         FPDFText_ClosePage(tp);
         return rc;
@@ -2237,26 +2422,36 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // original character indices, plus the raw unicode sequence used for
         // grapheme-cluster boundary alignment.
         std::vector<int> idxMap;
-        std::wstring wtext = buildNormalizedText(tp, count, idxMap);
+        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
             unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
         }
 
-        // Compile the pattern as a wide regex
-        std::wregex wre;
-        try {
-            wre.assign(utf8_to_wstring(pattern));
-        } catch (const std::regex_error&) {
+        // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
+#ifdef JPDFIUM_HAS_PCRE2
+        Pcre2Pattern pc;
+        std::string compileErr;
+        if (!pattern || !compilePcre2(utf8_to_u32(pattern), false, pc, compileErr)) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
+#else
+        if (!pattern) {
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_INVALID;
+        }
+#endif
 
         // Collect matches with character-level indices
         std::vector<TextMatch> matches;
-        collectRegexMatches(tp, wtext, idxMap, wre, 0.0f, matches);
-        alignMatchesToGraphemes(unicodeSeq, matches);
+#ifdef JPDFIUM_HAS_PCRE2
+        collectPcre2Matches(tp, wtext, idxMap, pc, 0.0f, matches);
+#else
+        (void)wtext;
+#endif
+        alignMatchesToGraphemes(tp, unicodeSeq, matches);
 
         if (matches.empty()) {
             FPDFText_ClosePage(tp);
@@ -2267,7 +2462,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         std::vector<char> redactSet(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::wstring expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
+        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
         // Apply Object Fission redaction
         int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
@@ -2281,14 +2476,17 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<int> idxMap2;
         int n2 = FPDFText_CountChars(audit);
-        std::wstring wtext2 = buildNormalizedText(audit, n2, idxMap2);
+        std::u32string wtext2 = buildNormalizedText(audit, n2, idxMap2);
         std::vector<TextMatch> remaining;
         // Padding 0: the audit re-matches the RAW pattern (the pre-redaction
         // padded bboxes were only for cover painting / geometric rules).
-        collectRegexMatches(audit, wtext2, idxMap2, wre, 0.0f, remaining);
-        std::wstring actualFp = survivingFingerprint(wtext2, idxMap2, {});
+#ifdef JPDFIUM_HAS_PCRE2
+        collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
+#endif
+        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
         FPDFText_ClosePage(audit);
-        if (!remaining.empty() || actualFp != expectedFp) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (!remaining.empty() || actualFp != expectedFp)
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
@@ -2342,7 +2540,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // Build the search buffer: NFKC-normalized text with an index map,
         // plus the raw unicode sequence for grapheme boundary alignment.
         std::vector<int> idxMap;
-        std::wstring wtext = buildNormalizedText(tp, count, idxMap);
+        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
@@ -2350,61 +2548,79 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         }
 
         std::vector<TextMatch> matches;
-        std::vector<std::wstring> compiledPatterns;
-        std::vector<std::wregex> compiledRegexes;
+#ifdef JPDFIUM_HAS_PCRE2
+        std::vector<Pcre2Pattern> compiledPatterns;
+#endif
         int rejectedPatterns = 0;
+        int compiledCount = 0;
 
-        // Regex flags: case-insensitive unless explicitly requested
-        auto rxFlags = std::regex_constants::ECMAScript;
-        if (!caseSensitive) rxFlags |= std::regex_constants::icase;
-
-        for (int wi = 0; wi < wordCount; ++wi) {
-            if (!words[wi]) continue;
-            std::wstring wpattern;
-
-            if (useRegex) {
-                wpattern = utf8_to_wstring(words[wi]);
-            } else {
-                // Escape regex special characters for literal matching
-                std::wstring raw = utf8_to_wstring(words[wi]);
-                for (wchar_t ch : raw) {
-                    if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' || ch == L'|' ||
-                        ch == L'?' || ch == L'*' || ch == L'+' || ch == L'(' || ch == L')' ||
-                        ch == L'[' || ch == L']' || ch == L'{' || ch == L'}') {
-                        wpattern += L'\\';
+        // Literal word lists compile into ONE combined alternation
+        // (group->word map) so the page text is scanned once; regex mode
+        // patterns compile individually (combining arbitrary regexes would
+        // change anchor semantics).
+        if (!useRegex) {
+#ifdef JPDFIUM_HAS_PCRE2
+            std::u32string combined;
+            std::vector<int> groupToWord;
+            if (buildLiteralAlternation(words, wordCount, wholeWord != 0, combined,
+                                        groupToWord)) {
+                Pcre2Pattern pc;
+                std::string err;
+                if (compilePcre2(combined, caseSensitive == 0, pc, err)) {
+                    compiledCount = 1;
+                    size_t offset = 0;
+                    while (offset <= wtext.size()) {
+                        int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
+                                             wtext.size(), offset, 0, pc.md, pc.mctx);
+                        if (rc == PCRE2_ERROR_NOMATCH) break;
+                        if (rc < 0) break;
+                        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
+                        PCRE2_SIZE start = ov[0];
+                        PCRE2_SIZE end = ov[1];
+                        if (end <= start) {
+                            offset = start + 1;
+                            continue;
+                        }
+                        appendMatchChars(tp, idxMap, static_cast<int>(start),
+                                         static_cast<int>(end - start), padding, matches);
+                        offset = end;
                     }
-                    wpattern += ch;
+                    compiledPatterns.push_back(std::move(pc));
                 }
             }
-
-            if (wholeWord) {
-                wpattern.insert(0, L"\\b");
-                wpattern += L"\\b";
+#endif
+        } else {
+            for (int32_t wi = 0; wi < wordCount; ++wi) {
+                if (!words[wi]) continue;
+                std::u32string wpattern = utf8_to_u32(words[wi]);
+                if (wholeWord) {
+                    wpattern.insert(0, U"\\b");
+                    wpattern += U"\\b";
+                }
+#ifdef JPDFIUM_HAS_PCRE2
+                Pcre2Pattern pc;
+                std::string err;
+                if (!compilePcre2(wpattern, caseSensitive == 0, pc, err)) {
+                    ++rejectedPatterns;
+                    continue;
+                }
+                compiledCount++;
+                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                compiledPatterns.push_back(std::move(pc));
+#endif
             }
-
-            std::wregex wre;
-            try {
-                wre.assign(wpattern, rxFlags);
-            } catch (const std::regex_error&) {
-                ++rejectedPatterns;
-                continue;
-            }
-
-            compiledPatterns.push_back(wpattern);
-            compiledRegexes.push_back(std::move(wre));
-            collectRegexMatches(tp, wtext, idxMap, compiledRegexes.back(), padding, matches);
         }
-        alignMatchesToGraphemes(unicodeSeq, matches);
+        alignMatchesToGraphemes(tp, unicodeSeq, matches);
         std::vector<char> redactSet(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::wstring expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
+        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
         if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
 
         // Every supplied pattern failed to compile: the caller believes the
         // redaction ran, but nothing was even searched for.
-        if (rejectedPatterns > 0 && compiledPatterns.empty()) {
+        if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
@@ -2429,20 +2645,22 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<int> idxMap2;
         int n2 = FPDFText_CountChars(audit);
-        std::wstring wtext2 = buildNormalizedText(audit, n2, idxMap2);
-        std::wstring actualFp = survivingFingerprint(wtext2, idxMap2, {});
+        std::u32string wtext2 = buildNormalizedText(audit, n2, idxMap2);
+        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
         if (actualFp != expectedFp) {
             FPDFText_ClosePage(audit);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
-        for (const auto& wre2 : compiledRegexes) {
+#ifdef JPDFIUM_HAS_PCRE2
+        for (const auto& pc : compiledPatterns) {
             std::vector<TextMatch> remaining;
-            collectRegexMatches(audit, wtext2, idxMap2, wre2, 0.0f, remaining);
+            collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
             if (!remaining.empty()) {
                 FPDFText_ClosePage(audit);
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             }
         }
+#endif
         FPDFText_ClosePage(audit);
         return JPDFIUM_OK;
     } catch (...) {
@@ -2585,8 +2803,7 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
 // Mark phase: find text matches and create REDACT annotations (no content mutation)
 int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t wordCount,
                                   float padding, int32_t wholeWord, int32_t useRegex,
-                                  int32_t caseSensitive, uint32_t argb,
-                                  int32_t* matchCount) noexcept {
+                                  int32_t caseSensitive, uint32_t argb, int32_t* matchCount) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!words || wordCount <= 0) {
@@ -2603,7 +2820,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         // Build the search buffer: NFKC-normalized text with an index map,
         // plus the raw unicode sequence for grapheme boundary alignment.
         std::vector<int> idxMap;
-        std::wstring wtext = buildNormalizedText(tp, count, idxMap);
+        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
@@ -2611,40 +2828,52 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         }
 
         std::vector<TextMatch> matches;
-        auto rxFlags = std::regex_constants::ECMAScript;
-        if (!caseSensitive) rxFlags |= std::regex_constants::icase;
-
-        for (int wi = 0; wi < wordCount; ++wi) {
-            if (!words[wi]) continue;
-            std::wstring wpattern;
-            if (useRegex) {
-                wpattern = utf8_to_wstring(words[wi]);
-            } else {
-                std::wstring raw = utf8_to_wstring(words[wi]);
-                for (wchar_t ch : raw) {
-                    if (ch == L'\\' || ch == L'^' || ch == L'$' || ch == L'.' || ch == L'|' ||
-                        ch == L'?' || ch == L'*' || ch == L'+' || ch == L'(' || ch == L')' ||
-                        ch == L'[' || ch == L']' || ch == L'{' || ch == L'}') {
-                        wpattern += L'\\';
+#ifdef JPDFIUM_HAS_PCRE2
+        if (!useRegex) {
+            std::u32string combined;
+            std::vector<int> groupToWord;
+            if (buildLiteralAlternation(words, wordCount, wholeWord != 0, combined,
+                                        groupToWord)) {
+                Pcre2Pattern pc;
+                std::string err;
+                if (compilePcre2(combined, caseSensitive == 0, pc, err)) {
+                    size_t offset = 0;
+                    while (offset <= wtext.size()) {
+                        int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
+                                             wtext.size(), offset, 0, pc.md, pc.mctx);
+                        if (rc == PCRE2_ERROR_NOMATCH) break;
+                        if (rc < 0) break;
+                        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
+                        PCRE2_SIZE start = ov[0];
+                        PCRE2_SIZE end = ov[1];
+                        if (end <= start) {
+                            offset = start + 1;
+                            continue;
+                        }
+                        appendMatchChars(tp, idxMap, static_cast<int>(start),
+                                         static_cast<int>(end - start), padding, matches);
+                        offset = end;
                     }
-                    wpattern += ch;
                 }
             }
-            if (wholeWord) {
-                wpattern.insert(0, L"\\b");
-                wpattern += L"\\b";
+        } else {
+            for (int32_t wi = 0; wi < wordCount; ++wi) {
+                if (!words[wi]) continue;
+                std::u32string wpattern = utf8_to_u32(words[wi]);
+                if (wholeWord) {
+                    wpattern.insert(0, U"\\b");
+                    wpattern += U"\\b";
+                }
+                Pcre2Pattern pc;
+                std::string err;
+                if (!compilePcre2(wpattern, caseSensitive == 0, pc, err)) continue;
+                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
             }
-
-            std::wregex wre;
-            try {
-                wre.assign(wpattern, rxFlags);
-            } catch (...) {
-                continue;
-            }
-
-            collectRegexMatches(tp, wtext, idxMap, wre, padding, matches);
         }
-        alignMatchesToGraphemes(unicodeSeq, matches);
+#else
+        (void)wtext;
+#endif
+        alignMatchesToGraphemes(tp, unicodeSeq, matches);
 
         FPDFText_ClosePage(tp);
 
@@ -2753,8 +2982,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                         &paintedCovers);
         FPDFText_ClosePage(tp);
 
         if (rc != JPDFIUM_OK) return rc;  // keep the marks; content unchanged

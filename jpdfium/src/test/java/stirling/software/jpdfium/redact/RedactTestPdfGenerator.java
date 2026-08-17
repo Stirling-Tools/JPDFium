@@ -12,7 +12,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import javax.imageio.ImageIO;
-
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -151,6 +150,9 @@ public class RedactTestPdfGenerator {
         generateFormWholesaleAncestor();
         generateBezierPathBelly();
         generateDashClipPaths();
+        generateNfkcFullWidth();
+        generateCombiningMarks();
+        generateUcpWordBoundary();
 
         System.out.println("All test PDFs generated in " + OUT_DIR);
     }
@@ -1548,6 +1550,69 @@ public class RedactTestPdfGenerator {
                         + "(SECRET REDACT ME) Tj ET\n");
             }
             save(doc, "redact-test-dash-clip.pdf");
+        }
+    }
+    /** Full-width digits: NFKC must fold them to ASCII so an ASCII pattern matches. */
+    private static void generateNfkcFullWidth() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(unicodeFont(doc), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("Full width SSN: \uFF11\uFF12\uFF13-\uFF14\uFF15-\uFF16\uFF17\uFF18\uFF19");
+                cs.newLineAtOffset(0, -24);
+                cs.showText("Normal SSN: 555-66-7777 must survive.");
+                cs.endText();
+            }
+            save(doc, "redact-test-nfkc.pdf");
+        }
+    }
+
+    /** A Unicode-capable embedded font for NFKC / combining-mark / UCP tests. */
+    private static PDFont unicodeFont(PDDocument doc) throws IOException {
+        for (String path : new String[]{
+                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "C:\\Windows\\Fonts\\arial.ttf"}) {
+            var ttf = new File(path);
+            if (ttf.exists()) return PDType0Font.load(doc, ttf);
+        }
+        return new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+    }
+
+    /** Base char + combining acute accent: cluster-safe cut points. */
+    private static void generateCombiningMarks() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(unicodeFont(doc), 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("cafe\u0301 with combining mark");
+                cs.newLineAtOffset(0, -24);
+                cs.showText("another cafe\u0301 here");
+                cs.endText();
+            }
+            save(doc, "redact-test-combining.pdf");
+        }
+    }
+
+    /** UCP word boundaries: whole-word "M\u00fcller" must NOT match inside "M\u00fcllerstra\u00dfe". */
+    private static void generateUcpWordBoundary() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(unicodeFont(doc), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("M\u00fcller M\u00fcllerstra\u00dfe M\u00fcller");
+                cs.endText();
+            }
+            save(doc, "redact-test-ucp-word-boundary.pdf");
         }
     }
 }
