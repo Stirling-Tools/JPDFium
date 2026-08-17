@@ -129,10 +129,15 @@ void runCropEngineChecks() {
     rc = jpdfium_crop_remove_content(cpage, 0.0f, 0.0f, 306.0f, 792.0f);
     CHECK(rc == JPDFIUM_OK, "crop fast path");
 
+    uint8_t* incSaved = nullptr;
+    int64_t incSavedLen = 0;
+    int32_t incRc = jpdfium_doc_save_incremental(cdoc, &incSaved, &incSavedLen);
+    CHECK(incRc == JPDFIUM_ERR_REDACTED_SAVE, "incremental save refused after redaction");
+
     uint8_t* saved = nullptr;
     int64_t savedLen = 0;
-    rc = jpdfium_doc_save_incremental(cdoc, &saved, &savedLen);
-    CHECK(rc == JPDFIUM_OK && saved && savedLen > 0, "incremental save after crop");
+    rc = jpdfium_doc_save_bytes(cdoc, &saved, &savedLen);
+    CHECK(rc == JPDFIUM_OK && saved && savedLen > 0, "full save after crop and redact");
     jpdfium_free_buffer(saved);
 
     jpdfium_page_close(cpage);

@@ -2254,6 +2254,10 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
                               int32_t remove_content) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
+        w <= 0.0f || h <= 0.0f) {
+        return JPDFIUM_ERR_INVALID;
+    }
     if (remove_content == 0) {
         // Doctrine: visual-only "cover" redaction is banned in the public
         // API. Content must be verified-gone, never painted over.
