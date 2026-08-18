@@ -51,6 +51,8 @@
         <exclude name="ShortMethodName"/>
         <exclude name="UseUnderscoresInNumericLiterals"/>
         <exclude name="UseExplicitTypes"/>
+        <exclude name="FieldDeclarationsShouldBeAtStartOfClass"/>
+        <exclude name="VariableDeclarationUsageDistance"/>
     </rule>
     <rule ref="category/java/design.xml">
         <exclude name="LawOfDemeter"/>
@@ -80,6 +82,7 @@
         <exclude name="NullAssignment"/>
         <exclude name="AvoidLiteralsInIfCondition"/>
         <exclude name="CompareObjectsWithEquals"/>
+        <exclude name="AvoidCatchingGenericException"/>
         <exclude name="AvoidCatchingThrowable"/>
         <exclude name="AssignmentInOperand"/>
         <exclude name="EmptyCatchBlock"/>

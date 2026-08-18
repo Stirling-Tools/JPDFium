@@ -75,7 +75,10 @@ public final class PdfThumbnails {
         if (bitmap.equals(MemorySegment.NULL)) return Optional.empty();
 
         try {
-            int w, h, stride, fmt;
+            int w;
+            int h;
+            int stride;
+            int fmt;
             MemorySegment buf;
             try {
                 w      = (int)           PageEditBindings.FPDFBitmap_GetWidth.invokeExact(bitmap);
@@ -101,7 +104,10 @@ public final class PdfThumbnails {
                 for (int x = 0; x < w; x++) {
                     int off = y * stride + x * bpp;
                     if (off + bpp - 1 >= raw.length) continue;
-                    int r, g, b, a;
+                    int r;
+                    int g;
+                    int b;
+                    int a;
                     switch (fmt) {
                         case FMT_GRAY -> { r = g = b = raw[off] & 0xFF; a = 255; }
                         case FMT_BGR  -> { b = raw[off] & 0xFF; g = raw[off+1] & 0xFF;

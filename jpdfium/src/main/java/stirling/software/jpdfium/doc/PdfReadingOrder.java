@@ -174,7 +174,10 @@ public final class PdfReadingOrder {
 
     private static class LineBlock {
         final List<TextLine> lines = new ArrayList<>();
-        float minX = Float.MAX_VALUE, maxX = 0, minY = Float.MAX_VALUE, maxY = 0;
+        float minX = Float.MAX_VALUE;
+        float maxX = 0;
+        float minY = Float.MAX_VALUE;
+        float maxY = 0;
         float lastY;
         int lineCount;
 

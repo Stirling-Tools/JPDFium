@@ -72,8 +72,10 @@ public final class PdfAutoCrop {
 
                 if (charCount <= 0) return null;
 
-                float minLeft = Float.MAX_VALUE, minBottom = Float.MAX_VALUE;
-                float maxRight = -Float.MAX_VALUE, maxTop = -Float.MAX_VALUE;
+                float minLeft = Float.MAX_VALUE;
+                float minBottom = Float.MAX_VALUE;
+                float maxRight = -Float.MAX_VALUE;
+                float maxTop = -Float.MAX_VALUE;
                 boolean foundAny = false;
 
                 try (Arena arena = Arena.ofConfined()) {
@@ -279,8 +281,10 @@ public final class PdfAutoCrop {
 
         if (uniform) {
             // Compute the union of all content boxes
-            float minLeft = Float.MAX_VALUE, minBottom = Float.MAX_VALUE;
-            float maxRight = -Float.MAX_VALUE, maxTop = -Float.MAX_VALUE;
+            float minLeft = Float.MAX_VALUE;
+            float minBottom = Float.MAX_VALUE;
+            float maxRight = -Float.MAX_VALUE;
+            float maxTop = -Float.MAX_VALUE;
             boolean foundAny = false;
 
             for (int i = 0; i < count; i++) {

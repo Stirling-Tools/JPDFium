@@ -161,7 +161,10 @@ public final class PdfDiff {
 
     private static VisualChange compareVisualPage(PdfDocument doc1, PdfDocument doc2,
                                                     int pageIndex, int dpi, int threshold) {
-        float pageWidth1, pageHeight1, pageWidth2, pageHeight2;
+        float pageWidth1;
+        float pageHeight1;
+        float pageWidth2;
+        float pageHeight2;
         try (PdfPage p1 = doc1.page(pageIndex)) {
             pageWidth1 = p1.size().width();
             pageHeight1 = p1.size().height();

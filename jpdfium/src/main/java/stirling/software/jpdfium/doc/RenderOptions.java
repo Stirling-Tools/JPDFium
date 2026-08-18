@@ -114,15 +114,12 @@ public final class RenderOptions {
                 MemorySegment buffer = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap);
                 int stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap);
                 MemorySegment pixels;
-                int snapW = w;
-                int snapH = h;
-                MemorySegment snapBitmap = bitmap;
                 if (stride == w * 4) {
                     pixels = buffer.reinterpret((long) stride * h);
                     MemorySegment capturedPixels = pixels;
                     return new RenderedPageView(w, h, stride, 4, PixelFormat.RGBA_STRAIGHT,
                             capturedPixels, () -> {
-                                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(snapBitmap); }
+                                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
                                 catch (Throwable _) {
                                     // Bitmap cleanup best effort
                                 }
@@ -139,7 +136,7 @@ public final class RenderOptions {
                     long len = packed.length;
                     MemorySegment owned = Arena.ofAuto().allocate(len);
                     MemorySegment.copy(heapSeg, 0, owned, 0, len);
-                    return new RenderedPageView(snapW, snapH, snapW * 4, 4, PixelFormat.RGBA_STRAIGHT,
+                    return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
                             owned.reinterpret(len), () -> {});
                 }
             } catch (Throwable t) {
@@ -158,13 +155,13 @@ public final class RenderOptions {
 
     public static final class Builder {
         private int dpi = 150;
-        private boolean grayscale = false;
-        private boolean printing = false;
+        private boolean grayscale;
+        private boolean printing;
         private boolean annotations = true;
-        private boolean lcdText = false;
+        private boolean lcdText;
         private boolean antiAlias = true;
         private int background = 0xFFFFFFFF;
-        private ColorScheme colorScheme = null;
+        private ColorScheme colorScheme;
         private ProcessingMode processingMode = ProcessingMode.DEFAULT;
 
         private Builder() {}

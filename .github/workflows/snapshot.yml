@@ -314,6 +314,16 @@ jobs:
         # hb-glib bindings we don't use; the bridge calls plain hb_*.
         run: bash native/build-harfbuzz-no-glib.sh
 
+      - name: Cache cargo registry & Rust target
+        if: matrix.libc != 'musl'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/rust/target
+          key: cargo-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('native/rust/Cargo.lock') }}
+
       - if: matrix.libc != 'musl'
         run: bash native/build-real.sh
 

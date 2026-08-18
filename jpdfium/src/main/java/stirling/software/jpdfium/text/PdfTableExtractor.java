@@ -207,8 +207,10 @@ public final class PdfTableExtractor {
         int numCols = columns.size();
         List<List<String>> tableRows = new ArrayList<>();
 
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
-        float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = Float.MIN_VALUE;
+        float maxY = Float.MIN_VALUE;
 
         for (WordRow row : wordRows) {
             String[] cells = new String[numCols];

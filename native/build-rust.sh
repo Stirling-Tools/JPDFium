@@ -65,6 +65,26 @@ fi
 CARGO_VERSION=$(cargo --version)
 echo "Using ${CARGO_VERSION}"
 
+# Retry transient network failures (DNS timeouts, connection resets on CI
+# runners) instead of failing the entire native build on the first hiccup.
+# Cargo's own net.retry in .cargo/config.toml handles per-request retries;
+# this wrapper covers whole-build failures that abort before any retry kicks in.
+run_cargo_build() {
+    local tries=3 delay=15
+    local i
+    for i in $(seq 1 "$tries"); do
+        if cargo build --release "$@"; then
+            return 0
+        fi
+        if [ "$i" -lt "$tries" ]; then
+            echo "cargo build failed (attempt $i/$tries) - retrying in ${delay}s..." >&2
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+    done
+    return 1
+}
+
 # ── Build ───────────────────────────────────────────────────────────────────
 echo "Building Rust static library (release)..."
 cd "${RUST_DIR}"
@@ -97,13 +117,13 @@ if [ -n "${CROSS_TARGET}" ]; then
     if command -v rustup >/dev/null 2>&1; then
         rustup target add "${CROSS_TARGET}"
     fi
-    cargo build --release --target "${CROSS_TARGET}"
+    run_cargo_build --target "${CROSS_TARGET}"
     # Cargo writes target-specific artifacts under target/<triple>/; the
     # bridge expects the lib at the canonical target/release path, so copy it.
     mkdir -p "$(dirname "${OUTPUT}")"
     cp "${RUST_DIR}/target/${CROSS_TARGET}/release/libjpdfium_rust.a" "${OUTPUT}"
 else
-    cargo build --release
+    run_cargo_build
 fi
 
 echo ""

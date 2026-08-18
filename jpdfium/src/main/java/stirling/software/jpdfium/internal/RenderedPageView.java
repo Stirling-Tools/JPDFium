@@ -38,8 +38,6 @@ public final class RenderedPageView implements AutoCloseable {
 
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            if (cleanup != null) cleanup.run();
-        }
+        if (closed.compareAndSet(false, true) && cleanup != null) cleanup.run();
     }
 }

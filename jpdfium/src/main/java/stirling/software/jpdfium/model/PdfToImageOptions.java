@@ -82,7 +82,7 @@ public final class PdfToImageOptions {
         private ImageFormat format = ImageFormat.PNG;
         private int dpi = 150;
         private Set<Integer> pages = Collections.emptySet();
-        private boolean transparent = false;
+        private boolean transparent;
         private int quality = 90;
 
         private Builder() {}
