@@ -172,12 +172,14 @@ if(JPDFIUM_USE_PDFIUM)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
-    # Strict warnings; -Werror deferred until the PDFium-dependent bridge can
-    # be compiled (needs setup-pdfium.sh + system libs not present locally).
+    # Warnings-as-errors: the redaction engine is a security boundary - every
+    # warning is a potential UB/leak. -Wno-ignored-qualifiers stays (harmless
+    # const-qualifier noise from the qpdf headers).
     if(MSVC)
-        target_compile_options(jpdfium PRIVATE /W4)
+        target_compile_options(jpdfium PRIVATE /W4 /WX)
     else()
-        target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Wno-ignored-qualifiers)
+        target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Werror
+                               -Wno-ignored-qualifiers)
     endif()
 
     if(PDFIUM_LINK_MODE STREQUAL "static")

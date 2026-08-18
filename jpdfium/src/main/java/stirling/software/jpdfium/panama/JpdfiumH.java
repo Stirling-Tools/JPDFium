@@ -2381,6 +2381,7 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
+
     /**
      * Function descriptor for:
      * {@snippet lang=c :

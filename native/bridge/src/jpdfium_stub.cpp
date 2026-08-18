@@ -42,11 +42,13 @@ constexpr std::string_view STUB_TEXT =
     "Hello World Confidential DRAFT Dummy Redaction\n"
     "Introduction Bold item Gradient Row brown fox\n"
     "Contact: test@example.com Phone: (555) 123-4567\n"
-    "SSN: 123-45-6789 987-65-4321 Size 10 Languages Rot Scale 6789\n"
+    "SSN: 123-45-6789 Size 10 Languages Rot Scale 6789\n"
     "Card: 4111-1111-1111-1111 Consider Employ VM\n"
     "John Smith works at Acme Corp custom certificat";
 
+// ---------------------------------------------------------------------------
 // RAII handles
+// ---------------------------------------------------------------------------
 
 struct FileCloser {
     void operator()(std::FILE* f) const noexcept {
@@ -65,10 +67,12 @@ static FilePtr safe_fopen_write(const char* path) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
 // FFI-safe allocators
 //
 // The JVM frees every buffer via jpdfium_free_string / jpdfium_free_buffer
 // (free()), so anything returned across the boundary MUST come from malloc.
+// ---------------------------------------------------------------------------
 
 [[nodiscard]] char* dup_cstring(std::string_view sv) noexcept {
     char* p = static_cast<char*>(std::malloc(sv.size() + 1));
@@ -89,6 +93,7 @@ static FilePtr safe_fopen_write(const char* path) {
     return static_cast<uint8_t*>(std::calloc(len, 1));
 }
 
+// ---------------------------------------------------------------------------
 // JsonBuf - minimal, allocation-cheap JSON writer.
 //
 // Backed by std::string with std::to_chars for numerics: no iostream, no
@@ -96,6 +101,7 @@ static FilePtr safe_fopen_write(const char* path) {
 // JVM reads them through Double/Float.parseFloat (which accepts scientific
 // notation), so output is safe across libstdc++/libc++/MSVC float-to-chars
 // differences.
+// ---------------------------------------------------------------------------
 
 class JsonBuf {
     std::string s_;
@@ -190,11 +196,15 @@ int count_occurrences(std::string_view haystack, std::string_view needle, bool c
     return JPDFIUM_ERR_NATIVE;
 }
 
+// ---------------------------------------------------------------------------
+// Internal state
+// ---------------------------------------------------------------------------
+
 struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
-    bool hasMutatedRedaction = false;
     int32_t unappliedRedactMarksCount = 0;
+    bool hasMutatedRedaction = false;
     std::unordered_map<int32_t, int> pagePendingMarks;
     std::string sanitizeReport;
 
@@ -215,7 +225,6 @@ std::unordered_map<int64_t, StubDoc> g_docs;
 std::unordered_map<int64_t, std::string> g_page_text;
 std::unordered_map<int64_t, int> g_page_annots;   // page -> pending REDACT count
 std::unordered_map<int64_t, int64_t> g_page_doc;  // page -> owning doc handle
-std::unordered_map<int64_t, int32_t> g_page_idx;  // page -> page index in doc
 std::unordered_map<int64_t, StubPattern> g_pcre;
 std::unordered_map<int64_t, StubFlashText> g_flash;
 
@@ -226,7 +235,7 @@ int64_t g_next_flash = 88001;
 
 }  // namespace
 
-// Core Document Functions
+// =====================  Core Document Functions  ===========================
 
 int32_t jpdfium_init() {
     return JPDFIUM_OK;
@@ -275,7 +284,7 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return JPDFIUM_OK;
     const auto& doc = it->second;
-    if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    if (doc.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     if (!doc.path.empty()) {
         FilePtr in(std::fopen(doc.path.c_str(), "rb"));
@@ -306,7 +315,7 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return return_stub();
     const auto& doc = it->second;
-    if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    if (doc.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     if (!doc.bytes.empty()) {
         *len = static_cast<int64_t>(doc.bytes.size());
@@ -321,11 +330,12 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
             if (sz >= 0) {
                 auto* p = static_cast<uint8_t*>(std::malloc(static_cast<std::size_t>(sz)));
                 if (p) {
-                    const std::size_t n = std::fread(p, 1, static_cast<std::size_t>(sz), in.get());
+                    *len = static_cast<int64_t>(
+                        std::fread(p, 1, static_cast<std::size_t>(sz), in.get()));
                     *data = p;
-                    *len = static_cast<int64_t>(n);
                     return JPDFIUM_OK;
                 }
+                return JPDFIUM_ERR_NATIVE;
             }
         }
     }
@@ -336,19 +346,11 @@ void jpdfium_doc_close(int64_t handle) {
     g_docs.erase(handle);
 }
 
-// Page Functions
+// =====================  Page Functions  ===================================
 
-int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
+int32_t jpdfium_page_open(int64_t doc, int32_t, int64_t* handle) {
     *handle = g_next_page++;
     g_page_doc[*handle] = doc;  // remember owning doc for page_doc_raw_handle
-    g_page_idx[*handle] = idx;
-    auto dit = g_docs.find(doc);
-    if (dit != g_docs.end()) {
-        auto pit = dit->second.pagePendingMarks.find(idx);
-        if (pit != dit->second.pagePendingMarks.end()) {
-            g_page_annots[*handle] = pit->second;
-        }
-    }
     return JPDFIUM_OK;
 }
 
@@ -362,17 +364,8 @@ int32_t jpdfium_page_height(int64_t, float* h) {
 }
 
 void jpdfium_page_close(int64_t handle) {
-    if (auto dit = g_page_doc.find(handle); dit != g_page_doc.end()) {
-        if (auto pit = g_page_idx.find(handle); pit != g_page_idx.end()) {
-            if (auto ait = g_page_annots.find(handle); ait != g_page_annots.end()) {
-                g_docs[dit->second].pagePendingMarks[pit->second] = ait->second;
-            }
-        }
-    }
     g_page_text.erase(handle);
-    g_page_annots.erase(handle);
     g_page_doc.erase(handle);
-    g_page_idx.erase(handle);
 }
 
 int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
@@ -392,7 +385,7 @@ void jpdfium_free_buffer(uint8_t* buf) {
     std::free(buf);
 }
 
-// Text Extraction
+// =====================  Text Extraction  ==================================
 
 // The fake text JSON depends only on STUB_TEXT, never on the page handle, so
 // build it once and hand out copies. Rebuilding ~40 KB of JSON per call made
@@ -445,7 +438,7 @@ void jpdfium_free_string(char* s) {
     std::free(s);
 }
 
-// Redaction
+// =====================  Redaction  ========================================
 
 // Stub must reject the same degenerate geometry the real bridge rejects so
 // native_smoke can validate the contract against either build variant.
@@ -535,7 +528,7 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     return JPDFIUM_OK;
 }
 
-// PCRE2 Pattern Engine (std::regex stand-in)
+// =====================  PCRE2 Pattern Engine (std::regex stand-in)  =======
 
 int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t, int64_t* handle) {
     *handle = g_next_pcre++;
@@ -574,7 +567,7 @@ void jpdfium_pcre2_free(int64_t handle) {
     g_pcre.erase(handle);
 }
 
-// Luhn
+// =====================  Luhn  =============================================
 
 int32_t jpdfium_luhn_validate(const char* number) {
     if (!number) return 0;
@@ -600,7 +593,7 @@ int32_t jpdfium_luhn_validate(const char* number) {
     return (sum % 10 == 0) ? 1 : 0;
 }
 
-// FlashText Dictionary NER
+// =====================  FlashText Dictionary NER  ==========================
 
 int32_t jpdfium_flashtext_create(int64_t* handle) {
     *handle = g_next_flash++;
@@ -649,7 +642,7 @@ void jpdfium_flashtext_free(int64_t handle) {
     g_flash.erase(handle);
 }
 
-// Font Normalization Pipeline stubs
+// =====================  Font Normalization Pipeline stubs  =================
 
 int32_t jpdfium_font_get_data(int64_t, int32_t, uint8_t** data, int64_t* len) {
     if (!data || !len) return JPDFIUM_ERR_INVALID;
@@ -697,7 +690,7 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
     return *out_data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
-// Glyph-Level Redaction stub
+// =====================  Glyph-Level Redaction stub  =======================
 
 int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
                                    int32_t* match_count, char** result_json) {
@@ -706,7 +699,7 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
     return JPDFIUM_OK;
 }
 
-// XMP Metadata Redaction stubs
+// =====================  XMP Metadata Redaction stubs  =====================
 
 int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* fields_redacted) {
     if (fields_redacted) *fields_redacted = 0;
@@ -726,7 +719,7 @@ int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
     return JPDFIUM_OK;
 }
 
-// ICU4C stubs
+// =====================  ICU4C stubs  ======================================
 
 int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     *result = dup_cstring(text ? text : "");
@@ -751,7 +744,7 @@ int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-// Annotation-Based Redaction (Mark -> Commit)
+// =====================  Annotation-Based Redaction (Mark -> Commit)  ======
 
 int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, uint32_t,
                                     int32_t* annot_index) noexcept {
@@ -759,9 +752,6 @@ int32_t jpdfium_annot_create_redact(int64_t page, float, float, float, float, ui
     if (annot_index) *annot_index = idx;
     if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
         g_docs[it->second].unappliedRedactMarksCount++;
-        if (auto pit = g_page_idx.find(page); pit != g_page_idx.end()) {
-            g_docs[it->second].pagePendingMarks[pit->second] = g_page_annots[page];
-        }
     }
     return JPDFIUM_OK;
 }
@@ -780,9 +770,6 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     if (match_count) *match_count = matches;
     if (auto it = g_page_doc.find(page); it != g_page_doc.end()) {
         g_docs[it->second].unappliedRedactMarksCount += matches;
-        if (auto pit = g_page_idx.find(page); pit != g_page_idx.end()) {
-            g_docs[it->second].pagePendingMarks[pit->second] = g_page_annots[page];
-        }
     }
     return JPDFIUM_OK;
 }
@@ -808,9 +795,6 @@ int32_t jpdfium_annot_remove_redact(int64_t page, int32_t) noexcept {
         if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
             g_docs[dit->second].unappliedRedactMarksCount =
                 std::max(0, g_docs[dit->second].unappliedRedactMarksCount - 1);
-            if (auto pit = g_page_idx.find(page); pit != g_page_idx.end()) {
-                g_docs[dit->second].pagePendingMarks[pit->second] = it->second;
-            }
         }
     }
     return JPDFIUM_OK;
@@ -825,12 +809,6 @@ int32_t jpdfium_annot_clear_redacts(int64_t page) noexcept {
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].unappliedRedactMarksCount =
             std::max(0, g_docs[dit->second].unappliedRedactMarksCount - count);
-        if (auto pit = g_page_idx.find(page); pit != g_page_idx.end()) {
-            g_docs[dit->second].pagePendingMarks.erase(pit->second);
-        }
-        if (count > 0) {
-            g_docs[dit->second].hasMutatedRedaction = true;
-        }
     }
     return JPDFIUM_OK;
 }
@@ -843,15 +821,12 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t remove_content,
         pending = it->second;
         g_page_annots.erase(it);
     }
+    if (commit_count) *commit_count = pending;
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].unappliedRedactMarksCount =
             std::max(0, g_docs[dit->second].unappliedRedactMarksCount - pending);
-        if (auto pit = g_page_idx.find(page); pit != g_page_idx.end()) {
-            g_docs[dit->second].pagePendingMarks.erase(pit->second);
-        }
         g_docs[dit->second].hasMutatedRedaction = true;
     }
-    if (commit_count) *commit_count = pending;
     return JPDFIUM_OK;
 }
 
@@ -867,10 +842,12 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
     return JPDFIUM_OK;
 }
 
+
+
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
     auto it = g_docs.find(handle);
     if (it != g_docs.end()) {
-        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        if (it->second.unappliedRedactMarksCount > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
     }
     return jpdfium_doc_save_bytes(handle, data, len);
