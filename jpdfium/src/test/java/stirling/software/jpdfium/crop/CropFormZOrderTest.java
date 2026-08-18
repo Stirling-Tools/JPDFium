@@ -45,19 +45,7 @@ class CropFormZOrderTest {
         // The straddling word must still exist in the text layer (its surviving
         // glyphs were fissioned out of the form, not lost).
         try (PDDocument doc = Loader.loadPDF(output)) {
-            var page = doc.getPage(0);
-            System.err.println("DEBUG PDFBOX MEDIABOX: " + page.getMediaBox());
-            System.err.println("DEBUG PDFBOX CROPBOX: " + page.getCropBox());
-            System.err.println("DEBUG PDFBOX RESOURCES FONT: " + page.getResources().getFontNames());
-            var it = page.getContentStreams();
-            while (it.hasNext()) {
-                try (var is = it.next().createInputStream()) {
-                    byte[] b = is.readAllBytes();
-                    System.err.println("DEBUG RAW PAGE STREAM: \n" + new String(b, java.nio.charset.StandardCharsets.ISO_8859_1));
-                }
-            }
             String text = new PDFTextStripper().getText(doc);
-            System.err.println("DEBUG PDFBOX EXTRACTED TEXT: [" + text + "]");
             assertTrue(text.contains("EDG"),
                     "surviving glyphs of the straddling word must exist: " + text);
         }
