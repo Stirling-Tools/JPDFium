@@ -207,7 +207,7 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
                 std::vector<UChar32> buf(out.length());
                 int32_t n32 = 0;
                 UErrorCode err2 = U_ZERO_ERROR;
-                out.toUTF32(buf.data(), buf.size(), err2);
+                out.toUTF32(buf.data(), static_cast<int32_t>(buf.size()), err2);
                 n32 = U_SUCCESS(err2) ? out.countChar32() : 0;
                 for (int32_t k = 0; k < n32; k++) mapped += static_cast<char32_t>(buf[k]);
             }
