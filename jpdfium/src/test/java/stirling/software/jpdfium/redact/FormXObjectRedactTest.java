@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.VisualDiff;
 import stirling.software.jpdfium.model.Rect;
 
 import java.awt.image.BufferedImage;
@@ -239,7 +238,7 @@ class FormXObjectRedactTest {
         }
     }
 
-    // Pixel verification: only the redacted regions may change
+    // -------- Pixel verification: only the redacted regions may change ----
 
     private static final int DPI = 150;
     private static final int PIXEL_THRESHOLD = 4;
@@ -252,8 +251,8 @@ class FormXObjectRedactTest {
      */
     private static void assertPixelConfinedRedaction(Path pdf, String word, String ctx)
             throws Exception {
-        BufferedImage imgBefore;
-        List<CharPos> charsBefore;
+        java.awt.image.BufferedImage imgBefore;
+        java.util.List<CharPos> charsBefore;
         float pageHeightPt;
         try (var doc = PdfDocument.open(pdf);
              var page = doc.page(0)) {
@@ -279,7 +278,7 @@ class FormXObjectRedactTest {
 
         byte[] redacted = redactWords(pdf, word, false);
 
-        BufferedImage imgAfter;
+        java.awt.image.BufferedImage imgAfter;
         try (var doc = PdfDocument.open(redacted);
              var page = doc.page(0)) {
             imgAfter = page.renderAt(DPI).toBufferedImage();
@@ -306,7 +305,7 @@ class FormXObjectRedactTest {
         }
         assertTrue(changedInside > 0, ctx + ": no pixels changed inside the redaction box");
 
-        int spillPixels = VisualDiff.changedPixelsOutsideRegion(
+        int spillPixels = stirling.software.jpdfium.VisualDiff.changedPixelsOutsideRegion(
                 imgBefore, imgAfter, roiX, roiY, roiW, roiH, PIXEL_THRESHOLD);
         int totalOutside = imgW * imgH - roiW * roiH;
         double spillFraction = (double) spillPixels / Math.max(1, totalOutside);
@@ -330,7 +329,7 @@ class FormXObjectRedactTest {
     @Test
     void partialImageRedactionErasesPixels() throws Exception {
         Path pdf = testPdf("redact-test-partial-image.pdf");
-        BufferedImage before;
+        java.awt.image.BufferedImage before;
         float pageH;
         try (var doc = PdfDocument.open(pdf);
              var page = doc.page(0)) {
@@ -338,25 +337,19 @@ class FormXObjectRedactTest {
             pageH = page.size().height();
         }
         // The image spans page (50,600)-(250,700). Redact its LEFT half.
+        byte[] redacted;
         try (var doc = PdfDocument.open(pdf);
              var page = doc.page(0)) {
             page.redactRegion(new Rect(40f, 590f, 110f, 120f), 0xFF000000);
             page.flatten();
+            redacted = doc.saveBytes();
         }
         BufferedImage after;
-        try (var doc = PdfDocument.open(pdf);
+        try (var doc = PdfDocument.open(redacted);
              var page = doc.page(0)) {
-            // NOTE: redaction mutated the in-memory document above but the
-            // pixel check needs the SAVED bytes; re-open the original and
-            // redact again inside a save cycle.
-            page.redactRegion(new Rect(40f, 590f, 110f, 120f), 0xFF000000);
-            page.flatten();
             after = page.renderAt(DPI).toBufferedImage();
         }
-
         double scale = DPI / 72.0;
-        // Sample the image LEFT half (should be black after erasure + box)
-        // and RIGHT half (should remain its original color) in pixel coords.
         int leftX = (int) ((60.0) * scale), leftY = (int) ((pageH - 650.0) * scale);
         int rightX = (int) ((200.0) * scale), rightY = leftY;
         int pl = after.getRGB(leftX, leftY) & 0xFFFFFF;

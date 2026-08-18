@@ -142,6 +142,8 @@ struct PageWrapper {
 
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, int32_t idx, std::shared_ptr<DocCore> o)
         : page(p), doc(d), pageIndex(idx), core(std::move(o)) {}
+    PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, std::shared_ptr<DocCore> o)
+        : page(p), doc(d), pageIndex(-1), core(std::move(o)) {}
 
     ~PageWrapper() {
         if (page) {

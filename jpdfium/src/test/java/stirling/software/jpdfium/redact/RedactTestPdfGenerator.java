@@ -1,9 +1,5 @@
 package stirling.software.jpdfium.redact;
 
-import java.awt.Color;
-import java.awt.geom.AffineTransform;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -11,7 +7,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import javax.imageio.ImageIO;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -30,7 +25,6 @@ import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
-import org.apache.pdfbox.util.Matrix;
 
 /**
  * Generates every test PDF required by {@link ObjectFissionCoordinateTest}.
@@ -41,8 +35,7 @@ import org.apache.pdfbox.util.Matrix;
  * }</pre>
  *
  */
-@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes", "PMD.AvoidCatchingGenericException"})
-public final class RedactTestPdfGenerator {
+public class RedactTestPdfGenerator {
 
     private static final String OUT_DIR_PROP = "pdfgen.outdir";
     private static Path OUT_DIR;
@@ -159,6 +152,8 @@ public final class RedactTestPdfGenerator {
         generateCombiningMarks();
         generateUcpWordBoundary();
         generateSanitizeRemnants();
+        generateTjDeviation();
+        generateLigatureCluster();
 
         System.out.println("All test PDFs generated in " + OUT_DIR);
     }
@@ -303,7 +298,7 @@ public final class RedactTestPdfGenerator {
                 } else {
                     font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
                 }
-            } catch (IOException e) {
+            } catch (Exception e) {
                 font = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
             }
             try (var cs = new PDPageContentStream(doc, page)) {
@@ -545,7 +540,7 @@ public final class RedactTestPdfGenerator {
                 float cos = (float) Math.cos(rad);
                 float sin = (float) Math.sin(rad);
                 float fs = 12;
-                cs.setTextMatrix(new Matrix(
+                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(
                         cos * fs, sin * fs, -sin * fs, cos * fs, 200, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Rotated: " + SSN1 + " confidential.");
@@ -561,7 +556,7 @@ public final class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new Matrix(24, 0, 0, 6, 72, 400));
+                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(24, 0, 0, 6, 72, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Scaled: " + SSN1 + " confidential.");
                 cs.endText();
@@ -576,7 +571,7 @@ public final class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new Matrix(12, 0, 3, 12, 72, 400));
+                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(12, 0, 3, 12, 72, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Skewed: " + SSN1 + " confidential.");
                 cs.endText();
@@ -591,7 +586,7 @@ public final class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
-                cs.setTextMatrix(new Matrix(-12, 0, 0, 12, 500, 400));
+                cs.setTextMatrix(new org.apache.pdfbox.util.Matrix(-12, 0, 0, 12, 500, 400));
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 1);
                 cs.showText("Mirror: " + SSN1 + " confidential.");
                 cs.endText();
@@ -662,7 +657,7 @@ public final class RedactTestPdfGenerator {
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.saveGraphicsState();
-                cs.transform(new Matrix(1, 0, 0, 1, 50, 50));
+                cs.transform(new org.apache.pdfbox.util.Matrix(1, 0, 0, 1, 50, 50));
                 cs.beginText();
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
                 cs.newLineAtOffset(72, 600);
@@ -1144,8 +1139,8 @@ public final class RedactTestPdfGenerator {
         try (var doc = new PDDocument()) {
             PDPage page = new PDPage(new PDRectangle(72000, 800));
             doc.addPage(page);
-            StringBuilder sb = new StringBuilder(4096);
-            for (int i = 0; i < 500; i++) sb.append("word").append(i).append(' ');
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < 500; i++) sb.append("word").append(i).append(" ");
             sb.append(SSN1).append(" end.");
             try (var cs = new PDPageContentStream(doc, page)) {
                 cs.beginText();
@@ -1245,7 +1240,7 @@ public final class RedactTestPdfGenerator {
             PDPage page = letterPage();
             doc.addPage(page);
             try (var cs = new PDPageContentStream(doc, page)) {
-                cs.beginMarkedContent(COSName.getPDFName("Span"));
+                cs.beginMarkedContent(org.apache.pdfbox.cos.COSName.getPDFName("Span"));
                 cs.beginText();
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
                 cs.newLineAtOffset(72, 700);
@@ -1298,12 +1293,12 @@ public final class RedactTestPdfGenerator {
         try (var doc = new PDDocument()) {
             PDPage page = letterPage();
             doc.addPage(page);
-            var img = new BufferedImage(200, 100,
-                    BufferedImage.TYPE_INT_RGB);
+            var img = new java.awt.image.BufferedImage(200, 100,
+                    java.awt.image.BufferedImage.TYPE_INT_RGB);
             var g = img.createGraphics();
-            g.setColor(new Color(200, 30, 30));
+            g.setColor(new java.awt.Color(200, 30, 30));
             g.fillRect(0, 0, 100, 100);
-            g.setColor(new Color(30, 30, 200));
+            g.setColor(new java.awt.Color(30, 30, 200));
             g.fillRect(100, 0, 100, 100);
             g.dispose();
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
@@ -1314,9 +1309,9 @@ public final class RedactTestPdfGenerator {
         }
     }
 
-    private static byte[] encodePng(BufferedImage img) throws Exception {
-        var bos = new ByteArrayOutputStream();
-        ImageIO.write(img, "png", bos);
+    private static byte[] encodePng(java.awt.image.BufferedImage img) throws Exception {
+        var bos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", bos);
         return bos.toByteArray();
     }
 
@@ -1383,7 +1378,7 @@ public final class RedactTestPdfGenerator {
             doc.addPage(page);
             PDFormXObject inner =
                     formWithText(doc, "BT /F1 12 Tf 1 0 0 1 5 10 Tm (DEEP SECRET) Tj ET", 200, 80);
-            inner.setMatrix(new AffineTransform(0.866, 0.5, -0.5, 0.866, 10, 10));
+            inner.setMatrix(new java.awt.geom.AffineTransform(0.866, 0.5, -0.5, 0.866, 10, 10));
 
             PDFormXObject outer = new PDFormXObject(doc);
             outer.setBBox(new PDRectangle(0, 0, 400, 200));
@@ -1558,6 +1553,7 @@ public final class RedactTestPdfGenerator {
             save(doc, "redact-test-dash-clip.pdf");
         }
     }
+
     /** Full-width digits: NFKC must fold them to ASCII so an ASCII pattern matches. */
     private static void generateNfkcFullWidth() throws Exception {
         try (var doc = new PDDocument()) {
@@ -1578,12 +1574,39 @@ public final class RedactTestPdfGenerator {
 
     /** A Unicode-capable embedded font for NFKC / combining-mark / UCP tests. */
     private static PDFont unicodeFont(PDDocument doc) throws IOException {
+        return unicodeFont(doc, true);
+    }
+
+    /** Like unicodeFont, but embedSubset=false keeps the FULL font program
+     *  (CID codes = the font's real cmap values; the ToUnicode CMap maps
+     *  them exactly - needed by the TJ-deviation test, whose raw strings
+     *  must extract as the written text). */
+    private static PDFont unicodeFontFull(PDDocument doc) throws IOException {
         for (String path : new String[]{
                 "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "C:\\Windows\\Fonts\\arial.ttf"}) {
             var ttf = new File(path);
-            if (ttf.exists()) return PDType0Font.load(doc, ttf);
+            if (ttf.exists()) {
+                try (var in = new java.io.FileInputStream(ttf)) {
+                    return PDType0Font.load(doc, in, false);
+                }
+            }
+        }
+        return unicodeFont(doc, true);
+    }
+
+    private static PDFont unicodeFont(PDDocument doc, boolean embedSubset) throws IOException {
+        for (String path : new String[]{
+                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "C:\\Windows\\Fonts\\arial.ttf"}) {
+            var ttf = new File(path);
+            if (ttf.exists()) {
+                try (var in = new java.io.FileInputStream(ttf)) {
+                    return PDType0Font.load(doc, in, embedSubset);
+                }
+            }
         }
         return new PDType1Font(Standard14Fonts.FontName.HELVETICA);
     }
@@ -1713,6 +1736,51 @@ public final class RedactTestPdfGenerator {
             annots.add(annotDict);
 
             save(doc, "redact-test-sanitize-remnants.pdf");
+        }
+    }
+
+    /** TJ kerning with NON-UNIFORM adjustments around a redactable word. */
+    private static void generateTjDeviation() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            PDFont font = unicodeFontFull(doc);
+            page.setResources(new PDResources());
+            page.getResources().put(COSName.getPDFName("F1"), font);
+            // 2-byte CID hex strings from the font's own encoder (raw ASCII
+            // strings would decode as 2-byte Identity codes in a Type0 font).
+            String kern = hexOf(font.encode("KERN"));
+            String secret = hexOf(font.encode("SECRET"));
+            String edge = hexOf(font.encode("EDGE"));
+            String tail = hexOf(font.encode("TAIL"));
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                appendRaw(cs, "BT /F1 12 Tf 1 0 0 1 72 700 Tm [<" + kern + "> -30 <" + secret
+                        + "> 25 <" + edge + "> -45 <" + tail + ">] TJ ET\n");
+            }
+            save(doc, "redact-test-tj-deviation.pdf");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String hexOf(byte[] bytes) {
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) sb.append(String.format("%02X", b & 0xFF));
+        return sb.toString();
+    }
+
+    /** Embedded font with a natural fi ligature cluster before the redacted word. */
+    private static void generateLigatureCluster() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(unicodeFont(doc), 14);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("office SECRET coffee");
+                cs.endText();
+            }
+            save(doc, "redact-test-ligature-cluster.pdf");
         }
     }
 }
