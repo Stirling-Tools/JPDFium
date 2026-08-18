@@ -196,6 +196,7 @@ struct StubDoc {
     bool hasMutatedRedaction = false;
     int32_t unappliedRedactMarksCount = 0;
     std::unordered_map<int32_t, int> pagePendingMarks;
+    std::string sanitizeReport;
 
     int32_t unappliedMarks() const {
         return unappliedRedactMarksCount;
@@ -235,28 +236,33 @@ void jpdfium_destroy() {}
 int32_t jpdfium_doc_create(int64_t* handle) {
     if (!handle) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
-    g_docs[*handle] = {"", {}, false, 0, {}};
+    StubDoc doc;
+    g_docs[*handle] = std::move(doc);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}, false, 0, {}};
+    StubDoc doc;
+    doc.path = path ? path : "";
+    g_docs[*handle] = std::move(doc);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
     if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
-    std::vector<uint8_t> bytes;
-    bytes.assign(data, data + len);
-    g_docs[*handle] = {"", std::move(bytes), false, 0, {}};
+    StubDoc doc;
+    doc.bytes.assign(data, data + len);
+    g_docs[*handle] = std::move(doc);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handle) {
     *handle = g_next_doc++;
-    g_docs[*handle] = {path ? path : "", {}, false, 0, {}};
+    StubDoc doc;
+    doc.path = path ? path : "";
+    g_docs[*handle] = std::move(doc);
     return JPDFIUM_OK;
 }
 
@@ -846,6 +852,18 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t remove_content,
         g_docs[dit->second].hasMutatedRedaction = true;
     }
     if (commit_count) *commit_count = pending;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
+    auto it = g_docs.find(doc);
+    if (it == g_docs.end() || !json) return JPDFIUM_ERR_INVALID;
+    const std::string& rep = it->second.sanitizeReport;
+    char* out = static_cast<char*>(std::malloc(rep.size() + 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    std::memcpy(out, rep.data(), rep.size());
+    out[rep.size()] = 0;
+    *json = out;
     return JPDFIUM_OK;
 }
 

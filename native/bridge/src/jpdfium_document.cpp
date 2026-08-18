@@ -119,29 +119,58 @@ int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
     return JPDFIUM_OK;
 }
 
+
+namespace {
+
+// Mandatory sanitize stage: every full save of a redacted document runs a
+// qpdf pass (dead-object purge, metadata/XMP/annotation/form/outline scrub,
+// ToUnicode filtering, hb-subset font erasure). Failure is a loud save
+// refusal - a redacted document is never shipped without it.
+int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
+    if (!w->core->contentRedacted) return JPDFIUM_OK;
+    std::vector<uint8_t> sanitized;
+    std::string report;
+    if (sanitizeRedactedPdf(bytes.data(), bytes.size(), *w->core, sanitized, report) != 0) {
+        w->core->sanitizeReport = report;
+        return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
+    }
+    w->core->sanitizeReport = report;
+    bytes = std::move(sanitized);
+    return JPDFIUM_OK;
+}
+
+}  // namespace
 int32_t jpdfium_doc_save(int64_t doc, const char* path) {
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    // Saving with uncommitted REDACT annotations would ship a document whose
-    // "redacted" text is fully intact under the marks.
     if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+
+    struct BufWriter : FPDF_FILEWRITE {
+        std::vector<uint8_t> buf;
+        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+            auto* bw = static_cast<BufWriter*>(self);
+            try {
+                auto* src = static_cast<const uint8_t*>(data);
+                bw->buf.insert(bw->buf.end(), src, src + size);
+                return 1;
+            } catch (...) {
+                return 0;  // never let exceptions cross the C callback
+            }
+        }
+    } bw;
+    bw.version = 1;
+    bw.WriteBlock = BufWriter::Write;
+
+    if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+
+    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+    if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
 
     FILE* f = safe_fopen_write(path);
     if (!f) return JPDFIUM_ERR_IO;
-
-    struct FileWriter : FPDF_FILEWRITE {
-        FILE* fp;
-        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            return fwrite(data, 1, size, static_cast<FileWriter*>(self)->fp) == size ? 1 : 0;
-        }
-    } fw;
-    fw.version = 1;
-    fw.WriteBlock = FileWriter::Write;
-    fw.fp = f;
-
-    int ok = FPDF_SaveAsCopy(w->core->doc, &fw, FPDF_NO_INCREMENTAL);
+    size_t written = fwrite(bw.buf.data(), 1, bw.buf.size(), f);
     fclose(f);
-    return ok ? JPDFIUM_OK : JPDFIUM_ERR_IO;
+    return written == bw.buf.size() ? JPDFIUM_OK : JPDFIUM_ERR_IO;
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
@@ -167,6 +196,9 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
 
     if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
+    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+    if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+
     size_t sz = bw.buf.size();
     uint8_t* out = static_cast<uint8_t*>(malloc(sz));
     if (!out) return JPDFIUM_ERR_NATIVE;
@@ -187,7 +219,7 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
     FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
     if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-    *handle = encodeHandle(new PageWrapper(page, w->core->doc, w->core));
+    *handle = encodeHandle(new PageWrapper(page, w->core->doc, idx, w->core));
     return JPDFIUM_OK;
 }
 
@@ -207,6 +239,19 @@ int32_t jpdfium_page_height(int64_t page, float* height) {
 
 void jpdfium_page_close(int64_t page) {
     delete decodePage(page);
+}
+
+// JSON report of the last sanitize stage ("" when none has run).
+int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core || !json) return JPDFIUM_ERR_INVALID;
+    const std::string& rep = w->core->sanitizeReport;
+    char* out = static_cast<char*>(malloc(rep.size() + 1));
+    if (!out) return JPDFIUM_ERR_NATIVE;
+    memcpy(out, rep.data(), rep.size());
+    out[rep.size()] = 0;
+    *json = out;
+    return JPDFIUM_OK;
 }
 
 int64_t jpdfium_doc_raw_handle(int64_t doc) {

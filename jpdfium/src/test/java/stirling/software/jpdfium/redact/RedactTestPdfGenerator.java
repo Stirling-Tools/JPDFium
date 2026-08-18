@@ -23,6 +23,10 @@ import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
+import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDTextField;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
@@ -154,6 +158,7 @@ public final class RedactTestPdfGenerator {
         generateNfkcFullWidth();
         generateCombiningMarks();
         generateUcpWordBoundary();
+        generateSanitizeRemnants();
 
         System.out.println("All test PDFs generated in " + OUT_DIR);
     }
@@ -1614,6 +1619,100 @@ public final class RedactTestPdfGenerator {
                 cs.endText();
             }
             save(doc, "redact-test-ucp-word-boundary.pdf");
+        }
+    }
+
+    /**
+     * Redaction remnants everywhere: /Info fields, XMP, outline titles,
+     * AcroForm field values and an annotation all echo the same secret.
+     * The sanitize stage must remove every copy on save (byte-level grep
+     * target for SanitizeStageRedactTest).
+     */
+    private static void generateSanitizeRemnants() throws Exception {
+        try (var doc = new PDDocument()) {
+            PDPage page = letterPage();
+            doc.addPage(page);
+            doc.getDocumentInformation().setAuthor("SECRET-AUTHOR");
+            doc.getDocumentInformation().setTitle("SECRET-TITLE");
+            doc.getDocumentInformation().setSubject("SECRET-SUBJECT");
+
+            // XMP packet echoing the secret (the sanitize stage scrubs it
+            // surgically with pugixml).
+            var xmpMeta = new org.apache.pdfbox.pdmodel.common.PDMetadata(doc);
+            String xmpXml = """
+                    <?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+                    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+                      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                        <rdf:Description rdf:about=""
+                            xmlns:dc="http://purl.org/dc/elements/1.1/">
+                          <dc:creator><rdf:Seq><rdf:li>SECRET-XMP-AUTHOR</rdf:li></rdf:Seq></dc:creator>
+                          <dc:title><rdf:Alt><rdf:li xml:lang="x-default">SECRET-XMP-TITLE</rdf:li></rdf:Alt></dc:title>
+                        </rdf:Description>
+                      </rdf:RDF>
+                    </x:xmpmeta>
+                    <?xpacket end="w"?>
+                    """;
+            xmpMeta.importXMPMetadata(xmpXml.getBytes(StandardCharsets.UTF_8));
+            doc.getDocumentCatalog().setMetadata(xmpMeta);
+
+            PDDocumentOutline outline = new PDDocumentOutline();
+            doc.getDocumentCatalog().setDocumentOutline(outline);
+            PDOutlineItem item = new PDOutlineItem();
+            item.setTitle("SECRET-OUTLINE");
+            outline.addLast(item);
+
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText("VISIBLE SECRET VISIBLE-TEXT");
+                cs.newLineAtOffset(0, -24);
+                cs.setFont(unicodeFont(doc), 12);
+                cs.showText("EMBEDDED SECRET-TT LINE");
+                cs.endText();
+            }
+
+            PDAcroForm form = new PDAcroForm(doc);
+            doc.getDocumentCatalog().setAcroForm(form);
+            PDType1Font helv = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
+            var dr = new org.apache.pdfbox.cos.COSDictionary();
+            var fontDict = new org.apache.pdfbox.cos.COSDictionary();
+            var f1Dict = new org.apache.pdfbox.cos.COSDictionary();
+            f1Dict.setItem(COSName.TYPE, COSName.FONT);
+            f1Dict.setItem(COSName.SUBTYPE, COSName.getPDFName("Type1"));
+            f1Dict.setItem(COSName.BASE_FONT, COSName.getPDFName("Helvetica"));
+            fontDict.setItem(COSName.getPDFName("Helv"), f1Dict);
+            dr.setItem(COSName.FONT, fontDict);
+            form.getCOSObject().setItem(COSName.DR, dr);
+            form.setDefaultResources(new PDResources(dr));
+            PDTextField field = new PDTextField(form);
+            field.setPartialName("note");
+            field.setDefaultAppearance("/Helv 0 Tf 0 g");
+            field.setValue("SECRET-FIELD");
+            form.getFields().add(field);
+
+            // Raw annotation dict: /Subtype /Text with /Rect and /Contents.
+            // (PDFBox's PDAnnotationText demands a /DA appearance entry the
+            // test does not need; the sanitize stage removes annotations by
+            // dict content regardless of appearance streams.)
+            var annotDict = new org.apache.pdfbox.cos.COSDictionary();
+            annotDict.setName(COSName.TYPE, "Annot");
+            annotDict.setName(COSName.SUBTYPE, "Text");
+            annotDict.setString(COSName.CONTENTS, "SECRET-ANNOT");
+            var rectArr = new org.apache.pdfbox.cos.COSArray();
+            rectArr.add(new org.apache.pdfbox.cos.COSFloat(400));
+            rectArr.add(new org.apache.pdfbox.cos.COSFloat(600));
+            rectArr.add(new org.apache.pdfbox.cos.COSFloat(500));
+            rectArr.add(new org.apache.pdfbox.cos.COSFloat(650));
+            annotDict.setItem(COSName.RECT, rectArr);
+            var annots = page.getCOSObject().getCOSArray(COSName.ANNOTS);
+            if (annots == null) {
+                annots = new org.apache.pdfbox.cos.COSArray();
+                page.getCOSObject().setItem(COSName.ANNOTS, annots);
+            }
+            annots.add(annotDict);
+
+            save(doc, "redact-test-sanitize-remnants.pdf");
         }
     }
 }

@@ -2320,6 +2320,57 @@ public class JpdfiumH extends JpdfiumH$shared {
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
+    private static class jpdfium_doc_sanitize_report {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_sanitize_report");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_sanitize_report(int64_t doc, char **json)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_sanitize_report$descriptor() {
+        return jpdfium_doc_sanitize_report.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_sanitize_report(int64_t doc, char **json)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_sanitize_report$handle() {
+        return jpdfium_doc_sanitize_report.HANDLE;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_sanitize_report(int64_t doc, char **json)
+     * }
+     */
+    public static int jpdfium_doc_sanitize_report(long doc, MemorySegment json) {
+        var mh$ = jpdfium_doc_sanitize_report.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_sanitize_report", doc, json);
+            }
+            return (int)mh$.invokeExact(doc, json);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     /**
      * Function descriptor for:
      * {@snippet lang=c :

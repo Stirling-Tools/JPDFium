@@ -8,7 +8,9 @@
 #include <cstring>
 #include <memory>
 #include <memory_resource>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #define JPDFIUM_OK (0)
 #define JPDFIUM_ERR_INVALID (-1)
@@ -38,6 +40,12 @@ inline int translatePdfiumError() {
     }
 }
 
+// A page-space redaction rectangle (PDF coords, y up).
+struct RedactZone {
+    int32_t pageIndex = -1;
+    float left = 0, bottom = 0, right = 0, top = 0;
+};
+
 // Shared document core. Owns the FPDF_DOCUMENT handle and all document-scoped
 // redaction bookkeeping. Both DocWrapper and every PageWrapper hold a
 // shared_ptr: closing the DocWrapper while pages are still open must not
@@ -62,8 +70,42 @@ struct DocCore {
     // live uncommitted marks.
     int32_t unappliedRedactMarksCount = 0;
 
+    // ---- sanitize-stage bookkeeping (consumed by jpdfium_sanitize.cpp) ----
+    // Words/patterns (UTF-8) used for redaction: metadata, annotation text,
+    // outline titles and form-field values containing these are scrubbed on
+    // every redacted save.
+    std::vector<std::string> redactedLiterals;
+    // Page-space rectangles of every committed redaction: annotations that
+    // intersect them are removed on save (their text may echo the redacted
+    // content).
+    std::vector<RedactZone> redactZones;
+    // BaseFont names of fonts whose text objects were redaction-touched:
+    // their font programs are re-subset on save (hb-subset) so the redacted
+    // glyph outlines cannot be recovered from the file (ACSC remnant class).
+    std::vector<std::string> touchedFontNames;
+    // JSON report of the last sanitize run ("" = sanitize has not run).
+    std::string sanitizeReport;
+
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
+    }
+
+    void addRedactLiteral(const char* s) {
+        if (!s || !*s) return;
+        std::string lit(s);
+        for (const auto& e : redactedLiterals)
+            if (e == lit) return;
+        redactedLiterals.push_back(std::move(lit));
+    }
+    void addRedactZone(int32_t pageIndex, float l, float b, float r, float t) {
+        redactZones.push_back(RedactZone{pageIndex, l, b, r, t});
+    }
+    void addTouchedFont(const char* name) {
+        if (!name || !*name) return;
+        std::string fn(name);
+        for (const auto& e : touchedFontNames)
+            if (e == fn) return;
+        touchedFontNames.push_back(std::move(fn));
     }
 };
 
@@ -95,10 +137,11 @@ struct PageWrapper {
     FPDF_PAGE page = nullptr;
     FPDF_DOCUMENT doc =
         nullptr;  // non-owning reference; needed by page-level APIs that also require the document
+    int32_t pageIndex = -1;
     std::shared_ptr<DocCore> core;  // keeps the document (and bookkeeping) alive
 
-    PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, std::shared_ptr<DocCore> o)
-        : page(p), doc(d), core(std::move(o)) {}
+    PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, int32_t idx, std::shared_ptr<DocCore> o)
+        : page(p), doc(d), pageIndex(idx), core(std::move(o)) {}
 
     ~PageWrapper() {
         if (page) {
@@ -107,6 +150,11 @@ struct PageWrapper {
         }
     }
 };
+
+// Mandatory qpdf sanitize stage for redacted saves (jpdfium_sanitize.cpp).
+// Returns 0 and fills out/reportJson on success; -1 on failure.
+int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,
+                        std::vector<uint8_t>& out, std::string& reportJson);
 
 // Encode heap pointers as int64_t handles for the Java-visible ABI.
 // The pointer stays alive until the matching close function deletes it.

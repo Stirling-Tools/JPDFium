@@ -337,6 +337,15 @@ public final class RedactionSession implements AutoCloseable {
         return totalCommitted;
     }
 
+    /**
+     * JSON report of the last mandatory sanitize stage (see
+     * {@link PdfDocument#sanitizeReport()}). Empty until a redacted save ran.
+     */
+    public String sanitizeReport() {
+        ensureOpen();
+        return document.sanitizeReport();
+    }
+
     /** Full save to file. Document remains valid. */
     public void save(Path path) {
         ensureOpen();

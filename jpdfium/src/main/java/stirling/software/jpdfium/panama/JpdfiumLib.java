@@ -321,6 +321,23 @@ public final class JpdfiumLib {
         }
     }
 
+    /** JSON report of the last sanitize stage ("" when none has run). */
+    public static String docSanitizeReport(long doc) {
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                check(JpdfiumH.jpdfium_doc_sanitize_report(doc, ptrSeg), "docSanitizeReport");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                JpdfiumH.jpdfium_free_string(strPtr);
+                return result;
+            }
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static String textGetChars(long page) {
         NativeGuard.acquire();
         try {
