@@ -2307,19 +2307,6 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
-    private static class jpdfium_doc_save_incremental {
-        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
-            JpdfiumH.C_INT,
-            JpdfiumH.C_LONG,
-            JpdfiumH.C_POINTER,
-            JpdfiumH.C_POINTER
-        );
-
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_incremental");
-
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
-    }
-
     private static class jpdfium_doc_sanitize_report {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -2353,6 +2340,16 @@ public class JpdfiumH extends JpdfiumH$shared {
     }
 
     /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_sanitize_report(int64_t doc, char **json)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_sanitize_report$address() {
+        return jpdfium_doc_sanitize_report.ADDR;
+    }
+
+    /**
      * {@snippet lang=c :
      * int32_t jpdfium_doc_sanitize_report(int64_t doc, char **json)
      * }
@@ -2369,6 +2366,19 @@ public class JpdfiumH extends JpdfiumH$shared {
         } catch (Throwable ex$) {
            throw new AssertionError("should not reach here", ex$);
         }
+    }
+
+    private static class jpdfium_doc_save_incremental {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_incremental");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
     /**
