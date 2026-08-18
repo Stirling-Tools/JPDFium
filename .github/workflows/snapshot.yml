@@ -247,7 +247,7 @@ jobs:
             TRIPLET="x64-windows"
           fi
           bash native/vcpkg-install.sh \
-            pcre2[32-bit]:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+            pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
             icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
             libunibreak:$TRIPLET
           {
@@ -316,7 +316,7 @@ jobs:
 
       - name: Cache cargo registry & Rust target
         if: matrix.libc != 'musl'
-        uses: actions/cache@v4
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: |
             ~/.cargo/registry
