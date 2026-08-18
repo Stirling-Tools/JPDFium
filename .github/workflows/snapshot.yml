@@ -234,7 +234,13 @@ jobs:
         run: |
           choco install -y cmake --version=4.4.2
           choco install -y ninja --version=1.13.2
-          choco install -y pkgconfiglite --version=0.28
+          if command -v pkg-config >/dev/null 2>&1; then
+            echo "pkg-config already on PATH"
+          elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then
+            echo "C:/Strawberry/c/bin" >> "$GITHUB_PATH"
+          else
+            choco install -y pkgconf || choco install -y pkgconfiglite || true
+          fi
           echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch so the bridge + bundler resolve the right
