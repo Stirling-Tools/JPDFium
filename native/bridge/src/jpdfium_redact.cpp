@@ -240,20 +240,30 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
 // text after removing the redacted spans. After a redaction, re-extracting
 // the page and computing the same fingerprint must yield the identical
 // sequence: a fission that silently drops or mangles glyphs (e.g. a
-// ligature-splitting failure) fails the fingerprint check, so the redaction
-// is refused and the page's original content is kept.
-static std::u32string unicodeSeq(FPDF_TEXTPAGE textPage, int count, const std::vector<bool>& mask) {
-    std::u32string seq;
-    for (int i = 0; i < count; i++) {
-        if (mask[static_cast<size_t>(i)]) continue;
-        unsigned int u = FPDFText_GetUnicode(textPage, i);
-        if (u <= 32 || u == 0xFFFE) continue;
-        if (u > 0x10FFFF || (u >= 0xD800 && u <= 0xDFFF)) {
-            u = 0xFFFD;
-        }
-        seq += static_cast<char32_t>(u);
+// character the font can only render as part of a ligature) changes the
+// fingerprint and is reported as an incomplete redaction instead of being
+// shipped as damaged text.
+static std::u32string survivingFingerprint(const std::u32string& normalizedText,
+                                           const std::vector<int>& normIdxMap,
+                                           const std::vector<char>& redactSet) {
+    std::u32string fp;
+    fp.reserve(normIdxMap.size());
+    for (size_t k = 0; k < normIdxMap.size(); k++) {
+        int ci = normIdxMap[k];
+        if (!redactSet.empty() && redactSet[ci]) continue;
+        char32_t wc = normalizedText[k];
+        // Printable, excluding guaranteed non-characters (U+FFFE/U+FFFF) and
+        // the private-use area (U+E000-U+F8FF): PUA codepoints have no
+        // portable meaning - most fonts cannot re-emit them, so fragments
+        // legitimately drop them and the fingerprint must not count them.
+        if (wc > 0x20 && wc < 0xFFFE && !(wc >= 0xE000 && wc <= 0xF8FF)) fp += wc;
     }
-    return seq;
+    // Order-insensitive comparison: page rotation, mirroring and overlapping
+    // objects change the EXTRACTION ORDER of surviving text between the pre
+    // and post passes without changing the content. Comparing sorted
+    // sequences keeps the dropped-glyph detection while tolerating reordering.
+    std::sort(fp.begin(), fp.end());
+    return fp;
 }
 
 // Partial image redaction: rasterize the covered portion by overwriting the
