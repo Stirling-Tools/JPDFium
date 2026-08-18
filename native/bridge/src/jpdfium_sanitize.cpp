@@ -305,7 +305,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
             } else if (w == "endbfrange") {
                 flushBfRange();
                 section = CmapSection::None;
-            } else if (w.find("begin") == 0) {
+            } else if (w.starts_with("begin")) {
                 // unrelated section: flush what we have and ignore it
                 flushBfChar();
                 flushBfRange();

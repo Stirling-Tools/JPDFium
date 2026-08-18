@@ -1,6 +1,6 @@
 #pragma once
-#include <fpdfview.h>
 #include <fpdf_edit.h>
+#include <fpdfview.h>
 
 #include <array>
 #include <cstddef>
@@ -126,10 +126,14 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
 }
 
 struct DocWrapper {
-    std::shared_ptr<DocCore> core;  // document handle + redaction bookkeeping
+    std::shared_ptr<DocCore> core;
     uint8_t* buf =
         nullptr;  // non-null when opened from bytes; PDFium requires it to outlive the doc
     int64_t blen = 0;
+
+    DocWrapper() = default;
+    DocWrapper(const DocWrapper&) = delete;
+    DocWrapper& operator=(const DocWrapper&) = delete;
 
     ~DocWrapper() {
         if (buf) {

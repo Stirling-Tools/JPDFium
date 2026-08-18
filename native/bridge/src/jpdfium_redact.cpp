@@ -567,8 +567,8 @@ static bool isStandard14Font(FPDF_FONT font) {
 //   4. Regenerate the content stream (single FPDFPage_GenerateContent call).
 
 struct TextMatch {
-    std::vector<int> charIndices;      // text-page char indices for matched chars
-    float bboxL, bboxB, bboxR, bboxT;  // tight aggregate bbox (PDF coords)
+    std::vector<int> charIndices;                      // text-page char indices for matched chars
+    float bboxL = 0, bboxB = 0, bboxR = 0, bboxT = 0;  // tight aggregate bbox (PDF coords)
 };
 
 // A single contiguous run of surviving (non-redacted) characters within a text
@@ -578,9 +578,9 @@ struct TextFragment {
     std::vector<uint16_t> utf16;            // UTF-16LE null-terminated text (original codepoints)
     std::vector<uint16_t> utf16Ligated;     // origin-sharing pairs recombined into U+FB00-FB06
     std::vector<uint16_t> utf16Decomposed;  // ligature-decomposed variant (empty if identical)
-    FS_MATRIX matrix;  // page space: linear part from FPDFText_GetMatrix (includes
-                       // rotation, Tz and the form chain), e/f from FPDFText_GetCharOrigin
-    float fontSize;    // font size of the first surviving char
+    FS_MATRIX matrix;    // page space: linear part from FPDFText_GetMatrix (includes
+                         // rotation, Tz and the form chain), e/f from FPDFText_GetCharOrigin
+    float fontSize = 0;  // font size of the first surviving char
     bool unicodeUnreliable = false;  // any char in the run has a broken ToUnicode mapping
     // Page-space bbox of the run's printable characters - used by the loose
     // width gate for emissions that cannot be round-trip verified.
@@ -1386,10 +1386,10 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // page indices captured BEFORE any modification, so survivors keep their
     // original paint order (FPDFPage_InsertObjectAtIndex).
     struct Insertion {
-        FPDF_PAGEOBJECT obj;
-        int insertIndex;  // page index captured before any modification
-        int ordinal;      // paint-order tie-breaker (child index in parent form)
-        int runIndex;     // fragment order within its plan
+        FPDF_PAGEOBJECT obj = nullptr;
+        int insertIndex = 0;  // page index captured before any modification
+        int ordinal = 0;      // paint-order tie-breaker (child index in parent form)
+        int runIndex = 0;     // fragment order within its plan
     };
     std::vector<Insertion> insertions;
 
@@ -1708,12 +1708,16 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     }
                 } else {
                     size_t fontDataLen = 0;
-                    if (FPDFFont_GetFontData(plan.font, nullptr, 0, &fontDataLen) && fontDataLen > 0) {
+                    if (FPDFFont_GetFontData(plan.font, nullptr, 0, &fontDataLen) &&
+                        fontDataLen > 0) {
                         std::vector<uint8_t> fontData(fontDataLen);
                         size_t actual = 0;
-                        if (FPDFFont_GetFontData(plan.font, fontData.data(), fontDataLen, &actual) && actual > 0) {
-                            FPDF_FONT lf = FPDFText_LoadFont(doc, fontData.data(), static_cast<uint32_t>(actual),
-                                                           FPDF_FONT_TRUETYPE, 1);
+                        if (FPDFFont_GetFontData(plan.font, fontData.data(), fontDataLen,
+                                                 &actual) &&
+                            actual > 0) {
+                            FPDF_FONT lf = FPDFText_LoadFont(doc, fontData.data(),
+                                                             static_cast<uint32_t>(actual),
+                                                             FPDF_FONT_TRUETYPE, 1);
                             if (lf) {
                                 if (core) core->loadedFonts.push_back(lf);
                                 fragFont = lf;
@@ -3008,7 +3012,11 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                         offset = end;
                     }
                     compiledPatterns.push_back(std::move(pc));
+                } else {
+                    rejectedPatterns += wordCount;
                 }
+            } else {
+                rejectedPatterns += wordCount;
             }
 #endif
         } else {
@@ -3048,6 +3056,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 
         // Every supplied pattern failed to compile: the caller believes the
         // redaction ran, but nothing was even searched for.
+        // cppcheck-suppress incorrectLogicOperator
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
