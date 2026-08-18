@@ -521,9 +521,6 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                 // Form content resolves font names through the FORM's own
                 // resources when present, else the enclosing scope's.
                 QPDFObjectHandle formRes = xo.hasKey("/Resources") ? xo.getKey("/Resources") : res;
-                // The form's content streams: /Contents, or - for a Form
-                // XObject - the stream itself.
-                QPDFObjectHandle fc = xo.getKey("/Contents");
                 auto scanBuf = [&](QPDFObjectHandle s) {
                     auto b = streamData(s);
                     if (b)
@@ -531,10 +528,13 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                                                       b->getSize()),
                                           globalScan);
                 };
-                if (fc.isArray()) {
-                    for (int i = 0; i < fc.getArrayNItems(); i++) scanBuf(fc.getArrayItem(i));
-                } else if (fc.isStream()) {
-                    scanBuf(fc);
+                if (xo.hasKey("/Contents")) {
+                    QPDFObjectHandle fc = xo.getKey("/Contents");
+                    if (fc.isArray()) {
+                        for (int i = 0; i < fc.getArrayNItems(); i++) scanBuf(fc.getArrayItem(i));
+                    } else if (fc.isStream()) {
+                        scanBuf(fc);
+                    }
                 } else {
                     // Form XObjects may omit /Subtype entirely (writers rely
                     // on the resource being invoked via Do). Only image
@@ -544,6 +544,40 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                     if (!isImage) scanBuf(xo);
                 }
                 scanResourceScope(formRes, globalScan, visitedObjs, depth + 1);
+            }
+        }
+    }
+}
+
+// Form child text objects promoted/fissioned to page level reference fonts
+// that were originally in the Form XObject's private /Resources. Ensure the
+// page-level /Resources /Font dictionary contains all reachable form fonts.
+void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRes,
+                              std::set<std::string>& visited, int depth) {
+    if (depth > 12 || !scopeRes.isDictionary()) return;
+    if (scopeRes.hasKey("/XObject") && scopeRes.getKey("/XObject").isDictionary()) {
+        QPDFObjectHandle xos = scopeRes.getKey("/XObject");
+        for (auto [name, xo] : xos.ditems()) {
+            if (!xo.isStream()) continue;
+            std::string id = xo.getObjGen().unparse();
+            if (visited.count(id)) continue;
+            visited.insert(id);
+            if (xo.hasKey("/Resources") && xo.getKey("/Resources").isDictionary()) {
+                QPDFObjectHandle formRes = xo.getKey("/Resources");
+                if (formRes.hasKey("/Font") && formRes.getKey("/Font").isDictionary()) {
+                    if (!pageRes.hasKey("/Font")) {
+                        pageRes.replaceKey("/Font", QPDFObjectHandle::newDictionary());
+                    }
+                    QPDFObjectHandle pageFonts = pageRes.getKey("/Font");
+                    if (pageFonts.isDictionary()) {
+                        for (auto [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
+                            if (!pageFonts.hasKey(fontName)) {
+                                pageFonts.replaceKey(fontName, fontDict);
+                            }
+                        }
+                    }
+                }
+                propagateFormFontsToPage(pageRes, formRes, visited, depth + 1);
             }
         }
     }
@@ -704,6 +738,9 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             if (page.hasKey("/Resources")) {
                 std::set<std::string> visited;
                 scanResourceScope(page.getKey("/Resources"), pageScans[pi], visited, 0);
+                std::set<std::string> fontVisited;
+                propagateFormFontsToPage(page.getKey("/Resources"), page.getKey("/Resources"),
+                                         fontVisited, 0);
             }
         }
 

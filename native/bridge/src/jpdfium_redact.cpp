@@ -478,6 +478,29 @@ static FS_MATRIX concatMatrix(const FS_MATRIX& m, const FS_MATRIX& t) {
     };
 }
 
+static const char* getStandard14FontName(const char* baseName) {
+    if (!baseName) return nullptr;
+    const char* s = baseName;
+    if (s[0] == '/') s++;
+    if (strncmp(s, "Helvetica-BoldOblique", 21) == 0) return "Helvetica-BoldOblique";
+    if (strncmp(s, "Helvetica-Bold", 14) == 0) return "Helvetica-Bold";
+    if (strncmp(s, "Helvetica-Oblique", 17) == 0) return "Helvetica-Oblique";
+    if (strncmp(s, "Helvetica", 9) == 0) return "Helvetica";
+    if (strncmp(s, "Times-BoldItalic", 16) == 0) return "Times-BoldItalic";
+    if (strncmp(s, "Times-Bold", 10) == 0) return "Times-Bold";
+    if (strncmp(s, "Times-Italic", 12) == 0) return "Times-Italic";
+    if (strncmp(s, "Times-Roman", 11) == 0 || strncmp(s, "TimesNewRoman", 13) == 0 ||
+        strncmp(s, "Times", 5) == 0)
+        return "Times-Roman";
+    if (strncmp(s, "Courier-BoldOblique", 19) == 0) return "Courier-BoldOblique";
+    if (strncmp(s, "Courier-Bold", 12) == 0) return "Courier-Bold";
+    if (strncmp(s, "Courier-Oblique", 15) == 0) return "Courier-Oblique";
+    if (strncmp(s, "Courier", 7) == 0) return "Courier";
+    if (strncmp(s, "Symbol", 6) == 0) return "Symbol";
+    if (strncmp(s, "ZapfDingbats", 12) == 0) return "ZapfDingbats";
+    return nullptr;
+}
+
 // The 14 built-in PDF fonts: their charcode->unicode mapping is fixed and
 // reliable (CharCodeFromUnicode round-trips), so fragments emitted with
 // FPDFText_SetText can be trusted even when the decoded-text round-trip is
@@ -488,12 +511,7 @@ static bool isStandard14Font(FPDF_FONT font) {
     if (FPDFFont_GetFontData(font, nullptr, 0, &len) && len > 0) return false;  // embedded
     char name[128] = {0};
     if (FPDFFont_GetBaseFontName(font, name, sizeof name) == 0) return false;
-    static const char* const kStandard[] = {"Courier", "Helvetica", "Times", "Symbol",
-                                            "ZapfDingbats"};
-    for (const char* s : kStandard) {
-        if (strncmp(name, s, strlen(s)) == 0) return true;
-    }
-    return false;
+    return getStandard14FontName(name) != nullptr;
 }
 
 // Object Fission Algorithm
@@ -1589,11 +1607,31 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 }
             }
         } else if (type == FPDF_PAGEOBJ_FORM) {
-            // Form XObject: first check if entire form is inside a redaction rect
+            // Form XObject: check if entire form is inside a redaction rect.
+            // When a form contains mapped text objects with surviving fragments,
+            // do not destroy the form wholesale on a partial (>70%) overlap;
+            // fission will emit the survivor fragments and markFormContents will
+            // clean up non-text children.
+            bool hasSurvivingText = false;
+            for (const auto& plan : plans) {
+                FPDF_PAGEOBJECT p = plan.originalObj;
+                while (p) {
+                    auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(p));
+                    if (it == objPtrToIndex.end()) break;
+                    if (allObjs[it->second].parentForm == obj) {
+                        hasSurvivingText = true;
+                        break;
+                    }
+                    p = allObjs[it->second].parentForm;
+                }
+                if (hasSurvivingText) break;
+            }
+
             bool formFullyInside = false;
             for (auto& m : matches) {
                 if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
-                    overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                    (!hasSurvivingText &&
+                     overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f)) {
                     formFullyInside = true;
                     break;
                 }
@@ -1657,11 +1695,40 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         std::vector<FPDF_PAGEOBJECT> createdObjs;
         bool allOk = true;
 
+        FPDF_FONT fragFont = plan.font;
+        if (plan.parentForm) {
+            char baseName[128] = {0};
+            if (FPDFFont_GetBaseFontName(plan.font, baseName, sizeof(baseName)) > 0) {
+                const char* stdName = getStandard14FontName(baseName);
+                if (stdName) {
+                    FPDF_FONT lf = FPDFText_LoadStandardFont(doc, stdName);
+                    if (lf) {
+                        if (core) core->loadedFonts.push_back(lf);
+                        fragFont = lf;
+                    }
+                } else {
+                    size_t fontDataLen = 0;
+                    if (FPDFFont_GetFontData(plan.font, nullptr, 0, &fontDataLen) && fontDataLen > 0) {
+                        std::vector<uint8_t> fontData(fontDataLen);
+                        size_t actual = 0;
+                        if (FPDFFont_GetFontData(plan.font, fontData.data(), fontDataLen, &actual) && actual > 0) {
+                            FPDF_FONT lf = FPDFText_LoadFont(doc, fontData.data(), static_cast<uint32_t>(actual),
+                                                           FPDF_FONT_TRUETYPE, 1);
+                            if (lf) {
+                                if (core) core->loadedFonts.push_back(lf);
+                                fragFont = lf;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         for (size_t fi = 0; fi < plan.fragments.size(); fi++) {
             TextFragment& frag = plan.fragments[fi];
             if (frag.utf16.size() <= 1) continue;  // skip null-only
 
-            FPDF_PAGEOBJECT fragObj = FPDFPageObj_CreateTextObj(doc, plan.font, frag.fontSize);
+            FPDF_PAGEOBJECT fragObj = FPDFPageObj_CreateTextObj(doc, fragFont, frag.fontSize);
             if (!fragObj) {
                 allOk = false;
                 break;
@@ -2658,20 +2725,67 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
-        TextMatch m;
-        m.bboxL = cL;
-        m.bboxB = cB;
-        m.bboxR = cR;
-        m.bboxT = cT;
+        // Compute aggregate bounding box covering all page objects and standard page size
+        float pageMinX = 0.0f, pageMinY = 0.0f;
+        float pageMaxX = static_cast<float>(FPDF_GetPageWidth(pw->page));
+        float pageMaxY = static_cast<float>(FPDF_GetPageHeight(pw->page));
+        if (pageMaxX <= 0.0f) pageMaxX = cR + 1000.0f;
+        if (pageMaxY <= 0.0f) pageMaxY = cT + 1000.0f;
 
-        const int count = FPDFText_CountChars(tp);
-        for (int i = 0; i < count; ++i) {
-            double ox, oy;
-            if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
-            if (ox < cL || ox > cR || oy < cB || oy > cT) m.charIndices.push_back(i);
+        for (int i = 0; i < fastObjCount; ++i) {
+            FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
+            if (!obj) continue;
+            float ol, ob, or_, ot;
+            if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
+                pageMinX = std::min(pageMinX, ol);
+                pageMinY = std::min(pageMinY, ob);
+                pageMaxX = std::max(pageMaxX, or_);
+                pageMaxY = std::max(pageMaxY, ot);
+            }
         }
 
-        bool anythingToRemove = !m.charIndices.empty();
+        // Expand bounds to enclose any outer content
+        pageMinX -= 100.0f;
+        pageMinY -= 100.0f;
+        pageMaxX += 100.0f;
+        pageMaxY += 100.0f;
+
+        // Define 4 outer margin bounding boxes around the crop rect
+        struct MarginBox {
+            float l, b, r, t;
+        };
+        std::vector<MarginBox> margins;
+        if (cL > pageMinX) margins.push_back({pageMinX, pageMinY, cL, pageMaxY});
+        if (cR < pageMaxX) margins.push_back({cR, pageMinY, pageMaxX, pageMaxY});
+        if (cB > pageMinY) margins.push_back({cL, pageMinY, cR, cB});
+        if (cT < pageMaxY) margins.push_back({cL, cT, cR, pageMaxY});
+
+        std::vector<TextMatch> matches;
+        const int count = FPDFText_CountChars(tp);
+
+        for (const auto& mb : margins) {
+            TextMatch m;
+            m.bboxL = mb.l;
+            m.bboxB = mb.b;
+            m.bboxR = mb.r;
+            m.bboxT = mb.t;
+            for (int i = 0; i < count; ++i) {
+                double ox, oy;
+                if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
+                if (ox >= mb.l && ox <= mb.r && oy >= mb.b && oy <= mb.t) {
+                    m.charIndices.push_back(i);
+                }
+            }
+            matches.push_back(std::move(m));
+        }
+
+        bool anythingToRemove = false;
+        for (const auto& m : matches) {
+            if (!m.charIndices.empty()) {
+                anythingToRemove = true;
+                break;
+            }
+        }
         if (!anythingToRemove) {
             const int objCount = FPDFPage_CountObjects(pw->page);
             for (int i = 0; i < objCount; ++i) {
@@ -2680,7 +2794,7 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
                 if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;
                 float ol, ob, or_, ot;
                 if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
-                if (!rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT)) {
+                if (!isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT)) {
                     anythingToRemove = true;
                     break;
                 }
@@ -2690,9 +2804,6 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             FPDFText_ClosePage(tp);
             return JPDFIUM_OK;
         }
-
-        std::vector<TextMatch> matches;
-        matches.push_back(std::move(m));
 
         int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
 

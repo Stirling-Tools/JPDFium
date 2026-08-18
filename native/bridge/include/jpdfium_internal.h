@@ -1,5 +1,6 @@
 #pragma once
 #include <fpdfview.h>
+#include <fpdf_edit.h>
 
 #include <array>
 #include <cstddef>
@@ -86,6 +87,8 @@ struct DocCore {
     // JSON report of the last sanitize run ("" = sanitize has not run).
     std::string sanitizeReport{};
 
+    std::vector<FPDF_FONT> loadedFonts{};
+
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
     }
@@ -111,6 +114,9 @@ struct DocCore {
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
     return std::shared_ptr<DocCore>(new DocCore{doc}, [](DocCore* c) {
+        for (FPDF_FONT f : c->loadedFonts) {
+            FPDFFont_Close(f);
+        }
         if (c->doc) {
             FPDF_CloseDocument(c->doc);
             c->doc = nullptr;
