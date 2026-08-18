@@ -57,7 +57,21 @@ case "$(uname -s)" in
         ;;
 esac
 
-HB_TAG="${HB_TAG:-8.3.0}"   # match the 8.3.x series Ubuntu Noble ships
+resolve_latest_tag() {
+    local repo="$1"
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+        | grep -oE '"tag_name": *"[^"]+"' | head -1 \
+        | sed -E 's/.*"([^"]+)"$/\1/' || true
+}
+
+if [ -z "${HB_TAG:-}" ]; then
+    HB_TAG="$(resolve_latest_tag harfbuzz/harfbuzz)"
+    HB_TAG="${HB_TAG:-14.3.1}"
+    echo "==> build-harfbuzz-no-glib.sh: harfbuzz resolved to latest: $HB_TAG"
+else
+    echo "==> build-harfbuzz-no-glib.sh: harfbuzz pinned by env: $HB_TAG"
+fi
 HB_REPO=https://github.com/harfbuzz/harfbuzz
 
 # Build prereqs.
