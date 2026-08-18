@@ -187,6 +187,11 @@ JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page) JPDFIUM_NOEXCEP
 JPDFIUM_EXPORT int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_content,
                                              int32_t* commitCount) JPDFIUM_NOEXCEPT;
 
+// JSON report of the last mandatory sanitize stage (qpdf pass) on a
+// redacted save. Caller frees with jpdfium_free_string. Returns "" (empty
+// string) when no sanitize has run.
+JPDFIUM_EXPORT int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) JPDFIUM_NOEXCEPT;
+
 // Incremental save: writes only changed objects, document stays live.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data,
                                                     int64_t* len) JPDFIUM_NOEXCEPT;

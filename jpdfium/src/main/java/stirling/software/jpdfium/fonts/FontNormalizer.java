@@ -70,7 +70,11 @@ public final class FontNormalizer {
      */
     public static Result normalizeAll(PdfDocument doc) {
         LOG.log(Level.DEBUG, "Normalizing all {0} pages", doc.pageCount());
-        int totalFonts = 0, totalTuc = 0, totalWidths = 0, totalType1 = 0, totalResubset = 0;
+        int totalFonts = 0;
+        int totalTuc = 0;
+        int totalWidths = 0;
+        int totalType1 = 0;
+        int totalResubset = 0;
         for (int i = 0; i < doc.pageCount(); i++) {
             Result r = normalizePage(doc, i);
             totalFonts += r.fontsProcessed;

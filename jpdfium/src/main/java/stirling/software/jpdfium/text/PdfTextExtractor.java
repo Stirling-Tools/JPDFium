@@ -86,7 +86,7 @@ public final class PdfTextExtractor {
      * Malformed objects are skipped wholesale.
      */
     static List<TextChar> parseCharsJson(String json) {
-        if (json == null || json.isEmpty() || json.equals("[]")) return new ArrayList<>();
+        if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
         final int n = json.length();
         // Rough pre-size: ~56 bytes per char object in the stub/real schema.
         List<TextChar> chars = new ArrayList<>(Math.max(8, n / 56));
@@ -95,8 +95,13 @@ public final class PdfTextExtractor {
             int objStart = json.indexOf('{', p);
             if (objStart < 0) break;
             int i = objStart + 1;
-            int index = 0, unicode = 0;
-            float x = 0, y = 0, w = 0, h = 0, fontSize = 0;
+            int index = 0;
+            int unicode = 0;
+            float x = 0;
+            float y = 0;
+            float w = 0;
+            float h = 0;
+            float fontSize = 0;
             String fontName = "";
             boolean complete = false;
             try {
@@ -224,10 +229,13 @@ public final class PdfTextExtractor {
         List<TextWord> words = buildWords(lineChars);
         if (lineChars.isEmpty()) return new TextLine(words, 0f, 0f, 0f, 0f);
         // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
-        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
-        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        float minX = Float.POSITIVE_INFINITY;
+        float minY = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY;
+        float maxY = Float.NEGATIVE_INFINITY;
         for (TextChar c : lineChars) {
-            float cx = c.x(), cy = c.y();
+            float cx = c.x();
+            float cy = c.y();
             if (cx < minX) minX = cx;
             if (cy < minY) minY = cy;
             float rx = cx + c.width();
@@ -264,10 +272,13 @@ public final class PdfTextExtractor {
     private static TextWord buildWord(List<TextChar> wordChars) {
         if (wordChars.isEmpty()) return new TextWord(wordChars, 0f, 0f, 0f, 0f);
         // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
-        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
-        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        float minX = Float.POSITIVE_INFINITY;
+        float minY = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY;
+        float maxY = Float.NEGATIVE_INFINITY;
         for (TextChar c : wordChars) {
-            float cx = c.x(), cy = c.y();
+            float cx = c.x();
+            float cy = c.y();
             if (cx < minX) minX = cx;
             if (cy < minY) minY = cy;
             float rx = cx + c.width();

@@ -159,6 +159,21 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * JSON report of the last mandatory sanitize stage (qpdf pass) that ran
+     * when a redacted document was saved, or empty when none has run.
+     *
+     * <p>Every save of a redacted document runs a sanitize pass that purges
+     * dead objects, scrubs metadata/XMP/annotations/form values/outlines,
+     * strips the structure tree, filters ToUnicode maps and erases redacted
+     * glyph outlines from touched font programs. The report carries the
+     * per-category counts (see {@code RedactionSession#sanitizeReport()}).
+     */
+    public String sanitizeReport() {
+        ensureOpen();
+        return JpdfiumLib.docSanitizeReport(handle);
+    }
+
+    /**
      * Returns the raw FPDF_DOCUMENT MemorySegment for direct PDFium FFM calls.
      */
     public MemorySegment rawHandle() {

@@ -26,7 +26,7 @@ public final class NativeJsonParser {
      */
     public static List<Map<String, String>> parseArray(String json) {
         List<Map<String, String>> result = new ArrayList<>();
-        if (json == null || json.equals("[]")) return result;
+        if (json == null || "[]".equals(json)) return result;
 
         int pos = 0;
         while (pos < json.length()) {
@@ -67,8 +67,7 @@ public final class NativeJsonParser {
     public static boolean boolField(String json, String key) {
         String needle = "\"" + key + "\":";
         int idx = json.indexOf(needle);
-        if (idx < 0) return false;
-        return json.indexOf("true", idx + needle.length()) == idx + needle.length();
+        return idx >= 0 && json.indexOf("true", idx + needle.length()) == idx + needle.length();
     }
 
     /** Extract a string field from a single JSON object string. Returns "" if missing. */

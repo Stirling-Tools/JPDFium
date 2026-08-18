@@ -75,7 +75,21 @@ case "$(uname -s)" in
         ;;
 esac
 
-QPDF_TAG="${QPDF_TAG:-v11.9.1}"
+resolve_latest_tag() {
+    local repo="$1"
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+        | grep -oE '"tag_name": *"[^"]+"' | head -1 \
+        | sed -E 's/.*"([^"]+)"$/\1/' || true
+}
+
+if [ -z "${QPDF_TAG:-}" ]; then
+    QPDF_TAG="$(resolve_latest_tag qpdf/qpdf)"
+    QPDF_TAG="${QPDF_TAG:-v12.4.0}"
+    echo "==> build-qpdf-native-crypto.sh: qpdf resolved to latest: $QPDF_TAG"
+else
+    echo "==> build-qpdf-native-crypto.sh: qpdf pinned by env: $QPDF_TAG"
+fi
 QPDF_REPO=https://github.com/qpdf/qpdf
 
 # Build prerequisites: zlib + libjpeg are needed by qpdf regardless of

@@ -1,0 +1,13 @@
+# Cargo configuration for JPDFium's Rust bridge.
+#
+# sparse protocol: uses direct HTTPS downloads instead of the git-based index,
+# which is faster and more resilient to transient network/DNS hiccups on CI
+# runners (the git protocol can stall on index.crates.io resolution).
+[registries.crates-io]
+protocol = "sparse"
+
+# Retry transient network failures (DNS timeouts, connection resets) instead
+# of failing the entire native build on the first hiccup.
+[net]
+retry = 5
+git-fetch-with-cli = false

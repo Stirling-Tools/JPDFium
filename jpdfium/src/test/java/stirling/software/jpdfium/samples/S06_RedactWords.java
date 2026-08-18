@@ -77,6 +77,7 @@ public class S06_RedactWords {
                 .addWord("Employ")
                 .addWord("VM")
                 .addWord("certificat")
+                .addWord("lorem")
                 // PII patterns
                 .enablePiiPatterns(PiiCategory.select(
                         PiiCategory.EMAIL,

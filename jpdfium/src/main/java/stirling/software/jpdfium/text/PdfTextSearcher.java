@@ -65,14 +65,15 @@ public final class PdfTextSearcher {
      */
     static List<SearchMatch> parseMatchesJson(String json, int pageIndex) {
         List<SearchMatch> matches = new ArrayList<>();
-        if (json == null || json.isEmpty() || json.equals("[]")) return matches;
+        if (json == null || json.isEmpty() || "[]".equals(json)) return matches;
         final int n = json.length();
         int p = 0;
         while (true) {
             int objStart = json.indexOf('{', p);
             if (objStart < 0) break;
             int i = objStart + 1;
-            int start = 0, len = 0;
+            int start = 0;
+            int len = 0;
             boolean complete = false;
             try {
                 while (i < n) {

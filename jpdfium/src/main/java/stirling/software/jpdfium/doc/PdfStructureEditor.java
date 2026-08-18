@@ -61,7 +61,11 @@ public final class PdfStructureEditor {
      * @return summary of what was tagged
      */
     public static TagResult autoTag(PdfDocument doc) {
-        int headings = 0, paragraphs = 0, tables = 0, figures = 0, lists = 0;
+        int headings = 0;
+        int paragraphs = 0;
+        int tables = 0;
+        int figures = 0;
+        int lists = 0;
 
         Builder builder = tag(doc);
 
@@ -188,8 +192,10 @@ public final class PdfStructureEditor {
     }
 
     private static Rect blockRect(List<TextLine> lines) {
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
-        float maxX = Float.MIN_VALUE, maxY = Float.MIN_VALUE;
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = Float.MIN_VALUE;
+        float maxY = Float.MIN_VALUE;
         for (TextLine l : lines) {
             minX = Math.min(minX, l.x());
             minY = Math.min(minY, l.y());

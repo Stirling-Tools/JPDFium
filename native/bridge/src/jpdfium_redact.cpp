@@ -967,6 +967,20 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             }
         }
 
+        // Every redaction-touched font is recorded for the sanitize stage:
+        // its font program is re-subset on save so the redacted glyph
+        // outlines are unrecoverable (ACSC font-subset remnant class).
+        // This includes fully-destroyed objects, which never create a plan.
+        if (anyRedacted && core) {
+            FPDF_FONT f = FPDFTextObj_GetFont(obj);
+            if (f) {
+                char fname[256] = {0};
+                if (FPDFFont_GetBaseFontName(f, fname, sizeof fname) > 0) {
+                    core->addTouchedFont(fname);
+                }
+            }
+        }
+
         // Fully contained in redaction -> simple removal
         if (allRedacted) {
             objsToDestroy.insert(obj);
@@ -2379,6 +2393,9 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         if (!auditNoSurvivorsInRegion(pw->page, regions, paintedCovers)) {
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
+        // Sanitize-stage bookkeeping: annotations intersecting this zone are
+        // removed on every redacted save.
+        if (pw->core) pw->core->addRedactZone(pw->pageIndex, x, y, x + w, y + h);
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
@@ -2487,6 +2504,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         }
 
         // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
+        // Sanitize-stage bookkeeping: metadata/outlines/form values containing
+        // the pattern are scrubbed on every redacted save.
+        if (pw->core) pw->core->addRedactLiteral(pattern);
 #ifdef JPDFIUM_HAS_PCRE2
         Pcre2Pattern pc;
         std::string compileErr;
@@ -2616,6 +2636,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // (group->word map) so the page text is scanned once; regex mode
         // patterns compile individually (combining arbitrary regexes would
         // change anchor semantics).
+        for (int32_t wi = 0; wi < wordCount; ++wi) {
+            if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
+        }
         if (!useRegex) {
 #ifdef JPDFIUM_HAS_PCRE2
             std::u32string combined;
@@ -2888,6 +2911,11 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         }
 
         std::vector<TextMatch> matches;
+        // Mark-phase bookkeeping: the literals only become sanitize-relevant
+        // once committed, but recording now keeps one code path.
+        for (int32_t wi = 0; wi < wordCount; ++wi) {
+            if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
+        }
 #ifdef JPDFIUM_HAS_PCRE2
         if (!useRegex) {
             std::u32string combined;
@@ -3068,6 +3096,14 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
         if (!auditNoSurvivorsInRegion(pw->page, redactRects, paintedCovers)) {
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
+
+        // Sanitize-stage bookkeeping: annotations intersecting these zones
+        // are removed on every redacted save.
+        if (pw->core) {
+            for (auto& ar : redactRects) {
+                pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+            }
         }
 
         // Verified complete: remove the REDACT annotations now.

@@ -37,7 +37,7 @@ import java.util.Map;
 public final class PatternEngine implements AutoCloseable {
 
     private final List<CompiledPattern> patterns;
-    private volatile boolean closed = false;
+    private volatile boolean closed;
 
     private PatternEngine(List<CompiledPattern> patterns) {
         this.patterns = patterns;
@@ -111,7 +111,8 @@ public final class PatternEngine implements AutoCloseable {
 
         allMatches.sort((a, b) -> {
             int cmp = Integer.compare(a.start, b.start);
-            return cmp != 0 ? cmp : Integer.compare(b.end, a.end);
+            if (cmp == 0) cmp = Integer.compare(b.end, a.end);
+            return cmp;
         });
 
         return Collections.unmodifiableList(allMatches);

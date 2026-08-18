@@ -356,7 +356,8 @@ final class QrEncoder {
     private static void placeFinderPatterns(boolean[][] m, boolean[][] r, int size) {
         int[][] corners = {{0, 0}, {size - 7, 0}, {0, size - 7}};
         for (int[] c : corners) {
-            int row = c[0], col = c[1];
+            int row = c[0];
+            int col = c[1];
             for (int dr = 0; dr < 7; dr++) {
                 for (int dc = 0; dc < 7; dc++) {
                     boolean dark = (dr == 0 || dr == 6 || dc == 0 || dc == 6 ||
@@ -382,7 +383,8 @@ final class QrEncoder {
                 for (int dr = -2; dr <= 2; dr++) {
                     for (int dc = -2; dc <= 2; dc++) {
                         boolean dark = (Math.abs(dr) == 2 || Math.abs(dc) == 2 || (dr == 0 && dc == 0));
-                        int rr = cy + dr, cc = cx + dc;
+                        int rr = cy + dr;
+                        int cc = cx + dc;
                         m[rr][cc] = dark;
                         r[rr][cc] = true;
                     }
@@ -590,7 +592,8 @@ final class QrEncoder {
     private static boolean matchesFinderLike(boolean[][] m, int row, int col, boolean horizontal) {
         boolean[] p1 = {true, false, true, true, true, false, true, false, false, false, false};
         boolean[] p2 = {false, false, false, false, true, false, true, true, true, false, true};
-        boolean m1 = true, m2 = true;
+        boolean m1 = true;
+        boolean m2 = true;
         for (int i = 0; i < 11; i++) {
             boolean val = horizontal ? m[row][col + i] : m[row + i][col];
             if (val != p1[i]) m1 = false;
