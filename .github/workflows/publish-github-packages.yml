@@ -194,10 +194,13 @@ jobs:
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
+            PLAT_GEN="ARM64"
           else
             TRIPLET="x64-windows"
+            PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
+            pkgconf:$TRIPLET \
             pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
             icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
             libunibreak:$TRIPLET
@@ -207,7 +210,10 @@ jobs:
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
+            echo "VCPKG_TARGET_TRIPLET=$TRIPLET"
+            echo "CMAKE_GENERATOR_PLATFORM=$PLAT_GEN"
           } >> "$GITHUB_ENV"
+          echo "$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/tools/pkgconf" >> "$GITHUB_PATH"
 
       - name: Fetch prebuilt PDFium (pinned)
         id: fetch
