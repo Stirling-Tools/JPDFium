@@ -119,7 +119,6 @@ int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
     return JPDFIUM_OK;
 }
 
-
 namespace {
 
 // Mandatory sanitize stage: every full save of a redacted document runs a

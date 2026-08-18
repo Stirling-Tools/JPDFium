@@ -511,7 +511,7 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
     // Form XObjects in this scope.
     if (res.hasKey("/XObject") && res.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = res.getKey("/XObject");
-        for (const auto& [name, xo] : xos.ditems()) {
+        for (auto [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visitedObjs.count(id)) continue;
@@ -719,7 +719,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             QPDFObjectHandle fonts = res.getKey("/Font");
             if (!fonts.isDictionary()) continue;
             ContentScan& scan = pageScans[pi];
-            for (const auto& [name, font] : fonts.ditems()) {
+            for (auto [name, font] : fonts.ditems()) {
                 if (!font.isDictionary()) continue;
                 std::string id = font.getObjGen().unparse();
                 // qpdf dict keys carry the leading slash; the content scan

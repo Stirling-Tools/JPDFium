@@ -74,17 +74,17 @@ struct DocCore {
     // Words/patterns (UTF-8) used for redaction: metadata, annotation text,
     // outline titles and form-field values containing these are scrubbed on
     // every redacted save.
-    std::vector<std::string> redactedLiterals;
+    std::vector<std::string> redactedLiterals{};
     // Page-space rectangles of every committed redaction: annotations that
     // intersect them are removed on save (their text may echo the redacted
     // content).
-    std::vector<RedactZone> redactZones;
+    std::vector<RedactZone> redactZones{};
     // BaseFont names of fonts whose text objects were redaction-touched:
     // their font programs are re-subset on save (hb-subset) so the redacted
     // glyph outlines cannot be recovered from the file (ACSC remnant class).
-    std::vector<std::string> touchedFontNames;
+    std::vector<std::string> touchedFontNames{};
     // JSON report of the last sanitize run ("" = sanitize has not run).
-    std::string sanitizeReport;
+    std::string sanitizeReport{};
 
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
