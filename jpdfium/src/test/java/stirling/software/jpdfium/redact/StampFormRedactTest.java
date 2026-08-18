@@ -19,13 +19,15 @@ import stirling.software.jpdfium.PdfDocument;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * A tight stamp form whose entire content is the target: the geometric pass marks the whole
  * form while the char pass claims its child text, and removal must not free the child twice.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class StampFormRedactTest {
 
     private static final int BLACK = 0xFF000000;

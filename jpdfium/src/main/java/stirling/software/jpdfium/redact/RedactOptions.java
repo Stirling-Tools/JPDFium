@@ -150,18 +150,18 @@ public final class RedactOptions {
     public static final class Builder {
         private final List<String> words = new ArrayList<>();
         private int boxColor = 0xFF000000;
-        private float padding = 0.0f;
-        private boolean useRegex = false;
-        private boolean wholeWord = false;
+        private float padding;
+        private boolean useRegex;
+        private boolean wholeWord;
         private boolean removeContent = true;
-        private boolean caseSensitive = false;
+        private boolean caseSensitive;
 
-        private boolean convertToImage = false;
+        private boolean convertToImage;
         private int imageDpi = 150;
 
-        private boolean incrementalSave = false;
+        private boolean incrementalSave;
 
-        private boolean normalizeFonts = false;
+        private boolean normalizeFonts;
         private boolean fixToUnicode = true;
         private boolean repairWidths = true;
 
@@ -170,16 +170,16 @@ public final class RedactOptions {
 
         private final List<EntityEntry> entities = new ArrayList<>();
 
-        private boolean glyphAware = false;
+        private boolean glyphAware;
         private boolean ligatureAware = true;
         private boolean bidiAware = true;
         private boolean graphemeSafe = true;
 
-        private boolean redactMetadata = false;
-        private boolean stripAllMetadata = false;
+        private boolean redactMetadata;
+        private boolean stripAllMetadata;
         private final List<String> metadataKeysToStrip = new ArrayList<>();
 
-        private boolean semanticRedact = false;
+        private boolean semanticRedact;
         private int coreferenceWindow = 2;
         private final List<String> coreferencePronouns = new ArrayList<>();
 

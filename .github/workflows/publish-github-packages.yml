@@ -192,7 +192,7 @@ jobs:
             TRIPLET="x64-windows"
           fi
           bash native/vcpkg-install.sh \
-            pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
+            pcre2[32-bit]:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
             icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
             libunibreak:$TRIPLET
           # CMakeLists.txt uses pkg_check_modules for these libs (same code path

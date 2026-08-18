@@ -309,9 +309,13 @@ if(JPDFIUM_USE_PDFIUM)
     # Native library dependencies (all required for full functionality)
     find_package(PkgConfig REQUIRED)
 
-    # PCRE2 - JIT-compiled regex for pattern matching
-    pkg_check_modules(PCRE2 REQUIRED IMPORTED_TARGET libpcre2-8)
-    target_link_libraries(jpdfium PRIVATE PkgConfig::PCRE2)
+    # PCRE2 - JIT-compiled regex for pattern matching. The redaction engine
+    # runs on char32_t buffers (32-bit build); the advanced pattern APIs use
+    # the 8-bit build. Both widths are required.
+    pkg_check_modules(PCRE2_8 REQUIRED IMPORTED_TARGET libpcre2-8)
+    target_link_libraries(jpdfium PRIVATE PkgConfig::PCRE2_8)
+    pkg_check_modules(PCRE2_32 REQUIRED IMPORTED_TARGET libpcre2-32)
+    target_link_libraries(jpdfium PRIVATE PkgConfig::PCRE2_32)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PCRE2)
 
     # FreeType - font extraction, classification, width repair

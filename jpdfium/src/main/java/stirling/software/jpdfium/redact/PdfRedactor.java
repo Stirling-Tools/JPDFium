@@ -54,6 +54,8 @@ import java.util.regex.Pattern;
  */
 public final class PdfRedactor {
 
+    private static final Pattern REGEX_METACHAR = Pattern.compile("([\\\\.*+?^${}()|\\[\\]])");
+
     private PdfRedactor() {}
 
     /**
@@ -65,11 +67,15 @@ public final class PdfRedactor {
      */
     public static RedactResult redact(Path inputPath, RedactOptions options) {
         PdfDocument doc = PdfDocument.open(inputPath);
+        boolean success = false;
         try {
-            return redact(doc, options);
-        } catch (Throwable t) {
-            doc.close();
-            throw t;
+            RedactResult result = redact(doc, options);
+            success = true;
+            return result;
+        } finally {
+            if (!success) {
+                doc.close();
+            }
         }
     }
 
@@ -82,11 +88,15 @@ public final class PdfRedactor {
      */
     public static RedactResult redact(byte[] pdfBytes, RedactOptions options) {
         PdfDocument doc = PdfDocument.open(pdfBytes);
+        boolean success = false;
         try {
-            return redact(doc, options);
-        } catch (Throwable t) {
-            doc.close();
-            throw t;
+            RedactResult result = redact(doc, options);
+            success = true;
+            return result;
+        } finally {
+            if (!success) {
+                doc.close();
+            }
         }
     }
 
@@ -149,7 +159,6 @@ public final class PdfRedactor {
             runNerOnly(doc, options, totalPages, allEntityMatches, pageRedactionWords);
         }
 
-        int totalWordMatches = 0;
         int totalGlyphMatches = 0;
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
 
@@ -179,7 +188,6 @@ public final class PdfRedactor {
                                 wordArray, options.boxColor(), options.padding(),
                                 options.wholeWord(), options.useRegex(),
                                 options.removeContent(), options.caseSensitive());
-                        totalWordMatches += matchesOnPage;
                     } catch (JPDFiumException e) {
                         if (e.isRedactIncomplete()) {
                             // The post-redaction audit found content that
@@ -223,7 +231,8 @@ public final class PdfRedactor {
             return FontNormalizer.normalizeAll(doc);
         }
 
-        int totalTuc = 0, totalWidths = 0;
+        int totalTuc = 0;
+        int totalWidths = 0;
         for (int i = 0; i < doc.pageCount(); i++) {
             if (options.fixToUnicode()) {
                 totalTuc += FontNormalizer.fixToUnicode(doc, i);
@@ -305,8 +314,6 @@ public final class PdfRedactor {
 
         return total;
     }
-
-    private static final Pattern REGEX_METACHAR = Pattern.compile("([\\\\.*+?^${}()|\\[\\]])");
 
     private static String escapeForRedact(String text, boolean regexMode) {
         if (!regexMode || text == null) return text;

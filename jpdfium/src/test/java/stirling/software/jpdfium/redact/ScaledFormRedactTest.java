@@ -22,13 +22,16 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The form is drawn scaled 2x: fragments re-inserted at page level must fold the form
  * transform into their matrix or they render at the wrong size and position.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+@SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class ScaledFormRedactTest {
 
     private static final int BLACK = 0xFF000000;

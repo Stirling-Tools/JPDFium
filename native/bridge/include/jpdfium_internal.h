@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <memory_resource>
+#include <unordered_map>
 
 #define JPDFIUM_OK (0)
 #define JPDFIUM_ERR_INVALID (-1)

@@ -95,7 +95,7 @@ public final class GlyphRedactor {
 
         public static final class Builder {
             private int color = 0xFF000000;
-            private float padding = 0.0f;
+            private float padding;
             private boolean ligatureAware = true;
             private boolean bidiAware = true;
             private boolean graphemeSafe = true;
