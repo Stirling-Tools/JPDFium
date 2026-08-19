@@ -73,11 +73,6 @@ public final class PdfDocument implements AutoCloseable {
 
     public int pageCount() {
         ensureOpen();
-        try {
-            if (DocBindings.FPDF_GetPageCount != null) {
-                return (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDocSegment);
-            }
-        } catch (Throwable _) {}
         return JpdfiumLib.docPageCount(handle);
     }
 

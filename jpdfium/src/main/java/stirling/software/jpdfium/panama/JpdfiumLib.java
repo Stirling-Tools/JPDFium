@@ -139,14 +139,19 @@ public final class JpdfiumLib {
         }
     }
 
+    private static final ThreadLocal<MemorySegment> INT_SCRATCH =
+            ThreadLocal.withInitial(() -> Arena.ofAuto().allocate(JAVA_INT));
+    private static final ThreadLocal<MemorySegment> LONG_SCRATCH =
+            ThreadLocal.withInitial(() -> Arena.ofAuto().allocate(JAVA_LONG));
+    private static final ThreadLocal<MemorySegment> FLOAT_SCRATCH =
+            ThreadLocal.withInitial(() -> Arena.ofAuto().allocate(JAVA_FLOAT));
+
     public static int docPageCount(long doc) {
         NativeGuard.acquire();
         try {
-            try (Arena a = Arena.ofConfined()) {
-                MemorySegment cSeg = a.allocate(JAVA_INT);
-                check(JpdfiumH.jpdfium_doc_page_count(doc, cSeg), "docPageCount");
-                return cSeg.get(JAVA_INT, 0);
-            }
+            MemorySegment cSeg = INT_SCRATCH.get();
+            check(JpdfiumH.jpdfium_doc_page_count(doc, cSeg), "docPageCount");
+            return cSeg.get(JAVA_INT, 0);
         } finally {
             NativeGuard.release();
         }
@@ -205,11 +210,9 @@ public final class JpdfiumLib {
     public static float pageWidth(long page) {
         NativeGuard.acquire();
         try {
-            try (Arena a = Arena.ofConfined()) {
-                MemorySegment s = a.allocate(JAVA_FLOAT);
-                check(JpdfiumH.jpdfium_page_width(page, s), "pageWidth");
-                return s.get(JAVA_FLOAT, 0);
-            }
+            MemorySegment s = FLOAT_SCRATCH.get();
+            check(JpdfiumH.jpdfium_page_width(page, s), "pageWidth");
+            return s.get(JAVA_FLOAT, 0);
         } finally {
             NativeGuard.release();
         }
@@ -218,11 +221,9 @@ public final class JpdfiumLib {
     public static float pageHeight(long page) {
         NativeGuard.acquire();
         try {
-            try (Arena a = Arena.ofConfined()) {
-                MemorySegment s = a.allocate(JAVA_FLOAT);
-                check(JpdfiumH.jpdfium_page_height(page, s), "pageHeight");
-                return s.get(JAVA_FLOAT, 0);
-            }
+            MemorySegment s = FLOAT_SCRATCH.get();
+            check(JpdfiumH.jpdfium_page_height(page, s), "pageHeight");
+            return s.get(JAVA_FLOAT, 0);
         } finally {
             NativeGuard.release();
         }
