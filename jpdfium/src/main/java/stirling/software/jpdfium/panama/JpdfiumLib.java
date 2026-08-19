@@ -11,8 +11,11 @@ import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.RenderResult;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
@@ -101,11 +104,25 @@ public final class JpdfiumLib {
     }
 
     private static float pageWidth0(long page) {
+        try {
+            if (FastLinks.PAGE_WIDTH != null) {
+                int rc = (int) FastLinks.PAGE_WIDTH.invokeExact(page, FLOAT_SCRATCH);
+                check(rc, "pageWidth");
+                return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
+            }
+        } catch (Throwable _) {}
         check(JpdfiumH.jpdfium_page_width(page, FLOAT_SCRATCH), "pageWidth");
         return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
     }
 
     private static float pageHeight0(long page) {
+        try {
+            if (FastLinks.PAGE_HEIGHT != null) {
+                int rc = (int) FastLinks.PAGE_HEIGHT.invokeExact(page, FLOAT2_SCRATCH);
+                check(rc, "pageHeight");
+                return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
+            }
+        } catch (Throwable _) {}
         check(JpdfiumH.jpdfium_page_height(page, FLOAT2_SCRATCH), "pageHeight");
         return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
     }
@@ -171,6 +188,13 @@ public final class JpdfiumLib {
     public static int docPageCount(long doc) {
         NativeGuard.acquire();
         try {
+            try {
+                if (FastLinks.DOC_PAGE_COUNT != null) {
+                    int rc = (int) FastLinks.DOC_PAGE_COUNT.invokeExact(doc, INT_SCRATCH);
+                    check(rc, "docPageCount");
+                    return INT_SCRATCH.get(JAVA_INT, 0);
+                }
+            } catch (Throwable _) {}
             check(JpdfiumH.jpdfium_doc_page_count(doc, INT_SCRATCH), "docPageCount");
             return INT_SCRATCH.get(JAVA_INT, 0);
         } finally {
@@ -203,9 +227,37 @@ public final class JpdfiumLib {
         }
     }
 
+    /**
+     * Streams saved document bytes directly to a channel without intermediate Java heap byte[] allocation.
+     */
+    public static void docSaveTo(long doc, WritableByteChannel channel) throws IOException {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
+            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            try {
+                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+                ByteBuffer bb = nativePtr.reinterpret(len).asByteBuffer();
+                while (bb.hasRemaining()) {
+                    channel.write(bb);
+                }
+            } finally {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+            }
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static void docClose(long doc) {
         NativeGuard.acquire();
         try {
+            try {
+                if (FastLinks.DOC_CLOSE != null) {
+                    FastLinks.DOC_CLOSE.invokeExact(doc);
+                    return;
+                }
+            } catch (Throwable _) {}
             JpdfiumH.jpdfium_doc_close(doc);
         } finally {
             NativeGuard.release();
@@ -243,6 +295,12 @@ public final class JpdfiumLib {
     public static void pageClose(long page) {
         NativeGuard.acquire();
         try {
+            try {
+                if (FastLinks.PAGE_CLOSE != null) {
+                    FastLinks.PAGE_CLOSE.invokeExact(page);
+                    return;
+                }
+            } catch (Throwable _) {}
             JpdfiumH.jpdfium_page_close(page);
         } finally {
             NativeGuard.release();

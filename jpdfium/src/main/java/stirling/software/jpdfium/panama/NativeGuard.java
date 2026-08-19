@@ -63,6 +63,11 @@ public final class NativeGuard {
         }
     }
 
+    /** Runs a multi-operation batch action under a single lock acquisition. */
+    public static void runBatch(Runnable action) {
+        run(action);
+    }
+
     /** Calls the supplier with the PDFium lock held. */
     public static <T> T call(Supplier<T> action) {
         LOCK.lock();
@@ -71,6 +76,11 @@ public final class NativeGuard {
         } finally {
             LOCK.unlock();
         }
+    }
+
+    /** Calls a multi-operation batch supplier under a single lock acquisition. */
+    public static <T> T callBatch(Supplier<T> action) {
+        return call(action);
     }
 
     /**

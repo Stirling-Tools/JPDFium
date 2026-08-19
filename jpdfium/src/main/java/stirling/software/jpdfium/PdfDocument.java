@@ -12,7 +12,11 @@ import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -124,6 +128,29 @@ public final class PdfDocument implements AutoCloseable {
     public void save(Path path) {
         ensureOpen();
         JpdfiumLib.docSave(handle, path.toAbsolutePath().toString());
+    }
+
+    /**
+     * Save the document directly to a {@link WritableByteChannel} without intermediate Java heap byte[] allocation.
+     *
+     * @param channel target output channel
+     * @throws IOException if an I/O error occurs
+     */
+    public void save(WritableByteChannel channel) throws IOException {
+        ensureOpen();
+        JpdfiumLib.docSaveTo(handle, channel);
+    }
+
+    /**
+     * Save the document directly to an {@link OutputStream}.
+     *
+     * @param out target output stream
+     * @throws IOException if an I/O error occurs
+     */
+    public void save(OutputStream out) throws IOException {
+        ensureOpen();
+        WritableByteChannel channel = Channels.newChannel(out);
+        JpdfiumLib.docSaveTo(handle, channel);
     }
 
     public byte[] saveBytes() {

@@ -308,4 +308,47 @@ class PdfDocumentTest {
             assertTrue(bytes.length > 0);
         }
     }
+
+    @Test
+    void saveToChannelAndStream() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath())) {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            doc.save(baos);
+            byte[] fromStream = baos.toByteArray();
+            assertTrue(fromStream.length > 0);
+
+            java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("jpdfium-test", ".pdf");
+            try (java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(
+                    tempFile, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE)) {
+                doc.save(fc);
+            }
+            byte[] fromChannel = java.nio.file.Files.readAllBytes(tempFile);
+            java.nio.file.Files.deleteIfExists(tempFile);
+            assertEquals(fromStream.length, fromChannel.length);
+        }
+    }
+
+    @Test
+    void renderIntoDirectByteBuffer() throws Exception {
+        try (var doc = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            int width = 595;
+            int height = 842;
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(width * height * 4);
+            page.renderInto(buffer, width, height);
+            assertEquals(width * height * 4, buffer.capacity());
+        }
+    }
+
+    @Test
+    void nativeGuardBatch() throws Exception {
+        int pages = stirling.software.jpdfium.panama.NativeGuard.callBatch(() -> {
+            try (var doc = PdfDocument.open(pdfPath())) {
+                return doc.pageCount();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        assertEquals(3, pages);
+    }
 }
