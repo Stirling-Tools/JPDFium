@@ -13,6 +13,7 @@ cd "${WORK}"
 
 failures=0
 check() {
+    # shellcheck disable=SC2034
     local desc="$1" expected="$2"
     shift 2
     if "${BIN}" "$@" --quiet >/dev/null 2>&1; then

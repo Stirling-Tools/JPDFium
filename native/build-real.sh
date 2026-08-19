@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Build libjpdfium linked against real PDFium.
 set -euo pipefail
 
