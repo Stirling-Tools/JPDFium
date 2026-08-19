@@ -25,6 +25,18 @@ CMAKE_ARGS=(
     -DPDFIUM_DIR="${PDFIUM_DIR}"
     -DCMAKE_BUILD_TYPE=Release
 )
+# Forward generator platform for multi-config generators (Visual Studio on Windows)
+if [ -n "${CMAKE_GENERATOR_PLATFORM:-}" ]; then
+    CMAKE_ARGS+=(-A "${CMAKE_GENERATOR_PLATFORM}")
+    echo "  Generator platform: ${CMAKE_GENERATOR_PLATFORM}"
+elif [ "${TRIPLET:-}" = "arm64-windows" ] || [ "${PROCESSOR_ARCHITECTURE:-}" = "ARM64" ]; then
+    OS_NAME="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    if [ "$OS_NAME" != "darwin" ] && [ "$OS_NAME" != "linux" ]; then
+        CMAKE_ARGS+=(-A "ARM64")
+        echo "  Generator platform: ARM64"
+    fi
+fi
+
 # darwin-x64 cross-compile from arm64 host: CMAKE_OSX_ARCHITECTURES is set
 # by the publish workflow's macOS x86_64 install step. Forward to cmake.
 if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then

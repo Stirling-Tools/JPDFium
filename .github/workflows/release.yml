@@ -189,7 +189,14 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y cmake ninja pkgconfiglite
+          choco install -y cmake ninja
+          if command -v pkg-config >/dev/null 2>&1; then
+            echo "pkg-config already on PATH"
+          elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then
+            echo "C:/Strawberry/c/bin" >> "$GITHUB_PATH"
+          else
+            choco install -y pkgconf || choco install -y pkgconfiglite || true
+          fi
           echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
           # matches the target arch (arm64-windows on windows-11-arm runners).
@@ -197,17 +204,23 @@ jobs:
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
+            PLAT_GEN="ARM64"
           else
             TRIPLET="x64-windows"
+            PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
+            pkgconf:$TRIPLET \
             pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
             icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
             libunibreak:$TRIPLET
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
+            echo "VCPKG_TARGET_TRIPLET=$TRIPLET"
+            echo "CMAKE_GENERATOR_PLATFORM=$PLAT_GEN"
           } >> "$GITHUB_ENV"
+          echo "$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/tools/pkgconf" >> "$GITHUB_PATH"
 
       - name: Fetch prebuilt PDFium (pinned)
         id: fetch

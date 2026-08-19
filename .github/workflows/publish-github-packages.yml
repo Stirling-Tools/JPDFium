@@ -179,7 +179,13 @@ jobs:
         run: |
           choco install -y cmake --version=4.4.2
           choco install -y ninja --version=1.13.2
-          choco install -y pkgconfiglite --version=0.28
+          if command -v pkg-config >/dev/null 2>&1; then
+            echo "pkg-config already on PATH"
+          elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then
+            echo "C:/Strawberry/c/bin" >> "$GITHUB_PATH"
+          else
+            choco install -y pkgconf || choco install -y pkgconfiglite || true
+          fi
           echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg ships preinstalled on windows-latest / windows-11-arm; pick up
           # the libs we need. Installed tree is triplet-scoped, so match the
@@ -188,10 +194,13 @@ jobs:
           # stock gitlab.freedesktop.org source is chronically flaky) + retries.
           if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
             TRIPLET="arm64-windows"
+            PLAT_GEN="ARM64"
           else
             TRIPLET="x64-windows"
+            PLAT_GEN="x64"
           fi
           bash native/vcpkg-install.sh \
+            pkgconf:$TRIPLET \
             pcre2:$TRIPLET freetype:$TRIPLET harfbuzz:$TRIPLET \
             icu:$TRIPLET qpdf:$TRIPLET pugixml:$TRIPLET \
             libunibreak:$TRIPLET
@@ -201,7 +210,10 @@ jobs:
           {
             echo "CMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
             echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig"
+            echo "VCPKG_TARGET_TRIPLET=$TRIPLET"
+            echo "CMAKE_GENERATOR_PLATFORM=$PLAT_GEN"
           } >> "$GITHUB_ENV"
+          echo "$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/tools/pkgconf" >> "$GITHUB_PATH"
 
       - name: Fetch prebuilt PDFium (pinned)
         id: fetch

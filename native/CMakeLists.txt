@@ -57,9 +57,9 @@ else()
     set(JPDFIUM_OS "linux")
 endif()
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "ARM64|arm64" OR CMAKE_GENERATOR_PLATFORM MATCHES "ARM64|arm64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     set(JPDFIUM_ARCH "arm64")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" OR CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "x64|X64" OR CMAKE_GENERATOR_PLATFORM MATCHES "x64|X64")
     set(JPDFIUM_ARCH "x64")
 else()
     message(WARNING "Unknown arch: ${CMAKE_SYSTEM_PROCESSOR}, defaulting to x64")
@@ -310,6 +310,17 @@ if(JPDFIUM_USE_PDFIUM)
     message(STATUS "  Rust lib: ${RUST_LIB}")
 
     # Native library dependencies (all required for full functionality)
+    if(WIN32 AND NOT PKG_CONFIG_EXECUTABLE)
+        find_program(PKG_CONFIG_EXECUTABLE NAMES pkgconf pkg-config pkg-config-lite
+            HINTS
+                "${CMAKE_PREFIX_PATH}/tools/pkgconf"
+                "$ENV{VCPKG_INSTALLATION_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/tools/pkgconf"
+                "$ENV{VCPKG_INSTALLATION_ROOT}/installed/arm64-windows/tools/pkgconf"
+                "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/tools/pkgconf"
+                "C:/Strawberry/c/bin"
+                "C:/ProgramData/chocolatey/bin"
+        )
+    endif()
     find_package(PkgConfig REQUIRED)
 
     # PCRE2 - JIT-compiled regex for pattern matching. The redaction engine
