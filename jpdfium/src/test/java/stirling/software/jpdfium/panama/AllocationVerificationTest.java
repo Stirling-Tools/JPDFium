@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * CI Gate: Hard-fail allocation verification tests for PDFium FFM hot call paths.
@@ -49,6 +50,9 @@ class AllocationVerificationTest {
 
     @BeforeAll
     static void setUp() throws Exception {
+        NativeLoader.ensureLoaded();
+        assumeTrue(NativeRuntime.isFull(), "Allocation verification requires real PDFium native library");
+
         tempPdf = Files.createTempFile("alloc-test-", ".pdf");
         try (var in = AllocationVerificationTest.class.getResourceAsStream("/pdfs/general/minimal.pdf")) {
             if (in != null) {

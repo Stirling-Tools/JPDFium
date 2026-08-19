@@ -57,7 +57,7 @@ public final class PdfBookmarkEditor {
      * @param output    destination file (overwritten if it exists)
      */
     public static void setBookmarks(PdfDocument doc, BookmarkTree tree, Path output) throws IOException {
-        setBookmarks(doc, tree.entries(), output);
+        setBookmarks(doc, tree.bookmarks(), output);
     }
 
     /**
@@ -94,7 +94,18 @@ public final class PdfBookmarkEditor {
      * @return PDF bytes of the document with bookmarks
      */
     public static byte[] setBookmarks(PdfDocument doc, BookmarkTree tree) {
-        return setBookmarks(doc, tree.entries());
+        return setBookmarks(doc, tree.bookmarks());
+    }
+
+    /**
+     * Set the bookmark tree on raw PDF bytes and return the updated PDF bytes.
+     *
+     * @param pdfBytes input PDF bytes
+     * @param tree     the bookmark tree to set
+     * @return updated PDF bytes with bookmarks
+     */
+    public static byte[] setBookmarks(byte[] pdfBytes, BookmarkTree tree) {
+        return setBookmarks(pdfBytes, tree.bookmarks());
     }
 
     /**
@@ -644,17 +655,33 @@ public final class PdfBookmarkEditor {
     }
 
     /**
+     * An entry in a bookmark tree.
+     *
+     * @param title     bookmark title
+     * @param pageIndex target page index (0-based)
+     */
+    public record BookmarkEntry(String title, int pageIndex) {}
+
+    /**
      * A tree of bookmarks to be written to a PDF.
      */
     public static final class BookmarkTree {
 
-        private final List<Bookmark> entries;
+        private final List<Bookmark> bookmarks;
+        private final List<BookmarkEntry> entries;
 
-        private BookmarkTree(List<Bookmark> entries) {
-            this.entries = Collections.unmodifiableList(entries);
+        private BookmarkTree(List<Bookmark> bookmarks) {
+            this.bookmarks = Collections.unmodifiableList(bookmarks);
+            List<BookmarkEntry> flat = new ArrayList<>();
+            for (Bookmark b : bookmarks) {
+                flat.add(new BookmarkEntry(b.title(), b.pageIndex()));
+            }
+            this.entries = Collections.unmodifiableList(flat);
         }
 
-        public List<Bookmark> entries() { return entries; }
+        public List<BookmarkEntry> entries() { return entries; }
+
+        public List<Bookmark> bookmarks() { return bookmarks; }
 
         public static Builder builder() { return new Builder(); }
 
