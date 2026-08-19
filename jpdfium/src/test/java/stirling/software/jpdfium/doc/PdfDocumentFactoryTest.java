@@ -95,6 +95,38 @@ class PdfDocumentFactoryTest {
     }
 
     @Test
+    void testMergeAndSplitMethods(@TempDir Path tempDir) throws IOException {
+        byte[] docA = SyntheticPdfFactory.singlePageWithText("Doc A");
+        byte[] docB = SyntheticPdfFactory.singlePageWithText("Doc B");
+
+        try (PdfDocument dA = PdfDocumentFactory.load(docA);
+             PdfDocument dB = PdfDocumentFactory.load(docB)) {
+            // Merge
+            try (PdfDocument merged = PdfDocumentFactory.merge(java.util.List.of(dA, dB))) {
+                assertNotNull(merged);
+                assertEquals(2, merged.pageCount());
+
+                // Extract
+                try (PdfDocument p0 = merged.extractPages(0)) {
+                    assertNotNull(p0);
+                    assertEquals(1, p0.pageCount());
+                }
+
+                try (PdfDocument range = merged.extractPageRange(0, 1)) {
+                    assertNotNull(range);
+                    assertEquals(2, range.pageCount());
+                }
+
+                // Split
+                java.util.List<PdfDocument> parts = merged.splitEveryNPages(1);
+                assertNotNull(parts);
+                assertEquals(2, parts.size());
+                parts.forEach(PdfDocument::close);
+            }
+        }
+    }
+
+    @Test
     void testNullValidation() {
         assertThrows(IllegalArgumentException.class, () -> PdfDocumentFactory.load((byte[]) null));
         assertThrows(IllegalArgumentException.class, () -> PdfDocumentFactory.load((Path) null));

@@ -11,6 +11,7 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
  * Split a PDF document by various strategies.
@@ -74,6 +75,13 @@ public final class PdfSplit {
         Collections.sort(sortedIndices);
         int[] pageIndices = sortedIndices.stream().mapToInt(Integer::intValue).toArray();
 
+        if (QpdfLib.isExtractSupported()) {
+            byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
+            if (extractedBytes != null) {
+                return PdfDocument.open(extractedBytes);
+            }
+        }
+
         PdfDocument destinationDoc = createEmptyDocument();
         PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
         PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandle(), pageIndices, 0);
@@ -107,6 +115,18 @@ public final class PdfSplit {
             throw new IllegalArgumentException(
                     "Invalid range [%d..%d] for document with %d pages"
                             .formatted(fromPage, toPage, doc.pageCount()));
+        }
+
+        if (QpdfLib.isExtractSupported()) {
+            int count = toPage - fromPage + 1;
+            int[] pageIndices = new int[count];
+            for (int i = 0; i < count; i++) {
+                pageIndices[i] = fromPage + i;
+            }
+            byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
+            if (extractedBytes != null) {
+                return PdfDocument.open(extractedBytes);
+            }
         }
 
         String pageRangeSpec = (fromPage + 1) + "-" + (toPage + 1);

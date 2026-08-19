@@ -2,7 +2,10 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfImageConverter;
+import stirling.software.jpdfium.PdfMerge;
+import stirling.software.jpdfium.PdfSplit;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -10,7 +13,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -154,5 +156,47 @@ public final class PdfDocumentFactory {
     public static void saveToFile(PdfDocument doc, File file) throws IOException {
         if (file == null) throw new IllegalArgumentException("file must not be null");
         saveToFile(doc, file.toPath());
+    }
+
+    /**
+     * Merge multiple open PDF documents into a single new document.
+     */
+    public static PdfDocument merge(List<PdfDocument> documents) {
+        return PdfMerge.merge(documents);
+    }
+
+    /**
+     * Merge multiple PDF byte arrays into a single merged byte array.
+     */
+    public static byte[] mergeBytes(List<byte[]> inputs) {
+        return PdfMerger.mergeBytes(inputs);
+    }
+
+    /**
+     * Merge multiple PDF files into a single destination file.
+     */
+    public static void mergeFiles(List<Path> paths, Path outputPath) throws IOException {
+        PdfMerger.merge(paths, outputPath);
+    }
+
+    /**
+     * Extract specific pages from a document by zero-based indices.
+     */
+    public static PdfDocument extractPages(PdfDocument doc, java.util.Set<Integer> indices) {
+        return PdfSplit.extractPages(doc, indices);
+    }
+
+    /**
+     * Extract specific pages from a PDF byte array by zero-based indices.
+     */
+    public static byte[] extractPages(byte[] pdfBytes, int[] indices) {
+        return QpdfLib.extractPages(pdfBytes, indices);
+    }
+
+    /**
+     * Split a document according to a split strategy.
+     */
+    public static List<PdfDocument> split(PdfDocument doc, PdfSplit.SplitStrategy strategy) {
+        return PdfSplit.split(doc, strategy);
     }
 }

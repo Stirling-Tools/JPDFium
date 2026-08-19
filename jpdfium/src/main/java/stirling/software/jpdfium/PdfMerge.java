@@ -1,6 +1,8 @@
 package stirling.software.jpdfium;
 
+import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -8,6 +10,7 @@ import java.util.List;
 
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
+import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
 /**
@@ -43,6 +46,13 @@ public final class PdfMerge {
     public static PdfDocument merge(List<PdfDocument> documents) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
+
+        if (PdfMerger.isSupported()) {
+            byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
+            if (mergedBytes != null) {
+                return PdfDocument.open(mergedBytes);
+            }
+        }
 
         List<Bookmark> mergedBookmarks = new ArrayList<>();
         int pageOffset = 0;
@@ -90,6 +100,21 @@ public final class PdfMerge {
         if (paths.size() == 1) {
             try (PdfDocument singleDoc = PdfDocument.open(paths.getFirst())) {
                 return reopenViaBytes(singleDoc);
+            }
+        }
+
+        if (PdfMerger.isSupported()) {
+            try {
+                List<byte[]> inputBytes = new ArrayList<>(paths.size());
+                for (Path p : paths) {
+                    inputBytes.add(Files.readAllBytes(p));
+                }
+                byte[] mergedBytes = PdfMerger.mergeBytes(inputBytes);
+                if (mergedBytes != null) {
+                    return PdfDocument.open(mergedBytes);
+                }
+            } catch (IOException _) {
+                // Fall back to legacy import path
             }
         }
         List<PdfDocument> openedDocs = new ArrayList<>(paths.size());

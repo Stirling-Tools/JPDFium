@@ -27,6 +27,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -381,6 +383,51 @@ public final class PdfDocument implements AutoCloseable {
      */
     public boolean deleteAttachment(int index) {
         return PdfAttachments.delete(rawHandle(), index);
+    }
+
+    /**
+     * Extract specific pages by zero-based indices into a new document.
+     */
+    public PdfDocument extractPages(Set<Integer> indices) {
+        ensureOpen();
+        return PdfSplit.extractPages(this, indices);
+    }
+
+    /**
+     * Extract specific pages by zero-based indices into a new document.
+     */
+    public PdfDocument extractPages(int... indices) {
+        ensureOpen();
+        if (indices == null || indices.length == 0) {
+            throw new IllegalArgumentException("indices must not be empty");
+        }
+        Set<Integer> set = new TreeSet<>();
+        for (int idx : indices) set.add(idx);
+        return PdfSplit.extractPages(this, set);
+    }
+
+    /**
+     * Extract a contiguous range of pages into a new document.
+     */
+    public PdfDocument extractPageRange(int fromPage, int toPage) {
+        ensureOpen();
+        return PdfSplit.extractPageRange(this, fromPage, toPage);
+    }
+
+    /**
+     * Split this document according to the given strategy.
+     */
+    public List<PdfDocument> split(PdfSplit.SplitStrategy strategy) {
+        ensureOpen();
+        return PdfSplit.split(this, strategy);
+    }
+
+    /**
+     * Split this document every N pages.
+     */
+    public List<PdfDocument> splitEveryNPages(int pagesPerSplit) {
+        ensureOpen();
+        return PdfSplit.split(this, PdfSplit.SplitStrategy.everyNPages(pagesPerSplit));
     }
 
     /**
