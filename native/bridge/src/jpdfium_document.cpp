@@ -84,6 +84,25 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const char* password,
+                                         int64_t* handle) {
+    if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
+    uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
+    if (!copy) return JPDFIUM_ERR_NATIVE;
+    memcpy(copy, data, static_cast<size_t>(len));
+
+    FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), password);
+    if (!doc) {
+        free(copy);
+        return translatePdfiumError();
+    }
+
+    auto* w = new DocWrapper();
+    w->core = makeDocCore(doc, copy, len);
+    *handle = encodeHandle(w);
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64_t* handle) {
     if (!path || !handle) return JPDFIUM_ERR_INVALID;
     FPDF_DOCUMENT doc = FPDF_LoadDocument(path, password);

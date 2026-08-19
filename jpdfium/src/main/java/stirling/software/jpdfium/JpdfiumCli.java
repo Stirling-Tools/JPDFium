@@ -10,6 +10,7 @@ import stirling.software.jpdfium.doc.PdfColorConverter;
 import stirling.software.jpdfium.doc.PdfCompressor;
 import stirling.software.jpdfium.doc.PdfCompressor.CompressResultWithBytes;
 import stirling.software.jpdfium.doc.PdfDeskew;
+import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageMirror;
 import stirling.software.jpdfium.doc.PdfPageReorder;
 import stirling.software.jpdfium.doc.PdfPageScaler;
@@ -614,8 +615,12 @@ public final class JpdfiumCli {
         Path out = Path.of(a.positional(0));
         List<Path> inputs = a.positional().subList(1, a.positional().size()).stream().map(Path::of).toList();
         rejectOverwriteUnlessForced(out, a);
-        try (PdfDocument merged = PdfMerge.mergeFiles(inputs)) {
-            saveAtomically(merged, out);
+        if (PdfMerger.isSupported()) {
+            PdfMerger.merge(inputs, out);
+        } else {
+            try (PdfDocument merged = PdfMerge.mergeFiles(inputs)) {
+                saveAtomically(merged, out);
+            }
         }
         if (!a.has("quiet")) {
             System.out.println("merged " + inputs.size() + " files -> " + out);

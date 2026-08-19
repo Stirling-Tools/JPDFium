@@ -1,17 +1,18 @@
 package stirling.software.jpdfium.doc;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.QpdfLib;
+
 /**
- * PDF Linearization (web optimization / fast web view).
+ * PDF linearization (fast web view).
  *
- * <p>Linearized PDFs load faster in web browsers because the first page can be
- * displayed before the entire file is downloaded.
- *
- * <p>Linearization uses the qpdf CLI tool, which must be installed on the system.
- * Install via: {@code apt install qpdf}, {@code brew install qpdf}, or
- * {@code choco install qpdf}.
+ * <p>Linearized PDFs let the first page render before the whole file downloads.
+ * Uses the bundled qpdf library in-process (FFM), no external qpdf binary.
  */
 public final class PdfLinearizer {
 
@@ -22,20 +23,29 @@ public final class PdfLinearizer {
      *
      * @param input  path to the input PDF
      * @param output path for the linearized output PDF
-     * @throws RuntimeException if qpdf is not available or linearization fails
+     * @throws JPDFiumException if linearization fails
      */
     public static void linearize(Path input, Path output) {
-        QpdfHelper.run("--linearize", input.toAbsolutePath().toString(),
-                output.toAbsolutePath().toString());
+        try {
+            byte[] out = PdfOptimizer.optimize(
+                    Files.readAllBytes(input),
+                    PdfOptimizer.LINEARIZE,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT);
+            if (out == null) {
+                throw new JPDFiumException("qpdf linearization produced no output");
+            }
+            Files.write(output, out);
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf linearization failed", e);
+        }
     }
 
-    /**
-     * Check if qpdf (required for linearization) is available.
-     *
-     * @return true if qpdf is found on the system PATH
-     */
+    /** Check if the in-process qpdf library is available in the current environment. */
     public static boolean isSupported() {
-        return QpdfHelper.isAvailable();
+        return QpdfLib.isSupported();
     }
 
     /**
@@ -50,3 +60,4 @@ public final class PdfLinearizer {
         return header.contains("/Linearized");
     }
 }
+

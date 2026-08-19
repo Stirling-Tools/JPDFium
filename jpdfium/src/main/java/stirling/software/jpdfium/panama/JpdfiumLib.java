@@ -171,6 +171,23 @@ public final class JpdfiumLib {
         }
     }
 
+    public static long docOpenBytesProtected(byte[] data, String password) {
+        if (JpdfiumH.jpdfium_doc_open_bytes_protected$address() == null) {
+            return docOpenBytes(data);
+        }
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cData = a.allocateFrom(JAVA_BYTE, data);
+            MemorySegment cPass = a.allocateFrom(password);
+            NativeGuard.acquire();
+            try {
+                check(JpdfiumH.jpdfium_doc_open_bytes_protected(cData, data.length, cPass, LONG_SCRATCH), "docOpenBytesProtected");
+                return LONG_SCRATCH.get(JAVA_LONG, 0);
+            } finally {
+                NativeGuard.release();
+            }
+        }
+    }
+
     public static long docOpenProtected(String path, String password) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(path);

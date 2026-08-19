@@ -5,16 +5,22 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
 import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
+import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
@@ -57,10 +63,61 @@ public final class PdfDocument implements AutoCloseable {
         return new PdfDocument(JpdfiumLib.docOpenBytes(data));
     }
 
+    public static PdfDocument open(byte[] data, String password) {
+        if (data == null) throw new IllegalArgumentException("data must not be null");
+        if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
+        if (password == null || password.isEmpty()) {
+            return new PdfDocument(JpdfiumLib.docOpenBytes(data));
+        }
+        return new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
+    }
+
+    public static PdfDocument open(InputStream in) throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        return open(in.readAllBytes());
+    }
+
+    public static PdfDocument open(InputStream in, String password) throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        return open(in.readAllBytes(), password);
+    }
+
+    public static PdfDocument open(File file) {
+        if (file == null) throw new IllegalArgumentException("file must not be null");
+        return open(file.toPath());
+    }
+
+    public static PdfDocument open(File file, String password) {
+        if (file == null) throw new IllegalArgumentException("file must not be null");
+        return open(file.toPath(), password);
+    }
+
+    public static PdfDocument open(ByteBuffer buffer) {
+        if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return open(bytes);
+    }
+
+    public static PdfDocument open(ByteBuffer buffer, String password) {
+        if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return open(bytes, password);
+    }
+
     public static PdfDocument open(Path path, String password) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
+    }
+
+    public static PdfDocument fromImages(List<BufferedImage> images) {
+        return PdfImageConverter.imagesToPdfFromImages(images, ImageToPdfOptions.builder().build());
+    }
+
+    public static PdfDocument fromImages(List<BufferedImage> images, ImageToPdfOptions options) {
+        return PdfImageConverter.imagesToPdfFromImages(images, options);
     }
 
     /**
@@ -73,6 +130,27 @@ public final class PdfDocument implements AutoCloseable {
      */
     public static PdfDocument createEmpty() {
         return new PdfDocument(JpdfiumLib.docCreate());
+    }
+
+    /**
+     * Merge multiple PDF files into a single output file using the fast, lossless QPDF engine.
+     *
+     * @param inputPaths  list of input PDF file paths
+     * @param outputPath destination PDF file path
+     * @throws IOException on I/O error
+     */
+    public static void merge(List<Path> inputPaths, Path outputPath) throws IOException {
+        PdfMerger.merge(inputPaths, outputPath);
+    }
+
+    /**
+     * Merge multiple PDF byte arrays into a single merged PDF byte array.
+     *
+     * @param inputs list of PDF byte arrays
+     * @return merged PDF bytes, or {@code null} on failure
+     */
+    public static byte[] mergeBytes(List<byte[]> inputs) {
+        return PdfMerger.mergeBytes(inputs);
     }
 
     public int pageCount() {

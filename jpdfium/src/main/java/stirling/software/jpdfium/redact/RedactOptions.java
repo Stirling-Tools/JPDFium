@@ -50,6 +50,7 @@ public final class RedactOptions {
     private final boolean wholeWord;
     private final boolean removeContent;
     private final boolean caseSensitive;
+    private final boolean sanitizeStructure;
 
     private final boolean convertToImage;
     private final int imageDpi;
@@ -89,6 +90,7 @@ public final class RedactOptions {
         this.wholeWord = b.wholeWord;
         this.removeContent = b.removeContent;
         this.caseSensitive = b.caseSensitive;
+        this.sanitizeStructure = b.sanitizeStructure;
         this.convertToImage = b.convertToImage;
         this.imageDpi = b.imageDpi;
         this.incrementalSave = b.incrementalSave;
@@ -120,6 +122,8 @@ public final class RedactOptions {
     public boolean wholeWord() { return wholeWord; }
     public boolean removeContent() { return removeContent; }
     public boolean caseSensitive() { return caseSensitive; }
+    /** If true, scrub structure/JS copies after content removal (default: true). */
+    public boolean sanitizeStructure() { return sanitizeStructure; }
     public boolean convertToImage() { return convertToImage; }
     public int imageDpi() { return imageDpi; }
     public boolean incrementalSave() { return incrementalSave; }
@@ -155,6 +159,7 @@ public final class RedactOptions {
         private boolean wholeWord;
         private boolean removeContent = true;
         private boolean caseSensitive;
+        private boolean sanitizeStructure = true;
 
         private boolean convertToImage;
         private int imageDpi = 150;
@@ -230,6 +235,9 @@ public final class RedactOptions {
 
         /** If true, match case-sensitively; if false, ignore case (default: false). */
         public Builder caseSensitive(boolean v) { this.caseSensitive = v; return this; }
+
+        /** If true, scrub structure/JS copies after content removal (default: true). */
+        public Builder sanitizeStructure(boolean v) { this.sanitizeStructure = v; return this; }
 
 
 
