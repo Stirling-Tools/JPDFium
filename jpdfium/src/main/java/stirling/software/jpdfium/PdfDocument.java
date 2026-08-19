@@ -73,6 +73,11 @@ public final class PdfDocument implements AutoCloseable {
 
     public int pageCount() {
         ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetPageCount != null) {
+                return (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
         return JpdfiumLib.docPageCount(handle);
     }
 
@@ -206,14 +211,14 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * Get the document's permission flags.
      */
-    public int permissions() {
+    public long permissions() {
         ensureOpen();
         try {
             if (DocBindings.FPDF_GetDocPermissions != null) {
                 return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
             }
         } catch (Throwable _) {}
-        return 0;
+        return 0L;
     }
 
     /**
