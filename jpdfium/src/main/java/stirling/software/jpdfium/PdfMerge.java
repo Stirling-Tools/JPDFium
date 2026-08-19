@@ -3,8 +3,11 @@ package stirling.software.jpdfium;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
+import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
 /**
@@ -33,26 +36,42 @@ public final class PdfMerge {
      * afterwards - the returned document is fully self-contained. The caller owns
      * the returned document and must close it.
      *
+     * @param documents list of open source documents
+     * @return merged document
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument merge(List<PdfDocument> documents) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
-        PdfDocument dest = reopenViaBytes(documents.getFirst());
-        MemorySegment rawDest = dest.rawHandle();
-        int insertAt = dest.pageCount();
-        for (int i = 1; i < documents.size(); i++) {
-            PdfPageImporter.importPages(rawDest, documents.get(i).rawHandle(), null, insertAt);
-            insertAt = dest.pageCount();
+
+        List<Bookmark> mergedBookmarks = new ArrayList<>();
+        int pageOffset = 0;
+        for (PdfDocument sourceDoc : documents) {
+            List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
+            if (!sourceBookmarks.isEmpty()) {
+                mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+            }
+            pageOffset += sourceDoc.pageCount();
         }
-        // PDFium's FPDF_ImportPages leaves imported pages referencing objects owned
-        // by the source documents, so the live destination would be invalidated the
-        // moment a source is closed (saving it afterwards crashes the native layer).
-        // Detach it - save, close and reopen - while the sources are still open so
-        // the returned document is fully standalone.
-        byte[] detached = dest.saveBytes();
-        dest.close();
-        return PdfDocument.open(detached);
+
+        PdfDocument destinationDoc = reopenViaBytes(documents.getFirst());
+        MemorySegment rawDestination = destinationDoc.rawHandle();
+        int insertIndex = destinationDoc.pageCount();
+        for (int i = 1; i < documents.size(); i++) {
+            PdfPageImporter.importPages(rawDestination, documents.get(i).rawHandle(), null, insertIndex);
+            insertIndex = destinationDoc.pageCount();
+        }
+
+        // FPDF_ImportPages leaves imported pages referencing objects owned by source documents;
+        // serialize and reload while sources remain open so the returned document is standalone.
+        byte[] mergedPdfBytes = destinationDoc.saveBytes();
+        destinationDoc.close();
+
+        if (!mergedBookmarks.isEmpty()) {
+            mergedPdfBytes = PdfBookmarkEditor.setBookmarks(mergedPdfBytes, mergedBookmarks);
+        }
+
+        return PdfDocument.open(mergedPdfBytes);
     }
 
     /**
@@ -62,46 +81,79 @@ public final class PdfMerge {
      * fully self-contained document. The caller owns the returned document and
      * must close it.
      *
-     * <p>PDFium's {@code FPDF_ImportPages} leaves imported pages referencing
-     * objects owned by the source document, so a source can only be closed once
-     * the destination no longer depends on it. Every source therefore stays open
-     * until the whole merge is complete, and the destination is detached (full
-     * save, close and reopen) with a <em>single</em> save while all sources are
-     * still open. This keeps the work linear in the total output size instead of
-     * re-saving the growing document once per input, and guarantees the returned
-     * document survives the closing of every source. PDFium parses documents
-     * lazily, so holding the sources open costs their xref tables, not their page
-     * content.
-     *
+     * @param paths file paths to merge
+     * @return merged document
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument mergeFiles(List<Path> paths) {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
-        if (paths.size() == 1) { try (PdfDocument s = PdfDocument.open(paths.getFirst())) { return reopenViaBytes(s); } }
-        List<PdfDocument> opened = new ArrayList<>(paths.size());
-        PdfDocument dest = null;
-        try {
-            dest = PdfDocument.open(paths.getFirst());
-            MemorySegment rawDest = dest.rawHandle();
-            int insertAt = dest.pageCount();
-            for (int i = 1; i < paths.size(); i++) {
-                PdfDocument src = PdfDocument.open(paths.get(i));
-                opened.add(src);
-                PdfPageImporter.importPages(rawDest, src.rawHandle(), null, insertAt);
-                insertAt = dest.pageCount();
-            }
-            byte[] detached = dest.saveBytes();
-            dest.close();
-            dest = null;
-            return PdfDocument.open(detached);
-        } finally {
-            if (dest != null) {
-                try { dest.close(); } catch (RuntimeException _) { }
-            }
-            for (PdfDocument d : opened) {
-                try { d.close(); } catch (RuntimeException _) { }
+        if (paths.size() == 1) {
+            try (PdfDocument singleDoc = PdfDocument.open(paths.getFirst())) {
+                return reopenViaBytes(singleDoc);
             }
         }
+        List<PdfDocument> openedDocs = new ArrayList<>(paths.size());
+        PdfDocument destinationDoc = null;
+        try {
+            destinationDoc = PdfDocument.open(paths.getFirst());
+            MemorySegment rawDestination = destinationDoc.rawHandle();
+
+            List<Bookmark> mergedBookmarks = new ArrayList<>();
+            int pageOffset = 0;
+            List<Bookmark> firstBookmarks = destinationDoc.bookmarks();
+            if (!firstBookmarks.isEmpty()) {
+                mergedBookmarks.addAll(offsetBookmarks(firstBookmarks, 0));
+            }
+            pageOffset += destinationDoc.pageCount();
+
+            int insertIndex = destinationDoc.pageCount();
+            for (int i = 1; i < paths.size(); i++) {
+                PdfDocument sourceDoc = PdfDocument.open(paths.get(i));
+                openedDocs.add(sourceDoc);
+                List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
+                if (!sourceBookmarks.isEmpty()) {
+                    mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+                }
+                pageOffset += sourceDoc.pageCount();
+
+                PdfPageImporter.importPages(rawDestination, sourceDoc.rawHandle(), null, insertIndex);
+                insertIndex = destinationDoc.pageCount();
+            }
+            byte[] mergedPdfBytes = destinationDoc.saveBytes();
+            destinationDoc.close();
+            destinationDoc = null;
+
+            if (!mergedBookmarks.isEmpty()) {
+                mergedPdfBytes = PdfBookmarkEditor.setBookmarks(mergedPdfBytes, mergedBookmarks);
+            }
+
+            return PdfDocument.open(mergedPdfBytes);
+        } finally {
+            if (destinationDoc != null) {
+                try { destinationDoc.close(); } catch (RuntimeException _) {}
+            }
+            for (PdfDocument openedDoc : openedDocs) {
+                try { openedDoc.close(); } catch (RuntimeException _) {}
+            }
+        }
+    }
+
+    private static List<Bookmark> offsetBookmarks(List<Bookmark> bookmarks, int pageOffset) {
+        List<Bookmark> result = new ArrayList<>(bookmarks.size());
+        for (Bookmark bookmark : bookmarks) {
+            int newPageIndex = bookmark.pageIndex() >= 0 ? bookmark.pageIndex() + pageOffset : -1;
+            List<Bookmark> newChildren = bookmark.hasChildren()
+                    ? offsetBookmarks(bookmark.children(), pageOffset)
+                    : Collections.emptyList();
+            result.add(new Bookmark(
+                    bookmark.title(),
+                    newPageIndex,
+                    newChildren,
+                    bookmark.actionType(),
+                    bookmark.uri(),
+                    bookmark.filePath()));
+        }
+        return result;
     }
 
     private static PdfDocument reopenViaBytes(PdfDocument source) {

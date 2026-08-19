@@ -28,37 +28,36 @@ public final class FfmHelper {
      */
     public static MemorySegment toWideString(Arena arena, String text) {
         byte[] encoded = text.getBytes(StandardCharsets.UTF_16LE);
-        MemorySegment seg = arena.allocate(encoded.length + 2L);  // +2 for null terminator
-        MemorySegment.copy(encoded, 0, seg, ValueLayout.JAVA_BYTE, 0, encoded.length);
-        seg.set(ValueLayout.JAVA_BYTE, encoded.length, (byte) 0);
-        seg.set(ValueLayout.JAVA_BYTE, encoded.length + 1, (byte) 0);
-        return seg;
+        MemorySegment encodedSegment = arena.allocate(encoded.length + 2L);
+        MemorySegment.copy(encoded, 0, encodedSegment, ValueLayout.JAVA_BYTE, 0, encoded.length);
+        encodedSegment.set(ValueLayout.JAVA_BYTE, encoded.length, (byte) 0);
+        encodedSegment.set(ValueLayout.JAVA_BYTE, encoded.length + 1, (byte) 0);
+        return encodedSegment;
     }
 
     /**
      * Decode a UTF-16LE buffer returned by PDFium into a Java String.
      *
-     * @param seg      the MemorySegment containing UTF-16LE data
-     * @param byteLen  total bytes in the buffer (including the 2-byte null terminator)
+     * @param sourceSegment the MemorySegment containing UTF-16LE data
+     * @param byteLen       total bytes in the buffer (including the 2-byte null terminator)
      * @return the decoded Java String
      */
-    public static String fromWideString(MemorySegment seg, long byteLen) {
+    public static String fromWideString(MemorySegment sourceSegment, long byteLen) {
         if (byteLen <= 2) return "";
-        // Strip the 2-byte null terminator
-        byte[] data = seg.asSlice(0, byteLen - 2).toArray(ValueLayout.JAVA_BYTE);
+        byte[] data = sourceSegment.asSlice(0, byteLen - 2).toArray(ValueLayout.JAVA_BYTE);
         return new String(data, StandardCharsets.UTF_16LE);
     }
 
     /**
      * Decode a null-terminated UTF-8 / ASCII buffer into a Java String.
      *
-     * @param seg      the MemorySegment containing the string
-     * @param byteLen  total bytes including the null terminator
+     * @param sourceSegment the MemorySegment containing the string
+     * @param byteLen       total bytes including the null terminator
      * @return the decoded string
      */
-    public static String fromByteString(MemorySegment seg, long byteLen) {
+    public static String fromByteString(MemorySegment sourceSegment, long byteLen) {
         if (byteLen <= 1) return "";
-        byte[] data = seg.asSlice(0, byteLen - 1).toArray(ValueLayout.JAVA_BYTE);
+        byte[] data = sourceSegment.asSlice(0, byteLen - 1).toArray(ValueLayout.JAVA_BYTE);
         return new String(data, StandardCharsets.UTF_8);
     }
 
@@ -74,13 +73,13 @@ public final class FfmHelper {
      * Invoke a MethodHandle that returns an int status code, throwing on non-zero.
      * Many PDFium functions return 0 for success and non-zero for error.
      *
-     * @param mh   MethodHandle to invoke
-     * @param args arguments to pass to the MethodHandle
+     * @param methodHandle MethodHandle to invoke
+     * @param args         arguments to pass to the MethodHandle
      * @throws RuntimeException if invocation fails or returns non-zero
      */
-    public static void invokeCheck(MethodHandle mh, Object... args) {
+    public static void invokeCheck(MethodHandle methodHandle, Object... args) {
         try {
-            int result = (int) mh.invokeExact(args);
+            int result = (int) methodHandle.invokeExact(args);
             if (result != 0) {
                 throw new RuntimeException("FFM call failed with code " + result);
             }
@@ -95,14 +94,14 @@ public final class FfmHelper {
     /**
      * Invoke a MethodHandle that returns an int status code, returning a default on failure.
      *
-     * @param mh           MethodHandle to invoke
+     * @param methodHandle MethodHandle to invoke
      * @param defaultValue value to return if invocation fails or returns non-zero
      * @param args         arguments to pass to the MethodHandle
      * @return the result or defaultValue on failure
      */
-    public static int invokeOrDefault(MethodHandle mh, int defaultValue, Object... args) {
+    public static int invokeOrDefault(MethodHandle methodHandle, int defaultValue, Object... args) {
         try {
-            int result = (int) mh.invokeExact(args);
+            int result = (int) methodHandle.invokeExact(args);
             return result != 0 ? defaultValue : result;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -113,13 +112,13 @@ public final class FfmHelper {
     /**
      * Invoke a MethodHandle that returns a MemorySegment, returning MemorySegment.NULL on failure.
      *
-     * @param mh MethodHandle to invoke
-     * @param args arguments to pass to the MethodHandle
+     * @param methodHandle MethodHandle to invoke
+     * @param args         arguments to pass to the MethodHandle
      * @return the result or MemorySegment.NULL on failure
      */
-    public static MemorySegment invokeSegment(MethodHandle mh, Object... args) {
+    public static MemorySegment invokeSegment(MethodHandle methodHandle, Object... args) {
         try {
-            return (MemorySegment) mh.invokeExact(args);
+            return (MemorySegment) methodHandle.invokeExact(args);
         } catch (Throwable t) {
             return MemorySegment.NULL;
         }
@@ -138,15 +137,15 @@ public final class FfmHelper {
     /**
      * Read four floats from a MemorySegment as a rectangle (left, bottom, right, top).
      *
-     * @param seg MemorySegment containing four floats
+     * @param targetSegment MemorySegment containing four floats
      * @return array of [left, bottom, right, top]
      */
-    public static float[] readRect(MemorySegment seg) {
+    public static float[] readRect(MemorySegment targetSegment) {
         return new float[]{
-            seg.get(ValueLayout.JAVA_FLOAT, 0),
-            seg.get(ValueLayout.JAVA_FLOAT, 4),
-            seg.get(ValueLayout.JAVA_FLOAT, 8),
-            seg.get(ValueLayout.JAVA_FLOAT, 12)
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 0),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 4),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 8),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 12)
         };
     }
 
@@ -163,15 +162,15 @@ public final class FfmHelper {
     /**
      * Read four ints from a MemorySegment as RGBA color values.
      *
-     * @param seg MemorySegment containing four ints
+     * @param targetSegment MemorySegment containing four ints
      * @return array of [r, g, b, a]
      */
-    public static int[] readColor(MemorySegment seg) {
+    public static int[] readColor(MemorySegment targetSegment) {
         return new int[]{
-            seg.get(ValueLayout.JAVA_INT, 0),
-            seg.get(ValueLayout.JAVA_INT, 4),
-            seg.get(ValueLayout.JAVA_INT, 8),
-            seg.get(ValueLayout.JAVA_INT, 12)
+            targetSegment.get(ValueLayout.JAVA_INT, 0),
+            targetSegment.get(ValueLayout.JAVA_INT, 4),
+            targetSegment.get(ValueLayout.JAVA_INT, 8),
+            targetSegment.get(ValueLayout.JAVA_INT, 12)
         };
     }
 
@@ -188,13 +187,13 @@ public final class FfmHelper {
     /**
      * Read two ints from a MemorySegment as a pair.
      *
-     * @param seg MemorySegment containing two ints
+     * @param targetSegment MemorySegment containing two ints
      * @return array of [first, second]
      */
-    public static int[] readIntPair(MemorySegment seg) {
+    public static int[] readIntPair(MemorySegment targetSegment) {
         return new int[]{
-            seg.get(ValueLayout.JAVA_INT, 0),
-            seg.get(ValueLayout.JAVA_INT, 4)
+            targetSegment.get(ValueLayout.JAVA_INT, 0),
+            targetSegment.get(ValueLayout.JAVA_INT, 4)
         };
     }
 
@@ -202,13 +201,13 @@ public final class FfmHelper {
      * Invoke a MethodHandle that returns an int, returning 0 on failure.
      * Use for fire-and-forget calls where failure is acceptable.
      *
-     * @param mh   MethodHandle to invoke
-     * @param args arguments to pass to the MethodHandle
+     * @param methodHandle MethodHandle to invoke
+     * @param args         arguments to pass to the MethodHandle
      * @return the result or 0 on failure
      */
-    public static int safeInt(MethodHandle mh, Object... args) {
+    public static int safeInt(MethodHandle methodHandle, Object... args) {
         try {
-            return (int) mh.invokeExact(args);
+            return (int) methodHandle.invokeExact(args);
         } catch (Throwable t) {
             return 0;
         }
@@ -217,13 +216,13 @@ public final class FfmHelper {
     /**
      * Invoke a MethodHandle that returns a long, returning 0 on failure.
      *
-     * @param mh   MethodHandle to invoke
-     * @param args arguments to pass to the MethodHandle
+     * @param methodHandle MethodHandle to invoke
+     * @param args         arguments to pass to the MethodHandle
      * @return the result or 0 on failure
      */
-    public static long safeLong(MethodHandle mh, Object... args) {
+    public static long safeLong(MethodHandle methodHandle, Object... args) {
         try {
-            return (long) mh.invokeExact(args);
+            return (long) methodHandle.invokeExact(args);
         } catch (Throwable t) {
             return 0;
         }
@@ -233,12 +232,12 @@ public final class FfmHelper {
      * Invoke a MethodHandle silently, ignoring all exceptions.
      * Use for cleanup calls where failure is acceptable.
      *
-     * @param mh   MethodHandle to invoke
-     * @param args arguments to pass to the MethodHandle
+     * @param methodHandle MethodHandle to invoke
+     * @param args         arguments to pass to the MethodHandle
      */
-    public static void safeSilent(MethodHandle mh, Object... args) {
+    public static void safeSilent(MethodHandle methodHandle, Object... args) {
         try {
-            mh.invokeExact(args);
+            methodHandle.invokeExact(args);
         } catch (Throwable t) {
             // Ignore
         }
@@ -248,19 +247,19 @@ public final class FfmHelper {
      * Allocate a UTF-8 string and invoke a MethodHandle that takes (segment, string).
      * Returns the int result or 0 on failure.
      *
-     * @param arena  Arena for allocation
-     * @param mh     MethodHandle expecting (MemorySegment, MemorySegment)
-     * @param target The target segment (e.g., annotation)
-     * @param key    The string key
-     * @param value  The string value
+     * @param arena        Arena for allocation
+     * @param methodHandle MethodHandle expecting (MemorySegment, MemorySegment)
+     * @param target       The target segment (e.g., annotation)
+     * @param key          The string key
+     * @param value        The string value
      * @return the result or 0 on failure
      */
-    public static int setStringKeyValue(Arena arena, MethodHandle mh,
+    public static int setStringKeyValue(Arena arena, MethodHandle methodHandle,
                                          MemorySegment target, String key, String value) {
         try {
-            MemorySegment keySeg = arena.allocateFrom(key);
-            MemorySegment valueSeg = toWideString(arena, value);
-            return (int) mh.invokeExact(target, keySeg, valueSeg);
+            MemorySegment keySegment = arena.allocateFrom(key);
+            MemorySegment valueSegment = toWideString(arena, value);
+            return (int) methodHandle.invokeExact(target, keySegment, valueSegment);
         } catch (Throwable t) {
             return 0;
         }

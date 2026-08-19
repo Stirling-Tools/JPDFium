@@ -145,24 +145,51 @@ public final class PdfPageReorder {
      * into a fresh document, then replaces all pages in the original.
      */
     private static void applyOrder(PdfDocument doc, List<Integer> order) {
-        int n = doc.pageCount();
-        MemorySegment rawDoc = doc.rawHandle();
+        int pageCount = doc.pageCount();
+        MemorySegment rawDocSegment = doc.rawHandle();
 
-        // Check if order is already identity
         boolean isIdentity = true;
-        for (int i = 0; i < n; i++) {
-            if (order.get(i) != i) { isIdentity = false; break; }
+        for (int i = 0; i < pageCount; i++) {
+            if (order.get(i) != i) {
+                isIdentity = false;
+                break;
+            }
         }
         if (isIdentity) return;
 
-        // Import all pages in the new order to the end of the document
         int[] indices = order.stream().mapToInt(Integer::intValue).toArray();
-        PdfPageImporter.importPagesByIndex(rawDoc, rawDoc, indices, n);
+        PdfPageImporter.importPagesByIndex(rawDocSegment, rawDocSegment, indices, pageCount);
 
-        // Delete original pages (they are at indices 0..n-1)
-        for (int i = n - 1; i >= 0; i--) {
-            PdfPageEditor.deletePage(rawDoc, i);
+        for (int i = pageCount - 1; i >= 0; i--) {
+            PdfPageEditor.deletePage(rawDocSegment, i);
         }
+    }
+
+    /**
+     * Remap bookmark destinations according to the new page ordering.
+     *
+     * @param bookmarks list of bookmarks (with possible children)
+     * @param order     the permutation list of page indices
+     * @return remapped list of bookmarks
+     */
+    public static List<Bookmark> remapBookmarks(List<Bookmark> bookmarks, List<Integer> order) {
+        List<Bookmark> result = new ArrayList<>(bookmarks.size());
+        for (Bookmark bookmark : bookmarks) {
+            int newPageIndex = bookmark.pageIndex() >= 0 && bookmark.pageIndex() < order.size()
+                    ? order.indexOf(bookmark.pageIndex())
+                    : bookmark.pageIndex();
+            List<Bookmark> newChildren = bookmark.hasChildren()
+                    ? remapBookmarks(bookmark.children(), order)
+                    : Collections.emptyList();
+            result.add(new Bookmark(
+                    bookmark.title(),
+                    newPageIndex,
+                    newChildren,
+                    bookmark.actionType(),
+                    bookmark.uri(),
+                    bookmark.filePath()));
+        }
+        return result;
     }
 
     private static void validateIndex(int index, int pageCount) {

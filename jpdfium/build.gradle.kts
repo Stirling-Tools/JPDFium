@@ -93,8 +93,12 @@ jmh {
     resultFormat.set("JSON")
     resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
     jvmArgsAppend.add("--enable-native-access=ALL-UNNAMED")
+    findProperty("jmh.profilers")?.let { prof ->
+        profilers.addAll((prof as String).split(",").map { it.trim() })
+    }
     // Include only benchmarks in the jpdfium bench package.
-    includes.add("stirling.software.jpdfium.bench.*")
+    val includePattern = findProperty("jmh.include") as String? ?: "stirling.software.jpdfium.bench.*"
+    includes.add(includePattern)
 }
 
 // Set jpdfium.jextractHome in ~/.gradle/gradle.properties or JEXTRACT_HOME env var.

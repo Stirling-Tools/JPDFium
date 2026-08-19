@@ -10,6 +10,9 @@ import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -214,5 +217,30 @@ public final class PdfPageSplitter {
                 catch (Throwable _) {}
             }
         }
+    }
+
+    /**
+     * Remap bookmark destinations for a 2-up split document.
+     *
+     * @param bookmarks   list of bookmarks
+     * @param leftToRight reading order
+     * @return remapped list of bookmarks
+     */
+    public static List<Bookmark> remapBookmarksFor2Up(List<Bookmark> bookmarks, boolean leftToRight) {
+        List<Bookmark> result = new ArrayList<>(bookmarks.size());
+        for (Bookmark bookmark : bookmarks) {
+            int newPageIndex = bookmark.pageIndex() >= 0 ? bookmark.pageIndex() * 2 : -1;
+            List<Bookmark> newChildren = bookmark.hasChildren()
+                    ? remapBookmarksFor2Up(bookmark.children(), leftToRight)
+                    : Collections.emptyList();
+            result.add(new Bookmark(
+                    bookmark.title(),
+                    newPageIndex,
+                    newChildren,
+                    bookmark.actionType(),
+                    bookmark.uri(),
+                    bookmark.filePath()));
+        }
+        return result;
     }
 }

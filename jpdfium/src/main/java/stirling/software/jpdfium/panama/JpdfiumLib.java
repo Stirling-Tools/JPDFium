@@ -321,6 +321,35 @@ public final class JpdfiumLib {
         }
     }
 
+    /**
+     * Render the page directly into a caller-supplied native memory buffer.
+     * Zero Java heap allocations in steady state.
+     *
+     * @param page           native page handle
+     * @param targetBitmap   pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width          render width in pixels
+     * @param height         render height in pixels
+     * @param flags          render flags (e.g. RenderBindings.FPDF_REVERSE_BYTE_ORDER | RenderBindings.FPDF_ANNOT)
+     */
+    public static void renderPageInto(long page, MemorySegment targetBitmap, int width, int height, int flags) {
+        NativeGuard.acquire();
+        try {
+            MemorySegment rawPage = pageRawHandle(page);
+            MemorySegment bitmap = (MemorySegment) PageEditBindings.FPDFBitmap_CreateEx.invokeExact(
+                    width, height, 4, targetBitmap, width * 4);
+            try {
+                RenderBindings.FPDF_RenderPageBitmap.invokeExact(
+                        bitmap, rawPage, 0, 0, width, height, 0, flags);
+            } finally {
+                PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap);
+            }
+        } catch (Throwable t) {
+            throw new JPDFiumException("renderPageInto failed", t);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     /** JSON report of the last sanitize stage ("" when none has run). */
     public static String docSanitizeReport(long doc) {
         NativeGuard.acquire();

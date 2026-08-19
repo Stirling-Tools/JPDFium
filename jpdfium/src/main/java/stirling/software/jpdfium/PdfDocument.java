@@ -9,6 +9,7 @@ import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.MemorySegment;
@@ -33,10 +34,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
+    private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;
+        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
     }
 
     public static PdfDocument open(Path path) {
@@ -70,6 +73,11 @@ public final class PdfDocument implements AutoCloseable {
 
     public int pageCount() {
         ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetPageCount != null) {
+                return (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
         return JpdfiumLib.docPageCount(handle);
     }
 
@@ -178,7 +186,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public MemorySegment rawHandle() {
         ensureOpen();
-        return JpdfiumLib.docRawHandle(handle);
+        return rawDocSegment;
     }
 
     /**
@@ -192,10 +200,9 @@ public final class PdfDocument implements AutoCloseable {
      * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
      */
     public Optional<String> metadata(String tag) {
-        // Find matching MetadataTag by pdfKey, fall back to direct lookup
-        for (MetadataTag mt : MetadataTag.values()) {
-            if (mt.pdfKey().equalsIgnoreCase(tag)) {
-                return PdfMetadata.of(rawHandle()).get(mt);
+        for (MetadataTag metadataTag : MetadataTag.values()) {
+            if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
+                return PdfMetadata.of(rawHandle()).get(metadataTag);
             }
         }
         return Optional.empty();
@@ -205,7 +212,26 @@ public final class PdfDocument implements AutoCloseable {
      * Get the document's permission flags.
      */
     public long permissions() {
-        return PdfMetadata.of(rawHandle()).permissions();
+        ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetDocPermissions != null) {
+                return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
+        return PdfMetadata.of(rawDocSegment).permissions();
+    }
+
+    /**
+     * Returns the security handler revision, or 0 if the document is not encrypted.
+     */
+    public int securityHandlerRevision() {
+        ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetSecurityHandlerRevision != null) {
+                return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
+        return PdfMetadata.of(rawDocSegment).securityHandlerRevision();
     }
 
     /**

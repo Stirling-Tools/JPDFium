@@ -33,28 +33,30 @@ public final class PdfAttachments {
     /**
      * Returns the number of attachments in the document.
      */
-    public static int count(MemorySegment doc) {
+    public static int count(MemorySegment rawDocSegment) {
         if (AttachmentBindings.FPDFDoc_GetAttachmentCount == null) {
             return 0;
         }
         try {
-            return (int) AttachmentBindings.FPDFDoc_GetAttachmentCount.invokeExact(doc);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_GetAttachmentCount failed", t); }
+            return (int) AttachmentBindings.FPDFDoc_GetAttachmentCount.invokeExact(rawDocSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFDoc_GetAttachmentCount failed", t);
+        }
     }
 
     /**
      * List all attachments in the document.
      *
-     * @param doc raw FPDF_DOCUMENT segment
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
      * @return all attachments with name and file data
      */
-    public static List<Attachment> list(MemorySegment doc) {
-        int n = count(doc);
-        if (n <= 0) return Collections.emptyList();
+    public static List<Attachment> list(MemorySegment rawDocSegment) {
+        int attachmentCount = count(rawDocSegment);
+        if (attachmentCount <= 0) return Collections.emptyList();
 
-        List<Attachment> result = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            result.add(get(doc, i));
+        List<Attachment> result = new ArrayList<>(attachmentCount);
+        for (int i = 0; i < attachmentCount; i++) {
+            result.add(get(rawDocSegment, i));
         }
         return Collections.unmodifiableList(result);
     }
@@ -62,110 +64,125 @@ public final class PdfAttachments {
     /**
      * Get a specific attachment by index.
      *
-     * @param doc   raw FPDF_DOCUMENT segment
-     * @param index 0-based attachment index
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
+     * @param index         0-based attachment index
      * @return the attachment with name and data
      */
-    public static Attachment get(MemorySegment doc, int index) {
-        MemorySegment att;
+    public static Attachment get(MemorySegment rawDocSegment, int index) {
+        MemorySegment attachmentSegment;
         try {
-            att = (MemorySegment) AttachmentBindings.FPDFDoc_GetAttachment.invokeExact(doc, index);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_GetAttachment failed", t); }
+            attachmentSegment = (MemorySegment) AttachmentBindings.FPDFDoc_GetAttachment.invokeExact(rawDocSegment, index);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFDoc_GetAttachment failed", t);
+        }
 
-        if (att.equals(MemorySegment.NULL)) {
+        if (attachmentSegment.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Attachment index " + index + " not found");
         }
 
-        String name = getAttachmentName(att);
-        byte[] data = getAttachmentFile(att);
+        String name = getAttachmentName(attachmentSegment);
+        byte[] data = getAttachmentFile(attachmentSegment);
         return new Attachment(index, name, data);
     }
 
     /**
      * Add a new attachment to the document.
      *
-     * @param doc      raw FPDF_DOCUMENT segment
-     * @param name     filename for the attachment
-     * @param contents the file content
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
+     * @param name          filename for the attachment
+     * @param contents      the file content
      * @return true if the attachment was successfully added
      */
-    public static boolean add(MemorySegment doc, String name, byte[] contents) {
+    public static boolean add(MemorySegment rawDocSegment, String name, byte[] contents) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment wideName = FfmHelper.toWideString(arena, name);
-            MemorySegment att;
+            MemorySegment wideNameSegment = FfmHelper.toWideString(arena, name);
+            MemorySegment attachmentSegment;
             try {
-                att = (MemorySegment) AttachmentBindings.FPDFDoc_AddAttachment.invokeExact(doc, wideName);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_AddAttachment failed", t); }
+                attachmentSegment = (MemorySegment) AttachmentBindings.FPDFDoc_AddAttachment.invokeExact(rawDocSegment, wideNameSegment);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFDoc_AddAttachment failed", t);
+            }
 
-            if (att.equals(MemorySegment.NULL)) {
+            if (attachmentSegment.equals(MemorySegment.NULL)) {
                 return false;
             }
 
-            MemorySegment dataBuf = arena.allocate(contents.length);
-            dataBuf.copyFrom(MemorySegment.ofArray(contents));
+            MemorySegment dataBufferSegment = arena.allocate(contents.length);
+            dataBufferSegment.copyFrom(MemorySegment.ofArray(contents));
 
-            int ok;
+            int success;
             try {
-                ok = (int) AttachmentBindings.FPDFAttachment_SetFile.invokeExact(att, doc, dataBuf, (long) contents.length);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFAttachment_SetFile failed", t); }
-            return ok != 0;
+                success = (int) AttachmentBindings.FPDFAttachment_SetFile.invokeExact(
+                        attachmentSegment, rawDocSegment, dataBufferSegment, (long) contents.length);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFAttachment_SetFile failed", t);
+            }
+            return success != 0;
         }
     }
 
     /**
      * Delete an attachment by index.
      *
-     * @param doc   raw FPDF_DOCUMENT segment
-     * @param index 0-based attachment index
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
+     * @param index         0-based attachment index
      * @return true if the attachment was successfully deleted
      */
-    public static boolean delete(MemorySegment doc, int index) {
+    public static boolean delete(MemorySegment rawDocSegment, int index) {
         try {
-            int ok = (int) AttachmentBindings.FPDFDoc_DeleteAttachment.invokeExact(doc, index);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException("FPDFDoc_DeleteAttachment failed", t); }
+            int success = (int) AttachmentBindings.FPDFDoc_DeleteAttachment.invokeExact(rawDocSegment, index);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFDoc_DeleteAttachment failed", t);
+        }
     }
 
-    private static String getAttachmentName(MemorySegment att) {
+    private static String getAttachmentName(MemorySegment attachmentSegment) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(att,
+                needed = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
             if (needed <= 2) return "";
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(att, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return FfmHelper.fromWideString(buf, needed);
+                long _ = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return FfmHelper.fromWideString(bufferSegment, needed);
         }
     }
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
-    private static byte[] getAttachmentFile(MemorySegment att) {
+    private static byte[] getAttachmentFile(MemorySegment attachmentSegment) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment outLen = arena.allocate(ValueLayout.JAVA_LONG);
+            MemorySegment lengthSegment = arena.allocate(ValueLayout.JAVA_LONG);
 
-            int ok;
+            int success;
             try {
-                ok = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(att,
-                        MemorySegment.NULL, 0L, outLen);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+                success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
+                        MemorySegment.NULL, 0L, lengthSegment);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
 
-            long len = outLen.get(ValueLayout.JAVA_LONG, 0);
-            if (ok == 0 || len <= 0) return EMPTY_BYTES;
+            long len = lengthSegment.get(ValueLayout.JAVA_LONG, 0);
+            if (success == 0 || len <= 0) return EMPTY_BYTES;
 
-            MemorySegment buf = arena.allocate(len);
+            MemorySegment bufferSegment = arena.allocate(len);
             try {
-                ok = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(att, buf, len, outLen);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            if (ok == 0) return EMPTY_BYTES;
-
-            return buf.asSlice(0, outLen.get(ValueLayout.JAVA_LONG, 0))
-                    .toArray(ValueLayout.JAVA_BYTE);
+                success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
+                        bufferSegment, len, lengthSegment);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return success != 0 ? bufferSegment.toArray(ValueLayout.JAVA_BYTE) : EMPTY_BYTES;
         }
     }
 }

@@ -63,52 +63,60 @@ public final class PdfPageEditor {
      * @param height    page height in points
      * @return raw FPDF_PAGE segment for the new page
      */
-    public static MemorySegment newPage(MemorySegment doc, int pageIndex,
+    public static MemorySegment newPage(MemorySegment rawDocSegment, int pageIndex,
                                          double width, double height) {
         try {
             MemorySegment page = (MemorySegment) PageEditBindings.FPDFPage_New.invokeExact(
-                    doc, pageIndex, width, height);
+                    rawDocSegment, pageIndex, width, height);
             if (page.equals(MemorySegment.NULL)) {
                 throw new JPDFiumException("FPDFPage_New returned null");
             }
             return page;
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_New failed", t); }
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_New failed", t);
+        }
     }
 
     /**
      * Generate (commit) content changes to a page. Must be called after
      * inserting, removing, or modifying page objects.
      *
-     * @param page raw FPDF_PAGE
+     * @param rawPageSegment raw FPDF_PAGE
      * @return true if generation succeeded
      */
-    public static boolean generateContent(MemorySegment page) {
+    public static boolean generateContent(MemorySegment rawPageSegment) {
         try {
-            int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(page);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
+            int success = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPageSegment);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
+        }
     }
 
     /**
      * Count the number of page objects.
      */
-    public static int countObjects(MemorySegment page) {
+    public static int countObjects(MemorySegment rawPageSegment) {
         try {
-            return (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(page);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPageSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Get a page object by index.
      *
-     * @param page  raw FPDF_PAGE
-     * @param index 0-based object index
+     * @param rawPageSegment raw FPDF_PAGE
+     * @param index          0-based object index
      * @return raw FPDF_PAGEOBJECT segment
      */
-    public static MemorySegment getObject(MemorySegment page, int index) {
+    public static MemorySegment getObject(MemorySegment rawPageSegment, int index) {
         try {
-            return (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(page, index);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPageSegment, index);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -116,19 +124,23 @@ public final class PdfPageEditor {
      *
      * @return one of PAGEOBJ_TEXT, PAGEOBJ_PATH, PAGEOBJ_IMAGE, etc.
      */
-    public static int getObjectType(MemorySegment obj) {
+    public static int getObjectType(MemorySegment pageObject) {
         try {
-            return (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(pageObject);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Insert a page object into a page. Ownership transfers to the page.
      */
-    public static void insertObject(MemorySegment page, MemorySegment obj) {
+    public static void insertObject(MemorySegment rawPageSegment, MemorySegment pageObject) {
         try {
-            PageEditBindings.FPDFPage_InsertObject.invokeExact(page, obj);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPageSegment, pageObject);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -137,56 +149,62 @@ public final class PdfPageEditor {
      *
      * @return true if removal succeeded
      */
-    public static boolean removeObject(MemorySegment page, MemorySegment obj) {
+    public static boolean removeObject(MemorySegment rawPageSegment, MemorySegment pageObject) {
         try {
-            int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(page, obj);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPageSegment, pageObject);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Create a new text object.
      *
-     * @param doc      raw FPDF_DOCUMENT
-     * @param fontName font name (e.g., "Helvetica", "Times-Roman")
-     * @param fontSize font size in points
+     * @param rawDocSegment raw FPDF_DOCUMENT
+     * @param fontName      font name (e.g., "Helvetica", "Times-Roman")
+     * @param fontSize      font size in points
      * @return raw FPDF_PAGEOBJECT (text type)
      */
-    public static MemorySegment createTextObject(MemorySegment doc, String fontName,
+    public static MemorySegment createTextObject(MemorySegment rawDocSegment, String fontName,
                                                    float fontSize) {
         try (Arena arena = Arena.ofConfined()) {
             byte[] fontBytes = fontName.getBytes(StandardCharsets.US_ASCII);
-            MemorySegment fontStr = arena.allocate(fontBytes.length + 1L);
-            fontStr.copyFrom(MemorySegment.ofArray(fontBytes));
-            fontStr.set(ValueLayout.JAVA_BYTE, fontBytes.length, (byte) 0);
+            MemorySegment fontNameSegment = arena.allocate(fontBytes.length + 1L);
+            fontNameSegment.copyFrom(MemorySegment.ofArray(fontBytes));
+            fontNameSegment.set(ValueLayout.JAVA_BYTE, fontBytes.length, (byte) 0);
 
-            MemorySegment obj;
+            MemorySegment pageObject;
             try {
-                obj = (MemorySegment) PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
-                        doc, fontStr, fontSize);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            if (obj.equals(MemorySegment.NULL)) {
+                pageObject = (MemorySegment) PageEditBindings.FPDFPageObj_NewTextObj.invokeExact(
+                        rawDocSegment, fontNameSegment, fontSize);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            if (pageObject.equals(MemorySegment.NULL)) {
                 throw new JPDFiumException("FPDFPageObj_NewTextObj returned null");
             }
-            return obj;
+            return pageObject;
         }
     }
 
     /**
      * Set the text content of a text page object.
      *
-     * @param textObj raw FPDF_PAGEOBJECT (text type)
-     * @param text    the text content
+     * @param textObject raw FPDF_PAGEOBJECT (text type)
+     * @param text       the text content
      * @return true if succeeded
      */
-    public static boolean setText(MemorySegment textObj, String text) {
+    public static boolean setText(MemorySegment textObject, String text) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment wideText = FfmHelper.toWideString(arena, text);
-            int ok;
+            int success;
             try {
-                ok = (int) PageEditBindings.FPDFText_SetText.invokeExact(textObj, wideText);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return ok != 0;
+                success = (int) PageEditBindings.FPDFText_SetText.invokeExact(textObject, wideText);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return success != 0;
         }
     }
 
@@ -196,10 +214,12 @@ public final class PdfPageEditor {
      * @param doc raw FPDF_DOCUMENT
      * @return raw FPDF_PAGEOBJECT (image type)
      */
-    public static MemorySegment createImageObject(MemorySegment doc) {
+    public static MemorySegment createImageObject(MemorySegment rawDocSegment) {
         try {
-            return (MemorySegment) PageEditBindings.FPDFPageObj_NewImageObj.invokeExact(doc);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return (MemorySegment) PageEditBindings.FPDFPageObj_NewImageObj.invokeExact(rawDocSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -215,7 +235,9 @@ public final class PdfPageEditor {
         try {
             return (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewRect.invokeExact(
                     x, y, width, height);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -228,7 +250,9 @@ public final class PdfPageEditor {
     public static MemorySegment createPath(float x, float y) {
         try {
             return (MemorySegment) PageEditBindings.FPDFPageObj_CreateNewPath.invokeExact(x, y);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -236,26 +260,32 @@ public final class PdfPageEditor {
      */
     public static boolean setDrawMode(MemorySegment path, FillMode fillMode, boolean stroke) {
         try {
-            int ok = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(
+            int success = (int) PageEditBindings.FPDFPath_SetDrawMode.invokeExact(
                     path, fillMode.value(), stroke ? 1 : 0);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /** Move to a point in a path object. */
     public static boolean pathMoveTo(MemorySegment path, float x, float y) {
         try {
-            int ok = (int) PageEditBindings.FPDFPath_MoveTo.invokeExact(path, x, y);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPath_MoveTo.invokeExact(path, x, y);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /** Draw a line to a point in a path object. */
     public static boolean pathLineTo(MemorySegment path, float x, float y) {
         try {
-            int ok = (int) PageEditBindings.FPDFPath_LineTo.invokeExact(path, x, y);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPath_LineTo.invokeExact(path, x, y);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /** Draw a cubic Bezier curve in a path object. */
@@ -263,57 +293,65 @@ public final class PdfPageEditor {
                                         float x1, float y1, float x2, float y2,
                                         float x3, float y3) {
         try {
-            int ok = (int) PageEditBindings.FPDFPath_BezierTo.invokeExact(
+            int success = (int) PageEditBindings.FPDFPath_BezierTo.invokeExact(
                     path, x1, y1, x2, y2, x3, y3);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /** Close the current path subpath. */
     public static boolean pathClose(MemorySegment path) {
         try {
-            int ok = (int) PageEditBindings.FPDFPath_Close.invokeExact(path);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPath_Close.invokeExact(path);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Apply an affine transform to a page object.
      *
-     * @param obj the page object
-     * @param a   scale X / rotate
-     * @param b   shear Y
-     * @param c   shear X
-     * @param d   scale Y / rotate
-     * @param e   translate X
-     * @param f   translate Y
+     * @param pageObject the page object
+     * @param a          scale X / rotate
+     * @param b          shear Y
+     * @param c          shear X
+     * @param d          scale Y / rotate
+     * @param e          translate X
+     * @param f          translate Y
      */
-    public static void transform(MemorySegment obj, double a, double b,
+    public static void transform(MemorySegment pageObject, double a, double b,
                                   double c, double d, double e, double f) {
         try {
-            PageEditBindings.FPDFPageObj_Transform.invokeExact(obj, a, b, c, d, e, f);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            PageEditBindings.FPDFPageObj_Transform.invokeExact(pageObject, a, b, c, d, e, f);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Get the bounding box of a page object.
      *
-     * @param obj the page object
+     * @param pageObject the page object
      * @return float[4] = {left, bottom, right, top}, or null on failure
      */
-    public static float[] getBounds(MemorySegment obj) {
+    public static float[] getBounds(MemorySegment pageObject) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
 
-            int ok;
+            int success;
             try {
-                ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
-                        obj, left, bottom, right, top);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            if (ok == 0) return null;
+                success = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
+                        pageObject, left, bottom, right, top);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            if (success == 0) return null;
 
             return new float[]{
                     left.get(ValueLayout.JAVA_FLOAT, 0),
@@ -327,23 +365,27 @@ public final class PdfPageEditor {
     /**
      * Set the fill color of a page object.
      */
-    public static boolean setFillColor(MemorySegment obj,
+    public static boolean setFillColor(MemorySegment pageObject,
                                         int r, int g, int b, int a) {
         try {
-            int ok = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(obj, r, g, b, a);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPageObj_SetFillColor.invokeExact(pageObject, r, g, b, a);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
      * Set the stroke color of a page object.
      */
-    public static boolean setStrokeColor(MemorySegment obj,
+    public static boolean setStrokeColor(MemorySegment pageObject,
                                           int r, int g, int b, int a) {
         try {
-            int ok = (int) PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(obj, r, g, b, a);
-            return ok != 0;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            int success = (int) PageEditBindings.FPDFPageObj_SetStrokeColor.invokeExact(pageObject, r, g, b, a);
+            return success != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
     }
 
     /**
@@ -355,81 +397,93 @@ public final class PdfPageEditor {
      * @param cid      true if CID font
      * @return raw FPDF_FONT segment, or NULL on failure
      */
-    public static MemorySegment loadFont(MemorySegment doc, byte[] fontData,
+    public static MemorySegment loadFont(MemorySegment rawDocSegment, byte[] fontData,
                                           int fontType, boolean cid) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment data = arena.allocate(fontData.length);
             data.copyFrom(MemorySegment.ofArray(fontData));
             try {
                 return (MemorySegment) PageEditBindings.FPDFText_LoadFont.invokeExact(
-                        doc, data, fontData.length, fontType, cid ? 1 : 0);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFText_LoadFont failed", t); }
+                        rawDocSegment, data, fontData.length, fontType, cid ? 1 : 0);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFText_LoadFont failed", t);
+            }
         }
     }
 
     /**
      * Close a font loaded with {@link #loadFont}.
      */
-    public static void closeFont(MemorySegment font) {
+    public static void closeFont(MemorySegment fontSegment) {
         try {
-            PageEditBindings.FPDFFont_Close.invokeExact(font);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFFont_Close failed", t); }
+            PageEditBindings.FPDFFont_Close.invokeExact(fontSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFFont_Close failed", t);
+        }
     }
 
     /**
      * Delete a page from a document by index.
      *
-     * @param doc       raw FPDF_DOCUMENT
-     * @param pageIndex 0-based page index to delete
+     * @param rawDocSegment raw FPDF_DOCUMENT
+     * @param pageIndex     0-based page index to delete
      */
-    public static void deletePage(MemorySegment doc, int pageIndex) {
+    public static void deletePage(MemorySegment rawDocSegment, int pageIndex) {
         try {
-            PageEditBindings.FPDFPage_Delete.invokeExact(doc, pageIndex);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_Delete failed", t); }
+            PageEditBindings.FPDFPage_Delete.invokeExact(rawDocSegment, pageIndex);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_Delete failed", t);
+        }
     }
 
     /**
      * Get the rotation of a page.
      *
-     * @param page raw FPDF_PAGE
+     * @param rawPageSegment raw FPDF_PAGE
      * @return rotation: 0=none, 1=90 degrees CW, 2=180 degrees, 3=270 degrees CW (90 degrees CCW)
      */
-    public static int getRotation(MemorySegment page) {
+    public static int getRotation(MemorySegment rawPageSegment) {
         try {
-            return (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(page);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetRotation failed", t); }
+            return (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(rawPageSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_GetRotation failed", t);
+        }
     }
 
     /**
      * Set the rotation of a page.
      *
-     * @param page     raw FPDF_PAGE
-     * @param rotation 0=none, 1=90 degrees CW, 2=180 degrees, 3=270 degrees CW (90 degrees CCW)
+     * @param rawPageSegment raw FPDF_PAGE
+     * @param rotation       0=none, 1=90 degrees CW, 2=180 degrees, 3=270 degrees CW (90 degrees CCW)
      */
-    public static void setRotation(MemorySegment page, int rotation) {
+    public static void setRotation(MemorySegment rawPageSegment, int rotation) {
         try {
-            PageEditBindings.FPDFPage_SetRotation.invokeExact(page, rotation);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetRotation failed", t); }
+            PageEditBindings.FPDFPage_SetRotation.invokeExact(rawPageSegment, rotation);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_SetRotation failed", t);
+        }
     }
 
     /**
      * Get the MediaBox of a page.
      *
-     * @param page raw FPDF_PAGE
+     * @param rawPageSegment raw FPDF_PAGE
      * @return float[4] = {left, bottom, right, top}, or null if not set
      */
-    public static float[] getMediaBox(MemorySegment page) {
+    public static float[] getMediaBox(MemorySegment rawPageSegment) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int ok;
+            int success;
             try {
-                ok = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
-                        page, left, bottom, right, top);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetMediaBox failed", t); }
-            if (ok == 0) return null;
+                success = (int) PageEditBindings.FPDFPage_GetMediaBox.invokeExact(
+                        rawPageSegment, left, bottom, right, top);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFPage_GetMediaBox failed", t);
+            }
+            if (success == 0) return null;
             return new float[]{
                     left.get(ValueLayout.JAVA_FLOAT, 0),
                     bottom.get(ValueLayout.JAVA_FLOAT, 0),
@@ -442,37 +496,41 @@ public final class PdfPageEditor {
     /**
      * Set the MediaBox of a page.
      *
-     * @param page   raw FPDF_PAGE
-     * @param left   left edge
-     * @param bottom bottom edge
-     * @param right  right edge
-     * @param top    top edge
+     * @param rawPageSegment raw FPDF_PAGE
+     * @param left           left edge
+     * @param bottom         bottom edge
+     * @param right          right edge
+     * @param top            top edge
      */
-    public static void setMediaBox(MemorySegment page, float left, float bottom,
+    public static void setMediaBox(MemorySegment rawPageSegment, float left, float bottom,
                                     float right, float top) {
         try {
-            PageEditBindings.FPDFPage_SetMediaBox.invokeExact(page, left, bottom, right, top);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetMediaBox failed", t); }
+            PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPageSegment, left, bottom, right, top);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_SetMediaBox failed", t);
+        }
     }
 
     /**
      * Get the CropBox of a page.
      *
-     * @param page raw FPDF_PAGE
+     * @param rawPageSegment raw FPDF_PAGE
      * @return float[4] = {left, bottom, right, top}, or null if not set
      */
-    public static float[] getCropBox(MemorySegment page) {
+    public static float[] getCropBox(MemorySegment rawPageSegment) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment left = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment bottom = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment right = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment top = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int ok;
+            int success;
             try {
-                ok = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
-                        page, left, bottom, right, top);
-            } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetCropBox failed", t); }
-            if (ok == 0) return null;
+                success = (int) PageEditBindings.FPDFPage_GetCropBox.invokeExact(
+                        rawPageSegment, left, bottom, right, top);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFPage_GetCropBox failed", t);
+            }
+            if (success == 0) return null;
             return new float[]{
                     left.get(ValueLayout.JAVA_FLOAT, 0),
                     bottom.get(ValueLayout.JAVA_FLOAT, 0),
@@ -485,16 +543,18 @@ public final class PdfPageEditor {
     /**
      * Set the CropBox of a page.
      *
-     * @param page   raw FPDF_PAGE
-     * @param left   left edge
-     * @param bottom bottom edge
-     * @param right  right edge
-     * @param top    top edge
+     * @param rawPageSegment raw FPDF_PAGE
+     * @param left           left edge
+     * @param bottom         bottom edge
+     * @param right          right edge
+     * @param top            top edge
      */
-    public static void setCropBox(MemorySegment page, float left, float bottom,
+    public static void setCropBox(MemorySegment rawPageSegment, float left, float bottom,
                                    float right, float top) {
         try {
-            PageEditBindings.FPDFPage_SetCropBox.invokeExact(page, left, bottom, right, top);
-        } catch (Throwable t) { throw new JPDFiumException("FPDFPage_SetCropBox failed", t); }
+            PageEditBindings.FPDFPage_SetCropBox.invokeExact(rawPageSegment, left, bottom, right, top);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_SetCropBox failed", t);
+        }
     }
 }

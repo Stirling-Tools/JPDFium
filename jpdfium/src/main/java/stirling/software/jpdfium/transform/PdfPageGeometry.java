@@ -2,11 +2,13 @@ package stirling.software.jpdfium.transform;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.lang.foreign.MemorySegment;
 import java.util.List;
 
 /**
@@ -175,9 +177,9 @@ public final class PdfPageGeometry {
         }
         int pages = Math.min(rects.size(), doc.pageCount());
         for (int i = 0; i < pages; i++) {
-            Rect r = rects.get(i);
-            if (r != null) {
-                cropSingle(doc, i, r);
+            Rect targetRect = rects.get(i);
+            if (targetRect != null) {
+                cropSingle(doc, i, targetRect);
             }
         }
     }
@@ -187,11 +189,25 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
                     rect.x(), rect.y(), rect.width(), rect.height());
+            pruneAnnotationsOutsideCrop(page.rawHandle(), rect);
             PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
             PdfPageBoxes.setCropBox(page.rawHandle(), rect);
             PdfPageBoxes.setTrimBox(page.rawHandle(), rect);
             PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
             PdfPageBoxes.setArtBox(page.rawHandle(), rect);
+        }
+    }
+
+    private static void pruneAnnotationsOutsideCrop(MemorySegment rawPage, Rect cropRect) {
+        int annotationCount = PdfAnnotations.count(rawPage);
+        for (int i = annotationCount - 1; i >= 0; i--) {
+            var annotationOptional = PdfAnnotations.get(rawPage, i);
+            if (annotationOptional.isPresent()) {
+                Rect annotationRect = annotationOptional.get().rect();
+                if (!cropRect.intersects(annotationRect)) {
+                    PdfAnnotations.remove(rawPage, i);
+                }
+            }
         }
     }
 

@@ -32,10 +32,10 @@ public final class HeaderFooterApplier {
     /**
      * Apply header and/or footer text to all pages.
      *
-     * @param doc document to modify
-     * @param hf  header/footer configuration
+     * @param doc                document to modify
+     * @param headerFooterConfig header/footer configuration
      */
-    public static void apply(PdfDocument doc, HeaderFooter hf) {
+    public static void apply(PdfDocument doc, HeaderFooter headerFooterConfig) {
         int totalPages = doc.pageCount();
 
         for (int i = 0; i < totalPages; i++) {
@@ -44,16 +44,16 @@ public final class HeaderFooterApplier {
                 MemorySegment rawPage = page.rawHandle();
                 PageSize size = page.size();
 
-                if (hf.header() != null) {
-                    String text = expandTemplate(hf.header(), i + 1, totalPages);
-                    addText(rawDoc, rawPage, text, hf,
-                            size.width() / 2f, size.height() - hf.margin());
+                if (headerFooterConfig.header() != null) {
+                    String text = expandTemplate(headerFooterConfig.header(), i + 1, totalPages);
+                    addText(rawDoc, rawPage, text, headerFooterConfig,
+                            size.width() / 2f, size.height() - headerFooterConfig.margin());
                 }
 
-                if (hf.footer() != null) {
-                    String text = expandTemplate(hf.footer(), i + 1, totalPages);
-                    addText(rawDoc, rawPage, text, hf,
-                            size.width() / 2f, hf.margin() - hf.fontSize());
+                if (headerFooterConfig.footer() != null) {
+                    String text = expandTemplate(headerFooterConfig.footer(), i + 1, totalPages);
+                    addText(rawDoc, rawPage, text, headerFooterConfig,
+                            size.width() / 2f, headerFooterConfig.margin() - headerFooterConfig.fontSize());
                 }
             }
         }
@@ -69,7 +69,7 @@ public final class HeaderFooterApplier {
      */
     public static void applyBatesNumbering(PdfDocument doc, String prefix,
                                             int startNum, int numDigits) {
-        HeaderFooter hf = HeaderFooter.builder()
+        HeaderFooter headerFooterConfig = HeaderFooter.builder()
                 .footer("placeholder")
                 .font(FontName.COURIER).size(8)
                 .margin(36)
@@ -84,8 +84,8 @@ public final class HeaderFooterApplier {
                 MemorySegment rawPage = page.rawHandle();
                 PageSize size = page.size();
 
-                addText(rawDoc, rawPage, batesNum, hf,
-                        size.width() / 2f, hf.margin() - hf.fontSize());
+                addText(rawDoc, rawPage, batesNum, headerFooterConfig,
+                        size.width() / 2f, headerFooterConfig.margin() - headerFooterConfig.fontSize());
             }
         }
     }
@@ -98,22 +98,24 @@ public final class HeaderFooterApplier {
     }
 
     private static void addText(MemorySegment rawDoc, MemorySegment rawPage,
-                                 String text, HeaderFooter hf,
+                                 String text, HeaderFooter headerFooterConfig,
                                  float centerX, float y) {
-        MemorySegment textObj = PdfPageEditor.createTextObject(rawDoc, hf.fontName().fontName(), hf.fontSize());
-        PdfPageEditor.setText(textObj, text);
+        MemorySegment textObject = PdfPageEditor.createTextObject(
+                rawDoc, headerFooterConfig.fontName().fontName(), headerFooterConfig.fontSize());
+        PdfPageEditor.setText(textObject, text);
 
-        int a = (hf.argbColor() >> 24) & 0xFF;
-        int r = (hf.argbColor() >> 16) & 0xFF;
-        int g = (hf.argbColor() >> 8) & 0xFF;
-        int b = hf.argbColor() & 0xFF;
-        PdfPageEditor.setFillColor(textObj, r, g, b, a);
+        int argb = headerFooterConfig.argbColor();
+        int alpha = (argb >> 24) & 0xFF;
+        int red = (argb >> 16) & 0xFF;
+        int green = (argb >> 8) & 0xFF;
+        int blue = argb & 0xFF;
+        PdfPageEditor.setFillColor(textObject, red, green, blue, alpha);
 
-        float estWidth = text.length() * hf.fontSize() * 0.45f;
+        float estWidth = text.length() * headerFooterConfig.fontSize() * 0.45f;
         float x = centerX - estWidth / 2f;
 
-        PdfPageEditor.transform(textObj, 1, 0, 0, 1, x, y);
-        PdfPageEditor.insertObject(rawPage, textObj);
+        PdfPageEditor.transform(textObject, 1, 0, 0, 1, x, y);
+        PdfPageEditor.insertObject(rawPage, textObject);
         PdfPageEditor.generateContent(rawPage);
     }
 }

@@ -69,84 +69,86 @@ public final class WatermarkApplier {
     }
 
     private static void applyTextWatermark(MemorySegment rawDoc, MemorySegment rawPage,
-                                            PageSize pageSize, Watermark wm) {
-        MemorySegment textObj = PdfPageEditor.createTextObject(rawDoc, wm.fontName().fontName(), wm.fontSize());
-        PdfPageEditor.setText(textObj, wm.text());
+                                            PageSize pageSize, Watermark watermark) {
+        MemorySegment textObject = PdfPageEditor.createTextObject(
+                rawDoc, watermark.fontName().fontName(), watermark.fontSize());
+        PdfPageEditor.setText(textObject, watermark.text());
 
-        int a = (wm.argbColor() >> 24) & 0xFF;
-        int r = (wm.argbColor() >> 16) & 0xFF;
-        int g = (wm.argbColor() >> 8) & 0xFF;
-        int b = wm.argbColor() & 0xFF;
-        PdfPageEditor.setFillColor(textObj, r, g, b, a);
+        int argb = watermark.argbColor();
+        int alpha = (argb >> 24) & 0xFF;
+        int red = (argb >> 16) & 0xFF;
+        int green = (argb >> 8) & 0xFF;
+        int blue = argb & 0xFF;
+        PdfPageEditor.setFillColor(textObject, red, green, blue, alpha);
 
-        float pageW = pageSize.width();
-        float pageH = pageSize.height();
+        float pageWidth = pageSize.width();
+        float pageHeight = pageSize.height();
 
-        float textWidth = wm.text().length() * wm.fontSize() * 0.5f;
-        float textHeight = wm.fontSize();
+        float textWidth = watermark.text().length() * watermark.fontSize() * 0.5f;
+        float textHeight = watermark.fontSize();
 
-        float[] pos = computePosition(wm.position(), pageW, pageH,
-                textWidth, textHeight, wm.margin());
+        float[] positionCoordinates = computePosition(watermark.position(), pageWidth, pageHeight,
+                textWidth, textHeight, watermark.margin());
 
-        float radians = (float) Math.toRadians(wm.rotation());
+        float radians = (float) Math.toRadians(watermark.rotation());
         float cos = (float) Math.cos(radians);
         float sin = (float) Math.sin(radians);
 
-        float cx = pageW / 2f;
-        float cy = pageH / 2f;
+        float centerX = pageWidth / 2f;
+        float centerY = pageHeight / 2f;
 
-        if (wm.rotation() != 0 && wm.position() == Position.CENTER) {
-            float tx = cx - (textWidth * cos - textHeight * sin) / 2f;
-            float ty = cy - (textWidth * sin + textHeight * cos) / 2f;
-            PdfPageEditor.transform(textObj, cos, sin, -sin, cos, tx, ty);
+        if (watermark.rotation() != 0 && watermark.position() == Position.CENTER) {
+            float tx = centerX - (textWidth * cos - textHeight * sin) / 2f;
+            float ty = centerY - (textWidth * sin + textHeight * cos) / 2f;
+            PdfPageEditor.transform(textObject, cos, sin, -sin, cos, tx, ty);
         } else {
-            if (wm.rotation() != 0) {
-                PdfPageEditor.transform(textObj, cos, sin, -sin, cos, pos[0], pos[1]);
+            if (watermark.rotation() != 0) {
+                PdfPageEditor.transform(textObject, cos, sin, -sin, cos, positionCoordinates[0], positionCoordinates[1]);
             } else {
-                PdfPageEditor.transform(textObj, 1, 0, 0, 1, pos[0], pos[1]);
+                PdfPageEditor.transform(textObject, 1, 0, 0, 1, positionCoordinates[0], positionCoordinates[1]);
             }
         }
 
-        PdfPageEditor.insertObject(rawPage, textObj);
+        PdfPageEditor.insertObject(rawPage, textObject);
         PdfPageEditor.generateContent(rawPage);
     }
 
     private static void applyImageWatermark(MemorySegment rawDoc, MemorySegment rawPage,
-                                             PageSize pageSize, Watermark wm) {
-        BufferedImage img = wm.image();
-        if (img == null) return;
+                                             PageSize pageSize, Watermark watermark) {
+        BufferedImage image = watermark.image();
+        if (image == null) return;
 
-        BufferedImage withAlpha = applyOpacity(img, wm.opacity());
+        BufferedImage imageWithAlpha = applyOpacity(image, watermark.opacity());
 
-        int w = withAlpha.getWidth();
-        int h = withAlpha.getHeight();
+        int width = imageWithAlpha.getWidth();
+        int height = imageWithAlpha.getHeight();
 
-        float targetW = pageSize.width() * wm.scale();
-        float scale = targetW / w;
-        float targetH = h * scale;
+        float targetWidth = pageSize.width() * watermark.scale();
+        float scale = targetWidth / width;
+        float targetHeight = height * scale;
 
-        float[] pos = computePosition(wm.position(), pageSize.width(), pageSize.height(),
-                targetW, targetH, wm.margin());
+        float[] positionCoordinates = computePosition(watermark.position(), pageSize.width(), pageSize.height(),
+                targetWidth, targetHeight, watermark.margin());
 
-        MemorySegment imgObj = PdfPageEditor.createImageObject(rawDoc);
+        MemorySegment imageObject = PdfPageEditor.createImageObject(rawDoc);
 
-        PdfPageEditor.transform(imgObj, targetW, 0, 0, targetH, pos[0], pos[1]);
+        PdfPageEditor.transform(imageObject, targetWidth, 0, 0, targetHeight, positionCoordinates[0], positionCoordinates[1]);
 
-        PdfPageEditor.insertObject(rawPage, imgObj);
+        PdfPageEditor.insertObject(rawPage, imageObject);
         PdfPageEditor.generateContent(rawPage);
     }
 
-    private static BufferedImage applyOpacity(BufferedImage src, float opacity) {
-        BufferedImage result = new BufferedImage(src.getWidth(), src.getHeight(),
-                BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = result.createGraphics();
+    private static BufferedImage applyOpacity(BufferedImage sourceImage, float opacity) {
+        BufferedImage resultImage = new BufferedImage(
+                sourceImage.getWidth(), sourceImage.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = resultImage.createGraphics();
         try {
-            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity));
-            g.drawImage(src, 0, 0, null);
+            graphics.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity));
+            graphics.drawImage(sourceImage, 0, 0, null);
         } finally {
-            g.dispose();
+            graphics.dispose();
         }
-        return result;
+        return resultImage;
     }
 
     /**
