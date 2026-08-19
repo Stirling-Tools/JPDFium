@@ -143,13 +143,7 @@ public final class PdfImageConverter {
                 if (effectiveDpi < 1) effectiveDpi = 1;
             }
             RenderResult result = page.renderAt(effectiveDpi);
-            BufferedImage img = result.toBufferedImage();
-
-            if (!transparent) {
-                img = createWhiteBackground(img);
-            }
-
-            return img;
+            return result.toBufferedImage(transparent);
         }
     }
 
@@ -445,7 +439,9 @@ public final class PdfImageConverter {
         String formatName = format.extension();
 
         if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            bufferedImage = createWhiteBackground(bufferedImage);
+            if (bufferedImage.getColorModel().hasAlpha()) {
+                bufferedImage = createWhiteBackground(bufferedImage);
+            }
             Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(formatName);
             if (writers.hasNext()) {
                 ImageWriter writer = writers.next();
@@ -491,7 +487,9 @@ public final class PdfImageConverter {
 
         if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
             // JPEG/WEBP don't support alpha channels; composite over white if needed
-            bufferedImage = createWhiteBackground(bufferedImage);
+            if (bufferedImage.getColorModel().hasAlpha()) {
+                bufferedImage = createWhiteBackground(bufferedImage);
+            }
             Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(format.extension());
             if (writers.hasNext()) {
                 ImageWriter writer = writers.next();

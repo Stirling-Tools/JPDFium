@@ -90,6 +90,7 @@ public final class PdfTextExtractor {
         final int jsonLength = json.length();
         List<TextChar> characters = new ArrayList<>(Math.max(8, jsonLength / 56));
         int searchPosition = 0;
+        String lastFontName = null;
         while (true) {
             int objectStart = json.indexOf('{', searchPosition);
             if (objectStart < 0) break;
@@ -127,7 +128,17 @@ public final class PdfTextExtractor {
                     if (json.charAt(valueStart) == '"') {
                         int quoteClose = endOfQuoted(json, valueStart + 1);
                         if (quoteClose < 0) break;
-                        if (keyInitial == 'f') fontName = unescape(json, valueStart + 1, quoteClose);
+                        if (keyInitial == 'f') {
+                            int qStart = valueStart + 1;
+                            int qLen = quoteClose - qStart;
+                            if (lastFontName != null && lastFontName.length() == qLen
+                                    && json.regionMatches(qStart, lastFontName, 0, qLen)) {
+                                fontName = lastFontName;
+                            } else {
+                                fontName = unescape(json, qStart, quoteClose);
+                                lastFontName = fontName;
+                            }
+                        }
                         cursor = quoteClose + 1;
                     } else {
                         int valueEnd = valueStart;
@@ -136,15 +147,14 @@ public final class PdfTextExtractor {
                             if (delimiter == ',' || delimiter == '}') break;
                             valueEnd++;
                         }
-                        String val = json.substring(valueStart, valueEnd);
                         switch (keyInitial) {
-                            case 'i' -> index = Integer.parseInt(val);
-                            case 'u' -> unicode = Integer.parseInt(val);
-                            case 'x' -> x = Float.parseFloat(val);
-                            case 'y' -> y = Float.parseFloat(val);
-                            case 'w' -> width = Float.parseFloat(val);
-                            case 'h' -> height = Float.parseFloat(val);
-                            case 's' -> fontSize = Float.parseFloat(val);
+                            case 'i' -> index = parseIntFast(json, valueStart, valueEnd);
+                            case 'u' -> unicode = parseIntFast(json, valueStart, valueEnd);
+                            case 'x' -> x = parseFloatFast(json, valueStart, valueEnd);
+                            case 'y' -> y = parseFloatFast(json, valueStart, valueEnd);
+                            case 'w' -> width = parseFloatFast(json, valueStart, valueEnd);
+                            case 'h' -> height = parseFloatFast(json, valueStart, valueEnd);
+                            case 's' -> fontSize = parseFloatFast(json, valueStart, valueEnd);
                             default -> {}
                         }
                         cursor = valueEnd;
@@ -157,6 +167,48 @@ public final class PdfTextExtractor {
             searchPosition = cursor;
         }
         return characters;
+    }
+
+    private static int parseIntFast(String s, int start, int end) {
+        int result = 0;
+        boolean negative = false;
+        int i = start;
+        if (i < end && s.charAt(i) == '-') {
+            negative = true;
+            i++;
+        }
+        while (i < end) {
+            char c = s.charAt(i++);
+            if (c >= '0' && c <= '9') {
+                result = result * 10 + (c - '0');
+            }
+        }
+        return negative ? -result : result;
+    }
+
+    private static float parseFloatFast(String s, int start, int end) {
+        try {
+            int dot = -1;
+            for (int i = start; i < end; i++) {
+                if (s.charAt(i) == '.') {
+                    dot = i;
+                    break;
+                }
+            }
+            if (dot < 0) {
+                return (float) parseIntFast(s, start, end);
+            }
+            int intPart = parseIntFast(s, start, dot);
+            int fracPart = parseIntFast(s, dot + 1, end);
+            int fracDigits = end - (dot + 1);
+            float frac = fracPart;
+            for (int i = 0; i < fracDigits; i++) {
+                frac /= 10.0f;
+            }
+            return intPart >= 0 ? intPart + frac : intPart - frac;
+        } catch (Exception _) {
+            return Float.parseFloat(s.substring(start, end));
+        }
     }
 
     private static int endOfQuoted(String json, int from) {
