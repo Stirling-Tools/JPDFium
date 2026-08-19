@@ -117,6 +117,14 @@ public final class PdfPipeline {
      * The caller must close the returned document.
      */
     public static PdfDocument process(Path input, ProcessingMode mode, PageOperation op) {
+        if (!mode.isParallel() && !mode.isStreaming()) {
+            PdfDocument doc = PdfDocument.open(input);
+            int pages = doc.pageCount();
+            for (int i = 0; i < pages; i++) {
+                op.apply(doc, i);
+            }
+            return doc;
+        }
         return process(readBytes(input), mode, op);
     }
 
@@ -147,7 +155,16 @@ public final class PdfPipeline {
      */
     public static void forEach(Path input, ProcessingMode mode,
                                BiConsumer<PdfDocument, Integer> consumer) {
-        forEach(readBytes(input), mode, consumer);
+        if (mode.isParallel()) {
+            forEachParallel(readBytes(input), mode, consumer);
+        } else {
+            try (PdfDocument doc = PdfDocument.open(input)) {
+                int pages = doc.pageCount();
+                for (int i = 0; i < pages; i++) {
+                    consumer.accept(doc, i);
+                }
+            }
+        }
     }
 
     /**
@@ -205,16 +222,16 @@ public final class PdfPipeline {
     }
 
     private static PdfDocument flushViaTempFile(PdfDocument doc) {
-        Path tmp;
+        Path tempPipelineFile;
         try {
-            tmp = Files.createTempFile("jpdfium-pipeline-", ".pdf");
+            tempPipelineFile = Files.createTempFile("jpdfium-pipeline-", ".pdf");
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create pipeline flush temp file", e);
         }
-        tmp.toFile().deleteOnExit();
-        doc.save(tmp);
+        tempPipelineFile.toFile().deleteOnExit();
+        doc.save(tempPipelineFile);
         doc.close();
-        return PdfDocument.open(tmp);
+        return PdfDocument.open(tempPipelineFile);
     }
 
     private static PdfDocument processParallel(byte[] sourceBytes, ProcessingMode mode, PageOperation op) {
@@ -231,14 +248,12 @@ public final class PdfPipeline {
                 ? mode.chunkSize()
                 : Math.max(1, (totalPages + parallelism - 1) / parallelism);
 
-        // Build chunk ranges [start, end] inclusive
         List<int[]> chunks = new ArrayList<>();
         for (int start = 0; start < totalPages; start += pagesPerChunk) {
             int end = Math.min(start + pagesPerChunk - 1, totalPages - 1);
             chunks.add(new int[]{start, end});
         }
 
-        // Split into chunk byte arrays (sequential - PDFium not thread safe)
         List<byte[]> chunkBytes = new ArrayList<>();
         try (PdfDocument source = PdfDocument.open(sourceBytes)) {
             for (int[] chunk : chunks) {
@@ -248,7 +263,6 @@ public final class PdfPipeline {
             }
         }
 
-        // Process chunks on thread pool - consumer must use PDFIUM_LOCK
         record ChunkResult(int order, byte[] bytes) {}
 
         ExecutorService executor = Executors.newFixedThreadPool(
@@ -256,26 +270,25 @@ public final class PdfPipeline {
         try {
             List<Future<ChunkResult>> futures = new ArrayList<>();
 
-            for (int ci = 0; ci < chunkBytes.size(); ci++) {
-                final byte[] cBytes = chunkBytes.get(ci);
-                final int order = ci;
+            for (int chunkIndex = 0; chunkIndex < chunkBytes.size(); chunkIndex++) {
+                final byte[] currentChunkBytes = chunkBytes.get(chunkIndex);
+                final int order = chunkIndex;
 
                 futures.add(executor.submit(
-                        () -> new ChunkResult(order, processChunkBytes(cBytes, mode, op))));
+                        () -> new ChunkResult(order, processChunkBytes(currentChunkBytes, mode, op))));
             }
 
             List<ChunkResult> results = collectResults(futures);
             results.sort(Comparator.comparingInt(ChunkResult::order));
 
-            // Merge processed chunks back
-            List<PdfDocument> mergeDocs = new ArrayList<>();
+            List<PdfDocument> documentsToMerge = new ArrayList<>();
             try {
-                for (var r : results) {
-                    mergeDocs.add(PdfDocument.open(r.bytes()));
+                for (var result : results) {
+                    documentsToMerge.add(PdfDocument.open(result.bytes()));
                 }
-                return PdfMerge.merge(mergeDocs);
+                return PdfMerge.merge(documentsToMerge);
             } finally {
-                mergeDocs.forEach(PdfDocument::close);
+                documentsToMerge.forEach(PdfDocument::close);
             }
         } finally {
             executor.shutdown();
@@ -349,9 +362,9 @@ public final class PdfPipeline {
 
     private static <T> List<T> collectResults(List<Future<T>> futures) {
         List<T> results = new ArrayList<>();
-        for (Future<T> f : futures) {
+        for (Future<T> future : futures) {
             try {
-                results.add(f.get());
+                results.add(future.get());
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;
@@ -366,9 +379,9 @@ public final class PdfPipeline {
     }
 
     private static void collectVoidResults(List<Future<?>> futures) {
-        for (Future<?> f : futures) {
+        for (Future<?> future : futures) {
             try {
-                f.get();
+                future.get();
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException re) throw re;

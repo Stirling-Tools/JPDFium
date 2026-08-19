@@ -43,19 +43,19 @@ public final class VipsImageConverter {
                                      VipsFormat format, int quality) {
         try (PdfPage page = doc.page(pageIndex);
              RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
-            VipsEncodeOptions opts = VipsEncodeOptions.builder(format).quality(quality).build();
-            return VipsEncoder.encodeToBytes(view, opts);
+            VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).quality(quality).build();
+            return VipsEncoder.encodeToBytes(view, encodeOptions);
         }
     }
 
     /** @return one encoded byte buffer per page, in page order. */
     public static List<byte[]> pdfToBytes(PdfDocument doc, int dpi, VipsFormat format) {
-        int n = doc.pageCount();
-        List<byte[]> out = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            out.add(pageToBytes(doc, i, dpi, format));
+        int pageCount = doc.pageCount();
+        List<byte[]> outputBytesList = new ArrayList<>(pageCount);
+        for (int i = 0; i < pageCount; i++) {
+            outputBytesList.add(pageToBytes(doc, i, dpi, format));
         }
-        return out;
+        return outputBytesList;
     }
 
     /**
@@ -67,18 +67,18 @@ public final class VipsImageConverter {
     public static List<Path> pdfToImages(PdfDocument doc, int dpi, VipsFormat format, Path dir)
             throws IOException {
         Files.createDirectories(dir);
-        List<Path> out = new ArrayList<>();
-        int n = doc.pageCount();
-        for (int i = 0; i < n; i++) {
-            VipsEncodeOptions opts = VipsEncodeOptions.builder(format).build();
+        List<Path> writtenFilePaths = new ArrayList<>();
+        int pageCount = doc.pageCount();
+        for (int i = 0; i < pageCount; i++) {
+            VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).build();
             try (PdfPage page = doc.page(i);
                  RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
                 Path file = dir.resolve(filename(i, format));
-                VipsEncoder.encodeToFile(view, file, opts);
-                out.add(file);
+                VipsEncoder.encodeToFile(view, file, encodeOptions);
+                writtenFilePaths.add(file);
             }
         }
-        return out;
+        return writtenFilePaths;
     }
 
     /**

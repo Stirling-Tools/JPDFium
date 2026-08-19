@@ -77,10 +77,10 @@ public final class Symbols {
     }
 
     /**
-     * Create a critical downcall method handle (skips Java/native thread state transitions).
+     * Create a downcall method handle (delegates to guarded downcall).
      */
     public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return downcall(name, desc, Linker.Option.critical(false));
+        return downcall(name, desc);
     }
 
     /**

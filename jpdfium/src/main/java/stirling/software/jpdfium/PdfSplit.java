@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.TreeSet;
 
 import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 
@@ -69,15 +70,25 @@ public final class PdfSplit {
             throw new IllegalArgumentException("At least one page index is required");
         }
 
-        List<Integer> sorted = new ArrayList<>(indices);
-        Collections.sort(sorted);
-        int[] pageIndices = sorted.stream().mapToInt(Integer::intValue).toArray();
+        List<Integer> sortedIndices = new ArrayList<>(indices);
+        Collections.sort(sortedIndices);
+        int[] pageIndices = sortedIndices.stream().mapToInt(Integer::intValue).toArray();
 
-        PdfDocument dest = createEmptyDocument();
-        PdfPageImporter.importPagesByIndex(dest.rawHandle(), doc.rawHandle(),
-                pageIndices, 0);
+        PdfDocument destinationDoc = createEmptyDocument();
+        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
+        PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandle(), pageIndices, 0);
 
-        return detach(dest);
+        PdfDocument detachedDoc = detach(destinationDoc);
+        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        if (!sourceBookmarks.isEmpty()) {
+            List<Bookmark> remappedBookmarks = filterBookmarksForIndices(sourceBookmarks, sortedIndices);
+            if (!remappedBookmarks.isEmpty()) {
+                byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
+                detachedDoc.close();
+                return PdfDocument.open(bytesWithBookmarks);
+            }
+        }
+        return detachedDoc;
     }
 
     /**
@@ -98,13 +109,54 @@ public final class PdfSplit {
                             .formatted(fromPage, toPage, doc.pageCount()));
         }
 
-        // PDFium uses 1-based page ranges
-        String range = (fromPage + 1) + "-" + (toPage + 1);
+        String pageRangeSpec = (fromPage + 1) + "-" + (toPage + 1);
 
-        PdfDocument dest = createEmptyDocument();
-        PdfPageImporter.importPages(dest.rawHandle(), doc.rawHandle(), range, 0);
+        PdfDocument destinationDoc = createEmptyDocument();
+        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
+        PdfPageImporter.importPages(destinationDoc.rawHandle(), doc.rawHandle(), pageRangeSpec, 0);
 
-        return detach(dest);
+        PdfDocument detachedDoc = detach(destinationDoc);
+        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        if (!sourceBookmarks.isEmpty()) {
+            List<Bookmark> remappedBookmarks = filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
+            if (!remappedBookmarks.isEmpty()) {
+                byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
+                detachedDoc.close();
+                return PdfDocument.open(bytesWithBookmarks);
+            }
+        }
+        return detachedDoc;
+    }
+
+    private static List<Bookmark> filterBookmarksForRange(List<Bookmark> bookmarks, int fromPage, int toPage) {
+        List<Bookmark> result = new ArrayList<>();
+        for (Bookmark bookmark : bookmarks) {
+            List<Bookmark> filteredChildren = bookmark.hasChildren()
+                    ? filterBookmarksForRange(bookmark.children(), fromPage, toPage)
+                    : Collections.emptyList();
+            boolean inRange = bookmark.pageIndex() >= fromPage && bookmark.pageIndex() <= toPage;
+            if (inRange || !filteredChildren.isEmpty()) {
+                int newPageIndex = inRange ? bookmark.pageIndex() - fromPage : (!filteredChildren.isEmpty() ? filteredChildren.getFirst().pageIndex() : 0);
+                result.add(new Bookmark(bookmark.title(), newPageIndex, filteredChildren, bookmark.actionType(), bookmark.uri(), bookmark.filePath()));
+            }
+        }
+        return result;
+    }
+
+    private static List<Bookmark> filterBookmarksForIndices(List<Bookmark> bookmarks, List<Integer> sortedIndices) {
+        List<Bookmark> result = new ArrayList<>();
+        for (Bookmark bookmark : bookmarks) {
+            List<Bookmark> filteredChildren = bookmark.hasChildren()
+                    ? filterBookmarksForIndices(bookmark.children(), sortedIndices)
+                    : Collections.emptyList();
+            int matchingIndex = sortedIndices.indexOf(bookmark.pageIndex());
+            boolean inSet = matchingIndex >= 0;
+            if (inSet || !filteredChildren.isEmpty()) {
+                int newPageIndex = inSet ? matchingIndex : (!filteredChildren.isEmpty() ? filteredChildren.getFirst().pageIndex() : 0);
+                result.add(new Bookmark(bookmark.title(), newPageIndex, filteredChildren, bookmark.actionType(), bookmark.uri(), bookmark.filePath()));
+            }
+        }
+        return result;
     }
 
     /**

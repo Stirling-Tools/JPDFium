@@ -1,12 +1,4 @@
-// Minimal, header-free smoke test for a built PDFium shared library.
-// dlopen()s libpdfium by path (resolving sibling component libs via its
-// RUNPATH=$ORIGIN, exactly like the JVM's System.load) and exercises the core
-// FPDF API: init -> open a PDF -> page count -> close. Proves the native both
-// LOADS and RUNS on the host libc (the real value on musl/Alpine, where a
-// glibc-built PDFium would not even load).
-//
-// Usage: pdfium_smoke <path/to/libpdfium.so> <path/to/test.pdf>
-// Exit:  0 ok, 2 load/symbol error, 3 document load failed, 4 unexpected pages.
+// Smoke test for libpdfium shared library.
 #include <stdio.h>
 #include <dlfcn.h>
 

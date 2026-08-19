@@ -27,10 +27,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfPage implements AutoCloseable {
 
     private final long handle;
+    private final MemorySegment rawPageSegment;
+    private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private PdfPage(long handle) {
         this.handle = handle;
+        this.rawPageSegment = JpdfiumLib.pageRawHandle(handle);
+        this.rawDocSegment = JpdfiumLib.pageDocRawHandle(handle);
     }
 
     static PdfPage open(long docHandle, int index) {
@@ -45,6 +49,35 @@ public final class PdfPage implements AutoCloseable {
     public RenderResult renderAt(int dpi) {
         ensureOpen();
         return JpdfiumLib.renderPage(handle, dpi);
+    }
+
+    /**
+     * Render the page directly into a pre-allocated native memory segment.
+     * Guarantees zero Java heap allocation in steady state.
+     *
+     * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     */
+    public void renderInto(MemorySegment targetBitmap, int width, int height) {
+        ensureOpen();
+        JpdfiumLib.renderPageInto(handle, targetBitmap, width, height, 0x10 | 0x01 /* FPDF_REVERSE_BYTE_ORDER | FPDF_ANNOT */);
+    }
+
+    /**
+     * Render the page directly into a pre-allocated direct {@link ByteBuffer}.
+     * Guarantees zero Java heap allocation in steady state.
+     *
+     * @param directBuffer pre-allocated direct ByteBuffer (capacity at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     */
+    public void renderInto(java.nio.ByteBuffer directBuffer, int width, int height) {
+        ensureOpen();
+        if (!directBuffer.isDirect()) {
+            throw new IllegalArgumentException("targetBuffer must be a direct ByteBuffer");
+        }
+        renderInto(MemorySegment.ofBuffer(directBuffer), width, height);
     }
 
     /** Returns raw character data as JSON: [{i,u,x,y,w,h,font,size}, ...] */
@@ -275,7 +308,7 @@ public final class PdfPage implements AutoCloseable {
      */
     public MemorySegment rawHandle() {
         ensureOpen();
-        return JpdfiumLib.pageRawHandle(handle);
+        return rawPageSegment;
     }
 
     /**
@@ -283,7 +316,7 @@ public final class PdfPage implements AutoCloseable {
      */
     public MemorySegment rawDocHandle() {
         ensureOpen();
-        return JpdfiumLib.pageDocRawHandle(handle);
+        return rawDocSegment;
     }
 
     /**

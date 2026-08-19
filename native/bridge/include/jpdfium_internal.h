@@ -41,52 +41,21 @@ inline int translatePdfiumError() {
     }
 }
 
-// A page-space redaction rectangle (PDF coords, y up).
 struct RedactZone {
     int32_t pageIndex = -1;
     float left = 0, bottom = 0, right = 0, top = 0;
 };
 
-// Shared document core. Owns the FPDF_DOCUMENT handle and all document-scoped
-// redaction bookkeeping. Both DocWrapper and every PageWrapper hold a
-// shared_ptr: closing the DocWrapper while pages are still open must not
-// leave pages with a dangling owner, and PDFium requires every page to be
-// closed BEFORE the document (FPDF_CloseDocument with open pages is UB), so
-// the document handle is only closed when the LAST reference (doc wrapper or
-// any page wrapper) is released.
+// Shared document state.
 struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
-
-    // Set when any content-removing redaction mutated the page content.
-    // An incremental save would append a new revision and keep the
-    // un-redacted original revision recoverable in the file body, so it is
-    // refused once this flag is set.
     bool contentRedacted = false;
-
-    // Set when REDACT annotations were created (mark phase) and not yet
-    // committed. Saving in this state ships a document whose text is fully
-    // intact under the marks - the classic "marked but never applied" leak.
-    // Tracked as a document-scoped counter so that committing or clearing
-    // marks on one page does not clear the flag while other pages still have
-    // live uncommitted marks.
     int32_t unappliedRedactMarksCount = 0;
 
-    // ---- sanitize-stage bookkeeping (consumed by jpdfium_sanitize.cpp) ----
-    // Words/patterns (UTF-8) used for redaction: metadata, annotation text,
-    // outline titles and form-field values containing these are scrubbed on
-    // every redacted save.
     std::vector<std::string> redactedLiterals{};
-    // Page-space rectangles of every committed redaction: annotations that
-    // intersect them are removed on save (their text may echo the redacted
-    // content).
     std::vector<RedactZone> redactZones{};
-    // BaseFont names of fonts whose text objects were redaction-touched:
-    // their font programs are re-subset on save (hb-subset) so the redacted
-    // glyph outlines cannot be recovered from the file (ACSC remnant class).
     std::vector<std::string> touchedFontNames{};
-    // JSON report of the last sanitize run ("" = sanitize has not run).
     std::string sanitizeReport{};
-
     std::vector<FPDF_FONT> loadedFonts{};
 
     bool hasUnappliedRedactMarks() const {
@@ -110,10 +79,18 @@ struct DocCore {
             if (e == fn) return;
         touchedFontNames.push_back(std::move(fn));
     }
+
+    uint8_t* buf = nullptr;
+    int64_t blen = 0;
 };
 
-inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
-    return std::shared_ptr<DocCore>(new DocCore{doc}, [](DocCore* c) {
+inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
+                                            int64_t blen = 0) {
+    auto* core = new DocCore();
+    core->doc = doc;
+    core->buf = buf;
+    core->blen = blen;
+    return std::shared_ptr<DocCore>(core, [](DocCore* c) {
         for (FPDF_FONT f : c->loadedFonts) {
             FPDFFont_Close(f);
         }
@@ -121,32 +98,26 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
             FPDF_CloseDocument(c->doc);
             c->doc = nullptr;
         }
+        if (c->buf) {
+            free(c->buf);
+            c->buf = nullptr;
+        }
         delete c;
     });
 }
 
 struct DocWrapper {
     std::shared_ptr<DocCore> core;
-    uint8_t* buf =
-        nullptr;  // non-null when opened from bytes; PDFium requires it to outlive the doc
-    int64_t blen = 0;
 
     DocWrapper() = default;
     DocWrapper(const DocWrapper&) = delete;
     DocWrapper& operator=(const DocWrapper&) = delete;
-
-    ~DocWrapper() {
-        if (buf) {
-            free(buf);
-            buf = nullptr;
-        }
-    }
 };
 
 struct PageWrapper {
     FPDF_PAGE page = nullptr;
-    FPDF_DOCUMENT doc =
-        nullptr;  // non-owning reference; needed by page-level APIs that also require the document
+    FPDF_DOCUMENT doc = nullptr;  // non-owning reference; needed by page-level APIs that also
+                                  // require the document
     int32_t pageIndex = -1;
     std::shared_ptr<DocCore> core;  // keeps the document (and bookkeeping) alive
 
@@ -202,9 +173,6 @@ class ScratchArena {
     std::pmr::monotonic_buffer_resource mrb_;
 };
 
-// Wraps an exported entry point so no C++ exception can ever cross the
-// C ABI into a JNI/FFM downcall (which is undefined behaviour). Returns
-// JPDFIUM_ERR_NATIVE on any exception, including std::bad_alloc.
 template <typename Fn>
 inline int32_t jpdfium_guarded(Fn&& fn) noexcept {
     try {
@@ -214,9 +182,6 @@ inline int32_t jpdfium_guarded(Fn&& fn) noexcept {
     }
 }
 
-// Allocate a width*height RGBA buffer with overflow checks. Returns nullptr
-// on overflow or allocation failure. The caller frees with free() (matching
-// the jpdfium_free_buffer FFI convention).
 inline uint8_t* allocRgbaChecked(int w, int h) {
     if (w <= 0 || h <= 0) return nullptr;
     size_t uw = static_cast<size_t>(w);

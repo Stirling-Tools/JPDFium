@@ -9,9 +9,14 @@ import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
+import java.nio.channels.Channels;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -33,10 +38,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
+    private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;
+        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
     }
 
     public static PdfDocument open(Path path) {
@@ -123,6 +130,29 @@ public final class PdfDocument implements AutoCloseable {
         JpdfiumLib.docSave(handle, path.toAbsolutePath().toString());
     }
 
+    /**
+     * Save the document directly to a {@link WritableByteChannel} without intermediate Java heap byte[] allocation.
+     *
+     * @param channel target output channel
+     * @throws IOException if an I/O error occurs
+     */
+    public void save(WritableByteChannel channel) throws IOException {
+        ensureOpen();
+        JpdfiumLib.docSaveTo(handle, channel);
+    }
+
+    /**
+     * Save the document directly to an {@link OutputStream}.
+     *
+     * @param out target output stream
+     * @throws IOException if an I/O error occurs
+     */
+    public void save(OutputStream out) throws IOException {
+        ensureOpen();
+        WritableByteChannel channel = Channels.newChannel(out);
+        JpdfiumLib.docSaveTo(handle, channel);
+    }
+
     public byte[] saveBytes() {
         ensureOpen();
         return JpdfiumLib.docSaveBytes(handle);
@@ -178,7 +208,7 @@ public final class PdfDocument implements AutoCloseable {
      */
     public MemorySegment rawHandle() {
         ensureOpen();
-        return JpdfiumLib.docRawHandle(handle);
+        return rawDocSegment;
     }
 
     /**
@@ -192,10 +222,9 @@ public final class PdfDocument implements AutoCloseable {
      * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
      */
     public Optional<String> metadata(String tag) {
-        // Find matching MetadataTag by pdfKey, fall back to direct lookup
-        for (MetadataTag mt : MetadataTag.values()) {
-            if (mt.pdfKey().equalsIgnoreCase(tag)) {
-                return PdfMetadata.of(rawHandle()).get(mt);
+        for (MetadataTag metadataTag : MetadataTag.values()) {
+            if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
+                return PdfMetadata.of(rawHandle()).get(metadataTag);
             }
         }
         return Optional.empty();
@@ -205,7 +234,26 @@ public final class PdfDocument implements AutoCloseable {
      * Get the document's permission flags.
      */
     public long permissions() {
-        return PdfMetadata.of(rawHandle()).permissions();
+        ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetDocPermissions != null) {
+                return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
+        return 0L;
+    }
+
+    /**
+     * Returns the security handler revision, or 0 if the document is not encrypted.
+     */
+    public int securityHandlerRevision() {
+        ensureOpen();
+        try {
+            if (DocBindings.FPDF_GetSecurityHandlerRevision != null) {
+                return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
+            }
+        } catch (Throwable _) {}
+        return 0;
     }
 
     /**

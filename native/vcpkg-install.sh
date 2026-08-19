@@ -1,18 +1,5 @@
 #!/usr/bin/env bash
-# Install vcpkg packages with resilience for the windows-* native builds.
-#
-# 1. freetype comes from OUR overlay port (native/vcpkg-overlay/ports) which
-#    fetches from the GitHub mirror (github.com/freetype/freetype) instead of
-#    the chronically flaky gitlab.freedesktop.org - repeated 502/504 timeouts
-#    there have been breaking the whole windows-* natives matrix. The GitHub
-#    tag archive is byte-identical to gitlab's (same SHA512), so the build is
-#    unchanged.
-# 2. The whole install is retried: the runner's vcpkg binary cache
-#    (~/.cache/vcpkg/archives on Linux, %LOCALAPPDATA%/vcpkg/archives on
-#    Windows) converges across attempts AND across CI runs, so a transient
-#    download failure on any other port no longer fails the build.
-#
-# Usage: vcpkg-install.sh <pkg>[:triplet] [<pkg>...]
+# Installs vcpkg packages with retry support for CI resilience.
 set -euo pipefail
 
 OVERLAY_DIR="$(cd "$(dirname "$0")" && pwd)/vcpkg-overlay/ports"

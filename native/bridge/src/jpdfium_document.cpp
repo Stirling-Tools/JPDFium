@@ -21,10 +21,6 @@
 
 namespace {
 
-// Open a file for writing, restricting the permissions of a newly created
-// file to owner read/write (0600) on POSIX so secrets written by the bridge
-// (e.g. saved PDFs) are not world-readable. On Windows the CRT default ACL
-// applies, as there is no POSIX mode argument.
 FILE* safe_fopen_write(const char* path) {
 #if defined(_WIN32)
     return std::fopen(path, "wb");
@@ -38,18 +34,7 @@ FILE* safe_fopen_write(const char* path) {
 }  // namespace
 
 int32_t jpdfium_init() {
-    FPDF_LIBRARY_CONFIG cfg{};
-    cfg.version = 4;
-    cfg.m_pUserFontPaths = nullptr;
-    cfg.m_pIsolate = nullptr;
-    cfg.m_v8EmbedderSlot = 0;
-    cfg.m_pPlatform = nullptr;
-#ifdef JPDFIUM_HAS_SKIA
-    cfg.m_RendererType = FPDF_RENDERERTYPE_SKIA;
-#else
-    cfg.m_RendererType = FPDF_RENDERERTYPE_AGG;
-#endif
-    FPDF_InitLibraryWithConfig(&cfg);
+    FPDF_InitLibrary();
     return JPDFIUM_OK;
 }
 
@@ -94,9 +79,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     }
 
     auto* w = new DocWrapper();
-    w->core = makeDocCore(doc);
-    w->buf = copy;
-    w->blen = len;
+    w->core = makeDocCore(doc, copy, len);
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }

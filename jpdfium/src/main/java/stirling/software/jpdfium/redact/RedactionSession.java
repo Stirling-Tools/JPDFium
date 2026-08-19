@@ -203,8 +203,8 @@ public final class RedactionSession implements AutoCloseable {
         ensureOpen();
         int total = 0;
         for (List<PendingMark> marks : pendingMarks.values()) {
-            for (PendingMark m : marks) {
-                total += m.matchCount();
+            for (PendingMark mark : marks) {
+                total += mark.matchCount();
             }
         }
         return total;
@@ -216,8 +216,8 @@ public final class RedactionSession implements AutoCloseable {
         List<PendingMark> marks = pendingMarks.get(pageIndex);
         if (marks == null) return 0;
         int total = 0;
-        for (PendingMark m : marks) {
-            total += m.matchCount();
+        for (PendingMark mark : marks) {
+            total += mark.matchCount();
         }
         return total;
     }
@@ -314,14 +314,14 @@ public final class RedactionSession implements AutoCloseable {
         try (PdfPage page = document.page(pageIndex)) {
             for (PendingMark mark : marks) {
                 switch (mark) {
-                    case WordMark wm -> {
-                        int committed = page.redactWordsEx(wm.words, argbColor,
-                                wm.padding, wm.wholeWord, wm.useRegex,
-                                removeContent, wm.caseSensitive);
+                    case WordMark wordMark -> {
+                        int committed = page.redactWordsEx(wordMark.words(), argbColor,
+                                wordMark.padding(), wordMark.wholeWord(), wordMark.useRegex(),
+                                removeContent, wordMark.caseSensitive());
                         totalCommitted += committed;
                     }
-                    case RegionMark rm -> {
-                        page.redactRegion(rm.rect, argbColor, removeContent);
+                    case RegionMark regionMark -> {
+                        page.redactRegion(regionMark.rect(), argbColor, removeContent);
                         totalCommitted += 1;
                     }
                 }

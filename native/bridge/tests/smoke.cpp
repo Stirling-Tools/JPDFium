@@ -1,12 +1,4 @@
-// native_smoke - CTest smoke test for the bridge ABI, run without the JVM.
-//
-// Exercises the core lifecycle end-to-end against either build variant:
-//   - stub bridge (JPDFIUM_USE_PDFIUM=OFF): deterministic fake data
-//   - real bridge (JPDFIUM_USE_PDFIUM=ON):  actual PDFium-backed behavior
-//
-// When the real bridge is detected (the stub's Rust stubs return
-// JPDFIUM_ERR_NATIVE=-99 while the real bridge does not), additional
-// boundary checks on untrusted-input validation run too.
+// native_smoke - CTest smoke test for the bridge ABI.
 
 #include <cmath>
 #include <cstdio>

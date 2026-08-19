@@ -29,19 +29,19 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  */
 public final class PdfMetadata {
 
-    private final MemorySegment docSeg;
+    private final MemorySegment rawDocSegment;
 
-    private PdfMetadata(MemorySegment docSeg) {
-        this.docSeg = docSeg;
+    private PdfMetadata(MemorySegment rawDocSegment) {
+        this.rawDocSegment = rawDocSegment;
     }
 
     /**
      * Create a PdfMetadata reader for the given document.
      *
-     * @param doc raw FPDF_DOCUMENT segment (from {@code JpdfiumLib.docRawHandle})
+     * @param rawDocSegment raw FPDF_DOCUMENT segment (from {@code JpdfiumLib.docRawHandle})
      */
-    public static PdfMetadata of(MemorySegment doc) {
-        return new PdfMetadata(doc);
+    public static PdfMetadata of(MemorySegment rawDocSegment) {
+        return new PdfMetadata(rawDocSegment);
     }
 
     public Optional<String> title()        { return get(MetadataTag.TITLE); }
@@ -61,30 +61,29 @@ public final class PdfMetadata {
      */
     public Optional<String> get(MetadataTag tag) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment tagSeg = arena.allocateFrom(tag.pdfKey());
+            MemorySegment tagSegment = arena.allocateFrom(tag.pdfKey());
 
-            // Double-call pattern: first call gets required buffer size
             long needed;
             try {
                 if (DocBindings.FPDF_GetMetaText == null) return Optional.empty();
-                needed = (long) DocBindings.FPDF_GetMetaText.invokeExact(docSeg, tagSeg,
+                needed = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment,
                         MemorySegment.NULL, 0L);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 return Optional.empty();
             }
 
-            if (needed <= 2) return Optional.empty();  // only null terminator
+            if (needed <= 2) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(docSeg, tagSeg, buf, needed);
+                long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 return Optional.empty();
             }
 
-            String value = FfmHelper.fromWideString(buf, needed);
+            String value = FfmHelper.fromWideString(bufferSegment, needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         }
     }
@@ -107,7 +106,7 @@ public final class PdfMetadata {
     public int permissions() {
         try {
             if (DocBindings.FPDF_GetDocPermissions == null) return -1;
-            return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(docSeg);
+            return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return -1;
@@ -120,7 +119,7 @@ public final class PdfMetadata {
     public int securityHandlerRevision() {
         try {
             if (DocBindings.FPDF_GetSecurityHandlerRevision == null) return 0;
-            return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(docSeg);
+            return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return 0;
@@ -137,18 +136,22 @@ public final class PdfMetadata {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex,
+                needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel size call", t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDF_GetPageLabel size call", t);
+            }
 
             if (needed <= 2) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(docSeg, pageIndex, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException("FPDF_GetPageLabel fill call", t); }
+                long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDF_GetPageLabel fill call", t);
+            }
 
-            String label = FfmHelper.fromWideString(buf, needed);
+            String label = FfmHelper.fromWideString(bufferSegment, needed);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);
         }
     }

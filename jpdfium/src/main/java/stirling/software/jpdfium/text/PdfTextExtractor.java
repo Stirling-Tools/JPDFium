@@ -87,137 +87,190 @@ public final class PdfTextExtractor {
      */
     static List<TextChar> parseCharsJson(String json) {
         if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
-        final int n = json.length();
-        // Rough pre-size: ~56 bytes per char object in the stub/real schema.
-        List<TextChar> chars = new ArrayList<>(Math.max(8, n / 56));
-        int p = 0;
+        final int jsonLength = json.length();
+        List<TextChar> characters = new ArrayList<>(Math.max(8, jsonLength / 56));
+        int searchPosition = 0;
+        String lastFontName = null;
         while (true) {
-            int objStart = json.indexOf('{', p);
-            if (objStart < 0) break;
-            int i = objStart + 1;
+            int objectStart = json.indexOf('{', searchPosition);
+            if (objectStart < 0) break;
+            int cursor = objectStart + 1;
             int index = 0;
             int unicode = 0;
             float x = 0;
             float y = 0;
-            float w = 0;
-            float h = 0;
+            float width = 0;
+            float height = 0;
             float fontSize = 0;
             String fontName = "";
             boolean complete = false;
             try {
-                while (i < n) {
-                    char c = json.charAt(i);
-                    if (c == '}') { i++; complete = true; break; }
-                    if (c == ',' || Character.isWhitespace(c)) { i++; continue; }
-                    if (c != '"') break;                  // malformed field
-                    int k1 = json.indexOf('"', i + 1);
-                    if (k1 < 0) break;
-                    int colon = json.indexOf(':', k1 + 1);
+                while (cursor < jsonLength) {
+                    char ch = json.charAt(cursor);
+                    if (ch == '}') {
+                        cursor++;
+                        complete = true;
+                        break;
+                    }
+                    if (ch == ',' || Character.isWhitespace(ch)) {
+                        cursor++;
+                        continue;
+                    }
+                    if (ch != '"') break;
+                    int keyEnd = json.indexOf('"', cursor + 1);
+                    if (keyEnd < 0) break;
+                    int colon = json.indexOf(':', keyEnd + 1);
                     if (colon < 0) break;
-                    char k0 = json.charAt(i + 1);        // first char of key
-                    int v0 = colon + 1;
-                    while (v0 < n && Character.isWhitespace(json.charAt(v0))) v0++;
-                    if (v0 >= n) break;
-                    if (json.charAt(v0) == '"') {        // string value (font)
-                        int close = endOfQuoted(json, v0 + 1);
-                        if (close < 0) break;
-                        if (k0 == 'f') fontName = unescape(json, v0 + 1, close);
-                        i = close + 1;
-                    } else {                             // number value
-                        int v1 = v0;
-                        while (v1 < n) {
-                            char d = json.charAt(v1);
-                            if (d == ',' || d == '}') break;
-                            v1++;
+                    char keyInitial = json.charAt(cursor + 1);
+                    int valueStart = colon + 1;
+                    while (valueStart < jsonLength && Character.isWhitespace(json.charAt(valueStart))) valueStart++;
+                    if (valueStart >= jsonLength) break;
+                    if (json.charAt(valueStart) == '"') {
+                        int quoteClose = endOfQuoted(json, valueStart + 1);
+                        if (quoteClose < 0) break;
+                        if (keyInitial == 'f') {
+                            int qStart = valueStart + 1;
+                            int qLen = quoteClose - qStart;
+                            if (lastFontName != null && lastFontName.length() == qLen
+                                    && json.regionMatches(qStart, lastFontName, 0, qLen)) {
+                                fontName = lastFontName;
+                            } else {
+                                fontName = unescape(json, qStart, quoteClose);
+                                lastFontName = fontName;
+                            }
                         }
-                        String val = json.substring(v0, v1);
-                        switch (k0) {
-                            case 'i' -> index = Integer.parseInt(val);
-                            case 'u' -> unicode = Integer.parseInt(val);
-                            case 'x' -> x = Float.parseFloat(val);
-                            case 'y' -> y = Float.parseFloat(val);
-                            case 'w' -> w = Float.parseFloat(val);
-                            case 'h' -> h = Float.parseFloat(val);
-                            case 's' -> fontSize = Float.parseFloat(val); // "size"
-                            default -> { /* font handled as string above */ }
+                        cursor = quoteClose + 1;
+                    } else {
+                        int valueEnd = valueStart;
+                        while (valueEnd < jsonLength) {
+                            char delimiter = json.charAt(valueEnd);
+                            if (delimiter == ',' || delimiter == '}') break;
+                            valueEnd++;
                         }
-                        i = v1;
+                        switch (keyInitial) {
+                            case 'i' -> index = parseIntFast(json, valueStart, valueEnd);
+                            case 'u' -> unicode = parseIntFast(json, valueStart, valueEnd);
+                            case 'x' -> x = parseFloatFast(json, valueStart, valueEnd);
+                            case 'y' -> y = parseFloatFast(json, valueStart, valueEnd);
+                            case 'w' -> width = parseFloatFast(json, valueStart, valueEnd);
+                            case 'h' -> height = parseFloatFast(json, valueStart, valueEnd);
+                            case 's' -> fontSize = parseFloatFast(json, valueStart, valueEnd);
+                            default -> {}
+                        }
+                        cursor = valueEnd;
                     }
                 }
-                if (complete) chars.add(new TextChar(index, unicode, x, y, w, h, fontName, fontSize));
-            } catch (NumberFormatException skip) {
-                // malformed entry - don't add this char
+                if (complete) characters.add(new TextChar(index, unicode, x, y, width, height, fontName, fontSize));
+            } catch (NumberFormatException _) {
+                // Skip malformed entries
             }
-            p = i;
+            searchPosition = cursor;
         }
-        return chars;
+        return characters;
     }
 
-    /** Index of the closing {@code "} for the string opened at {@code openQuote} (handles {@code \"}). */
+    private static int parseIntFast(String s, int start, int end) {
+        int result = 0;
+        boolean negative = false;
+        int i = start;
+        if (i < end && s.charAt(i) == '-') {
+            negative = true;
+            i++;
+        }
+        while (i < end) {
+            char c = s.charAt(i++);
+            if (c >= '0' && c <= '9') {
+                result = result * 10 + (c - '0');
+            }
+        }
+        return negative ? -result : result;
+    }
+
+    private static float parseFloatFast(String s, int start, int end) {
+        try {
+            int dot = -1;
+            for (int i = start; i < end; i++) {
+                if (s.charAt(i) == '.') {
+                    dot = i;
+                    break;
+                }
+            }
+            if (dot < 0) {
+                return (float) parseIntFast(s, start, end);
+            }
+            int intPart = parseIntFast(s, start, dot);
+            int fracPart = parseIntFast(s, dot + 1, end);
+            int fracDigits = end - (dot + 1);
+            float frac = fracPart;
+            for (int i = 0; i < fracDigits; i++) {
+                frac /= 10.0f;
+            }
+            return intPart >= 0 ? intPart + frac : intPart - frac;
+        } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
+            try {
+                return Float.parseFloat(s.substring(start, end));
+            } catch (NumberFormatException _) {
+                return 0.0f;
+            }
+        }
+    }
+
     private static int endOfQuoted(String json, int from) {
-        final int n = json.length();
-        for (int i = from; i < n; ) {
-            char c = json.charAt(i);
-            if (c == '\\') { i += 2; continue; }
-            if (c == '"') return i;
+        final int jsonLength = json.length();
+        for (int i = from; i < jsonLength; ) {
+            char ch = json.charAt(i);
+            if (ch == '\\') {
+                i += 2;
+                continue;
+            }
+            if (ch == '"') return i;
             i++;
         }
         return -1;
     }
 
-    /** JSON-unescape the chars between {@code start} and {@code end}; fast path when no {@code \} present. */
     private static String unescape(String json, int start, int end) {
         if (start >= end) return "";
         for (int i = start; i < end; i++) {
             if (json.charAt(i) == '\\') {
-                StringBuilder sb = new StringBuilder(end - start);
-                for (int i2 = start; i2 < end; ) {
-                    char c = json.charAt(i2);
-                    if (c == '\\' && i2 + 1 < end) {
-                        sb.append(switch (json.charAt(i2 + 1)) {
+                StringBuilder builder = new StringBuilder(end - start);
+                for (int pos = start; pos < end; ) {
+                    char ch = json.charAt(pos);
+                    if (ch == '\\' && pos + 1 < end) {
+                        builder.append(switch (json.charAt(pos + 1)) {
                             case '"' -> '"'; case '\\' -> '\\'; case '/' -> '/';
                             case 'n' -> '\n'; case 't' -> '\t'; case 'r' -> '\r';
                             case 'b' -> '\b'; case 'f' -> '\f';
-                            default -> json.charAt(i2 + 1);
+                            default -> json.charAt(pos + 1);
                         });
-                        i2 += 2;
+                        pos += 2;
                     } else {
-                        sb.append(c);
-                        i2++;
+                        builder.append(ch);
+                        pos++;
                     }
                 }
-                return sb.toString();
+                return builder.toString();
             }
         }
         return json.substring(start, end);
     }
 
-    /**
-     * Groups a flat character list into lines and words.
-     * <p>
-     * Lines are detected by a Y-position shift greater than half the current character height.
-     * Using a relative threshold (half-height) rather than a fixed point value makes the
-     * segmentation work correctly across different font sizes within the same page.
-     */
-    static List<TextLine> buildLines(List<TextChar> chars) {
-        if (chars.isEmpty()) return List.of();
+    static List<TextLine> buildLines(List<TextChar> characters) {
+        if (characters.isEmpty()) return List.of();
 
         List<TextLine> lines = new ArrayList<>();
         List<TextChar> currentLineChars = new ArrayList<>();
-        float currentLineY = chars.getFirst().y();
-        // Use half the first character's height as the initial threshold.
-        // The threshold is updated per line to adapt to font size changes mid-page.
-        float lineThreshold = chars.getFirst().height() * 0.5f;
+        float currentLineY = characters.getFirst().y();
+        float lineThreshold = characters.getFirst().height() * 0.5f;
 
-        for (TextChar ch : chars) {
-            if (!currentLineChars.isEmpty() && Math.abs(ch.y() - currentLineY) > lineThreshold) {
+        for (TextChar textChar : characters) {
+            if (!currentLineChars.isEmpty() && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
                 lines.add(buildLine(currentLineChars));
-                // TextLine does not retain this list, so reuse it for the next line.
                 currentLineChars.clear();
-                lineThreshold = ch.height() * 0.5f;
+                lineThreshold = textChar.height() * 0.5f;
             }
-            currentLineChars.add(ch);
-            currentLineY = ch.y();
+            currentLineChars.add(textChar);
+            currentLineY = textChar.y();
         }
 
         lines.add(buildLine(currentLineChars));
@@ -228,20 +281,19 @@ public final class PdfTextExtractor {
     private static TextLine buildLine(List<TextChar> lineChars) {
         List<TextWord> words = buildWords(lineChars);
         if (lineChars.isEmpty()) return new TextLine(words, 0f, 0f, 0f, 0f);
-        // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
         float minX = Float.POSITIVE_INFINITY;
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        for (TextChar c : lineChars) {
-            float cx = c.x();
-            float cy = c.y();
-            if (cx < minX) minX = cx;
-            if (cy < minY) minY = cy;
-            float rx = cx + c.width();
-            float by = cy + c.height();
-            if (rx > maxX) maxX = rx;
-            if (by > maxY) maxY = by;
+        for (TextChar textChar : lineChars) {
+            float charX = textChar.x();
+            float charY = textChar.y();
+            if (charX < minX) minX = charX;
+            if (charY < minY) minY = charY;
+            float rightX = charX + textChar.width();
+            float bottomY = charY + textChar.height();
+            if (rightX > maxX) maxX = rightX;
+            if (bottomY > maxY) maxY = bottomY;
         }
         return new TextLine(words, minX, minY, maxX - minX, maxY - minY);
     }
@@ -250,15 +302,14 @@ public final class PdfTextExtractor {
         List<TextWord> words = new ArrayList<>();
         List<TextChar> currentWord = new ArrayList<>();
 
-        for (TextChar ch : lineChars) {
-            if (ch.isWhitespace() || ch.isNewline()) {
+        for (TextChar textChar : lineChars) {
+            if (textChar.isWhitespace() || textChar.isNewline()) {
                 if (!currentWord.isEmpty()) {
                     words.add(buildWord(currentWord));
-                    // TextWord retains its char list, so allocate a fresh one per word.
                     currentWord = new ArrayList<>();
                 }
             } else {
-                currentWord.add(ch);
+                currentWord.add(textChar);
             }
         }
 
@@ -271,20 +322,19 @@ public final class PdfTextExtractor {
 
     private static TextWord buildWord(List<TextChar> wordChars) {
         if (wordChars.isEmpty()) return new TextWord(wordChars, 0f, 0f, 0f, 0f);
-        // Single pass for min/max - avoids 4 stream pipelines + float autoboxing.
         float minX = Float.POSITIVE_INFINITY;
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        for (TextChar c : wordChars) {
-            float cx = c.x();
-            float cy = c.y();
-            if (cx < minX) minX = cx;
-            if (cy < minY) minY = cy;
-            float rx = cx + c.width();
-            float by = cy + c.height();
-            if (rx > maxX) maxX = rx;
-            if (by > maxY) maxY = by;
+        for (TextChar textChar : wordChars) {
+            float charX = textChar.x();
+            float charY = textChar.y();
+            if (charX < minX) minX = charX;
+            if (charY < minY) minY = charY;
+            float rightX = charX + textChar.width();
+            float bottomY = charY + textChar.height();
+            if (rightX > maxX) maxX = rightX;
+            if (bottomY > maxY) maxY = bottomY;
         }
         return new TextWord(wordChars, minX, minY, maxX - minX, maxY - minY);
     }

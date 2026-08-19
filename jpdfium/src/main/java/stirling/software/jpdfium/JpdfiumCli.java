@@ -28,6 +28,8 @@ import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -839,22 +841,16 @@ public final class JpdfiumCli {
 
         private static byte[] idat(byte[] rgba, int width, int height) {
             int stride = width * 4;
-            byte[] raw = new byte[(stride + 1) * height];
-            for (int y = 0; y < height; y++) {
-                int row = y * (stride + 1);
-                raw[row] = 0; // filter: none
-                System.arraycopy(rgba, y * stride, raw, row + 1, stride);
-            }
+            ByteArrayOutputStream b = new ByteArrayOutputStream(Math.max(1024, (stride * height) / 4));
             Deflater deflater = new Deflater(Deflater.DEFAULT_COMPRESSION);
-            ByteArrayOutputStream b = new ByteArrayOutputStream(raw.length / 2);
-            try {
-                deflater.setInput(raw);
-                deflater.finish();
-                byte[] buf = new byte[8192];
-                while (!deflater.finished()) {
-                    int n = deflater.deflate(buf);
-                    b.write(buf, 0, n);
+            try (java.util.zip.DeflaterOutputStream dos = new java.util.zip.DeflaterOutputStream(b, deflater)) {
+                for (int y = 0; y < height; y++) {
+                    dos.write(0); // filter: none
+                    dos.write(rgba, y * stride, stride);
                 }
+                dos.finish();
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
             } finally {
                 deflater.end();
             }

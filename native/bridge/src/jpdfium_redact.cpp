@@ -1,6 +1,4 @@
-// jpdfium_redact.cpp - Redaction engine: Object Fission algorithm,
-// pattern/word/region redaction, annotation-based mark-commit redaction,
-// and incremental save.
+// jpdfium_redact.cpp - Redaction engine.
 
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
@@ -43,10 +41,6 @@
 #endif
 
 #ifdef JPDFIUM_HAS_PCRE2
-// 32-bit code units: the redaction text pipeline is char32_t end-to-end
-// (wchar_t is platform-dependent - 32-bit on POSIX, 16-bit on Windows - and
-// was silently wrong on Windows before). PCRE2 32-bit matches char32_t
-// buffers directly (PCRE2_SPTR32 = const uint32_t*).
 #define PCRE2_CODE_UNIT_WIDTH 32
 #include <pcre2.h>
 #endif
@@ -57,7 +51,6 @@
 static FT_Library g_ft_lib = nullptr;
 static std::once_flag g_ft_once;
 static void ensureFreeTypeInit() {
-    // FreeType's FT_Library is not safe for concurrent lazy init; guard it.
     std::call_once(g_ft_once, [] {
         if (!g_ft_lib) FT_Init_FreeType(&g_ft_lib);
     });

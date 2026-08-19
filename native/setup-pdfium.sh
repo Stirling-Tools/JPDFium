@@ -1,31 +1,10 @@
 #!/usr/bin/env bash
-# Builds PDFium from the EmbedPDF fork source into native/pdfium/
-#
-# The EmbedPDF fork provides enhanced APIs: native redaction, encryption,
-# annotation rotation/appearance, page-rotation normalization, and more.
-# Source: https://github.com/embedpdf/pdfium  (branch: embedpdf/main)
-#
-# Usage:
-#   ./native/setup-pdfium.sh             # First-time build (clones + builds)
-#   ./native/setup-pdfium.sh --rebuild   # Force rebuild (keeps source checkout)
-#   ./native/setup-pdfium.sh --clean     # Full clean rebuild (removes everything)
-#
-# Prerequisites:
-#   - git, python3, ninja-build (or ninja)
-#   - ~15 GB disk space (source checkout + build artifacts)
-#   - Build takes 15-60 minutes depending on hardware
-#
-# The script will install depot_tools (gclient/gn/ninja) automatically.
+# Builds PDFium from source into native/pdfium/.
 set -euo pipefail
 
-# Portable in-place sed - BSD (macOS) requires a backup suffix argument to -i,
-# GNU sed treats it as optional. Using -i.bak works on both; the .bak files are
-# removed after each edit. All uses of `sed -i` below go through this wrapper.
 sed_i() {
     local file
     local -a sed_args
-    # Last positional arg is the file (one per invocation below); everything
-    # before it is passed through to sed.
     file="${!#}"
     sed_args=("${@:1:$#-1}")
     sed -i.bak "${sed_args[@]}" "$file"

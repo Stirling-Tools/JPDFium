@@ -1,11 +1,4 @@
 // jpdfium_repair.cpp - PDF structural repair pipeline.
-//
-// Uses qpdf (Apache 2.0) for XRef reconstruction, trailer repair, and
-// structural normalization. Falls back gracefully when qpdf is unavailable.
-//
-// Libraries used:
-//   qpdf     (Apache 2.0) - XRef rebuild, stream normalization, inspection mode
-//   PDFium   (BSD)        - Tolerant parser fallback (Chrome lineage)
 
 #include <cstddef>
 #include <cstdio>

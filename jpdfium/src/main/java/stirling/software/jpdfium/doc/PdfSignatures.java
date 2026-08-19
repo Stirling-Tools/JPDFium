@@ -38,28 +38,30 @@ public final class PdfSignatures {
     /**
      * Returns the number of signatures in the document.
      */
-    public static int count(MemorySegment doc) {
+    public static int count(MemorySegment rawDocSegment) {
         if (SignatureBindings.FPDF_GetSignatureCount == null) {
             return 0;
         }
         try {
-            return (int) SignatureBindings.FPDF_GetSignatureCount.invokeExact(doc);
-        } catch (Throwable t) { throw new JPDFiumException("FPDF_GetSignatureCount failed", t); }
+            return (int) SignatureBindings.FPDF_GetSignatureCount.invokeExact(rawDocSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDF_GetSignatureCount failed", t);
+        }
     }
 
     /**
      * List all signatures in the document.
      *
-     * @param doc raw FPDF_DOCUMENT segment
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
      * @return all signatures with their properties
      */
-    public static List<Signature> list(MemorySegment doc) {
-        int n = count(doc);
-        if (n <= 0) return Collections.emptyList();
+    public static List<Signature> list(MemorySegment rawDocSegment) {
+        int signatureCount = count(rawDocSegment);
+        if (signatureCount <= 0) return Collections.emptyList();
 
-        List<Signature> result = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            result.add(get(doc, i));
+        List<Signature> result = new ArrayList<>(signatureCount);
+        for (int i = 0; i < signatureCount; i++) {
+            result.add(get(rawDocSegment, i));
         }
         return Collections.unmodifiableList(result);
     }
@@ -67,103 +69,126 @@ public final class PdfSignatures {
     /**
      * Get a specific signature by index.
      *
-     * @param doc   raw FPDF_DOCUMENT segment
-     * @param index 0-based signature index
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
+     * @param index         0-based signature index
      * @return the signature
      */
-    public static Signature get(MemorySegment doc, int index) {
-        MemorySegment sig;
+    public static Signature get(MemorySegment rawDocSegment, int index) {
+        MemorySegment signatureSegment;
         try {
-            sig = (MemorySegment) SignatureBindings.FPDF_GetSignatureObject.invokeExact(doc, index);
-        } catch (Throwable t) { throw new JPDFiumException("FPDF_GetSignatureObject failed", t); }
+            signatureSegment = (MemorySegment) SignatureBindings.FPDF_GetSignatureObject.invokeExact(rawDocSegment, index);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDF_GetSignatureObject failed", t);
+        }
 
-        if (sig.equals(MemorySegment.NULL)) {
+        if (signatureSegment.equals(MemorySegment.NULL)) {
             throw new IndexOutOfBoundsException("Signature index " + index + " not found");
         }
 
         return new Signature(
                 index,
-                getSubFilter(sig),
-                getReason(sig),
-                getTime(sig),
-                getContents(sig),
-                getPermission(sig)
+                getSubFilter(signatureSegment),
+                getReason(signatureSegment),
+                getTime(signatureSegment),
+                getContents(signatureSegment),
+                getPermission(signatureSegment)
         );
     }
 
-    private static Optional<String> getSubFilter(MemorySegment sig) {
+    private static Optional<String> getSubFilter(MemorySegment signatureSegment) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(sig,
+                needed = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
             if (needed <= 1) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return Optional.of(FfmHelper.fromByteString(buf, needed));
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(FfmHelper.fromByteString(bufferSegment, needed));
         }
     }
 
-    private static Optional<String> getReason(MemorySegment sig) {
+    private static Optional<String> getReason(MemorySegment signatureSegment) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(sig,
+                needed = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
             if (needed <= 2) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return Optional.of(FfmHelper.fromWideString(buf, needed));
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(FfmHelper.fromWideString(bufferSegment, needed));
         }
     }
 
-    private static Optional<String> getTime(MemorySegment sig) {
+    private static Optional<String> getTime(MemorySegment signatureSegment) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(sig,
+                needed = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
             if (needed <= 1) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return Optional.of(FfmHelper.fromByteString(buf, needed));
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(FfmHelper.fromByteString(bufferSegment, needed));
         }
     }
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
-    private static byte[] getContents(MemorySegment sig) {
+    private static byte[] getContents(MemorySegment signatureSegment) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
             try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(sig,
+                needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment,
                         MemorySegment.NULL, 0L);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
             if (needed <= 0) return EMPTY_BYTES;
 
-            MemorySegment buf = arena.allocate(needed);
+            MemorySegment bufferSegment = arena.allocate(needed);
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(sig, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return buf.toArray(ValueLayout.JAVA_BYTE);
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment, bufferSegment, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return bufferSegment.toArray(ValueLayout.JAVA_BYTE);
         }
     }
 
-    private static int getPermission(MemorySegment sig) {
+    private static int getPermission(MemorySegment signatureSegment) {
+        if (SignatureBindings.FPDFSignatureObj_GetDocMDPPermission == null) {
+            return 0;
+        }
         try {
-            return (int) SignatureBindings.FPDFSignatureObj_GetDocMDPPermission.invokeExact(sig);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
+            return (int) SignatureBindings.FPDFSignatureObj_GetDocMDPPermission.invokeExact(signatureSegment);
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 }

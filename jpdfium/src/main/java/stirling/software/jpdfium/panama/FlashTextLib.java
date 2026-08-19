@@ -74,6 +74,12 @@ public final class FlashTextLib {
     public static void free(long handle) {
         NativeGuard.acquire();
         try {
+            if (FastLinks.FLASHTEXT_FREE != null) {
+                try {
+                    FastLinks.FLASHTEXT_FREE.invokeExact(handle);
+                    return;
+                } catch (Throwable _) {}
+            }
             JpdfiumH.jpdfium_flashtext_free(handle);
         } finally {
             NativeGuard.release();

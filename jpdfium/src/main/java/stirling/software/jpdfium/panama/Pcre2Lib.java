@@ -56,6 +56,12 @@ public final class Pcre2Lib {
     public static void free(long patternHandle) {
         NativeGuard.acquire();
         try {
+            if (FastLinks.PCRE2_FREE != null) {
+                try {
+                    FastLinks.PCRE2_FREE.invokeExact(patternHandle);
+                    return;
+                } catch (Throwable _) {}
+            }
             JpdfiumH.jpdfium_pcre2_free(patternHandle);
         } finally {
             NativeGuard.release();

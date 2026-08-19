@@ -100,14 +100,7 @@ JPDFIUM_EXPORT void jpdfium_free_string(char* str);
 JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
-// Ghostscript-style hard crop: physically removes every page object (text,
-// image, path, shading, form) lying entirely outside the crop rectangle
-// [x,y,x+w,y+h] (PDF coords, y up). Text straddling the boundary is split at
-// character level so only the glyphs inside the crop area survive; straddling
-// non-text objects are kept and clipped by the page CropBox. No paint
-// rectangles are emitted. The caller sets the page boxes afterwards.
-// Non-finite (NaN/Inf) coordinates or non-positive sizes return
-// JPDFIUM_ERR_INVALID.
+// Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
@@ -125,17 +118,9 @@ JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
-// Each element contains the character index, origin (ox,oy), and bounding box (l,r,b,t).
-// Used by tests to verify that text positions are preserved after redaction.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json);
 
 // Annotation-Based Redaction (Mark / Commit pattern)
-//
-// Two-phase redaction modeled after EmbedPDF's architecture:
-//   Mark phase:  Create FPDF_ANNOT_REDACT annotations (zero content mutation).
-//   Commit phase: Burn all REDACT annotations via Object Fission (destructive).
-//
-// The document stays alive between phases - no close/reload required.
 
 // Mark phase: create a single REDACT annotation at the given rectangle.
 // The annotation is stored in the page's annotation dictionary; the content
