@@ -378,6 +378,12 @@ public final class JpdfiumLib {
     public static void renderPageInto(long page, MemorySegment targetBitmap, int width, int height, int flags) {
         NativeGuard.acquire();
         try {
+            if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
+                if (NativeRuntime.isStub()) {
+                    return;
+                }
+                throw new JPDFiumException("Direct render bindings not available");
+            }
             MemorySegment rawPage = pageRawHandle0(page);
             MemorySegment bitmap = (MemorySegment) PageEditBindings.FPDFBitmap_CreateEx.invokeExact(
                     width, height, 4, targetBitmap, width * 4);
