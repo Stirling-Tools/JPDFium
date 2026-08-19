@@ -1,48 +1,22 @@
 #!/usr/bin/env bash
-# Bundle the JPDFium bridge's third-party shared-library dependencies next to
-# libjpdfium.so/.dylib so the published natives jar is hermetic - downstream
-# users don't need apt/brew/system-package installs at runtime.
-#
-# Linux: walk `ldd` recursively, skip libc/libm/etc., copy everything else.
-#        libjpdfium.so is built with RUNPATH=$ORIGIN (set in CMakeLists.txt),
-#        so the dynamic linker finds the bundled deps next to the bridge.
-#
-# macOS: walk `otool -L` recursively, skip /System and /usr/lib (always
-#        present, signed), copy everything else. Rewrite each dependency
-#        path with `install_name_tool -change` to use @loader_path so the
-#        dyld finds bundled deps next to the bridge. The bridge itself is
-#        built with INSTALL_RPATH=@loader_path (set in CMakeLists.txt).
-#
-# Windows: walk the bridge's import table with dumpbin and copy the runtime
-#          DLLs it references from vcpkg's installed/<triplet>/bin (skipping
-#          Windows system DLLs). Triplet is x64-windows or arm64-windows.
-#
-# Usage: bundle-runtime-deps.sh <platform>     e.g. linux-x64, darwin-arm64
+# Bundle native shared-library runtime dependencies into native/dist/<platform>/.
 set -euo pipefail
 
 PLATFORM="${1:?platform required}"
 DIST_DIR="native/dist/$PLATFORM"
 
 if [ ! -d "$DIST_DIR" ]; then
-    echo "ERROR: $DIST_DIR not found - staging step didn't run?" >&2
+    echo "ERROR: $DIST_DIR not found" >&2
     exit 1
 fi
 
 bundle_linux() {
     export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
-    [ -f "$bridge" ] || { echo "no libjpdfium.so to bundle for"; return 0; }
+    [ -f "$bridge" ] || { echo "no libjpdfium.so found to bundle"; return 0; }
 
-    # Always-present system libs we don't need to (and shouldn't) bundle.
-    # Bundling libc/libpthread/etc. can crash because the dynamic linker
-    # already has its own copy loaded into the process. Also covers the musl
-    # names (libc.musl-<arch>.so.1, ld-musl-<arch>.so.1) on Alpine/Alpine-style
-    # runtimes - the linux-musl-* natives bundle against musl.
     local skip_regex='^(linux-vdso|libc|libc\.musl|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux|^ld-musl'
 
-    # Recursive walk: queue of files to process; each file's ldd output gets
-    # filtered and uncopied entries get copied + queued. We use file-existence
-    # in DIST_DIR as the "seen" check so this works under bash 3.2 (macOS) too.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
@@ -51,14 +25,9 @@ bundle_linux() {
         while IFS= read -r line; do
             local name path
             name=$(awk '{print $1}' <<<"$line")
-            # ldd lines come in two shapes:
-            #   libfoo.so.0 => /abs/path/libfoo.so.0 (0x...)
-            #   linux-vdso.so.1 (0x...)           <- no '=>'
             if ! grep -q '=>' <<<"$line"; then continue; fi
             path=$(awk '{print $3}' <<<"$line")
-            [ -z "$path" ] && continue
-            [ "$path" = "not" ] && continue  # "not found" stub
-            [ ! -e "$path" ] && continue
+            [ -z "$path" ] || [ "$path" = "not" ] || [ ! -e "$path" ] && continue
 
             if echo "$name" | grep -qE "$skip_regex"; then continue; fi
 
@@ -72,28 +41,11 @@ bundle_linux() {
         done < <(ldd "$target" 2>/dev/null || true)
     done
 
-    # NOTE: deliberately NOT creating libfoo.so unversioned aliases for the
-    # bundled SONAME-versioned files. The bridge's NEEDED entries reference
-    # SONAMEs like libicudata.so.74 - that's what the runtime loader looks
-    # up. Unversioned libfoo.so is a compile-time linker convention that
-    # nothing needs at runtime. Skipping the alias copies saves the jar
-    # 30+ MB on Linux (icudata, gnutls, unistring, p11-kit, libqpdf, etc.).
-
-    # Linux's dynamic loader does NOT propagate DT_RUNPATH transitively (this
-    # is a deliberate security restriction). The bridge already has
-    # RUNPATH=$ORIGIN (set in CMakeLists.txt), but each bundled .so needs its
-    # own RUNPATH=$ORIGIN so when libqpdf loads its dep libcrypto, the loader
-    # looks in $ORIGIN (the dist dir) and finds the bundled libcrypto. Without
-    # this, transitive deps fall back to system search and may not be found.
     if command -v patchelf >/dev/null 2>&1; then
         for f in "$DIST_DIR"/lib*.so*; do
             [ -e "$f" ] || continue
-            [ -L "$f" ] && continue  # symlinks don't carry RUNPATH; their target does
+            [ -L "$f" ] && continue
             patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-            # No bundled lib may demand an executable stack - LXC / hardened
-            # kernels refuse to load those (cannot enable executable stack).
-            # Clear it and fail hard if patchelf cannot: shipping a lib that
-            # still requires RWE breaks every container/Nix user downstream.
             if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
                 echo "Clearing executable stack on $f" >&2
                 patchelf --clear-execstack "$f" || {
@@ -106,34 +58,17 @@ bundle_linux() {
         echo "WARNING: patchelf not installed - transitive deps may not resolve at runtime" >&2
     fi
 
-    # Final gates: no bundled lib may ship with an executable stack, and every
-    # bundled lib's dependencies must be self-contained (bundled or core system
-    # libs). These are the same checks CI runs, so the published natives jar can
-    # be consumed in LXC / Proxmox / Nix sandboxes.
     bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
     bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
 }
 
 bundle_macos() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
-    [ -f "$bridge" ] || { echo "no libjpdfium.dylib to bundle for"; return 0; }
+    [ -f "$bridge" ] || { echo "no libjpdfium.dylib found to bundle"; return 0; }
 
-    # Known macOS install prefixes for searching @rpath/@loader_path deps.
-    # Brew on Apple Silicon installs to /opt/homebrew; brew on Intel to
-    # /usr/local. Our qpdf-native and harfbuzz-no-glib builds install to
-    # the brew prefix on both archs. /usr/local stays as a fallback for
-    # Intel hosts.
-    #
-    # Keg-only formulas (icu4c@78, openssl@3, libgcrypt, gnutls, etc.) live
-    # at <prefix>/opt/<formula>/lib/ - not symlinked into <prefix>/lib/. We
-    # add a glob fallback below so any keg-only formula's libs are found
-    # without having to enumerate them by name.
     local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
     local rpath_globs=(/opt/homebrew/opt/*/lib /usr/local/opt/*/lib)
 
-    # Resolve a dep that came back as @rpath/foo.dylib or @loader_path/foo.dylib
-    # by basename-searching through rpath_dirs (fixed list) then rpath_globs
-    # (keg-only formulas). echoes the absolute path or empty if nothing matches.
     _resolve_rpath_dep() {
         local d="$1"
         local base
@@ -145,9 +80,6 @@ bundle_macos() {
                 return 0
             fi
         done
-        # Glob expansion runs at function-call time, picking up whatever
-        # keg-only formulas brew has installed. Quote the basename test to
-        # tolerate dirs that don't exist (the glob can return its literal).
         for dir in "${rpath_globs[@]}"; do
             for d2 in $dir; do
                 [ -d "$d2" ] || continue
@@ -265,35 +197,27 @@ sign_macos() {
         keychain_args=(--keychain "$MACOS_KEYCHAIN_PATH")
     fi
 
-    echo "Code-signing dylibs with identity: $identity"
+    echo "Signing dylibs with identity: $identity"
     local f
     for f in "$DIST_DIR"/*.dylib; do
-        [ -L "$f" ] && continue   # skip version symlinks
+        [ -L "$f" ] && continue
         [ -e "$f" ] || continue
-        # --options runtime keeps these notarization-ready; harmless for a
-        # dylib loaded into the JVM (library validation is governed by the
-        # host java executable, not by us).
         codesign --force --timestamp --options runtime \
                  --sign "$identity" "${keychain_args[@]}" "$f"
         codesign --verify --strict --verbose=2 "$f"
     done
-    echo "Signed $(ls -1 "$DIST_DIR"/*.dylib 2>/dev/null | wc -l | tr -d ' ') dylib(s)."
 }
 
 bundle_windows() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/jpdfium.dll}"
-    [ -f "$bridge" ] || { echo "no jpdfium.dll to bundle for"; return 0; }
+    [ -f "$bridge" ] || { echo "no jpdfium.dll found to bundle"; return 0; }
 
-    # Walk import table of every DLL in DIST_DIR, copying the bridge's runtime
-    # deps from vcpkg's installed bin while skipping Windows system DLLs.
-    # Use dumpbin (ships with Visual Studio on github-runner windows-latest).
     if ! command -v dumpbin >/dev/null 2>&1; then
-        # Fallback to PATH lookup - VS install dir varies. Try a few.
         local vs_dumpbin
         vs_dumpbin=$(find "/c/Program Files/Microsoft Visual Studio" \
                      -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
         if [ -z "$vs_dumpbin" ]; then
-            echo "ERROR: dumpbin not on PATH and not findable under VS install" >&2
+            echo "ERROR: dumpbin not found" >&2
             return 1
         fi
         DUMPBIN="$vs_dumpbin"
@@ -301,15 +225,6 @@ bundle_windows() {
         DUMPBIN=dumpbin
     fi
 
-    # Windows DLLs we never need to ship - they're always present on a
-    # Windows installation, signed and version-managed by the OS.
-    #
-    # We intentionally DO NOT skip msvcp140 / vcruntime140 / ucrtbase here:
-    # the bridge is built with MSVC default /MD (dynamic CRT), so these are
-    # real link-time deps. A pure-Java user who installs Java but not the VS
-    # Redistributable would otherwise see "msvcp140.dll not found" at JNI
-    # load. The proper fix to drop them is paired with /MT + vcpkg
-    # x64-windows-static - tracked as a follow-up.
     is_system_dll() {
         local lc
         lc=$(echo "$1" | tr 'A-Z' 'a-z')
@@ -329,9 +244,6 @@ bundle_windows() {
         return 1
     }
 
-    # Search locations for resolving a DLL by name. vcpkg's installed-tree
-    # folder is triplet-scoped (x64-windows vs arm64-windows on ARM64), so
-    # derive it from the platform instead of hardcoding x64.
     local vcpkg_triplet="x64-windows"
     case "$PLATFORM" in
         windows-arm64|vips-windows-arm64) vcpkg_triplet="arm64-windows" ;;
@@ -350,12 +262,10 @@ bundle_windows() {
         return 1
     }
 
-    # Recursive walk by basename - copy only first occurrence per name.
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
         queue=("${queue[@]:1}")
-        # dumpbin /dependents lines are indented DLL names. Filter via regex.
         local deps
         deps=$("$DUMPBIN" //dependents "$target" 2>/dev/null \
                | grep -oE '[A-Za-z0-9_+.-]+\.[Dd][Ll][Ll]' \
@@ -363,13 +273,11 @@ bundle_windows() {
         while IFS= read -r dep; do
             [ -z "$dep" ] && continue
             if is_system_dll "$dep"; then continue; fi
-            # If we already have it in the dist dir we're done with this name.
             local dest="$DIST_DIR/$dep"
             if [ -e "$dest" ]; then continue; fi
             local src
             src=$(find_dll "$dep" || true)
             if [ -z "$src" ]; then
-                echo "  (skipping $dep - not found in any source dir)" >&2
                 continue
             fi
             cp -v "$src" "$dest"
@@ -377,14 +285,6 @@ bundle_windows() {
         done <<<"$deps"
     done
 
-    # The bridge is built with MSVC /MD, so it needs the FULL VC redist CRT set
-    # - including msvcp140_1.dll (iostreams), which vcpkg's bin does NOT ship
-    # (the import-table walk above skips it as "not found in any source dir").
-    # On windows-arm64 that missing DLL made System.load hard-crash the JVM
-    # (STATUS_ENTRYPOINT_NOT_FOUND, 0xc0000139): the bridge bound to the JVM's
-    # older CRT copy. Resolve any CRT DLL that the bundled DLLs import but that
-    # is still missing from the VS redist (same-arch triplet), copying exactly
-    # what is referenced - so nothing orphaned is added.
     local arch_dir
     case "$PLATFORM" in
         windows-arm64|vips-windows-arm64) arch_dir="arm64" ;;
@@ -393,11 +293,9 @@ bundle_windows() {
     local redist_dir
     redist_dir=$(find "/c/Program Files/Microsoft Visual Studio" -path "*VC/Redist/MSVC/*/${arch_dir}/Microsoft.VC*.CRT" -type d 2>/dev/null | sort | tail -1 || true)
     if [ -n "$redist_dir" ]; then
-        echo "Resolving imported-but-missing CRT DLLs from: $redist_dir"
         local work_dir
         work_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'crt-imports')
         local crt_imports="$work_dir/crt-imports.txt"
-        # Collect every CRT DLL basename the bundled DLLs import.
         : > "$crt_imports"
         for dll in "$DIST_DIR"/*.dll; do
             [ -e "$dll" ] || continue
@@ -410,32 +308,18 @@ bundle_windows() {
             [ -e "$DIST_DIR/$crt" ] && continue
             if [ -f "$redist_dir/$crt" ]; then
                 cp -v "$redist_dir/$crt" "$DIST_DIR/$crt"
-            else
-                echo "WARNING: $crt imported but not in VS redist or bundle" >&2
             fi
         done
         rm -rf "$work_dir"
-    else
-        echo "WARNING: VC redist CRT dir not found - CRT DLLs may be missing from the bundle" >&2
     fi
 }
 
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
-        # The prebuilt PDFium component build ships a PartitionAlloc allocator
-        # shim that NOTHING links against on Linux (verified: libpdfium.so
-        # links raw_ptr but NOT the shim). It is dead weight AND a latent JVM
-        # hazard - strip it. raw_ptr stays: libpdfium.so genuinely needs it.
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
-        # Strip debug symbols from the bridge to slash binary size. The
-        # build is is_debug=false / symbol_level=0 / -DCMAKE_BUILD_TYPE=Release
-        # but Rust's #[no_mangle] + statically linked third-party crates still
-        # leave megabytes of section info. Safe on shared libs.
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
-            # Also strip the bundled libs - they came from /usr/lib already
-            # stripped on most distros, but be defensive.
             for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
@@ -445,11 +329,6 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
-        # macOS: libpdfium.dylib genuinely links BOTH the allocator shim and
-        # raw_ptr, so neither is stripped.
-        # macOS strip wants -S (debug symbols only) to keep the symbol table
-        # the loader needs. -x would strip non-global symbols which can
-        # break dlsym lookups.
         if command -v strip >/dev/null 2>&1; then
             strip -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
             for f in "$DIST_DIR"/*.dylib; do
@@ -462,15 +341,8 @@ case "$PLATFORM" in
         ;;
     windows-*|vips-windows-*)
         bundle_windows
-        # The prebuilt PDFium component build ships PartitionAlloc DLLs where
-        # only the allocator shim and raw_ptr are orphaned on Windows (allocator_base
-        # and allocator_core are imported by pdfium.dll and must stay).
-        # allocator_shim's DllMain replaces the process allocator, which is a JVM
-        # hazard - strip it along with orphaned raw_ptr.
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
-        # The MSVC linker strips PE files in Release config already; no
-        # equivalent `strip` step needed.
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2
@@ -478,19 +350,9 @@ case "$PLATFORM" in
         ;;
 esac
 
-# Orphaned / JVM-hostile library gate: every bundled lib must be imported by
-# something. On Windows the prebuilt PDFium component build ships exactly such
-# orphans (PartitionAlloc shim/raw_ptr) - preloading them into the JVM
-# hard-crashes it, so this fails the bundle rather than the first consumer.
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR" "$PLATFORM"
-
-# Leanness gate: no debug symbols, no stray artifact types, no duplicate
-# basenames (dead-weight collisions), plus a size report.
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"
-
-# Size budget gate: fails when the bundle exceeds its per-platform budget.
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-size.sh" "$DIST_DIR" "$PLATFORM"
 
-echo ""
 echo "Final bundle contents for $PLATFORM:"
 ls -la "$DIST_DIR/"

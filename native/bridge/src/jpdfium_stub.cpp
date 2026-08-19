@@ -2,13 +2,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-// Stub implementation - returns realistic data for Java-layer testing.
-// Compiles without PDFium or any external library:
-//   PCRE2     -> std::regex
-//   FlashText -> substring matching
-//   doc.save  -> byte-for-byte copy of the input
-// All buffers handed to the JVM are malloc'd and released via
-// jpdfium_free_string / jpdfium_free_buffer (which call free()).
+// Stub bridge implementation for tests without native library dependencies.
 
 #include "jpdfium.h"
 

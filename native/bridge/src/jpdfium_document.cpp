@@ -21,10 +21,6 @@
 
 namespace {
 
-// Open a file for writing, restricting the permissions of a newly created
-// file to owner read/write (0600) on POSIX so secrets written by the bridge
-// (e.g. saved PDFs) are not world-readable. On Windows the CRT default ACL
-// applies, as there is no POSIX mode argument.
 FILE* safe_fopen_write(const char* path) {
 #if defined(_WIN32)
     return std::fopen(path, "wb");

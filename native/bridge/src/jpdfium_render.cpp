@@ -13,9 +13,6 @@
 
 namespace {
 
-// Hard cap on total rendered pixels per page: 1 GiB of RGBA output
-// (268,435,456 px). Requests above this are treated as invalid input rather
-// than risking multi-gigabyte allocations from untrusted dpi values.
 constexpr double kMaxRenderPixels = 268435456.0;
 
 inline int renderFlagsForScreen() {

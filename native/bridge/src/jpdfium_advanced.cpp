@@ -1,22 +1,4 @@
-/**
- * jpdfium_advanced.cpp - Advanced redaction native implementations.
- *
- * This file implements the advanced redaction pipeline functions declared in jpdfium.h:
- *   - PCRE2 JIT pattern engine
- *   - Luhn credit card validation
- *   - FlashText trie-based NER
- *   - Font normalization (FreeType + HarfBuzz hb-subset)
- *   - Glyph-level redaction (HarfBuzz shaping + ICU BiDi)
- *   - XMP metadata redaction (pugixml + qpdf)
- *   - ICU4C text processing (NFC, sentence segmentation, BiDi)
- *
- * Each section is guarded by JPDFIUM_HAS_* preprocessor symbols which are
- * defined by CMake when the corresponding library is found. When a library
- * is not available, the function returns JPDFIUM_ERR_NOT_FOUND or a reasonable
- * stub response so the Java layer can degrade gracefully.
- *
- * License: MIT
- */
+// jpdfium_advanced.cpp - Pattern matching, font analysis, metadata and text utilities.
 
 #include <fpdf_save.h>
 

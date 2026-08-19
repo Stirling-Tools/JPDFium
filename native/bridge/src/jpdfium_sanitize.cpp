@@ -1,39 +1,4 @@
-// jpdfium_sanitize.cpp - mandatory qpdf sanitize stage for redacted saves.
-//
-// DOCTRINE: redacting the visible content while leaving metadata, outlines,
-// annotations, form values, XFA, structure-tree /ActualText or font-program
-// remnants extractable is the "looks redacted" bug class. Every save of a
-// redacted document therefore runs a qpdf full rewrite:
-//
-//   1. Dead-object purge (qpdf writes only reachable objects - prior
-//      revisions and orphaned remnants disappear).
-//   2. /Info removed, XMP scrubbed via pugixml (values containing redacted
-//      literals blanked; Producer replaced honestly).
-//   3. /Names: /EmbeddedFiles and /JavaScript dropped; /OpenAction and all
-//      /AA action dictionaries removed (pages included).
-//   4. Annotations intersecting a redaction zone, or whose /Contents,
-//      /T or /Subj contain a redacted literal, are removed.
-//   5. AcroForm /XFA dropped; field /V values containing redacted literals
-//      are blanked.
-//   6. Outline titles containing redacted literals are blanked.
-//   7. Structure tree: /StructTreeRoot + /MarkInfo removed (ActualText is a
-//      verbatim copy of the text - the default policy is wholesale strip;
-//      surgical ActualText editing is deliberately not attempted).
-//   8. ToUnicode filtering: per-font CMaps are re-written keeping only
-//      charcodes actually used by surviving content (collected by
-//      re-tokenizing the content streams, including Form XObjects). Fonts
-//      with no scannable usage are left untouched (proving them unused is
-//      not possible; the safe direction is to keep).
-//   9. Font program erasure (hb-subset) for redaction-touched fonts:
-//      RETAIN_GIDS | RETAIN_NUM_GLYPHS | NOTDEF_OUTLINE |
-//      PASSTHROUGH_UNRECOGNIZED with only the surviving unicodes - dropped
-//      glyphs keep their GIDs but lose their outlines (ACSC remnant closed).
-//
-// Encryption policy: full saves already strip encryption (PDFium's
-// SaveAsCopy writes unencrypted output); the sanitize pass preserves that.
-// An incremental save after redaction is refused outright
-// (JPDFIUM_ERR_REDACTED_SAVE), so no redacted document is ever written
-// without this stage.
+// jpdfium_sanitize.cpp - Post-redaction document sanitization.
 
 #include <algorithm>
 #include <cstdio>

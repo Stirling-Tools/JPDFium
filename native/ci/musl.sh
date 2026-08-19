@@ -1,24 +1,10 @@
 #!/usr/bin/env bash
-# Runs musl/Alpine native build steps inside an Alpine container. Invoked by
-# alpine-exec.sh (host) after the repo is mounted at /src; never run directly.
-#
-# Steps (any number, in order, all in one container):
-#   pdfium        - build PDFium from source (prebuild workflow). Needs
-#                   EMBEDPDF_PIN_SHA / JPDFIUM_BUILD_MODE env, and JPDFIUM_LIBC
-#                   is forced to musl here.
-#   pdfium-smoke  - C smoke: dlopen the built libpdfium and open a PDF.
-#   natives       - fetch prebuilt PDFium (already on host) + rebuild deps +
-#                   build the bridge + stage + bundle for native/dist/<platform>.
-#   smoke         - Gradle smoke test (INIT the native + open a PDF) on the
-#                   musl JDK of this container.
-#   probe         - stub bridge + natives jar + smoke (native-probe workflow).
+# Runs native build steps inside an Alpine/musl container.
 set -euo pipefail
 
 PLATFORM="${1:?usage: musl.sh <platform> <step> [<step> ...]}"
 shift
 
-# Alpine images have no bash/coreutils; bootstrap them before any step runs.
-# gcompat lets Chromium's glibc-built bundled clang run in the container.
 echo "==> musl.sh [$PLATFORM] bootstrapping Alpine toolchain"
 apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
   meson python3 git curl tar xz gcompat libstdc++ linux-headers \

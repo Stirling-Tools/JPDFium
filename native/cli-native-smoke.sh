@@ -1,16 +1,5 @@
 #!/usr/bin/env bash
-# cli-native-smoke.sh - Verify the compiled GraalVM native CLI actually works.
-#
-# Exercises a representative set of operations through the native binary and
-# verifies the operations HAPPENED and produced uncorrupted output:
-#   - every produced PDF re-opens (jpdfium info succeeds)
-#   - redaction removes the targeted words from extracted text
-#   - rotation swaps page dimensions
-#   - page extraction reduces the page count
-#   - merge sums page counts
-#   - render emits a decodable PNG
-#
-# Usage: bash native/cli-native-smoke.sh <path-to-jpdfium-binary> <work-dir>
+# Smoke tests for the compiled native CLI binary.
 set -euo pipefail
 
 BIN="$(cd "$(dirname "${1:?usage: cli-native-smoke.sh <jpdfium-binary> <work-dir>}")" && pwd)/$(basename "$1")"
@@ -24,8 +13,6 @@ cd "${WORK}"
 
 failures=0
 check() {
-    # $1 = description, $2 = expected rc, rest = args
-    # shellcheck disable=SC2034 # expected is asserted implicitly (rc 0 = pass)
     local desc="$1" expected="$2"
     shift 2
     if "${BIN}" "$@" --quiet >/dev/null 2>&1; then
@@ -51,7 +38,6 @@ page_count() {
 
 echo "jpdfium native smoke (binary: ${BIN})"
 
-# Help must be instant and must not require the native library.
 "${BIN}" help >/dev/null 2>&1 || { echo "  FAIL: help"; exit 1; }
 
 # redact-words must remove the targeted words (correctness), output must open.
