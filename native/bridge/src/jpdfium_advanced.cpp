@@ -662,9 +662,9 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
 // The DocWrapper pointer itself is unchanged, so the Java-side handle remains valid.
 static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newBytes) {
     FPDF_CloseDocument(w->core->doc);
-    if (w->buf) {
-        free(w->buf);
-        w->buf = nullptr;
+    if (w->core->buf) {
+        free(w->core->buf);
+        w->core->buf = nullptr;
     }
 
     size_t sz = newBytes.size();
@@ -679,8 +679,8 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     }
 
     w->core->doc = newDoc;
-    w->buf = copy;
-    w->blen = static_cast<int64_t>(sz);
+    w->core->buf = copy;
+    w->core->blen = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 
