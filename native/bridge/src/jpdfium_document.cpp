@@ -79,9 +79,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     }
 
     auto* w = new DocWrapper();
-    w->core = makeDocCore(doc);
-    w->buf = copy;
-    w->blen = len;
+    w->core = makeDocCore(doc, copy, len);
     *handle = encodeHandle(w);
     return JPDFIUM_OK;
 }

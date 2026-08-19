@@ -77,12 +77,16 @@ struct DocCore {
         std::string fn(name);
         for (const auto& e : touchedFontNames)
             if (e == fn) return;
-        touchedFontNames.push_back(std::move(fn));
-    }
+    uint8_t* buf = nullptr;
+    int64_t blen = 0;
 };
 
-inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
-    return std::shared_ptr<DocCore>(new DocCore{doc}, [](DocCore* c) {
+inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr, int64_t blen = 0) {
+    auto* core = new DocCore();
+    core->doc = doc;
+    core->buf = buf;
+    core->blen = blen;
+    return std::shared_ptr<DocCore>(core, [](DocCore* c) {
         for (FPDF_FONT f : c->loadedFonts) {
             FPDFFont_Close(f);
         }
@@ -90,26 +94,20 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc) {
             FPDF_CloseDocument(c->doc);
             c->doc = nullptr;
         }
+        if (c->buf) {
+            free(c->buf);
+            c->buf = nullptr;
+        }
         delete c;
     });
 }
 
 struct DocWrapper {
     std::shared_ptr<DocCore> core;
-    uint8_t* buf =
-        nullptr;  // non-null when opened from bytes; PDFium requires it to outlive the doc
-    int64_t blen = 0;
 
     DocWrapper() = default;
     DocWrapper(const DocWrapper&) = delete;
     DocWrapper& operator=(const DocWrapper&) = delete;
-
-    ~DocWrapper() {
-        if (buf) {
-            free(buf);
-            buf = nullptr;
-        }
-    }
 };
 
 struct PageWrapper {

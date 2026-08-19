@@ -117,6 +117,14 @@ public final class PdfPipeline {
      * The caller must close the returned document.
      */
     public static PdfDocument process(Path input, ProcessingMode mode, PageOperation op) {
+        if (!mode.isParallel() && !mode.isStreaming()) {
+            PdfDocument doc = PdfDocument.open(input);
+            int pages = doc.pageCount();
+            for (int i = 0; i < pages; i++) {
+                op.apply(doc, i);
+            }
+            return doc;
+        }
         return process(readBytes(input), mode, op);
     }
 
@@ -147,7 +155,16 @@ public final class PdfPipeline {
      */
     public static void forEach(Path input, ProcessingMode mode,
                                BiConsumer<PdfDocument, Integer> consumer) {
-        forEach(readBytes(input), mode, consumer);
+        if (mode.isParallel()) {
+            forEachParallel(readBytes(input), mode, consumer);
+        } else {
+            try (PdfDocument doc = PdfDocument.open(input)) {
+                int pages = doc.pageCount();
+                for (int i = 0; i < pages; i++) {
+                    consumer.accept(doc, i);
+                }
+            }
+        }
     }
 
     /**
