@@ -19,6 +19,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.PdfSplit;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.io.ByteArrayOutputStream;
@@ -29,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Audit and regression tests ensuring document objects (nested outline trees,
@@ -41,6 +43,7 @@ class ObjectPreservationTest {
     @BeforeAll
     static void init() {
         NativeLoader.ensureLoaded();
+        assumeTrue(NativeRuntime.isFull(), "Object preservation tests require real PDFium native library (not stub mode)");
     }
 
     /**
