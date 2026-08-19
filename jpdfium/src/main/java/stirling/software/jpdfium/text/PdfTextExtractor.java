@@ -206,8 +206,12 @@ public final class PdfTextExtractor {
                 frac /= 10.0f;
             }
             return intPart >= 0 ? intPart + frac : intPart - frac;
-        } catch (Exception _) {
-            return Float.parseFloat(s.substring(start, end));
+        } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
+            try {
+                return Float.parseFloat(s.substring(start, end));
+            } catch (NumberFormatException _) {
+                return 0.0f;
+            }
         }
     }
 
