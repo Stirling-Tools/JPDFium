@@ -875,17 +875,16 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 
-int64_t jpdfium_doc_raw_handle(int64_t doc) {
-    return doc;
+int64_t jpdfium_doc_raw_handle(int64_t) {
+    return 0;
 }
 
-int64_t jpdfium_page_raw_handle(int64_t page) {
-    return page;
+int64_t jpdfium_page_raw_handle(int64_t) {
+    return 0;
 }
 
-int64_t jpdfium_page_doc_raw_handle(int64_t page) {
-    if (auto it = g_page_doc.find(page); it != g_page_doc.end()) return it->second;
-    return page;
+int64_t jpdfium_page_doc_raw_handle(int64_t) {
+    return 0;
 }
 
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,

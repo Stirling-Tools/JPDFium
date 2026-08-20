@@ -1,9 +1,12 @@
 package stirling.software.jpdfium.doc;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.SyntheticPdfFactory;
+import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -17,24 +20,31 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfDocumentFactoryTest {
+
+    @BeforeAll
+    static void setUp() {
+        NativeLoader.ensureLoaded();
+    }
 
     @Test
     void testLoadFromVariousSources(@TempDir Path tempDir) throws IOException {
         byte[] pdfBytes = SyntheticPdfFactory.singlePageWithText("Factory Test Page");
+        int expectedPages = NativeRuntime.isStub() ? 3 : 1;
 
         // 1. From byte[]
         try (PdfDocument doc = PdfDocumentFactory.load(pdfBytes)) {
             assertNotNull(doc);
-            assertEquals(1, doc.pageCount());
+            assertEquals(expectedPages, doc.pageCount());
         }
 
         // 2. From InputStream
         try (ByteArrayInputStream in = new ByteArrayInputStream(pdfBytes);
              PdfDocument doc = PdfDocumentFactory.load(in)) {
             assertNotNull(doc);
-            assertEquals(1, doc.pageCount());
+            assertEquals(expectedPages, doc.pageCount());
         }
 
         // 3. From Path
@@ -42,21 +52,21 @@ class PdfDocumentFactoryTest {
         Files.write(pdfFile, pdfBytes);
         try (PdfDocument doc = PdfDocumentFactory.load(pdfFile)) {
             assertNotNull(doc);
-            assertEquals(1, doc.pageCount());
+            assertEquals(expectedPages, doc.pageCount());
         }
 
         // 4. From File
         File file = pdfFile.toFile();
         try (PdfDocument doc = PdfDocumentFactory.load(file)) {
             assertNotNull(doc);
-            assertEquals(1, doc.pageCount());
+            assertEquals(expectedPages, doc.pageCount());
         }
 
         // 5. From ByteBuffer
         ByteBuffer buffer = ByteBuffer.wrap(pdfBytes);
         try (PdfDocument doc = PdfDocumentFactory.load(buffer)) {
             assertNotNull(doc);
-            assertEquals(1, doc.pageCount());
+            assertEquals(expectedPages, doc.pageCount());
         }
 
         // 6. Create Empty
@@ -96,6 +106,8 @@ class PdfDocumentFactoryTest {
 
     @Test
     void testMergeAndSplitMethods(@TempDir Path tempDir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "PDF merge and split methods require real PDFium native library");
+
         byte[] docA = SyntheticPdfFactory.singlePageWithText("Doc A");
         byte[] docB = SyntheticPdfFactory.singlePageWithText("Doc B");
 

@@ -60,6 +60,9 @@ public final class PdfMetadata {
      * @return the value, or empty if not present
      */
     public Optional<String> get(MetadataTag tag) {
+        if (rawDocSegment == null || rawDocSegment.equals(MemorySegment.NULL) || rawDocSegment.address() == 0) {
+            return Optional.empty();
+        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment tagSegment = arena.allocateFrom(tag.pdfKey());
 
