@@ -867,6 +867,11 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
 }
 
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
+    auto it = g_docs.find(handle);
+    if (it != g_docs.end()) {
+        if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
+        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    }
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 
