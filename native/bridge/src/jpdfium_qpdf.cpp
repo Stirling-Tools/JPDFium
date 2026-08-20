@@ -10,6 +10,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "jpdfium.h"
 
@@ -76,6 +77,9 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
         dest->emptyPDF();
         QPDFPageDocumentHelper dest_pdh{*dest};
 
+        std::vector<std::shared_ptr<QPDF>> sources;
+        sources.reserve(static_cast<size_t>(count));
+
         for (int32_t i = 0; i < count; ++i) {
             const uint8_t* in = inputs[i];
             int64_t len = inputLens[i];
@@ -84,6 +88,7 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
             auto src = QPDF::create();
             src->processMemoryFile("merge-src", reinterpret_cast<const char*>(in),
                                    static_cast<size_t>(len));
+            sources.push_back(src);
             QPDFPageDocumentHelper src_pdh{*src};
             for (auto& page : src_pdh.getAllPages()) {
                 dest_pdh.addPage(page, false);

@@ -22,6 +22,10 @@ graalvmNative {
             mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
             sharedLibrary.set(false)
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
+            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama")
+            buildArgs.add("-H:IncludeLocales=en")
+            buildArgs.add("--no-fallback")
+            buildArgs.add("-H:+ReportExceptionStackTraces")
         }
         create("cli") {
             imageName.set("jpdfium")
@@ -33,8 +37,7 @@ graalvmNative {
             buildArgs.add("-H:IncludeResources=natives/.*")
             // Native library loading and FFM symbol lookup must happen at runtime
             // on the target host, never during image build.
-            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama.NativeLoader")
-            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama.Symbols")
+            buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama")
             // Only the C locale is needed; trims ~10 MB of locale data.
             buildArgs.add("-H:IncludeLocales=en")
             buildArgs.add("--no-fallback")
