@@ -164,6 +164,8 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_repair.cpp
+        bridge/src/jpdfium_qpdf.cpp
+        bridge/src/jpdfium_qpdf_sanitize.cpp
         bridge/src/jpdfium_sanitize.cpp
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp

@@ -2,10 +2,16 @@
   "resources": {
     "includes": [
       {
-        "pattern": "natives/.*"
+        "pattern": ".*natives/.*"
       },
       {
-        "pattern": "META-INF/native-image/com.stirling/jpdfium/.*"
+        "pattern": ".*native-libs\\.txt"
+      },
+      {
+        "pattern": ".*pdfs/.*"
+      },
+      {
+        "pattern": ".*META-INF/native-image/.*"
       }
     ]
   }

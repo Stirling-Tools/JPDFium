@@ -6,9 +6,13 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
+import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -40,6 +44,17 @@ import java.util.List;
  */
 public final class PdfSecurity {
 
+    // Permission flags (match standard PDF permission bitmask)
+    public static final int PERM_PRINT_LOW       = 0x0004;
+    public static final int PERM_MODIFY          = 0x0008;
+    public static final int PERM_EXTRACT         = 0x0010;
+    public static final int PERM_ANNOTATE        = 0x0020;
+    public static final int PERM_FILL_FORMS      = 0x0100;
+    public static final int PERM_ACCESSIBILITY   = 0x0200;
+    public static final int PERM_ASSEMBLE        = 0x0400;
+    public static final int PERM_PRINT_HIGH      = 0x0800;
+    public static final int PERM_ALL             = 0x0F3C;
+
     private final boolean removeJavaScript;
     private final boolean removeEmbeddedFiles;
     private final boolean removeActions;
@@ -62,6 +77,100 @@ public final class PdfSecurity {
         this.removeComments = b.removeComments;
         this.removeHiddenText = b.removeHiddenText;
         this.flattenForms = b.flattenForms;
+    }
+
+    /** Check if in-process QPDF security (encrypt/decrypt) is available. */
+    public static boolean isSupported() {
+        return QpdfLib.isEncryptSupported() && QpdfLib.isDecryptSupported();
+    }
+
+    /**
+     * Encrypt a PDF file using AES-256 (PDF 2.0 / R6).
+     *
+     * @param input         input PDF file path
+     * @param output        output PDF file path
+     * @param userPassword  user password required to open/view the document
+     * @param ownerPassword owner password required to edit permissions
+     * @param permissions   permission flags (e.g. {@link #PERM_ALL} or bitwise OR of flags)
+     * @throws IOException on I/O error
+     */
+    public static void encrypt(Path input, Path output, String userPassword, String ownerPassword, int permissions) throws IOException {
+        encrypt(input, output, userPassword, ownerPassword, permissions, 256);
+    }
+
+    /**
+     * Encrypt a PDF file with specified key length (256 or 128 bit).
+     *
+     * @param input         input PDF file path
+     * @param output        output PDF file path
+     * @param userPassword  user password required to open/view
+     * @param ownerPassword owner password required to edit permissions
+     * @param permissions   permission flags
+     * @param keyLength     256 for AES-256 (R6) or 128 for AES-128 (R5)
+     * @throws IOException on I/O error
+     */
+    public static void encrypt(Path input, Path output, String userPassword, String ownerPassword, int permissions, int keyLength) throws IOException {
+        byte[] inBytes = Files.readAllBytes(input);
+        byte[] encBytes = encryptBytes(inBytes, userPassword, ownerPassword, permissions, keyLength);
+        if (encBytes == null) {
+            throw new JPDFiumException("PDF encryption failed");
+        }
+        Files.write(output, encBytes);
+    }
+
+    /**
+     * Encrypt PDF bytes using AES-256 (PDF 2.0 / R6).
+     *
+     * @param input         input PDF bytes
+     * @param userPassword  user password required to open/view
+     * @param ownerPassword owner password required to edit permissions
+     * @param permissions   permission flags
+     * @return encrypted PDF bytes, or {@code null} on failure
+     */
+    public static byte[] encryptBytes(byte[] input, String userPassword, String ownerPassword, int permissions) {
+        return encryptBytes(input, userPassword, ownerPassword, permissions, 256);
+    }
+
+    /**
+     * Encrypt PDF bytes with specified key length (256 or 128 bit).
+     *
+     * @param input         input PDF bytes
+     * @param userPassword  user password required to open/view
+     * @param ownerPassword owner password required to edit permissions
+     * @param permissions   permission flags
+     * @param keyLength     256 for AES-256 (R6) or 128 for AES-128 (R5)
+     * @return encrypted PDF bytes, or {@code null} on failure
+     */
+    public static byte[] encryptBytes(byte[] input, String userPassword, String ownerPassword, int permissions, int keyLength) {
+        return QpdfLib.encrypt(input, userPassword, ownerPassword, permissions, keyLength);
+    }
+
+    /**
+     * Decrypt a password-protected PDF file and remove all encryption.
+     *
+     * @param input    input PDF file path
+     * @param output   output decrypted PDF file path
+     * @param password user or owner password
+     * @throws IOException on I/O error
+     */
+    public static void decrypt(Path input, Path output, String password) throws IOException {
+        byte[] inBytes = Files.readAllBytes(input);
+        byte[] decBytes = decryptBytes(inBytes, password);
+        if (decBytes == null) {
+            throw new JPDFiumException("PDF decryption failed");
+        }
+        Files.write(output, decBytes);
+    }
+
+    /**
+     * Decrypt password-protected PDF bytes and remove all encryption.
+     *
+     * @param input    encrypted PDF bytes
+     * @param password user or owner password
+     * @return decrypted PDF bytes, or {@code null} on failure
+     */
+    public static byte[] decryptBytes(byte[] input, String password) {
+        return QpdfLib.decrypt(input, password);
     }
 
     /** Create a new builder. */

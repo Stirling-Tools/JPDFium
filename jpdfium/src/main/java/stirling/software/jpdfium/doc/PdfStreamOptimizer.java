@@ -1,20 +1,18 @@
 package stirling.software.jpdfium.doc;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.QpdfLib;
+
 /**
- * PDF Stream Optimization (object stream compression, cross-reference streams).
+ * PDF stream optimization (object streams, cross-reference streams).
  *
- * <p>Provides two levels of optimization:
- * <ul>
- *   <li>{@link #optimize(Path, Path)} - full optimization via qpdf
- *       (object streams, cross-reference streams, removes unreferenced objects)</li>
- *   <li>{@link #compact(Path, Path)} - basic compaction via qpdf
- *       (removes unreferenced objects, normalizes streams)</li>
- * </ul>
- *
- * <p>Requires qpdf to be installed on the system: {@code apt install qpdf},
- * {@code brew install qpdf}, or {@code choco install qpdf}.
+ * <p>Two levels: full optimization (object streams + xref streams) and basic
+ * compaction (removes unreferenced objects). Uses the bundled qpdf library
+ * in-process (FFM), no external qpdf binary.
  */
 public final class PdfStreamOptimizer {
 
@@ -26,12 +24,24 @@ public final class PdfStreamOptimizer {
      *
      * @param input  path to the input PDF
      * @param output path for the optimized output PDF
-     * @throws RuntimeException if qpdf is not available or optimization fails
+     * @throws JPDFiumException if optimization fails
      */
     public static void optimize(Path input, Path output) {
-        QpdfHelper.run("--object-streams=generate",
-                input.toAbsolutePath().toString(),
-                output.toAbsolutePath().toString());
+        try {
+            byte[] out = PdfOptimizer.optimize(
+                    Files.readAllBytes(input),
+                    0,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT);
+            if (out == null) {
+                throw new JPDFiumException("qpdf optimization produced no output");
+            }
+            Files.write(output, out);
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf optimization failed", e);
+        }
     }
 
     /**
@@ -39,19 +49,28 @@ public final class PdfStreamOptimizer {
      *
      * @param input  path to the input PDF
      * @param output path for the compacted output PDF
-     * @throws RuntimeException if qpdf is not available or compaction fails
+     * @throws JPDFiumException if compaction fails
      */
     public static void compact(Path input, Path output) {
-        QpdfHelper.run(input.toAbsolutePath().toString(),
-                output.toAbsolutePath().toString());
+        try {
+            byte[] out = PdfOptimizer.optimize(
+                    Files.readAllBytes(input),
+                    0,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT);
+            if (out == null) {
+                throw new JPDFiumException("qpdf compaction produced no output");
+            }
+            Files.write(output, out);
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf compaction failed", e);
+        }
     }
 
-    /**
-     * Check if stream optimization (qpdf) is available.
-     *
-     * @return true if qpdf is found on the system PATH
-     */
+    /** Check if the in-process qpdf library is available in the current environment. */
     public static boolean isSupported() {
-        return QpdfHelper.isAvailable();
+        return QpdfLib.isSupported();
     }
 }

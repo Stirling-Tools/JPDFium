@@ -21,11 +21,11 @@ import javax.imageio.ImageIO;
  * rotated text (45 degrees), and a filled shape. Generated with PDFBox so the
  * content is independent of the code under test.
  */
-final class SyntheticPdfFactory {
+public final class SyntheticPdfFactory {
 
     private SyntheticPdfFactory() {}
 
-    static byte[] createDiverse(int pages) throws Exception {
+    public static byte[] createDiverse(int pages) throws Exception {
         byte[] png = checkerPng();
         try (PDDocument doc = new PDDocument()) {
             PDImageXObject image = PDImageXObject.createFromByteArray(doc, png, "synth-checker");
@@ -55,6 +55,25 @@ final class SyntheticPdfFactory {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
             return out.toByteArray();
+        }
+    }
+
+    public static byte[] singlePageWithText(String text) {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(72, 700);
+                cs.showText(text != null ? text : "Test");
+                cs.endText();
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

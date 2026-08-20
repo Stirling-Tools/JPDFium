@@ -1,5 +1,17 @@
 [
   {
+    "name": "java.lang.Boolean",
+    "jniAccessible": true,
+    "methods": [
+      {
+        "name": "getBoolean",
+        "parameterTypes": [
+          "java.lang.String"
+        ]
+      }
+    ]
+  },
+  {
     "name": "stirling.software.jpdfium.panama.NativeLoader",
     "allDeclaredConstructors": true,
     "allPublicConstructors": true,
@@ -25,5 +37,153 @@
     "allPublicMethods": true,
     "allDeclaredFields": true,
     "allPublicFields": true
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.NativeGuard",
+    "methods": [
+      {
+        "name": "acquire",
+        "parameterTypes": []
+      },
+      {
+        "name": "release",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.ActionBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.AnnotationBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.AttachmentBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.BookmarkBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.DocBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.FormFillBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.ImageObjBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.JavaScriptBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.LinkBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.PageEditBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.PageImportBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.RenderBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.RustBridgeBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.SignatureBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.StructureBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.TextPageBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.ThumbnailBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.WebLinkBindings"
+  },
+  {
+    "name": "sun.security.provider.NativePRNG",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": [
+          "java.security.SecureRandomParameters"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "sun.security.provider.SHA",
+    "methods": [
+      {
+        "name": "<init>",
+        "parameterTypes": []
+      }
+    ]
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.Architecture"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.FastLinks"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.FfmHelper"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.FlashTextLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.FontLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.GlyphLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.IcuLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.JpdfiumH$shared"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.NativeRuntime"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.Pcre2Lib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.QpdfLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.RepairLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.Symbols"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.XmpLib"
+  },
+  {
+    "name": "stirling.software.jpdfium.doc.PdfVersionConverter",
+    "methods": [
+      {
+        "name": "writeBlockCallback",
+        "parameterTypes": [
+          "java.lang.foreign.MemorySegment",
+          "java.lang.foreign.MemorySegment",
+          "long"
+        ]
+      }
+    ]
   }
 ]

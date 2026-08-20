@@ -18,7 +18,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * <ol>
  *   <li><strong>Ghostscript</strong> (if available): image resampling, font subsetting,
  *       lossy JPEG compression, and PDF stream re-encoding</li>
- *   <li><strong>qpdf</strong> (if available): structural optimization via object streams,
+ *   <li><strong>qpdf</strong> (in-process FFM): structural optimization via object streams,
  *       cross-reference stream compression, and unreferenced object removal</li>
  *   <li><strong>PDFium</strong>: metadata stripping via {@link PdfSecurity}</li>
  *   <li><strong>Rust/zopfli</strong> (optional, if compiled in): lopdf reloads the output
@@ -120,22 +120,30 @@ public final class PdfCompressor {
                 currentInput = tempGs;
             }
 
-            // 3. qpdf pass: structural optimization
-            if (opts.optimizeStreams() && QpdfHelper.isAvailable()) {
-                tempOut = Files.createTempFile("jpdfium-compress-out-", ".pdf");
-                List<String> qpdfArgs = new ArrayList<>();
-                qpdfArgs.add("--object-streams=generate");
-                qpdfArgs.add(currentInput.toAbsolutePath().toString());
-                qpdfArgs.add(tempOut.toAbsolutePath().toString());
-                QpdfHelper.run(qpdfArgs.toArray(String[]::new));
-                resultBytes = Files.readAllBytes(tempOut);
-                streamsOptimized = true;
-                actions.add("qpdf: optimized object streams and cross-reference tables");
-            } else if (opts.removeUnusedObjects() && QpdfHelper.isAvailable()) {
-                tempOut = Files.createTempFile("jpdfium-compact-out-", ".pdf");
-                PdfStreamOptimizer.compact(currentInput, tempOut);
-                resultBytes = Files.readAllBytes(tempOut);
-                actions.add("qpdf: compacted (removed unreferenced objects)");
+            // 3. qpdf pass: structural optimization (in-process FFM, qpdf bundled)
+            if (opts.optimizeStreams()) {
+                byte[] inBytes = Files.readAllBytes(currentInput);
+                byte[] opt = PdfOptimizer.optimize(inBytes, 0,
+                        PdfOptimizer.DEFAULT, PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                        PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT);
+                if (opt != null) {
+                    resultBytes = opt;
+                    streamsOptimized = true;
+                    actions.add("qpdf: optimized object streams and cross-reference tables");
+                } else {
+                    resultBytes = inBytes;
+                }
+            } else if (opts.removeUnusedObjects()) {
+                byte[] inBytes = Files.readAllBytes(currentInput);
+                byte[] opt = PdfOptimizer.optimize(inBytes, 0,
+                        PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT,
+                        PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT);
+                if (opt != null) {
+                    resultBytes = opt;
+                    actions.add("qpdf: compacted (removed unreferenced objects)");
+                } else {
+                    resultBytes = inBytes;
+                }
             } else {
                 // Read from the best intermediate result
                 resultBytes = Files.readAllBytes(currentInput);

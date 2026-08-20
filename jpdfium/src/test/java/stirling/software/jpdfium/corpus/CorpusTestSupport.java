@@ -74,6 +74,20 @@ final class CorpusTestSupport {
             }
         }
 
+        try {
+            Path patholDir = Path.of("build", "test-corpus", "pathological");
+            Files.createDirectories(patholDir);
+            for (var entry : PathologicalPdfFactory.generateAll().entrySet()) {
+                Path p = patholDir.resolve(entry.getKey() + ".pdf");
+                if (!Files.exists(p)) {
+                    Files.write(p, entry.getValue().bytes());
+                }
+                pdfs.add(p);
+            }
+        } catch (Exception e) {
+            System.err.println("[corpus] pathological specimen generation failed: " + e.getMessage());
+        }
+
         return shard(pdfs.stream().distinct().toList());
     }
 

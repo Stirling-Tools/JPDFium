@@ -252,6 +252,11 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const char*,
+                                         int64_t* handle) {
+    return jpdfium_doc_open_bytes(data, len, handle);
+}
+
 int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handle) {
     *handle = g_next_doc++;
     StubDoc doc;
@@ -864,23 +869,25 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
     auto it = g_docs.find(handle);
     if (it != g_docs.end()) {
-        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
+        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
     }
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 
-int64_t jpdfium_doc_raw_handle(int64_t doc) {
-    return doc;
+static uint64_t g_stub_raw_doc = 0;
+static uint64_t g_stub_raw_page = 0;
+
+int64_t jpdfium_doc_raw_handle(int64_t) {
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
-int64_t jpdfium_page_raw_handle(int64_t page) {
-    return page;
+int64_t jpdfium_page_raw_handle(int64_t) {
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_page));
 }
 
-int64_t jpdfium_page_doc_raw_handle(int64_t page) {
-    if (auto it = g_page_doc.find(page); it != g_page_doc.end()) return it->second;
-    return page;
+int64_t jpdfium_page_doc_raw_handle(int64_t) {
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
@@ -939,4 +946,88 @@ int32_t jpdfium_repair_pdf(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
 int32_t jpdfium_repair_inspect(const uint8_t*, int64_t, char** json_out) {
     if (json_out) *json_out = dup_cstring("{\"status\":\"clean\",\"issues\":[]}");
     return 0;
+}
+
+int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
+                              int64_t* out_len, int32_t, int32_t, int32_t, int32_t, int32_t) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_qpdf_sanitize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
+                              int64_t* out_len, int32_t) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens, int32_t count,
+                           uint8_t** out_ptr, int64_t* out_len) {
+    if (out_ptr && out_len && inputs && inputLens && count > 0 && inputs[0] && inputLens[0] >= 4) {
+        if (auto* p = dup_bytes(inputs[0], static_cast<std::size_t>(inputLens[0]))) {
+            *out_ptr = p;
+            *out_len = inputLens[0];
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_qpdf_extract_pages(const uint8_t* in, int64_t in_len, const int32_t*, int32_t,
+                                   uint8_t** out_ptr, int64_t* out_len) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_qpdf_encrypt(const uint8_t* in, int64_t in_len, const char*, const char*, int32_t,
+                             int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uint8_t** out_ptr,
+                             int64_t* out_len) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
 }

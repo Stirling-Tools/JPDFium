@@ -1,0 +1,9 @@
+{
+  "resources": {
+    "includes": [
+      {
+        "pattern": "META-INF/native-image/com.stirling/jpdfium-spring/.*"
+      }
+    ]
+  }
+}

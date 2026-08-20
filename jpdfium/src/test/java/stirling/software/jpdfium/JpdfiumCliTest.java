@@ -374,4 +374,23 @@ class JpdfiumCliTest {
         assertNotEquals(out, pdf);
         assertOpens(out, 3);
     }
+
+    @Test
+    void versionOutputsBinaryAndSystemInfo() throws Exception {
+        assertOk("version");
+        assertOk("--version");
+        assertOk("-v");
+    }
+
+    @Test
+    void infoSupportsPerfFlag() throws Exception {
+        Path pdf = fixture("/pdfs/general/basic-text.pdf");
+        assertOk("info", pdf.toString(), "--perf");
+    }
+
+    @Test
+    void benchMeasuresThroughput() throws Exception {
+        Path pdf = fixture("/pdfs/general/basic-text.pdf");
+        assertOk("bench", pdf.toString(), "--dpi", "72", "--iterations", "2");
+    }
 }

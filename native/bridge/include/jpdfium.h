@@ -75,6 +75,8 @@ JPDFIUM_EXPORT int64_t jpdfium_page_doc_raw_handle(int64_t page);
 JPDFIUM_EXPORT int32_t jpdfium_doc_create(int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open(const char* path, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle);
+JPDFIUM_EXPORT int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len,
+                                                        const char* password, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* password,
                                                   int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count);
@@ -367,6 +369,85 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen
 // Caller must free *diagnosticJson with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inputLen,
                                               char** diagnosticJson);
+
+// In-process qpdf structural optimization (FFM, no CLI).
+// Returns optimized bytes via *output (caller frees with jpdfium_free_buffer).
+// rc: 0 = ok, 3 = ok with warnings, negative = failure.
+//
+// Flag bits (OR together):
+#define JPDFIUM_QPDF_LINEARIZE 0x01
+#define JPDFIUM_QPDF_RECOMPRESS_FLATE 0x02
+#define JPDFIUM_QPDF_COMPRESS_STREAMS 0x04
+#define JPDFIUM_QPDF_PRESERVE_UNREFERENCED 0x08
+#define JPDFIUM_QPDF_NORMALIZE_CONTENT 0x10
+// --remove-unreferenced-resources has no read/write-pass equivalent in qpdf
+// (it only applies during --pages splitting), so it is intentionally omitted.
+// objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
+// streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
+// decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default
+// compressionLevel: accepted for ABI stability but currently IGNORED. qpdf's
+// only zlib-level knob (Pl_Flate::setCompressionLevel) is process-global, not
+// per-QPDFWriter, so exposing it here would race across concurrent requests.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,
+                                             uint8_t** output, int64_t* outputLen, int32_t flags,
+                                             int32_t compressionLevel, int32_t objectStreamMode,
+                                             int32_t streamDataMode, int32_t decodeLevel);
+
+// In-process qpdf structural sanitization (FFM, no CLI).
+// Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
+// widgets, and flattens annotations. Does NOT do visual redaction (removing
+// text from content streams) -- that is the pdfium side's job and should run
+// first; this cleans up the secondary copies redaction leaves behind.
+// Returns sanitized bytes via *output (caller frees with jpdfium_free_buffer).
+//
+// Flag bits (OR together):
+#define JPDFIUM_SANITIZE_METADATA 0x01     // drop /Metadata from catalog
+#define JPDFIUM_SANITIZE_INFO 0x02         // drop /Info trailer dict
+#define JPDFIUM_SANITIZE_STRUCTURE 0x04    // drop /StructTreeRoot (tagged PDF)
+#define JPDFIUM_SANITIZE_JAVASCRIPT 0x08   // drop /OpenAction, /AA, /Names/JavaScript
+#define JPDFIUM_SANITIZE_ATTACHMENTS 0x10  // drop embedded files
+#define JPDFIUM_SANITIZE_ACROFORM 0x20     // drop /AcroForm + widget annotations
+#define JPDFIUM_SANITIZE_FLATTEN 0x40      // flatten annotations
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t inputLen,
+                                             uint8_t** output, int64_t* outputLen, int32_t flags);
+
+// QPDF In-Process Document Merging
+// Losslessly merges multiple PDF files in memory into a single document with
+// automatic object deduplication and shared resource management.
+// Returns merged PDF bytes via *output. Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens,
+                                          int32_t count, uint8_t** output, int64_t* outputLen);
+
+// QPDF In-Process Page Extraction
+// Losslessly extracts the specified zero-based pages into a new document.
+// Returns extracted PDF bytes via *output. Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
+                                                  const int32_t* pageIndices, int32_t pageCount,
+                                                  uint8_t** output, int64_t* outputLen);
+
+// QPDF In-Process Encryption & Decryption
+#define JPDFIUM_PERM_PRINT_LOW 0x0004
+#define JPDFIUM_PERM_MODIFY 0x0008
+#define JPDFIUM_PERM_EXTRACT 0x0010
+#define JPDFIUM_PERM_ANNOTATE 0x0020
+#define JPDFIUM_PERM_FILL_FORMS 0x0100
+#define JPDFIUM_PERM_ACCESSIBILITY 0x0200
+#define JPDFIUM_PERM_ASSEMBLE 0x0400
+#define JPDFIUM_PERM_PRINT_HIGH 0x0800
+#define JPDFIUM_PERM_ALL 0x0F3C
+
+// Encrypt a PDF using AES-256 (keyLength=256 / R6) or AES-128 (keyLength=128 / R5).
+// Returns encrypted PDF bytes via *output. Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt(const uint8_t* input, int64_t inputLen,
+                                            const char* userPassword, const char* ownerPassword,
+                                            int32_t permissions, int32_t keyLength,
+                                            uint8_t** output, int64_t* outputLen);
+
+// Decrypt a PDF removing all password security.
+// Returns decrypted PDF bytes via *output. Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t* input, int64_t inputLen,
+                                            const char* password, uint8_t** output,
+                                            int64_t* outputLen);
 
 // Brotli Codec (PDF 2.0+ /BrotliDecode streams)
 //
