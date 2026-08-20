@@ -17,25 +17,31 @@ graalvmNative {
         enabled.set(false)
     }
     binaries {
+        val nativeGc = project.findProperty("jpdfium.native.gc")?.toString()
+        val nativePgo = project.findProperty("jpdfium.native.pgo")?.toString()
+        val maxHeap = project.findProperty("jpdfium.native.maxHeap")?.toString() ?: "2g"
+
         named("main") {
             imageName.set("jpdfium-native-smoke")
             mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
             sharedLibrary.set(false)
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
-            buildArgs.add("-H:IncludeResources=natives/.*")
             buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama")
             buildArgs.add("-H:IncludeLocales=en")
             buildArgs.add("--no-fallback")
             buildArgs.add("-H:+ReportExceptionStackTraces")
+            buildArgs.add("--future-defaults=all")
+            buildArgs.add("-R:MaxHeapSize=$maxHeap")
+            val march = project.findProperty("jpdfium.native.march")?.toString() ?: "native"
+            buildArgs.add("-march=$march")
+            if (!nativeGc.isNullOrBlank()) buildArgs.add("--gc=$nativeGc")
+            if (!nativePgo.isNullOrBlank()) buildArgs.add("--pgo=$nativePgo")
         }
         create("cli") {
             imageName.set("jpdfium")
             mainClass.set("stirling.software.jpdfium.JpdfiumCli")
             sharedLibrary.set(false)
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
-            // Bundle the platform natives jar resources so NativeLoader can
-            // extract and load libjpdfium at runtime.
-            buildArgs.add("-H:IncludeResources=natives/.*")
             // Native library loading and FFM symbol lookup must happen at runtime
             // on the target host, never during image build.
             buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama")
@@ -43,6 +49,13 @@ graalvmNative {
             buildArgs.add("-H:IncludeLocales=en")
             buildArgs.add("--no-fallback")
             buildArgs.add("-H:+ReportExceptionStackTraces")
+            buildArgs.add("--future-defaults=all")
+            buildArgs.add("-R:MaxHeapSize=$maxHeap")
+            // Default to compatibility for distributed CLI binaries to ensure portability
+            val march = project.findProperty("jpdfium.native.march")?.toString() ?: "compatibility"
+            if (march.isNotBlank()) buildArgs.add("-march=$march")
+            if (!nativeGc.isNullOrBlank()) buildArgs.add("--gc=$nativeGc")
+            if (!nativePgo.isNullOrBlank()) buildArgs.add("--pgo=$nativePgo")
         }
     }
 }
