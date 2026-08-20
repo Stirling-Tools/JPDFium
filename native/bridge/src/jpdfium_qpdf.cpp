@@ -8,8 +8,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <string>
 #include <span>
+#include <string>
 
 #include "jpdfium.h"
 
@@ -28,7 +28,9 @@ namespace {
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
     std::string error;
-    bool ok() const { return buffer != nullptr; }
+    bool ok() const {
+        return buffer != nullptr;
+    }
 };
 
 // compressionLevel is intentionally ignored. The only qpdf knob for the zlib
@@ -37,11 +39,8 @@ struct QpdfResult {
 // Wiring it here would let concurrent requests with different levels silently
 // clobber one another. The parameter is retained purely for ABI stability;
 // revisit only if a per-instance alternative appears in qpdf.
-QpdfResult optimize(std::span<const uint8_t> input,
-                    int32_t flags,
-                    int32_t objectStreamMode,
-                    int32_t streamDataMode,
-                    int32_t decodeLevel) {
+QpdfResult optimize(std::span<const uint8_t> input, int32_t flags, int32_t objectStreamMode,
+                    int32_t streamDataMode, int32_t decodeLevel) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-input", reinterpret_cast<const char*>(input.data()),
@@ -68,9 +67,7 @@ QpdfResult optimize(std::span<const uint8_t> input,
     }
 }
 
-QpdfResult mergePdfs(const uint8_t* const* inputs,
-                     const int64_t* inputLens,
-                     int32_t count) {
+QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int32_t count) {
     try {
         if (!inputs || !inputLens || count <= 0) {
             return {nullptr, "invalid merge inputs"};
@@ -104,8 +101,7 @@ QpdfResult mergePdfs(const uint8_t* const* inputs,
     }
 }
 
-QpdfResult extractPages(std::span<const uint8_t> input,
-                        const int32_t* pageIndices,
+QpdfResult extractPages(std::span<const uint8_t> input, const int32_t* pageIndices,
                         int32_t pageCount) {
     try {
         if (!pageIndices || pageCount <= 0) {
@@ -140,11 +136,8 @@ QpdfResult extractPages(std::span<const uint8_t> input,
     }
 }
 
-QpdfResult encryptPdf(std::span<const uint8_t> input,
-                      const char* userPassword,
-                      const char* ownerPassword,
-                      int32_t permissions,
-                      int32_t keyLength) {
+QpdfResult encryptPdf(std::span<const uint8_t> input, const char* userPassword,
+                      const char* ownerPassword, int32_t permissions, int32_t keyLength) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("encrypt-in", reinterpret_cast<const char*>(input.data()),
@@ -183,8 +176,7 @@ QpdfResult encryptPdf(std::span<const uint8_t> input,
     }
 }
 
-QpdfResult decryptPdf(std::span<const uint8_t> input,
-                      const char* password) {
+QpdfResult decryptPdf(std::span<const uint8_t> input, const char* password) {
     try {
         auto qpdf = QPDF::create();
         if (password && *password) {

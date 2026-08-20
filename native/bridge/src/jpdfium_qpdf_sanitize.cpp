@@ -12,8 +12,8 @@
 #include <cstring>
 #include <map>
 #include <memory>
-#include <string>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "jpdfium.h"
@@ -36,11 +36,12 @@ namespace {
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
     std::string error;
-    bool ok() const { return buffer != nullptr; }
+    bool ok() const {
+        return buffer != nullptr;
+    }
 };
 
-QpdfResult sanitize(std::span<const uint8_t> input,
-                    int32_t flags) {
+QpdfResult sanitize(std::span<const uint8_t> input, int32_t flags) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-sanitize-in", reinterpret_cast<const char*>(input.data()),
