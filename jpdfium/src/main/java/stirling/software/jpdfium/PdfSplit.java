@@ -78,7 +78,16 @@ public final class PdfSplit {
         if (QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
-                return PdfDocument.open(extractedBytes);
+                PdfDocument candidate = null;
+                try {
+                    candidate = PdfDocument.open(extractedBytes);
+                    if (candidate.pageCount() == pageIndices.length) {
+                        return candidate;
+                    }
+                    candidate.close();
+                } catch (Exception _) {
+                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                }
             }
         }
 
@@ -125,7 +134,16 @@ public final class PdfSplit {
             }
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
-                return PdfDocument.open(extractedBytes);
+                PdfDocument candidate = null;
+                try {
+                    candidate = PdfDocument.open(extractedBytes);
+                    if (candidate.pageCount() == count) {
+                        return candidate;
+                    }
+                    candidate.close();
+                } catch (Exception _) {
+                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                }
             }
         }
 

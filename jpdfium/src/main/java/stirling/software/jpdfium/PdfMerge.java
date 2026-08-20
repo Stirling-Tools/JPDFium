@@ -47,10 +47,24 @@ public final class PdfMerge {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
 
+        int expectedPages = 0;
+        for (PdfDocument doc : documents) {
+            expectedPages += doc.pageCount();
+        }
+
         if (PdfMerger.isSupported()) {
             byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
             if (mergedBytes != null) {
-                return PdfDocument.open(mergedBytes);
+                PdfDocument candidate = null;
+                try {
+                    candidate = PdfDocument.open(mergedBytes);
+                    if (candidate.pageCount() == expectedPages) {
+                        return candidate;
+                    }
+                    candidate.close();
+                } catch (Exception _) {
+                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                }
             }
         }
 
@@ -106,12 +120,32 @@ public final class PdfMerge {
         if (PdfMerger.isSupported()) {
             try {
                 List<byte[]> inputBytes = new ArrayList<>(paths.size());
+                int expectedPages = 0;
+                boolean allOpenable = true;
                 for (Path p : paths) {
-                    inputBytes.add(Files.readAllBytes(p));
+                    byte[] b = Files.readAllBytes(p);
+                    inputBytes.add(b);
+                    try (PdfDocument doc = PdfDocument.open(b)) {
+                        expectedPages += doc.pageCount();
+                    } catch (Exception _) {
+                        allOpenable = false;
+                        break;
+                    }
                 }
-                byte[] mergedBytes = PdfMerger.mergeBytes(inputBytes);
-                if (mergedBytes != null) {
-                    return PdfDocument.open(mergedBytes);
+                if (allOpenable && expectedPages > 0) {
+                    byte[] mergedBytes = PdfMerger.mergeBytes(inputBytes);
+                    if (mergedBytes != null) {
+                        PdfDocument candidate = null;
+                        try {
+                            candidate = PdfDocument.open(mergedBytes);
+                            if (candidate.pageCount() == expectedPages) {
+                                return candidate;
+                            }
+                            candidate.close();
+                        } catch (Exception _) {
+                            if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                        }
+                    }
                 }
             } catch (IOException _) {
                 // Fall back to legacy import path
