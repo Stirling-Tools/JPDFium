@@ -139,6 +139,8 @@ public final class PdfRepair {
                     repairedBytes = doc.saveBytes();
                     coreResult = new RepairResult(coreResult.status(), repairedBytes,
                             coreResult.diagnosticJson());
+                } catch (Exception _) {
+                    // Sanitization failed on damaged structure; retain core result
                 }
             }
         }

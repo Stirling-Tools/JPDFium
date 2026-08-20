@@ -14,32 +14,15 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import stirling.software.jpdfium.corpus.PathologicalPdfFactory;
+
 /**
- * Generates intentionally damaged PDFs for repair testing.
- *
- * <p>Each method produces a {@code byte[]} containing a PDF with a specific
- * class of damage, inspired by real-world corruption patterns seen in
- * PDF.js bug tracker, Ghostscript test suite, and qpdf issue reports.
- *
- * <p>Damage categories:
- * <ol>
- *   <li><b>Structural</b> - xref table corruption, bad startxref, missing trailer</li>
- *   <li><b>Truncation</b> - incomplete downloads, mid-stream cut</li>
- *   <li><b>Syntax</b> - missing endobj, broken object references</li>
- *   <li><b>Stream</b> - wrong stream length, corrupted stream data</li>
- * </ol>
- *
- * <p>All PDFs are generated from scratch via Apache PDFBox (Apache 2.0 license),
- * so there are zero external corpus licensing concerns.
+ * Generates damaged PDFs for repair testing.
  */
 public final class RepairCorpus {
 
     private RepairCorpus() {}
 
-    /**
-     * Returns all damage specimens as a name->bytes map.
-     * Names follow the pattern {@code damage-<category>-<variant>}.
-     */
     public static Map<String, byte[]> all() throws IOException {
         byte[] validPdf = validMultiPage();
         Map<String, byte[]> corpus = new LinkedHashMap<>();
@@ -56,6 +39,9 @@ public final class RepairCorpus {
         corpus.put("damage-endobj-missing", stripEndobj(validPdf));
         corpus.put("damage-header-garbage", garbageHeader(validPdf));
         corpus.put("damage-null-bytes-injected", injectNullBytes(validPdf));
+
+        PathologicalPdfFactory.generateAll().forEach((name, specimen) ->
+                corpus.put("damage-" + name, specimen.bytes()));
 
         return corpus;
     }

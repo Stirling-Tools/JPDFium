@@ -8,8 +8,10 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -35,11 +37,12 @@ public final class PdfBookmarks {
     /**
      * Returns the full bookmark tree for the document.
      *
-     * @param doc raw FPDF_DOCUMENT segment
+     * @param rawDocSegment raw FPDF_DOCUMENT segment
      * @return root-level bookmarks (each may have children)
      */
     public static List<Bookmark> list(MemorySegment rawDocSegment) {
-        return collectChildren(rawDocSegment, MemorySegment.NULL, 0);
+        Set<Long> visited = new HashSet<>();
+        return collectChildren(rawDocSegment, MemorySegment.NULL, 0, visited);
     }
 
     /**
@@ -60,11 +63,12 @@ public final class PdfBookmarks {
             }
 
             if (bookmarkSegment.equals(MemorySegment.NULL)) return Optional.empty();
-            return Optional.of(toBookmark(rawDocSegment, bookmarkSegment, 0));
+            Set<Long> visited = new HashSet<>();
+            return Optional.of(toBookmark(rawDocSegment, bookmarkSegment, 0, visited));
         }
     }
 
-    private static List<Bookmark> collectChildren(MemorySegment rawDocSegment, MemorySegment parentBookmark, int depth) {
+    private static List<Bookmark> collectChildren(MemorySegment rawDocSegment, MemorySegment parentBookmark, int depth, Set<Long> visited) {
         if (depth > MAX_DEPTH || BookmarkBindings.FPDFBookmark_GetFirstChild == null) return Collections.emptyList();
 
         List<Bookmark> result = new ArrayList<>();
@@ -76,7 +80,11 @@ public final class PdfBookmarks {
         }
 
         while (!childBookmark.equals(MemorySegment.NULL)) {
-            result.add(toBookmark(rawDocSegment, childBookmark, depth));
+            long addr = childBookmark.address();
+            if (!visited.add(addr)) {
+                break; // Cycle detected in bookmark chain
+            }
+            result.add(toBookmark(rawDocSegment, childBookmark, depth, visited));
             try {
                 childBookmark = (MemorySegment) BookmarkBindings.FPDFBookmark_GetNextSibling.invokeExact(rawDocSegment, childBookmark);
             } catch (Throwable t) {
@@ -86,7 +94,7 @@ public final class PdfBookmarks {
         return Collections.unmodifiableList(result);
     }
 
-    private static Bookmark toBookmark(MemorySegment rawDocSegment, MemorySegment bookmarkSegment, int depth) {
+    private static Bookmark toBookmark(MemorySegment rawDocSegment, MemorySegment bookmarkSegment, int depth, Set<Long> visited) {
         String title = getTitle(bookmarkSegment);
         int pageIndex = -1;
         ActionType actionType = ActionType.UNSUPPORTED;
@@ -145,7 +153,7 @@ public final class PdfBookmarks {
             }
         }
 
-        List<Bookmark> children = collectChildren(rawDocSegment, bookmarkSegment, depth + 1);
+        List<Bookmark> children = collectChildren(rawDocSegment, bookmarkSegment, depth + 1, visited);
         return new Bookmark(title, pageIndex, children, actionType, uri, filePath);
     }
 
