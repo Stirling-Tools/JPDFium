@@ -20,7 +20,7 @@ public class GraalVmSmokeApp {
 
     private GraalVmSmokeApp() {}
 
-    static void main() throws Exception {
+    public static void main(String[] args) throws Exception {
         System.out.println("Starting GraalVM Native Image JPDFium Major Samples and Verifications");
         System.out.println("Platform detected: " + NativeLoader.detectPlatform());
 
