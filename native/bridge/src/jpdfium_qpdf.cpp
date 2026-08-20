@@ -155,15 +155,19 @@ std::expected<std::shared_ptr<Buffer>, std::string> encryptPdf(std::span<const u
         bool allowExtract = (permissions & JPDFIUM_PERM_EXTRACT) != 0;
         bool allowModify = (permissions & JPDFIUM_PERM_MODIFY) != 0;
         bool allowAccessibility = (permissions & JPDFIUM_PERM_ACCESSIBILITY) != 0;
+        bool allowAssemble = (permissions & JPDFIUM_PERM_ASSEMBLE) != 0;
+        bool allowAnnotate = (permissions & JPDFIUM_PERM_ANNOTATE) != 0;
+        bool allowFillForms = (permissions & JPDFIUM_PERM_FILL_FORMS) != 0;
+        qpdf_r3_print_e printMode = allowPrint ? qpdf_r3p_full : qpdf_r3p_none;
 
         if (keyLength == 256) {
             w.setR6EncryptionParameters(userPass.c_str(), ownerPass.c_str(), allowAccessibility,
-                                        allowExtract, allowPrint, allowModify, allowModify, true);
+                                        allowExtract, allowAssemble, allowAnnotate, allowFillForms,
+                                        allowModify, printMode, true);
         } else {
-            qpdf_r3_print_e p = allowPrint ? qpdf_r3p_full : qpdf_r3p_none;
-            qpdf_r3_modify_e m = allowModify ? qpdf_r3m_all : qpdf_r3m_none;
             w.setR5EncryptionParameters(userPass.c_str(), ownerPass.c_str(), allowAccessibility,
-                                        allowExtract, p, m, true);
+                                        allowExtract, allowAssemble, allowAnnotate, allowFillForms,
+                                        allowModify, printMode, true);
         }
 
         w.write();
