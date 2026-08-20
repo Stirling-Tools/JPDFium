@@ -10,9 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <expected>
 #include <map>
 #include <memory>
+#include <string>
 #include <span>
 #include <vector>
 
@@ -33,8 +33,14 @@
 
 namespace {
 
-std::expected<std::shared_ptr<Buffer>, std::string> sanitize(std::span<const uint8_t> input,
-                                                             int32_t flags) {
+struct QpdfResult {
+    std::shared_ptr<Buffer> buffer;
+    std::string error;
+    bool ok() const { return buffer != nullptr; }
+};
+
+QpdfResult sanitize(std::span<const uint8_t> input,
+                    int32_t flags) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-sanitize-in", reinterpret_cast<const char*>(input.data()),
@@ -119,9 +125,9 @@ std::expected<std::shared_ptr<Buffer>, std::string> sanitize(std::span<const uin
         w.setOutputMemory();
         w.write();
 
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
@@ -136,12 +142,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t input
     *outputLen = 0;
 
     auto result = sanitize({input, static_cast<size_t>(inputLen)}, flags);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf sanitize: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf sanitize: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {

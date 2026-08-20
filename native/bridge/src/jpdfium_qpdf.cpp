@@ -7,8 +7,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <expected>
 #include <memory>
+#include <string>
 #include <span>
 
 #include "jpdfium.h"
@@ -25,17 +25,23 @@
 
 namespace {
 
+struct QpdfResult {
+    std::shared_ptr<Buffer> buffer;
+    std::string error;
+    bool ok() const { return buffer != nullptr; }
+};
+
 // compressionLevel is intentionally ignored. The only qpdf knob for the zlib
 // level, Pl_Flate::setCompressionLevel, mutates process-global state shared by
 // every Pl_Flate instance in deflate mode -- not a per-QPDFWriter setting.
 // Wiring it here would let concurrent requests with different levels silently
 // clobber one another. The parameter is retained purely for ABI stability;
 // revisit only if a per-instance alternative appears in qpdf.
-std::expected<std::shared_ptr<Buffer>, std::string> optimize(std::span<const uint8_t> input,
-                                                             int32_t flags,
-                                                             int32_t objectStreamMode,
-                                                             int32_t streamDataMode,
-                                                             int32_t decodeLevel) {
+QpdfResult optimize(std::span<const uint8_t> input,
+                    int32_t flags,
+                    int32_t objectStreamMode,
+                    int32_t streamDataMode,
+                    int32_t decodeLevel) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-input", reinterpret_cast<const char*>(input.data()),
@@ -56,18 +62,18 @@ std::expected<std::shared_ptr<Buffer>, std::string> optimize(std::span<const uin
             w.setDecodeLevel(static_cast<qpdf_stream_decode_level_e>(decodeLevel));
 
         w.write();
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
-std::expected<std::shared_ptr<Buffer>, std::string> mergePdfs(const uint8_t* const* inputs,
-                                                              const int64_t* inputLens,
-                                                              int32_t count) {
+QpdfResult mergePdfs(const uint8_t* const* inputs,
+                     const int64_t* inputLens,
+                     int32_t count) {
     try {
         if (!inputs || !inputLens || count <= 0) {
-            return std::unexpected("invalid merge inputs");
+            return {nullptr, "invalid merge inputs"};
         }
         auto dest = QPDF::create();
         dest->emptyPDF();
@@ -92,18 +98,18 @@ std::expected<std::shared_ptr<Buffer>, std::string> mergePdfs(const uint8_t* con
         w.setObjectStreamMode(qpdf_o_generate);
         w.setCompressStreams(true);
         w.write();
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
-std::expected<std::shared_ptr<Buffer>, std::string> extractPages(std::span<const uint8_t> input,
-                                                                 const int32_t* pageIndices,
-                                                                 int32_t pageCount) {
+QpdfResult extractPages(std::span<const uint8_t> input,
+                        const int32_t* pageIndices,
+                        int32_t pageCount) {
     try {
         if (!pageIndices || pageCount <= 0) {
-            return std::unexpected("invalid page indices");
+            return {nullptr, "invalid page indices"};
         }
         auto src = QPDF::create();
         src->processMemoryFile("extract-src", reinterpret_cast<const char*>(input.data()),
@@ -128,17 +134,17 @@ std::expected<std::shared_ptr<Buffer>, std::string> extractPages(std::span<const
         w.setObjectStreamMode(qpdf_o_generate);
         w.setCompressStreams(true);
         w.write();
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
-std::expected<std::shared_ptr<Buffer>, std::string> encryptPdf(std::span<const uint8_t> input,
-                                                               const char* userPassword,
-                                                               const char* ownerPassword,
-                                                               int32_t permissions,
-                                                               int32_t keyLength) {
+QpdfResult encryptPdf(std::span<const uint8_t> input,
+                      const char* userPassword,
+                      const char* ownerPassword,
+                      int32_t permissions,
+                      int32_t keyLength) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("encrypt-in", reinterpret_cast<const char*>(input.data()),
@@ -171,14 +177,14 @@ std::expected<std::shared_ptr<Buffer>, std::string> encryptPdf(std::span<const u
         }
 
         w.write();
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
-std::expected<std::shared_ptr<Buffer>, std::string> decryptPdf(std::span<const uint8_t> input,
-                                                               const char* password) {
+QpdfResult decryptPdf(std::span<const uint8_t> input,
+                      const char* password) {
     try {
         auto qpdf = QPDF::create();
         if (password && *password) {
@@ -192,9 +198,9 @@ std::expected<std::shared_ptr<Buffer>, std::string> decryptPdf(std::span<const u
         QPDFWriter w{*qpdf};
         w.setOutputMemory();
         w.write();
-        return w.getBufferSharedPointer();
+        return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
-        return std::unexpected(e.what());
+        return {nullptr, e.what()};
     }
 }
 
@@ -212,12 +218,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
 
     auto result = optimize({input, static_cast<size_t>(inputLen)}, flags, objectStreamMode,
                            streamDataMode, decodeLevel);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf optimize: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf optimize: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {
@@ -235,12 +241,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const in
     *outputLen = 0;
 
     auto result = mergePdfs(inputs, inputLens, count);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf merge: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf merge: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {
@@ -260,12 +266,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t 
     *outputLen = 0;
 
     auto result = extractPages({input, static_cast<size_t>(inputLen)}, pageIndices, pageCount);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf extract: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf extract: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {
@@ -286,12 +292,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt(const uint8_t* input, int64_t inputL
 
     auto result = encryptPdf({input, static_cast<size_t>(inputLen)}, userPassword, ownerPassword,
                              permissions, keyLength);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf encrypt: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf encrypt: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {
@@ -310,12 +316,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t* input, int64_t inputL
     *outputLen = 0;
 
     auto result = decryptPdf({input, static_cast<size_t>(inputLen)}, password);
-    if (!result) {
-        std::fprintf(stderr, "jpdfium qpdf decrypt: %s\n", result.error().c_str());
+    if (!result.ok()) {
+        std::fprintf(stderr, "jpdfium qpdf decrypt: %s\n", result.error.c_str());
         return -1;
     }
 
-    auto& buf = *result;
+    auto& buf = result.buffer;
     *outputLen = static_cast<int64_t>(buf->getSize());
     *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
     if (!*output) {
