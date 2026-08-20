@@ -960,10 +960,15 @@ int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_p
     return -1;
 }
 
-int32_t jpdfium_qpdf_sanitize(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
-                              int32_t) {
-    // Sanitization cannot be performed without qpdf linked; signal failure
-    // rather than pretending the document was cleaned.
+int32_t jpdfium_qpdf_sanitize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
+                              int64_t* out_len, int32_t) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
     return -1;

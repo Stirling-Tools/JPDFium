@@ -74,4 +74,3 @@ public final class PdfStreamOptimizer {
         return QpdfLib.isSupported();
     }
 }
-
