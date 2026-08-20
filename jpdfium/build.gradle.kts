@@ -165,7 +165,14 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_compress_pdf",
     "jpdfium_rust_repair_lopdf",
     "jpdfium_rust_resize_pixels",
-    "jpdfium_rust_free"
+    "jpdfium_rust_free",
+    // QPDF in-process functions
+    "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_sanitize",
+    "jpdfium_qpdf_merge",
+    "jpdfium_qpdf_extract_pages",
+    "jpdfium_qpdf_encrypt",
+    "jpdfium_qpdf_decrypt"
 )
 
 val generateBindings = tasks.register<Exec>("generateBindings") {
