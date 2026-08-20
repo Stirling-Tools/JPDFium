@@ -290,7 +290,7 @@ jobs:
         include:
           - { platform: linux-x64,     runner: ubuntu-latest,       artifact-glob: 'libjpdfium.so libpdfium.so *.so.*' }
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm,    artifact-glob: 'libjpdfium.so libpdfium.so *.so.*' }
-          - { platform: darwin-x64,    runner: macos-13,            artifact-glob: 'libjpdfium.dylib libpdfium.dylib' }
+          - { platform: darwin-x64,    runner: macos-14,            artifact-glob: 'libjpdfium.dylib libpdfium.dylib' }
           - { platform: darwin-arm64,  runner: macos-14,            artifact-glob: 'libjpdfium.dylib libpdfium.dylib' }
           - { platform: windows-x64,   runner: windows-latest,      artifact-glob: 'jpdfium.dll pdfium.dll' }
     runs-on: ${{ matrix.runner }}
