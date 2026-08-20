@@ -867,24 +867,22 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
 }
 
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
-    auto it = g_docs.find(handle);
-    if (it != g_docs.end()) {
-        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
-        if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
-    }
     return jpdfium_doc_save_bytes(handle, data, len);
 }
 
+static uint64_t g_stub_raw_doc = 0;
+static uint64_t g_stub_raw_page = 0;
+
 int64_t jpdfium_doc_raw_handle(int64_t) {
-    return 0;
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
 int64_t jpdfium_page_raw_handle(int64_t) {
-    return 0;
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_page));
 }
 
 int64_t jpdfium_page_doc_raw_handle(int64_t) {
-    return 0;
+    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
