@@ -22,6 +22,7 @@ graalvmNative {
             mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
             sharedLibrary.set(false)
             buildArgs.add("--enable-native-access=ALL-UNNAMED")
+            buildArgs.add("-H:IncludeResources=natives/.*")
             buildArgs.add("--initialize-at-run-time=stirling.software.jpdfium.panama")
             buildArgs.add("-H:IncludeLocales=en")
             buildArgs.add("--no-fallback")

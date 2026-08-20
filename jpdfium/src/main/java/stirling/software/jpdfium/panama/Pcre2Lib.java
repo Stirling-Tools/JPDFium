@@ -24,6 +24,13 @@ public final class Pcre2Lib {
 
     private Pcre2Lib() {}
 
+    /**
+     * Check if PCRE2 support is compiled and available in the native library.
+     */
+    public static boolean isSupported() {
+        return JpdfiumH.jpdfium_pcre2_compile$address() != null;
+    }
+
     public static long compile(String pattern, int flags) {
         NativeGuard.acquire();
         try {

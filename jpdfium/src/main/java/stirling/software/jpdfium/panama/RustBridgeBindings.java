@@ -61,6 +61,13 @@ public final class RustBridgeBindings {
     private RustBridgeBindings() {}
 
     /**
+     * Check if Rust bridge functions are available in the loaded native library.
+     */
+    public static boolean isSupported() {
+        return AVAILABLE;
+    }
+
+    /**
      * Resolve a native symbol to a downcall handle, or return {@code null} if the
      * symbol is not found. Never throws.
      */

@@ -24,6 +24,9 @@ import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.Pcre2Lib;
+import stirling.software.jpdfium.panama.QpdfLib;
+import stirling.software.jpdfium.panama.RustBridgeBindings;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.transform.PdfPageGeometry;
@@ -248,6 +251,10 @@ public final class JpdfiumCli {
                 "Strip hidden content and metadata", JpdfiumCli::opSanitize));
         ops.put("toc", new Operation("toc <in.pdf> <out.pdf>",
                 "Generate a table of contents from headings", JpdfiumCli::opToc));
+        ops.put("version", new Operation("version",
+                "Print JPDFium version, binary size, platform and runtime details", JpdfiumCli::opVersion));
+        ops.put("bench", new Operation("bench <input.pdf> [--dpi N] [--iterations N]",
+                "Benchmark PDF parsing, rendering, text extraction and memory throughput", JpdfiumCli::opBench));
         return Map.copyOf(ops);
     }
 
@@ -260,6 +267,9 @@ public final class JpdfiumCli {
         if (opName.equals("help") || opName.equals("--help") || opName.equals("-h")) {
             printHelp();
             return 0;
+        }
+        if (opName.equals("version") || opName.equals("--version") || opName.equals("-v")) {
+            return opVersion(new Args(List.of(), Map.of(), "version"));
         }
         Operation op = OPS.get(opName);
         if (op == null) {
@@ -320,10 +330,10 @@ public final class JpdfiumCli {
             "rect", "color", "words", "padding", "pattern", "preset", "margin", "text",
             "opacity", "size", "rotation", "header", "footer", "prefix", "start", "digits",
             "degrees", "max-angle", "accuracy", "min-confidence", "paper", "fit", "range",
-            "cols", "rows", "pages-per", "dpi", "page");
+            "cols", "rows", "pages-per", "dpi", "page", "iterations");
 
     private static final Set<String> BOOLEAN_FLAGS = Set.of(
-            "remove", "force", "quiet", "verbose");
+            "remove", "force", "quiet", "verbose", "perf", "time");
 
 
     private static int transform(Args a, String verb, DocOp op) throws Exception {
@@ -332,12 +342,19 @@ public final class JpdfiumCli {
         rejectSameFile(in, out);
         rejectOverwriteUnlessForced(out, a);
         long t0 = System.nanoTime();
+        long mem0 = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
         try (PdfDocument doc = PdfDocument.open(in)) {
             op.apply(doc);
             saveAtomically(doc, out);
         }
         if (!a.has("quiet")) {
-            System.out.printf("%s %s -> %s (%.2f s)%n", verb, in, out, (System.nanoTime() - t0) / 1e9);
+            double elapsedSec = (System.nanoTime() - t0) / 1e9;
+            if (a.has("perf") || a.has("time")) {
+                long mem1 = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                System.out.printf("%s %s -> %s (%.2f s, heap %s)%n", verb, in, out, elapsedSec, formatMemorySize(Math.max(0, mem1 - mem0)));
+            } else {
+                System.out.printf("%s %s -> %s (%.2f s)%n", verb, in, out, elapsedSec);
+            }
         }
         return 0;
     }
@@ -700,8 +717,14 @@ public final class JpdfiumCli {
 
     private static int opInfo(Args a) throws Exception {
         Path in = Path.of(a.positional(0));
+        long t0 = System.nanoTime();
+        long fileSize = Files.exists(in) ? Files.size(in) : -1;
         try (PdfDocument doc = PdfDocument.open(in)) {
+            long tLoad = System.nanoTime() - t0;
             System.out.println("File: " + in);
+            if (fileSize >= 0) {
+                System.out.println("Size: " + formatFileSize(fileSize));
+            }
             System.out.println("Pages: " + doc.pageCount());
             for (MetadataTag tag : MetadataTag.values()) {
                 doc.metadata(tag.pdfKey()).ifPresent(value -> System.out.println(tag.pdfKey() + ": " + value));
@@ -712,8 +735,181 @@ public final class JpdfiumCli {
                     System.out.printf("Page %d: %.1f x %.1f pt%n", i + 1, size.width(), size.height());
                 }
             }
+            if (a.has("perf") || a.has("time")) {
+                System.out.printf("Performance: load time %.2f ms, heap used %s%n",
+                        tLoad / 1e6,
+                        formatMemorySize(Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()));
+            }
         }
         return 0;
+    }
+
+    private static int opVersion(Args a) {
+        NativeLoader.ensureLoaded();
+        String platform = NativeLoader.detectPlatform();
+        boolean isNative = System.getProperty("org.graalvm.nativeimage.imagecode") != null;
+        String runtimeType = isNative ? "GraalVM Native Image" : "JVM (" + System.getProperty("java.vm.name", "Java") + " " + System.getProperty("java.version") + ")";
+
+        Path binPath = getBinaryPath();
+        long binSize = -1;
+        if (binPath != null) {
+            try {
+                binSize = Files.size(binPath);
+            } catch (IOException ignored) {}
+        }
+
+        System.out.println("JPDFium CLI");
+        System.out.println("Runtime:       " + runtimeType);
+        System.out.println("Platform:      " + platform);
+        if (binPath != null) {
+            System.out.println("Binary Path:   " + binPath);
+            if (binSize > 0) {
+                System.out.println("Binary Size:   " + formatFileSize(binSize));
+            }
+        }
+        System.out.println("Features:");
+        System.out.println("  - PDFium:    available (core rendering, layout & editing)");
+        System.out.println("  - QPDF:      " + (QpdfLib.isSupported() ? "available (lossless merge, optimization, sanitization)" : "disabled"));
+        System.out.println("  - PCRE2:     " + (Pcre2Lib.isSupported() ? "available (JIT regex search/redact)" : "disabled"));
+        System.out.println("  - Rust:      " + (RustBridgeBindings.isSupported() ? "available (lopdf repair, zopfli DEFLATE)" : "disabled"));
+
+        Runtime rt = Runtime.getRuntime();
+        long maxMem = rt.maxMemory();
+        long totalMem = rt.totalMemory();
+        long freeMem = rt.freeMemory();
+        long usedMem = totalMem - freeMem;
+        System.out.println("System:");
+        System.out.println("  - OS:        " + System.getProperty("os.name") + " (" + System.getProperty("os.arch") + ", " + System.getProperty("os.version") + ")");
+        System.out.println("  - CPUs:      " + rt.availableProcessors() + " available cores");
+        System.out.println("  - Heap:      " + formatMemorySize(usedMem) + " used / " + (maxMem == Long.MAX_VALUE ? "unlimited" : formatMemorySize(maxMem)) + " max");
+        return 0;
+    }
+
+    private static int opBench(Args a) throws Exception {
+        Path in = Path.of(a.positional(0));
+        int dpi = a.intFlag("dpi", 150);
+        int iterations = a.intFlag("iterations", 1);
+        if (dpi < 1) throw new UsageError("--dpi must be >= 1");
+        if (iterations < 1) throw new UsageError("--iterations must be >= 1");
+
+        long fileSize = Files.size(in);
+        System.out.println("================================================================================");
+        System.out.println("JPDFium Performance Benchmark");
+        System.out.println("File:          " + in.toAbsolutePath());
+        System.out.println("File Size:     " + formatFileSize(fileSize));
+        System.out.println("Render DPI:    " + dpi);
+        System.out.println("Iterations:    " + iterations);
+        System.out.println("================================================================================");
+
+        Runtime rt = Runtime.getRuntime();
+        System.gc();
+        long memBefore = rt.totalMemory() - rt.freeMemory();
+
+        long tOpenTotal = 0;
+        long tTextTotal = 0;
+        long tRenderTotal = 0;
+        long tSaveTotal = 0;
+        int pageCount = 0;
+        long totalChars = 0;
+        long totalPixels = 0;
+
+        for (int iter = 0; iter < iterations; iter++) {
+            long t0 = System.nanoTime();
+            try (PdfDocument doc = PdfDocument.open(in)) {
+                long t1 = System.nanoTime();
+                tOpenTotal += (t1 - t0);
+                pageCount = doc.pageCount();
+
+                // 1. Text Extraction
+                long tText0 = System.nanoTime();
+                for (int p = 0; p < pageCount; p++) {
+                    try (PdfPage page = doc.page(p)) {
+                        String text = page.extractTextJson();
+                        if (text != null) totalChars += text.length();
+                    }
+                }
+                long tText1 = System.nanoTime();
+                tTextTotal += (tText1 - tText0);
+
+                // 2. Rendering
+                long tRender0 = System.nanoTime();
+                for (int p = 0; p < pageCount; p++) {
+                    try (PdfPage page = doc.page(p)) {
+                        RenderResult res = page.renderAt(dpi);
+                        totalPixels += (long) res.width() * res.height();
+                    }
+                }
+                long tRender1 = System.nanoTime();
+                tRenderTotal += (tRender1 - tRender0);
+
+                // 3. Serialization
+                long tSave0 = System.nanoTime();
+                byte[] saved = doc.saveBytes();
+                long tSave1 = System.nanoTime();
+                tSaveTotal += (tSave1 - tSave0);
+            }
+        }
+
+        long memAfter = rt.totalMemory() - rt.freeMemory();
+        long memDelta = Math.max(0, memAfter - memBefore);
+
+        double avgOpenMs = (tOpenTotal / 1e6) / iterations;
+        double avgTextMs = (tTextTotal / 1e6) / iterations;
+        double avgRenderMs = (tRenderTotal / 1e6) / iterations;
+        double avgSaveMs = (tSaveTotal / 1e6) / iterations;
+        double totalTimeMs = avgOpenMs + avgTextMs + avgRenderMs + avgSaveMs;
+
+        double textThroughputCharsSec = (totalChars / (double) iterations) / Math.max(0.0001, (avgTextMs / 1000.0));
+        double textPagesSec = pageCount / Math.max(0.0001, (avgTextMs / 1000.0));
+        double renderMegapixelsSec = (totalPixels / (double) iterations / 1e6) / Math.max(0.0001, (avgRenderMs / 1000.0));
+        double renderPagesSec = pageCount / Math.max(0.0001, (avgRenderMs / 1000.0));
+        double saveThroughputMBs = (fileSize / (1024.0 * 1024.0)) / Math.max(0.0001, (avgSaveMs / 1000.0));
+
+        System.out.printf("Document Pages:   %d pages%n", pageCount);
+        System.out.printf("%-24s %12s %20s%n", "Benchmark Stage", "Avg Time", "Throughput");
+        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Open & Parse", avgOpenMs, String.format(java.util.Locale.US, "%.1f docs/s", 1000.0 / Math.max(0.001, avgOpenMs)));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Text Extraction", avgTextMs, String.format(java.util.Locale.US, "%.1f p/s (%.0f c/s)", textPagesSec, textThroughputCharsSec));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Page Render (" + dpi + " DPI)", avgRenderMs, String.format(java.util.Locale.US, "%.1f p/s (%.2f MP/s)", renderPagesSec, renderMegapixelsSec));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Serialization", avgSaveMs, String.format(java.util.Locale.US, "%.1f MB/s", saveThroughputMBs));
+        System.out.printf("%-24s %10.2f ms%n", "Total Pipeline Time", totalTimeMs);
+        System.out.printf("Heap Memory Delta:       %s%n", formatMemorySize(memDelta));
+        return 0;
+    }
+
+    private static String formatFileSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.2f KB (%d bytes)", bytes / 1024.0, bytes);
+        if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.2f MB (%d bytes)", bytes / (1024.0 * 1024.0), bytes);
+        return String.format(java.util.Locale.US, "%.2f GB (%d bytes)", bytes / (1024.0 * 1024.0 * 1024.0), bytes);
+    }
+
+    private static String formatMemorySize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+        return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    private static Path getBinaryPath() {
+        try {
+            String cmd = ProcessHandle.current().info().command().orElse(null);
+            if (cmd != null) {
+                Path p = Path.of(cmd);
+                if (Files.exists(p)) {
+                    return p;
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            var src = JpdfiumCli.class.getProtectionDomain().getCodeSource();
+            if (src != null && src.getLocation() != null) {
+                Path p = Path.of(src.getLocation().toURI());
+                if (Files.exists(p)) {
+                    return p;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
     }
 
 
@@ -812,6 +1008,7 @@ public final class JpdfiumCli {
                   --force      overwrite an existing output file
                   --quiet      suppress success messages
                   --verbose    print stack traces on failure
+                  --perf       print execution latency and heap memory stats
 
                 Exit codes: 0 success, 1 processing failure, 2 usage error, 70 fatal.
                 """);

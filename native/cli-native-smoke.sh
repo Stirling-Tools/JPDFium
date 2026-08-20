@@ -40,6 +40,7 @@ page_count() {
 echo "jpdfium native smoke (binary: ${BIN})"
 
 "${BIN}" help >/dev/null 2>&1 || { echo "  FAIL: help"; exit 1; }
+"${BIN}" version || { echo "  FAIL: version"; exit 1; }
 
 # redact-words must remove the targeted words (correctness), output must open.
 check "redact-words" 0 redact-words "${BASIC}" redacted.pdf --words "Sample,Introduction" --remove
@@ -103,6 +104,9 @@ open_ok compressed.pdf
 open_ok flattened.pdf
 open_ok watermarked.pdf
 open_ok background.pdf
+
+# bench must execute successfully across pipeline stages
+check "bench" 0 bench "${BASIC}" --dpi 72 --iterations 1
 
 if [ "${failures}" -eq 0 ]; then
     echo "cli-native-smoke: all checks passed"
