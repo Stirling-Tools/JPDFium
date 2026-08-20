@@ -113,7 +113,7 @@ val jextractBin: String = run {
 
 val jpdfiumFunctions = listOf(
     "jpdfium_init", "jpdfium_destroy",
-    "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_protected",
+    "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
     "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_close",
     "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
@@ -268,11 +268,24 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
         // and must not see host-dependent churn.
         val targetMain = committedDir.resolve("JpdfiumH.java")
         if (targetMain.exists()) {
-            val before = targetMain.readText()
-            val normalized = before.replace("JpdfiumH.C_LONG_LONG", "JpdfiumH.C_LONG")
-            if (normalized != before) {
-                targetMain.writeText(normalized)
-                logger.lifecycle("Normalized JpdfiumH descriptors to C_LONG for cross-platform stability")
+            var text = targetMain.readText()
+            text = text.replace("JpdfiumH.C_LONG_LONG", "JpdfiumH.C_LONG")
+
+            // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
+            val qpdfFuncs = listOf(
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
+                "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
+            )
+            for (fn in qpdfFuncs) {
+                text = text.replace(
+                    "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"$fn\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);",
+                    "public static final MemorySegment ADDR = SYMBOL_LOOKUP.find(\"$fn\").orElse(null);\n\n        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;"
+                )
+            }
+
+            if (text != targetMain.readText()) {
+                targetMain.writeText(text)
+                logger.lifecycle("Normalized JpdfiumH descriptors and patched optional qpdf bindings for stability")
             }
         }
     }

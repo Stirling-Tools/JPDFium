@@ -502,6 +502,69 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_open_bytes_protected {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_open_bytes_protected");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_open_bytes_protected(const uint8_t *data, int64_t len, const char *password, int64_t *handle)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_open_bytes_protected$descriptor() {
+        return jpdfium_doc_open_bytes_protected.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_open_bytes_protected(const uint8_t *data, int64_t len, const char *password, int64_t *handle)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_open_bytes_protected$handle() {
+        return jpdfium_doc_open_bytes_protected.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_open_bytes_protected(const uint8_t *data, int64_t len, const char *password, int64_t *handle)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_open_bytes_protected$address() {
+        return jpdfium_doc_open_bytes_protected.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_open_bytes_protected(const uint8_t *data, int64_t len, const char *password, int64_t *handle)
+     * }
+     */
+    public static int jpdfium_doc_open_bytes_protected(MemorySegment data, long len, MemorySegment password, MemorySegment handle) {
+        var mh$ = jpdfium_doc_open_bytes_protected.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_open_bytes_protected", data, len, password, handle);
+            }
+            return (int)mh$.invokeExact(data, len, password, handle);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_open_protected {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -3929,9 +3992,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_optimize");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
@@ -3993,9 +4056,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_sanitize");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_sanitize").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
@@ -4057,9 +4120,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_merge");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_merge").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
@@ -4122,9 +4185,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_extract_pages");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_extract_pages").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
@@ -4189,9 +4252,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_encrypt");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_encrypt").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
@@ -4253,9 +4316,9 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_qpdf_decrypt");
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_decrypt").orElse(null);
 
-        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
     }
 
     /**
