@@ -8,10 +8,13 @@
 #include <fpdfview.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -30,7 +33,57 @@
 
 #ifdef JPDFIUM_HAS_ICU
 #include <unicode/normalizer2.h>
+#include <unicode/putil.h>
+#include <unicode/uclean.h>
+#include <unicode/udata.h>
 #include <unicode/utypes.h>
+
+static void ensureIcuInit() {
+    static std::once_flag s_icu_once;
+    std::call_once(s_icu_once, [] {
+        UErrorCode status = U_ZERO_ERROR;
+        u_init(&status);
+        if (U_SUCCESS(status)) return;
+
+        static const char* const candidateDirs[] = {"/usr/share/icu",
+                                                    "/usr/share/icu/78.1",
+                                                    "/usr/share/icu/77.1",
+                                                    "/usr/share/icu/76.1",
+                                                    "/usr/share/icu/75.1",
+                                                    "/usr/share/icu/74.2",
+                                                    "/usr/share/icu/74.1",
+                                                    "/usr/share/icu/73.2",
+                                                    "/usr/share/icu/73.1",
+                                                    "/usr/share/icu/72.1",
+                                                    "/usr/share/icu/71.1",
+                                                    "/usr/share/icu/70.1",
+                                                    "/usr/share/icu/69.1",
+                                                    "/usr/share/icu/68.2",
+                                                    "/usr/share/icu/67.1",
+                                                    "/usr/share/icu/66.1",
+                                                    "/usr/share/icu/65.1",
+                                                    "/usr/share/icu/64.2",
+                                                    "/usr/share/icu/60.2",
+                                                    "/usr/lib/x86_64-linux-gnu",
+                                                    "/usr/lib/aarch64-linux-gnu",
+                                                    "/usr/lib",
+                                                    "/usr/lib64",
+                                                    "/usr/local/share/icu",
+                                                    "/opt/homebrew/share/icu",
+                                                    "/usr/share",
+                                                    "/etc/icu",
+                                                    "."};
+
+        for (const char* dir : candidateDirs) {
+            status = U_ZERO_ERROR;
+            u_setDataDirectory(dir);
+            u_init(&status);
+            if (U_SUCCESS(status)) {
+                return;
+            }
+        }
+    });
+}
 #endif
 #ifdef JPDFIUM_HAS_UNIBREAK
 #include <graphemebreak.h>
@@ -56,6 +109,209 @@ static void ensureFreeTypeInit() {
     });
 }
 #endif
+
+namespace fs = std::filesystem;
+
+static std::vector<uint8_t> loadSystemFontFallback(const std::string& fontName) {
+    if (fontName.empty()) return {};
+
+    static const std::vector<std::string> fontSearchPaths = [] {
+        std::vector<std::string> paths = {"/usr/share/fonts",
+                                          "/usr/share/fonts/truetype",
+                                          "/usr/share/fonts/truetype/dejavu",
+                                          "/usr/share/fonts/truetype/liberation",
+                                          "/usr/share/fonts/truetype/noto",
+                                          "/usr/share/fonts/truetype/freefont",
+                                          "/usr/share/fonts/opentype",
+                                          "/usr/share/fonts/dejavu",
+                                          "/usr/share/fonts/liberation",
+                                          "/usr/share/fonts/noto",
+                                          "/usr/share/fonts/freefont",
+                                          "/usr/share/fonts/type1",
+                                          "/usr/share/fonts/X11",
+                                          "/usr/local/share/fonts",
+                                          "/var/lib/ghostscript/fonts",
+                                          "/usr/share/ghostscript/fonts",
+                                          "/System/Library/Fonts",
+                                          "/System/Library/Fonts/Supplemental",
+                                          "/Library/Fonts"};
+        const char* customPath = std::getenv("JPDFIUM_FONT_PATH");
+        if (customPath && *customPath) paths.insert(paths.begin(), customPath);
+        const char* fcPath = std::getenv("FONTCONFIG_PATH");
+        if (fcPath && *fcPath) paths.insert(paths.begin(), fcPath);
+        const char* javaHome = std::getenv("JAVA_HOME");
+        if (javaHome && *javaHome) {
+            paths.push_back(std::string(javaHome) + "/lib/fonts");
+        }
+        return paths;
+    }();
+
+    auto toLower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return s;
+    };
+
+    std::string lowerName = toLower(fontName);
+    auto plusPos = lowerName.find('+');
+    if (plusPos != std::string::npos && plusPos + 1 < lowerName.size()) {
+        lowerName = lowerName.substr(plusPos + 1);
+    }
+
+    std::vector<std::string> searchKeywords;
+    if (lowerName.find("helvetica") != std::string::npos ||
+        lowerName.find("arial") != std::string::npos ||
+        lowerName.find("sans") != std::string::npos) {
+        bool bold = lowerName.find("bold") != std::string::npos;
+        bool italic = lowerName.find("oblique") != std::string::npos ||
+                      lowerName.find("italic") != std::string::npos;
+        if (bold && italic) {
+            searchKeywords = {"liberationsans-bolditalic", "dejavusans-boldoblique",
+                              "arial-bolditalic", "freesansboldoblique", "helvetica-boldoblique"};
+        } else if (bold) {
+            searchKeywords = {"liberationsans-bold", "dejavusans-bold", "arial-bold",
+                              "freesansbold", "helvetica-bold"};
+        } else if (italic) {
+            searchKeywords = {"liberationsans-italic", "dejavusans-oblique", "arial-italic",
+                              "freesansoblique", "helvetica-oblique"};
+        } else {
+            searchKeywords = {
+                "liberationsans-regular", "dejavusans", "freesans", "arial", "helvetica",
+                "notosans-regular"};
+        }
+    } else if (lowerName.find("times") != std::string::npos ||
+               lowerName.find("serif") != std::string::npos ||
+               lowerName.find("roman") != std::string::npos) {
+        bool bold = lowerName.find("bold") != std::string::npos;
+        bool italic = lowerName.find("italic") != std::string::npos;
+        if (bold && italic) {
+            searchKeywords = {"liberationserif-bolditalic", "dejavuserif-bolditalic",
+                              "times-bolditalic", "freeserifbolditalic"};
+        } else if (bold) {
+            searchKeywords = {"liberationserif-bold", "dejavuserif-bold", "times-bold",
+                              "freeserifbold"};
+        } else if (italic) {
+            searchKeywords = {"liberationserif-italic", "dejavuserif-italic", "times-italic",
+                              "freeserifitalic"};
+        } else {
+            searchKeywords = {"liberationserif-regular", "dejavuserif", "freeserif", "times",
+                              "notoserif-regular"};
+        }
+    } else if (lowerName.find("courier") != std::string::npos ||
+               lowerName.find("mono") != std::string::npos) {
+        bool bold = lowerName.find("bold") != std::string::npos;
+        bool italic = lowerName.find("oblique") != std::string::npos ||
+                      lowerName.find("italic") != std::string::npos;
+        if (bold && italic) {
+            searchKeywords = {"liberationmono-bolditalic", "dejavusansmono-boldoblique",
+                              "freemonoboldoblique", "courier-boldoblique"};
+        } else if (bold) {
+            searchKeywords = {"liberationmono-bold", "dejavusansmono-bold", "freemonobold",
+                              "courier-bold"};
+        } else if (italic) {
+            searchKeywords = {"liberationmono-italic", "dejavusansmono-oblique", "freemonooblique",
+                              "courier-oblique"};
+        } else {
+            searchKeywords = {"liberationmono-regular", "dejavusansmono", "freemono", "courier",
+                              "notosansmono-regular"};
+        }
+    } else {
+        searchKeywords = {lowerName};
+    }
+
+    static std::mutex s_font_mutex;
+    static std::unordered_map<std::string, std::vector<uint8_t>> s_font_data_cache;
+    static std::vector<std::pair<std::string, std::string>> s_system_fonts;
+    static bool s_indexed = false;
+
+    std::lock_guard<std::mutex> lock(s_font_mutex);
+    auto cit = s_font_data_cache.find(lowerName);
+    if (cit != s_font_data_cache.end()) return cit->second;
+
+    if (!s_indexed) {
+        s_indexed = true;
+        for (const auto& searchPath : fontSearchPaths) {
+            std::error_code ec;
+            if (!fs::exists(searchPath, ec) || !fs::is_directory(searchPath, ec)) continue;
+            for (const auto& entry : fs::recursive_directory_iterator(
+                     searchPath, fs::directory_options::skip_permission_denied, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file(ec)) continue;
+                std::string ext = entry.path().extension().string();
+                std::string lowerExt = toLower(ext);
+                if (lowerExt == ".ttf" || lowerExt == ".otf" || lowerExt == ".ttc" ||
+                    lowerExt == ".pfb") {
+                    s_system_fonts.emplace_back(toLower(entry.path().stem().string()),
+                                                entry.path().string());
+                }
+            }
+        }
+    }
+
+    std::string matchedPath;
+    for (const auto& kw : searchKeywords) {
+        for (const auto& [stem, path] : s_system_fonts) {
+            if (stem == kw || stem.find(kw) != std::string::npos ||
+                kw.find(stem) != std::string::npos) {
+                matchedPath = path;
+                break;
+            }
+        }
+        if (!matchedPath.empty()) break;
+    }
+
+    if (matchedPath.empty() && !s_system_fonts.empty()) {
+        for (const auto& [stem, path] : s_system_fonts) {
+            if (stem.find("sans") != std::string::npos ||
+                stem.find("dejavu") != std::string::npos ||
+                stem.find("liberation") != std::string::npos) {
+                matchedPath = path;
+                break;
+            }
+        }
+        if (matchedPath.empty()) matchedPath = s_system_fonts[0].second;
+    }
+
+    if (!matchedPath.empty()) {
+        std::ifstream file(matchedPath, std::ios::binary | std::ios::ate);
+        if (file) {
+            auto size = file.tellg();
+            if (size > 0 && size < 100 * 1024 * 1024) {
+                std::vector<uint8_t> data(static_cast<size_t>(size));
+                file.seekg(0, std::ios::beg);
+                if (file.read(reinterpret_cast<char*>(data.data()), size)) {
+                    s_font_data_cache[lowerName] = data;
+                    return data;
+                }
+            }
+        }
+    }
+
+    s_font_data_cache[lowerName] = {};
+    return {};
+}
+
+static bool loadFontDataWithFallback(FPDF_FONT font, std::vector<uint8_t>& outData) {
+    outData.clear();
+    if (!font) return false;
+    size_t buflen = 0;
+    if (FPDFFont_GetFontData(font, nullptr, 0, &buflen) && buflen > 0) {
+        outData.resize(buflen);
+        size_t actual = 0;
+        if (FPDFFont_GetFontData(font, outData.data(), buflen, &actual) && actual > 0) {
+            outData.resize(actual);
+            return true;
+        }
+        outData.clear();
+    }
+
+    char baseName[256] = {0};
+    if (FPDFFont_GetBaseFontName(font, baseName, sizeof(baseName)) > 0 && baseName[0]) {
+        outData = loadSystemFontFallback(baseName);
+        return !outData.empty();
+    }
+    return false;
+}
 
 // UTF-8 -> std::u32string. Decodes DEFENSIVELY: a truncated multi-byte
 // sequence at the end of the buffer (FFI input from Java strings) must never
@@ -173,6 +429,7 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
 #ifdef JPDFIUM_HAS_ICU
     static thread_local std::unordered_map<uint32_t, std::u32string> cache;
     static const icu::Normalizer2* nfkc = [] {
+        ensureIcuInit();
         UErrorCode err = U_ZERO_ERROR;
         const icu::Normalizer2* n = icu::Normalizer2::getNFKCInstance(err);
         return U_FAILURE(err) ? nullptr : n;
@@ -980,39 +1237,35 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         if (it != ftCache.end()) return it->second;
 
         FtFontCache& cache = ftCache[key];
-        size_t buflen = 0;
-        if (FPDFFont_GetFontData(font, nullptr, 0, &buflen) && buflen > 0) {
-            std::vector<uint8_t> fontData(buflen);
-            size_t actual = 0;
-            if (FPDFFont_GetFontData(font, fontData.data(), buflen, &actual) && actual > 0) {
-                ensureFreeTypeInit();
-                FT_Face face;
-                if (FT_New_Memory_Face(g_ft_lib, fontData.data(), static_cast<FT_Long>(actual), 0,
-                                       &face) == 0) {
-                    cache.isCidKeyed = FT_IS_CID_KEYED(face) != 0;
-                    // Select a Unicode cmap if available
-                    for (int cm = 0; cm < face->num_charmaps; cm++) {
-                        if (face->charmaps[cm]->encoding == FT_ENCODING_UNICODE) {
-                            FT_Set_Charmap(face, face->charmaps[cm]);
-                            break;
-                        }
+        std::vector<uint8_t> fontData;
+        if (loadFontDataWithFallback(font, fontData) && !fontData.empty()) {
+            ensureFreeTypeInit();
+            FT_Face face;
+            if (FT_New_Memory_Face(g_ft_lib, fontData.data(), static_cast<FT_Long>(fontData.size()),
+                                   0, &face) == 0) {
+                cache.isCidKeyed = FT_IS_CID_KEYED(face) != 0;
+                // Select a Unicode cmap if available
+                for (int cm = 0; cm < face->num_charmaps; cm++) {
+                    if (face->charmaps[cm]->encoding == FT_ENCODING_UNICODE) {
+                        FT_Set_Charmap(face, face->charmaps[cm]);
+                        break;
                     }
-                    cache.upem = static_cast<short>(face->units_per_EM);
-                    FT_UInt gid;
-                    FT_ULong charcode = FT_Get_First_Char(face, &gid);
-                    while (gid != 0) {
-                        cache.unicodeToGid[static_cast<uint32_t>(charcode)] = gid;
-                        charcode = FT_Get_Next_Char(face, charcode, &gid);
-                    }
-                    for (const auto& [uni, g] : cache.unicodeToGid) {
-                        if (cache.advances.count(g)) continue;
-                        if (FT_Load_Glyph(face, g, FT_LOAD_NO_SCALE) == 0) {
-                            cache.advances[g] = face->glyph->advance.x;
-                        }
-                    }
-                    cache.valid = !cache.unicodeToGid.empty();
-                    FT_Done_Face(face);
                 }
+                cache.upem = static_cast<short>(face->units_per_EM);
+                FT_UInt gid;
+                FT_ULong charcode = FT_Get_First_Char(face, &gid);
+                while (gid != 0) {
+                    cache.unicodeToGid[static_cast<uint32_t>(charcode)] = gid;
+                    charcode = FT_Get_Next_Char(face, charcode, &gid);
+                }
+                for (const auto& [uni, g] : cache.unicodeToGid) {
+                    if (cache.advances.count(g)) continue;
+                    if (FT_Load_Glyph(face, g, FT_LOAD_NO_SCALE) == 0) {
+                        cache.advances[g] = face->glyph->advance.x;
+                    }
+                }
+                cache.valid = !cache.unicodeToGid.empty();
+                FT_Done_Face(face);
             }
         }
         return cache;
@@ -1713,21 +1966,14 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                         fragFont = lf;
                     }
                 } else {
-                    size_t fontDataLen = 0;
-                    if (FPDFFont_GetFontData(plan.font, nullptr, 0, &fontDataLen) &&
-                        fontDataLen > 0) {
-                        std::vector<uint8_t> fontData(fontDataLen);
-                        size_t actual = 0;
-                        if (FPDFFont_GetFontData(plan.font, fontData.data(), fontDataLen,
-                                                 &actual) &&
-                            actual > 0) {
-                            FPDF_FONT lf = FPDFText_LoadFont(doc, fontData.data(),
-                                                             static_cast<uint32_t>(actual),
-                                                             FPDF_FONT_TRUETYPE, 1);
-                            if (lf) {
-                                if (core) core->loadedFonts.push_back(lf);
-                                fragFont = lf;
-                            }
+                    std::vector<uint8_t> fontData;
+                    if (loadFontDataWithFallback(plan.font, fontData) && !fontData.empty()) {
+                        FPDF_FONT lf = FPDFText_LoadFont(doc, fontData.data(),
+                                                         static_cast<uint32_t>(fontData.size()),
+                                                         FPDF_FONT_TRUETYPE, 1);
+                        if (lf) {
+                            if (core) core->loadedFonts.push_back(lf);
+                            fragFont = lf;
                         }
                     }
                 }
@@ -2455,20 +2701,14 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
         if (!f) return nullptr;
         auto it = hbCache.find(reinterpret_cast<uintptr_t>(f));
         if (it != hbCache.end()) return it->second.font;
-        size_t buflen = 0;
-        if (!FPDFFont_GetFontData(f, nullptr, 0, &buflen) || buflen == 0) {
-            hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
-            return nullptr;
-        }
-        std::vector<uint8_t> fontData(buflen);
-        size_t actual = 0;
-        if (!FPDFFont_GetFontData(f, fontData.data(), buflen, &actual) || actual == 0) {
+        std::vector<uint8_t> fontData;
+        if (!loadFontDataWithFallback(f, fontData) || fontData.empty()) {
             hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
             return nullptr;
         }
         hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(fontData.data()),
-                                         static_cast<unsigned>(actual), HB_MEMORY_MODE_READONLY,
-                                         nullptr, nullptr);
+                                         static_cast<unsigned>(fontData.size()),
+                                         HB_MEMORY_MODE_READONLY, nullptr, nullptr);
         if (!blob) return nullptr;
         hb_face_t* face = hb_face_create(blob, 0);
         hb_blob_destroy(blob);  // face holds its own reference
