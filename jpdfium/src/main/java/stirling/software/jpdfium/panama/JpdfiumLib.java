@@ -433,6 +433,16 @@ public final class JpdfiumLib {
         }
     }
 
+    /** Enable or disable the QPDF sanitize pass when saving a redacted document. */
+    public static void docSetSanitizeOnSave(long doc, boolean enable) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_doc_set_sanitize_on_save(doc, enable ? 1 : 0), "docSetSanitizeOnSave");
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static String textGetChars(long page) {
         NativeGuard.acquire();
         try {

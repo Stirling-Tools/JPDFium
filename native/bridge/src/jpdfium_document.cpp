@@ -123,12 +123,11 @@ int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
 
 namespace {
 
-// Mandatory sanitize stage: every full save of a redacted document runs a
-// qpdf pass (dead-object purge, metadata/XMP/annotation/form/outline scrub,
-// ToUnicode filtering, hb-subset font erasure). Failure is a loud save
-// refusal - a redacted document is never shipped without it.
+// Opt-in sanitize stage: when sanitizeOnSave is enabled on a redacted document,
+// runs a qpdf pass (dead-object purge, metadata/XMP/annotation/form/outline scrub,
+// ToUnicode filtering, hb-subset font erasure).
 int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
-    if (!w->core->contentRedacted) return JPDFIUM_OK;
+    if (!w->core->contentRedacted || !w->core->sanitizeOnSave) return JPDFIUM_OK;
     std::vector<uint8_t> sanitized;
     std::string report;
     if (sanitizeRedactedPdf(bytes.data(), bytes.size(), *w->core, sanitized, report) != 0) {
@@ -252,6 +251,13 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
     memcpy(out, rep.data(), rep.size());
     out[rep.size()] = 0;
     *json = out;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) noexcept {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core) return JPDFIUM_ERR_INVALID;
+    w->core->sanitizeOnSave = (enable != 0);
     return JPDFIUM_OK;
 }
 

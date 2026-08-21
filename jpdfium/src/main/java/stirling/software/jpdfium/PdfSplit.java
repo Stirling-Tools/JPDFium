@@ -75,9 +75,15 @@ public final class PdfSplit {
         Collections.sort(sortedIndices);
         int[] pageIndices = sortedIndices.stream().mapToInt(Integer::intValue).toArray();
 
+        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
+
         if (QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
+                if (!remappedBookmarks.isEmpty()) {
+                    extractedBytes = PdfBookmarkEditor.setBookmarks(extractedBytes, remappedBookmarks);
+                }
                 PdfDocument candidate = null;
                 try {
                     candidate = PdfDocument.open(extractedBytes);
@@ -96,14 +102,10 @@ public final class PdfSplit {
         PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandle(), pageIndices, 0);
 
         PdfDocument detachedDoc = detach(destinationDoc);
-        List<Bookmark> sourceBookmarks = doc.bookmarks();
-        if (!sourceBookmarks.isEmpty()) {
-            List<Bookmark> remappedBookmarks = filterBookmarksForIndices(sourceBookmarks, sortedIndices);
-            if (!remappedBookmarks.isEmpty()) {
-                byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
-                detachedDoc.close();
-                return PdfDocument.open(bytesWithBookmarks);
-            }
+        if (!remappedBookmarks.isEmpty()) {
+            byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
+            detachedDoc.close();
+            return PdfDocument.open(bytesWithBookmarks);
         }
         return detachedDoc;
     }
@@ -126,6 +128,9 @@ public final class PdfSplit {
                             .formatted(fromPage, toPage, doc.pageCount()));
         }
 
+        List<Bookmark> sourceBookmarks = doc.bookmarks();
+        List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
+
         if (QpdfLib.isExtractSupported()) {
             int count = toPage - fromPage + 1;
             int[] pageIndices = new int[count];
@@ -134,6 +139,9 @@ public final class PdfSplit {
             }
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
+                if (!remappedBookmarks.isEmpty()) {
+                    extractedBytes = PdfBookmarkEditor.setBookmarks(extractedBytes, remappedBookmarks);
+                }
                 PdfDocument candidate = null;
                 try {
                     candidate = PdfDocument.open(extractedBytes);
@@ -154,14 +162,10 @@ public final class PdfSplit {
         PdfPageImporter.importPages(destinationDoc.rawHandle(), doc.rawHandle(), pageRangeSpec, 0);
 
         PdfDocument detachedDoc = detach(destinationDoc);
-        List<Bookmark> sourceBookmarks = doc.bookmarks();
-        if (!sourceBookmarks.isEmpty()) {
-            List<Bookmark> remappedBookmarks = filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
-            if (!remappedBookmarks.isEmpty()) {
-                byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
-                detachedDoc.close();
-                return PdfDocument.open(bytesWithBookmarks);
-            }
+        if (!remappedBookmarks.isEmpty()) {
+            byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
+            detachedDoc.close();
+            return PdfDocument.open(bytesWithBookmarks);
         }
         return detachedDoc;
     }

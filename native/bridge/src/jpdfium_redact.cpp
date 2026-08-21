@@ -1794,15 +1794,18 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // (fonts that subset only ligature glyphs cannot re-emit the
             // components), then the original codepoints, then the decomposed
             // variant.
+            bool strategyAUsed = false;
             if (!frag.unicodeUnreliable) {
                 for (const auto* cand : {&frag.utf16Ligated, &frag.utf16, &frag.utf16Decomposed}) {
                     if (cand->empty()) continue;
                     textOk =
                         FPDFText_SetText(fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
                     if (!textOk) continue;
+                    strategyAUsed = true;
                     emissionStatus = fragmentTextStatus(fragObj, *cand);
                     if (emissionStatus != 0) break;  // 1 verified, -1 width-gated
                     textOk = false;
+                    strategyAUsed = false;
                 }
                 if (textOk) boundsOk = boundsValid(fragObj);
             }
@@ -1884,9 +1887,11 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // decoded-text round-trip and do not use a standard-14 font:
             // wrong glyphs from custom encodings change the glyph sequence
             // and therefore the page-space bbox. Standard-14 fonts are
-            // trusted (fixed encoding); the tolerance is loose enough for
+            // trusted (fixed encoding); Strategy A is trusted (direct Unicode
+            // encoding via PDFium font map); the tolerance is loose enough for
             // Tc/Tw spacing drift while still rejecting wholesale garbage.
-            if (emissionStatus == -1 && !isStandard14Font(plan.font) && frag.hasExpectedBox) {
+            if (!strategyAUsed && emissionStatus == -1 && !isStandard14Font(plan.font) &&
+                frag.hasExpectedBox) {
                 float fl, fb, fr, ft;
                 if (!FPDFPageObj_GetBounds(fragObj, &fl, &fb, &fr, &ft)) {
                     FPDFPageObj_Destroy(fragObj);

@@ -188,6 +188,7 @@ struct StubDoc {
     std::string path;
     std::vector<uint8_t> bytes;
     bool hasMutatedRedaction = false;
+    bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
     std::unordered_map<int32_t, int> pagePendingMarks;
     std::string sanitizeReport;
@@ -276,6 +277,13 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     const auto& doc = it->second;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
+    if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
+        it->second.sanitizeReport =
+            "{\"annots_removed\":1,\"fields_blanked\":0,\"outlines_blanked\":0,"
+            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":"
+            "0}";
+    }
+
     if (!doc.path.empty()) {
         FilePtr in(std::fopen(doc.path.c_str(), "rb"));
         FilePtr out = safe_fopen_write(output_path);
@@ -306,6 +314,13 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     if (it == g_docs.end()) return return_stub();
     const auto& doc = it->second;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+
+    if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
+        it->second.sanitizeReport =
+            "{\"annots_removed\":1,\"fields_blanked\":0,\"outlines_blanked\":0,"
+            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":"
+            "0}";
+    }
 
     if (!doc.bytes.empty()) {
         *len = static_cast<int64_t>(doc.bytes.size());
@@ -863,6 +878,14 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
     std::memcpy(out, rep.data(), rep.size());
     out[rep.size()] = 0;
     *json = out;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) noexcept {
+    auto it = g_docs.find(doc);
+    if (it != g_docs.end()) {
+        it->second.sanitizeOnSave = (enable != 0);
+    }
     return JPDFIUM_OK;
 }
 

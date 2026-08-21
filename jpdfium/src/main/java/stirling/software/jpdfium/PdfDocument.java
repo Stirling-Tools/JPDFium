@@ -284,6 +284,14 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Enable or disable the QPDF sanitize pass when saving a redacted document (default: false).
+     */
+    public void setSanitizeOnSave(boolean enable) {
+        ensureOpen();
+        JpdfiumLib.docSetSanitizeOnSave(handle, enable);
+    }
+
+    /**
      * Returns the raw FPDF_DOCUMENT MemorySegment for direct PDFium FFM calls.
      */
     public MemorySegment rawHandle() {

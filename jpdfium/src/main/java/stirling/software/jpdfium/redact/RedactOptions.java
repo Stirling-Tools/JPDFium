@@ -51,6 +51,7 @@ public final class RedactOptions {
     private final boolean removeContent;
     private final boolean caseSensitive;
     private final boolean sanitizeStructure;
+    private final boolean flatten;
 
     private final boolean convertToImage;
     private final int imageDpi;
@@ -91,6 +92,7 @@ public final class RedactOptions {
         this.removeContent = b.removeContent;
         this.caseSensitive = b.caseSensitive;
         this.sanitizeStructure = b.sanitizeStructure;
+        this.flatten = b.flatten;
         this.convertToImage = b.convertToImage;
         this.imageDpi = b.imageDpi;
         this.incrementalSave = b.incrementalSave;
@@ -122,8 +124,12 @@ public final class RedactOptions {
     public boolean wholeWord() { return wholeWord; }
     public boolean removeContent() { return removeContent; }
     public boolean caseSensitive() { return caseSensitive; }
-    /** If true, scrub structure/JS copies after content removal (default: true). */
+    /** If true, scrub structure/JS copies after content removal (opt-in, default: false). */
     public boolean sanitizeStructure() { return sanitizeStructure; }
+    /** Alias for {@link #sanitizeStructure()}. */
+    public boolean sanitize() { return sanitizeStructure; }
+    /** If true, flatten annotations/form fields on redacted pages (opt-in, default: false). */
+    public boolean flatten() { return flatten; }
     public boolean convertToImage() { return convertToImage; }
     public int imageDpi() { return imageDpi; }
     public boolean incrementalSave() { return incrementalSave; }
@@ -159,7 +165,8 @@ public final class RedactOptions {
         private boolean wholeWord;
         private boolean removeContent = true;
         private boolean caseSensitive;
-        private boolean sanitizeStructure = true;
+        private boolean sanitizeStructure = false;
+        private boolean flatten = false;
 
         private boolean convertToImage;
         private int imageDpi = 150;
@@ -236,8 +243,14 @@ public final class RedactOptions {
         /** If true, match case-sensitively; if false, ignore case (default: false). */
         public Builder caseSensitive(boolean v) { this.caseSensitive = v; return this; }
 
-        /** If true, scrub structure/JS copies after content removal (default: true). */
+        /** If true, scrub structure/JS copies and metadata in post-sanitize (opt-in, default: false). */
         public Builder sanitizeStructure(boolean v) { this.sanitizeStructure = v; return this; }
+
+        /** Alias for {@link #sanitizeStructure(boolean)}. */
+        public Builder sanitize(boolean v) { this.sanitizeStructure = v; return this; }
+
+        /** If true, flatten annotations/form fields into the page content (opt-in, default: false). */
+        public Builder flatten(boolean v) { this.flatten = v; return this; }
 
 
 

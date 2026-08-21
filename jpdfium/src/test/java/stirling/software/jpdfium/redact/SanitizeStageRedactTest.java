@@ -101,6 +101,7 @@ class SanitizeStageRedactTest {
         byte[] redacted;
         String report;
         try (var doc = PdfDocument.open(pdf)) {
+            doc.setSanitizeOnSave(true);
             try (var page = doc.page(0)) {
                 int n = page.redactWordsEx(new String[]{"SECRET"}, 0xFF000000, 0f,
                         false, false, true, false);
@@ -183,6 +184,7 @@ class SanitizeStageRedactTest {
     void redactedSaveReportExposedViaSession() throws Exception {
         Path pdf = testPdf("redact-test-sanitize-remnants.pdf");
         try (var session = RedactionSession.open(pdf)) {
+            session.sanitizeOnSave(true);
             session.markWordsOnPage(0, new String[]{"SECRET"}, 0xFF000000,
                     0f, false, false, false);
             session.commitPage(0);
@@ -190,6 +192,22 @@ class SanitizeStageRedactTest {
             String report = session.sanitizeReport();
             assertTrue(report != null && !report.isEmpty(), "session sanitize report missing");
             assertTrue(report.contains("annots_removed"), "report missing fields: " + report);
+        }
+    }
+
+    @Test
+    void defaultRedactionPreservesStructureWithoutSanitizing() throws Exception {
+        Path pdf = testPdf("redact-test-sanitize-remnants.pdf");
+        try (var doc = PdfDocument.open(pdf)) {
+            try (var page = doc.page(0)) {
+                page.redactWordsEx(new String[]{"SECRET"}, 0xFF000000, 0f,
+                        false, false, true, false);
+            }
+            byte[] saved = doc.saveBytes();
+            assertEquals("", doc.sanitizeReport(), "sanitize report must be empty when sanitizeOnSave is not opted in");
+            // /Info metadata is preserved by default (no unwanted structure rewrite).
+            assertTrue(indexOf(saved, "/Info".getBytes(StandardCharsets.US_ASCII), 0) >= 0,
+                    "default save must preserve document metadata");
         }
     }
 }

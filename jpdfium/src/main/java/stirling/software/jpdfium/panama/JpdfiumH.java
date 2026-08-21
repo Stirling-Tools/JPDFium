@@ -811,6 +811,67 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_set_sanitize_on_save {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_set_sanitize_on_save");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_set_sanitize_on_save$descriptor() {
+        return jpdfium_doc_set_sanitize_on_save.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_set_sanitize_on_save$handle() {
+        return jpdfium_doc_set_sanitize_on_save.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_set_sanitize_on_save$address() {
+        return jpdfium_doc_set_sanitize_on_save.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable)
+     * }
+     */
+    public static int jpdfium_doc_set_sanitize_on_save(long doc, int enable) {
+        var mh$ = jpdfium_doc_set_sanitize_on_save.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_set_sanitize_on_save", doc, enable);
+            }
+            return (int)mh$.invokeExact(doc, enable);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_close {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             JpdfiumH.C_LONG
