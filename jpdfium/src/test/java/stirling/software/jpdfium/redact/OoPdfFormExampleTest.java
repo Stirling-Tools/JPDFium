@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.model.RenderResult;
 
@@ -10,6 +11,7 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+@EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class OoPdfFormExampleTest {
 
     @Test
