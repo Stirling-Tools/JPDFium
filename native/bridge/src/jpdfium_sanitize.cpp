@@ -482,10 +482,11 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
             if (visitedObjs.count(id)) continue;
             visitedObjs.insert(id);
             auto buf = streamData(xo);
+            QPDFObjectHandle xoDict = xo.isStream() ? xo.getDict() : xo;
             if (buf) {
                 // Form content resolves font names through the FORM's own
                 // resources when present, else the enclosing scope's.
-                QPDFObjectHandle formRes = xo.hasKey("/Resources") ? xo.getKey("/Resources") : res;
+                QPDFObjectHandle formRes = xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
                 auto scanBuf = [&](QPDFObjectHandle s) {
                     auto b = streamData(s);
                     if (b)
@@ -493,8 +494,8 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                                                       b->getSize()),
                                           globalScan);
                 };
-                if (xo.hasKey("/Contents")) {
-                    QPDFObjectHandle fc = xo.getKey("/Contents");
+                if (xoDict.hasKey("/Contents")) {
+                    QPDFObjectHandle fc = xoDict.getKey("/Contents");
                     if (fc.isArray()) {
                         for (int i = 0; i < fc.getArrayNItems(); i++) scanBuf(fc.getArrayItem(i));
                     } else if (fc.isStream()) {
@@ -504,8 +505,8 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                     // Form XObjects may omit /Subtype entirely (writers rely
                     // on the resource being invoked via Do). Only image
                     // streams are excluded from the content scan.
-                    bool isImage = xo.hasKey("/Subtype") && xo.getKey("/Subtype").isName() &&
-                                   xo.getKey("/Subtype").getName() == "/Image";
+                    bool isImage = xoDict.hasKey("/Subtype") && xoDict.getKey("/Subtype").isName() &&
+                                   xoDict.getKey("/Subtype").getName() == "/Image";
                     if (!isImage) scanBuf(xo);
                 }
                 scanResourceScope(formRes, globalScan, visitedObjs, depth + 1);
@@ -527,8 +528,9 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRe
             std::string id = xo.getObjGen().unparse();
             if (visited.count(id)) continue;
             visited.insert(id);
-            if (xo.hasKey("/Resources") && xo.getKey("/Resources").isDictionary()) {
-                QPDFObjectHandle formRes = xo.getKey("/Resources");
+            QPDFObjectHandle xoDict = xo.isStream() ? xo.getDict() : xo;
+            if (xoDict.hasKey("/Resources") && xoDict.getKey("/Resources").isDictionary()) {
+                QPDFObjectHandle formRes = xoDict.getKey("/Resources");
                 if (formRes.hasKey("/Font") && formRes.getKey("/Font").isDictionary()) {
                     if (!pageRes.hasKey("/Font")) {
                         pageRes.replaceKey("/Font", QPDFObjectHandle::newDictionary());
@@ -764,7 +766,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                         "[sanitize] font id=%s base=%s strings=%zu used=%zu cb=%d hasTU=%d\n",
                         id.c_str(), baseFont.c_str(), fontStringsByDict[id].size(),
                         usedCodes.size(), codeBytes, font.hasKey("/ToUnicode") ? 1 : 0);
-                for (int c : usedCodes) fprintf(stderr, "[sanitize]   code %04X\n", c);
+                for (int c : usedCodes) fprintf(stderr, "[sanitize]   code %04X (%c)\n", c, (c >= 32 && c <= 126) ? (char)c : '?');
             }
 
             // ToUnicode filtering: only when we have positive evidence of
@@ -851,9 +853,10 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                     if (!fileStream.isStream()) fileStream = followFontDescriptor(desc);
                 }
             }
-            if (!fileStream.isStream()) fileStream = followFontDescriptor(font);
+            bool isType0 = (font.hasKey("/Subtype") && font.getKey("/Subtype").isName() &&
+                            font.getKey("/Subtype").getName() == "/Type0");
             bool subsetted = false;
-            if (fileStream.isStream() && fullyAccounted) {
+            if (fileStream.isStream() && isType0 && fullyAccounted) {
                 auto fb = streamData(fileStream);
                 if (fb) {
                     std::vector<uint8_t> fontData(fb->getBuffer(), fb->getBuffer() + fb->getSize());
