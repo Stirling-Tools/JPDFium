@@ -47,27 +47,6 @@ public final class PdfMerge {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
 
-        int expectedPages = 0;
-        for (PdfDocument doc : documents) {
-            expectedPages += doc.pageCount();
-        }
-
-        if (PdfMerger.isSupported()) {
-            byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
-            if (mergedBytes != null) {
-                PdfDocument candidate = null;
-                try {
-                    candidate = PdfDocument.open(mergedBytes);
-                    if (candidate.pageCount() == expectedPages) {
-                        return candidate;
-                    }
-                    candidate.close();
-                } catch (Exception _) {
-                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
-                }
-            }
-        }
-
         List<Bookmark> mergedBookmarks = new ArrayList<>();
         int pageOffset = 0;
         for (PdfDocument sourceDoc : documents) {
@@ -76,6 +55,25 @@ public final class PdfMerge {
                 mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
             }
             pageOffset += sourceDoc.pageCount();
+        }
+
+        if (PdfMerger.isSupported()) {
+            byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
+            if (mergedBytes != null) {
+                if (!mergedBookmarks.isEmpty()) {
+                    mergedBytes = PdfBookmarkEditor.setBookmarks(mergedBytes, mergedBookmarks);
+                }
+                PdfDocument candidate = null;
+                try {
+                    candidate = PdfDocument.open(mergedBytes);
+                    if (candidate.pageCount() == pageOffset) {
+                        return candidate;
+                    }
+                    candidate.close();
+                } catch (Exception _) {
+                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                }
+            }
         }
 
         PdfDocument destinationDoc = reopenViaBytes(documents.getFirst());
