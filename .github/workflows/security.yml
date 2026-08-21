@@ -26,7 +26,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@d2bb5a81bf6132351ee9adcc0bba8261a8d34d48 # v5.7.0
+      - uses: actions/setup-java@1dbac3c9e137b6d4d280bae1ae4e9902bb4ce1b9 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'
