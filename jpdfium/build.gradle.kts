@@ -132,7 +132,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_init", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
-    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_close",
+    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
     "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
     "jpdfium_render_page", "jpdfium_free_buffer",
     "jpdfium_text_get_chars", "jpdfium_text_find", "jpdfium_free_string",
@@ -161,7 +161,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_annot_count_redacts", "jpdfium_annot_get_redacts_json",
     "jpdfium_annot_remove_redact", "jpdfium_annot_clear_redacts",
     "jpdfium_redact_commit", "jpdfium_doc_save_incremental",
-    "jpdfium_doc_sanitize_report", "jpdfium_doc_set_sanitize_on_save",
+    "jpdfium_doc_sanitize_report",
     // Raw handle extraction (for direct PDFium FFM bindings)
     "jpdfium_doc_raw_handle", "jpdfium_page_raw_handle", "jpdfium_page_doc_raw_handle",
     // PDF Repair Pipeline

@@ -1890,7 +1890,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             // trusted (fixed encoding); Strategy A is trusted (direct Unicode
             // encoding via PDFium font map); the tolerance is loose enough for
             // Tc/Tw spacing drift while still rejecting wholesale garbage.
-            if (!strategyAUsed && emissionStatus == -1 && !isStandard14Font(plan.font) && frag.hasExpectedBox) {
+            if (!strategyAUsed && emissionStatus == -1 && !isStandard14Font(plan.font) &&
+                frag.hasExpectedBox) {
                 float fl, fb, fr, ft;
                 if (!FPDFPageObj_GetBounds(fragObj, &fl, &fb, &fr, &ft)) {
                     FPDFPageObj_Destroy(fragObj);

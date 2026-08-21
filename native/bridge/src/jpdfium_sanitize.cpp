@@ -486,7 +486,8 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
             if (buf) {
                 // Form content resolves font names through the FORM's own
                 // resources when present, else the enclosing scope's.
-                QPDFObjectHandle formRes = xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
+                QPDFObjectHandle formRes =
+                    xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
                 auto scanBuf = [&](QPDFObjectHandle s) {
                     auto b = streamData(s);
                     if (b)
@@ -505,7 +506,8 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                     // Form XObjects may omit /Subtype entirely (writers rely
                     // on the resource being invoked via Do). Only image
                     // streams are excluded from the content scan.
-                    bool isImage = xoDict.hasKey("/Subtype") && xoDict.getKey("/Subtype").isName() &&
+                    bool isImage = xoDict.hasKey("/Subtype") &&
+                                   xoDict.getKey("/Subtype").isName() &&
                                    xoDict.getKey("/Subtype").getName() == "/Image";
                     if (!isImage) scanBuf(xo);
                 }
@@ -766,7 +768,9 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                         "[sanitize] font id=%s base=%s strings=%zu used=%zu cb=%d hasTU=%d\n",
                         id.c_str(), baseFont.c_str(), fontStringsByDict[id].size(),
                         usedCodes.size(), codeBytes, font.hasKey("/ToUnicode") ? 1 : 0);
-                for (int c : usedCodes) fprintf(stderr, "[sanitize]   code %04X (%c)\n", c, (c >= 32 && c <= 126) ? (char)c : '?');
+                for (int c : usedCodes)
+                    fprintf(stderr, "[sanitize]   code %04X (%c)\n", c,
+                            (c >= 32 && c <= 126) ? (char)c : '?');
             }
 
             // ToUnicode filtering: only when we have positive evidence of

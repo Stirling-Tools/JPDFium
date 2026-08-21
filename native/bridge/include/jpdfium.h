@@ -82,7 +82,8 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* 
 JPDFIUM_EXPORT int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save(int64_t doc, const char* path);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len);
-JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
+                                                        int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc);
 
 JPDFIUM_EXPORT int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle);

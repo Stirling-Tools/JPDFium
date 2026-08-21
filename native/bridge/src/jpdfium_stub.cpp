@@ -280,7 +280,8 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
         it->second.sanitizeReport =
             "{\"annots_removed\":1,\"fields_blanked\":0,\"outlines_blanked\":0,"
-            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":0}";
+            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":"
+            "0}";
     }
 
     if (!doc.path.empty()) {
@@ -317,7 +318,8 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
         it->second.sanitizeReport =
             "{\"annots_removed\":1,\"fields_blanked\":0,\"outlines_blanked\":0,"
-            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":0}";
+            "\"info_removed\":true,\"xmp_scrubbed\":true,\"tounicode_filtered\":0,\"fonts_subset\":"
+            "0}";
     }
 
     if (!doc.bytes.empty()) {
