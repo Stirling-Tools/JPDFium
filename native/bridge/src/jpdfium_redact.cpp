@@ -177,7 +177,20 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
         const icu::Normalizer2* n = icu::Normalizer2::getNFKCInstance(err);
         return U_FAILURE(err) ? nullptr : n;
     }();
-    if (!nfkc) return norm;  // fall back to identity below
+    if (!nfkc) {
+        norm.reserve(static_cast<size_t>(count) + 16);
+        normIdxMap.reserve(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            unsigned int uni = FPDFText_GetUnicode(textPage, i);
+            if (uni == 0) continue;
+            if (uni > 0x10FFFF || (uni >= 0xD800 && uni <= 0xDFFF)) {
+                uni = 0xFFFD;
+            }
+            norm += static_cast<char32_t>(uni);
+            normIdxMap.push_back(i);
+        }
+        return norm;
+    }
 
     norm.reserve(static_cast<size_t>(count) + 16);
     normIdxMap.reserve(static_cast<size_t>(count));

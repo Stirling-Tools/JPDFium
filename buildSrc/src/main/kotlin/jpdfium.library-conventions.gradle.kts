@@ -116,6 +116,7 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+    systemProperties(System.getProperties().mapKeys { it.key.toString() }.filterKeys { it.startsWith("jpdfium.") })
 }
 
 // JaCoCo coverage: emit the XML report CI consumes to enforce a coverage

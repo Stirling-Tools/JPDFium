@@ -333,12 +333,13 @@ public final class JpdfiumLib {
         long w = Math.max(1, Math.round(pw * scale));
         long h = Math.max(1, Math.round(ph * scale));
         long pixels = w * h;
-        if (pixels > MAX_RENDER_PIXELS) {
+        long maxPixels = Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+        if (maxPixels > 0 && pixels > maxPixels) {
             throw new JPDFiumException(String.format(
                     "refusing to render %dx%d pixels (page %.1fx%.1f pt at %d dpi) - "
                             + "exceeds jpdfium.maxRenderPixels=%d. Reduce the DPI or raise "
                             + "-Djpdfium.maxRenderPixels (0 disables the bound)",
-                    w, h, pw, ph, dpi, MAX_RENDER_PIXELS));
+                    w, h, pw, ph, dpi, maxPixels));
         }
     }
 
