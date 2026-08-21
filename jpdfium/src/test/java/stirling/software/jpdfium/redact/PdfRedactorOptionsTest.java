@@ -1,7 +1,6 @@
 package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
-import stirling.software.jpdfium.PdfDocument;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;

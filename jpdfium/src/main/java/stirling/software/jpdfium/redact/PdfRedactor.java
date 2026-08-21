@@ -2,7 +2,6 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.doc.PdfSanitizer;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.panama.FlashTextLib;
