@@ -866,6 +866,12 @@ int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) noexcept {
+    (void)doc;
+    (void)enable;
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* len) noexcept {
     auto it = g_docs.find(handle);
     if (it != g_docs.end()) {

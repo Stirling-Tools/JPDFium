@@ -50,6 +50,7 @@ struct RedactZone {
 struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
+    bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
 
     std::vector<std::string> redactedLiterals{};

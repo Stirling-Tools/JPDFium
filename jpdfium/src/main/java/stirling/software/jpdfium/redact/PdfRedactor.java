@@ -71,7 +71,6 @@ public final class PdfRedactor {
         boolean success = false;
         try {
             RedactResult result = redact(doc, options);
-            result = sanitizeResult(result, options);
             success = true;
             return result;
         } finally {
@@ -93,7 +92,6 @@ public final class PdfRedactor {
         boolean success = false;
         try {
             RedactResult result = redact(doc, options);
-            result = sanitizeResult(result, options);
             success = true;
             return result;
         } finally {
@@ -114,6 +112,7 @@ public final class PdfRedactor {
     public static RedactResult redact(PdfDocument doc, RedactOptions options) {
         long t0 = System.nanoTime();
         int totalPages = doc.pageCount();
+        doc.setSanitizeOnSave(options.sanitizeStructure());
 
         FontNormalizer.Result fontResult = null;
         if (options.normalizeFonts()) {
@@ -204,7 +203,9 @@ public final class PdfRedactor {
                     }
                 }
 
-                page.flatten();
+                if (options.flatten()) {
+                    page.flatten();
+                }
             }
 
             if (options.convertToImage()) {
@@ -226,31 +227,6 @@ public final class PdfRedactor {
         return new RedactResult(doc, pageResults, durationMs, options.incrementalSave(),
                 fontResult, allPatternMatches, allEntityMatches,
                 totalGlyphMatches, metadataRedacted, allSemanticTargets);
-    }
-
-    /**
-     * Second-stage scrub. After content-stream redaction, qpdf removes the
-     * structural copies it leaves behind (tagged structure tree, JS actions).
-     * Only runs when real content was removed.
-     */
-    private static RedactResult sanitizeResult(RedactResult result, RedactOptions options) {
-        if (!options.removeContent() || !options.sanitizeStructure()) {
-            return result;
-        }
-        int flags = PdfSanitizer.STRUCTURE | PdfSanitizer.JAVASCRIPT;
-        PdfDocument doc = result.document();
-        byte[] bytes = result.saveBytes();
-        doc.close();
-        byte[] cleaned = PdfSanitizer.sanitize(bytes, flags);
-        if (cleaned == null) {
-            cleaned = bytes; // sanitizer unavailable; keep redacted output
-        }
-        PdfDocument newDoc = PdfDocument.open(cleaned);
-        return new RedactResult(newDoc, result.pageResults(), result.durationMs(),
-                result.incrementalSave(), result.fontNormalization(),
-                result.patternMatches(), result.entityMatches(),
-                result.glyphRedactMatches(), result.metadataFieldsRedacted(),
-                result.semanticTargets());
     }
 
     private static FontNormalizer.Result runFontNormalization(

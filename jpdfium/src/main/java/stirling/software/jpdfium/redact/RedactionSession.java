@@ -346,6 +346,13 @@ public final class RedactionSession implements AutoCloseable {
         return document.sanitizeReport();
     }
 
+    /** Enable or disable the QPDF sanitize pass when saving a redacted document (default: false). */
+    public RedactionSession sanitizeOnSave(boolean enable) {
+        ensureOpen();
+        document.setSanitizeOnSave(enable);
+        return this;
+    }
+
     /** Full save to file. Document remains valid. */
     public void save(Path path) {
         ensureOpen();

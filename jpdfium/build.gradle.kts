@@ -161,7 +161,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_annot_count_redacts", "jpdfium_annot_get_redacts_json",
     "jpdfium_annot_remove_redact", "jpdfium_annot_clear_redacts",
     "jpdfium_redact_commit", "jpdfium_doc_save_incremental",
-    "jpdfium_doc_sanitize_report",
+    "jpdfium_doc_sanitize_report", "jpdfium_doc_set_sanitize_on_save",
     // Raw handle extraction (for direct PDFium FFM bindings)
     "jpdfium_doc_raw_handle", "jpdfium_page_raw_handle", "jpdfium_page_doc_raw_handle",
     // PDF Repair Pipeline
