@@ -134,7 +134,9 @@ meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
     ${MESON_CROSS_FLAGS[@]+"${MESON_CROSS_FLAGS[@]}"} \
     --prefix="$PREFIX" \
     --buildtype=release \
-    --default-library=shared \
+    --default-library=static \
+    -Db_staticpic=true \
+    -Dsubset=enabled \
     -Dglib=disabled \
     -Dgobject=disabled \
     -Dicu=disabled \
@@ -164,44 +166,35 @@ else
       || { echo "build-harfbuzz-no-glib.sh: ninja install failed; skipping" >&2; exit 0; }
 fi
 
-# Diagnostics - confirm no libglib in the new libharfbuzz.
+# Diagnostics - confirm static harfbuzz archives exist.
 if [ "$OS" = "linux" ]; then
-    NEW_HB=$(find "$PREFIX/lib" -maxdepth 2 -name "libharfbuzz.so.*" -type f 2>/dev/null | head -1)
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 2 -name "libharfbuzz.a" -type f 2>/dev/null | head -1)
     if [ -n "$NEW_HB" ]; then
         echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
-        echo "ldd:"
-        ldd "$NEW_HB" | sed 's/^/  /'
-        if ldd "$NEW_HB" | grep -q glib; then
-            echo "WARNING: new harfbuzz still links libglib - bindings flag wasn't honored?" >&2
-        else
-            echo "SUCCESS: libglib successfully stripped from libharfbuzz."
-        fi
+        echo "SUCCESS: static libharfbuzz built and installed."
     fi
 else
-    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.*.dylib" -type f 2>/dev/null | head -1)
+    NEW_HB=$(find "$PREFIX/lib" -maxdepth 1 -name "libharfbuzz.a" -type f 2>/dev/null | head -1)
     if [ -n "$NEW_HB" ]; then
         echo "Installed: $NEW_HB ($(du -h "$NEW_HB" | cut -f1))"
-        echo "otool -L:"
-        otool -L "$NEW_HB" | sed 's/^/  /'
-        if otool -L "$NEW_HB" | grep -q glib; then
-            echo "WARNING: new harfbuzz still links libglib - bindings flag wasn't honored?" >&2
-        else
-            echo "SUCCESS: libglib successfully stripped from libharfbuzz."
-        fi
+        echo "SUCCESS: static libharfbuzz built and installed."
     fi
 fi
 
-# Move the original harfbuzz aside so the bundler picks up our build.
-# Linux: apt's libs under /usr/lib/<triplet>/. macOS: brew's libs under
-# $(brew --prefix)/Cellar/harfbuzz/<version>/lib/ AND the brewed
-# canonical names under $(brew --prefix)/lib/. We just-installed over
-# the latter; only the Cellar copies remain and they aren't on the
-# pkg-config search path so they don't get picked up.
+# Move old shared harfbuzz aside so CMake / pkg-config links the static archives.
+# Linux: apt's libs under /usr/lib/<triplet>/ and any /usr/local/lib shared copies.
+# macOS: brew's shared dylibs under $(brew --prefix)/lib/ and Cellar.
 if [ "$OS" = "linux" ]; then
     for old in /usr/lib/x86_64-linux-gnu/libharfbuzz.so* \
                /usr/lib/x86_64-linux-gnu/libharfbuzz-subset.so* \
                /usr/lib/aarch64-linux-gnu/libharfbuzz.so* \
-               /usr/lib/aarch64-linux-gnu/libharfbuzz-subset.so*; do
+               /usr/lib/aarch64-linux-gnu/libharfbuzz-subset.so* \
+               /usr/local/lib/libharfbuzz.so* \
+               /usr/local/lib/libharfbuzz-subset.so* \
+               /usr/local/lib/x86_64-linux-gnu/libharfbuzz.so* \
+               /usr/local/lib/x86_64-linux-gnu/libharfbuzz-subset.so* \
+               /usr/local/lib/aarch64-linux-gnu/libharfbuzz.so* \
+               /usr/local/lib/aarch64-linux-gnu/libharfbuzz-subset.so*; do
         [ -e "$old" ] || continue
         sudo mv "$old" "${old}.disabled" 2>/dev/null || true
     done

@@ -83,14 +83,14 @@ public final class NativeLoader {
             // Multi-pass: deps have their own inter-dependencies and we don't
             // know the topological order at runtime. Keep retrying failed
             // loads until either all succeed or a pass makes no progress.
-            boolean isWindows =
-                    System.getProperty("os.name").toLowerCase().contains("win");
-            if (isWindows && !libs.isEmpty()) {
-                preloadWindowsDeps(tmpDir, libs, pdfiumName, bridgeName);
+            // Pre-load bundled dependencies in tmpDir before loading pdfium and bridge.
+            // On Windows this ensures LoadLibrary finds sibling DLLs; on Linux/macOS
+            // this ensures bundled copies are mapped into memory ahead of older system libraries.
+            if (!libs.isEmpty()) {
+                preloadDependencies(tmpDir, libs, pdfiumName, bridgeName);
             }
 
-            // Load pdfium (Linux/macOS: triggers RUNPATH resolution of its
-            // deps; Windows: deps already pre-loaded above).
+            // Load pdfium
             Path pdfiumPath = tmpDir.resolve(pdfiumName);
             if (Files.exists(pdfiumPath)) {
                 System.load(pdfiumPath.toAbsolutePath().toString());
@@ -136,19 +136,20 @@ public final class NativeLoader {
         }
     }
 
-    private static void preloadWindowsDeps(
+    private static void preloadDependencies(
             Path tmpDir, List<String> libs, String pdfiumName, String bridgeName) {
         List<String> remaining = new ArrayList<>();
         List<String> priority = new ArrayList<>();
         for (String lib : libs) {
             if (lib.equals(pdfiumName) || lib.equals(bridgeName)) continue;
-            if (isWindowsJvmHazardDll(lib)) continue;
+            if (isJvmHazardLib(lib)) continue;
             Path p = tmpDir.resolve(lib);
             if (Files.exists(p)) {
                 String l = lib.toLowerCase();
-                // Preload foundational runtimes first so dependent libraries resolve
-                // against the bundled copies in memory rather than incompatible PATH DLLs.
-                if (l.contains("libc++") || l.startsWith("vcruntime") || l.startsWith("msvcp") || l.startsWith("concrt")) {
+                // Preload foundational runtimes and core libraries first so dependent libraries resolve
+                // against the bundled copies in memory rather than incompatible host libraries.
+                if (l.contains("libc++") || l.startsWith("vcruntime") || l.startsWith("msvcp") || l.startsWith("concrt")
+                        || (l.contains("harfbuzz") && !l.contains("subset"))) {
                     priority.add(lib);
                 } else {
                     remaining.add(lib);
@@ -171,24 +172,14 @@ public final class NativeLoader {
             if (failed.size() == remaining.size()) {
                 // No progress this pass - remaining libs likely depend on
                 // something not in the manifest (e.g. a system DLL we can't
-                // help with). Let pdfium.dll's load surface the real error.
+                // help with). Let pdfium/bridge load surface the real error if any.
                 break;
             }
             remaining = failed;
         }
-        maxPasses--;
     }
 
-    /**
-     * DLLs that must never be {@link System#load}ed into the JVM. On Windows:
-     * 1. PartitionAlloc allocator shim / raw_ptr: allocator_shim's DllMain replaces
-     *    the process allocator, which hard-crashes the JVM. raw_ptr is orphaned on Windows.
-     *    (Note: allocator_base and allocator_core are required by pdfium.dll and are NOT hazards).
-     * 2. UCRT API set stubs (api-ms-win-*, ext-ms-*): system-provided forwarders and cannot be loaded directly.
-     * Note: VC Redist CRT DLLs (msvcp140*, vcruntime140*, concrt140*) and libc++.dll ARE pre-loaded
-     * so that dependent libraries (like allocator_base.dll and pdfium.dll) resolve against them in memory.
-     */
-    private static boolean isWindowsJvmHazardDll(String lib) {
+    private static boolean isJvmHazardLib(String lib) {
         String l = lib.toLowerCase();
         return l.contains("allocator_shim")
                 || l.contains("raw_ptr")
