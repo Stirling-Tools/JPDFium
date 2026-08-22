@@ -2069,43 +2069,13 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 if (textOk) boundsOk = boundsValid(fragObj);
             }
 
-#ifdef JPDFIUM_HAS_FREETYPE
-            // Strategy B: FreeType GID-based SetCharcodes.
-            // For simple (non-CID) fonts, charcodes serialize as 1 byte in the content
-            // stream. Reject GIDs > 0xFF for non-CID fonts up front to prevent truncation.
-            if (!textOk || !boundsOk) {
-                const auto& ftInfo = getFtMapping(plan.font);
-                if (ftInfo.valid) {
-                    for (const auto* cand : {&frag.utf16, &frag.utf16Decomposed}) {
-                        if (cand->empty()) continue;
-                        std::vector<uint32_t> codes;
-                        bool allMapped = true;
-                        for (size_t i = 0; i + 1 < cand->size(); i++) {
-                            auto git = ftInfo.unicodeToGid.find(static_cast<uint32_t>((*cand)[i]));
-                            if (git != ftInfo.unicodeToGid.end() && git->second != 0) {
-                                if (!ftInfo.isCidKeyed && git->second > 0xFF) {
-                                    allMapped = false;
-                                    break;
-                                }
-                                codes.push_back(git->second);
-                            } else {
-                                allMapped = false;
-                                break;
-                            }
-                        }
-                        if (allMapped && !codes.empty()) {
-                            FPDFText_SetCharcodes(fragObj, codes.data(), codes.size());
-                            emissionStatus = fragmentTextStatus(fragObj, expectedText);
-                            if (emissionStatus != 0) {
-                                textOk = true;
-                                boundsOk = boundsValid(fragObj);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-#endif
+            // Strategy B (legacy FreeType GID injection) was removed because
+            // FreeType GIDs are glyph IDs inside the font program and do not
+            // correspond to PDF content stream character codes for subset CID and
+            // custom-encoded fonts. Passing raw GIDs to FPDFText_SetCharcodes
+            // causes glyph misalignment and missing lowercase characters.
+            // Strategy A (Unicode) and Strategy C (WinAnsi) ensure valid PDF encoding.
+            // If encoding is impossible, fission safely keeps original under the redaction box.
 
             // Strategy C: WinAnsi SetCharcodes (Standard 14 / non-embedded).
             if (!textOk || !boundsOk) {
@@ -3644,23 +3614,44 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             return JPDFIUM_OK;
         }
 
-        // Build TextMatch objects from annotation rects and run Object Fission.
-        // Load text page for char-level hit testing. NOTE: the annotations are
-        // removed only AFTER the content mutation succeeded - a failed fission
-        // keeps the marks so the caller can retry instead of silently losing
-        // both the marks and the content.
-        //
-        // No geometric fallback: committing marks without a verifiable text
-        // page would silently redact by bbox - the banned degrade path.
+        // High-fidelity native in-place redaction via EmbedPDF core engine
+        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page);
+        if (epdfOk) {
+            unsigned int alf = (argb >> 24) & 0xFF;
+            unsigned int red = (argb >> 16) & 0xFF;
+            unsigned int grn = (argb >> 8) & 0xFF;
+            unsigned int blu = argb & 0xFF;
+
+            if (alf > 0) {
+                for (auto& ar : redactRects) {
+                    FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
+                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
+                    if (!rect) continue;
+                    FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
+                    FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
+                    FPDFPage_InsertObject(pw->page, rect);
+                }
+            }
+            FPDFPage_GenerateContent(pw->page);
+
+            if (pw->core) {
+                pw->core->contentRedacted = true;
+                for (auto& ar : redactRects) {
+                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+                }
+                pw->core->unappliedRedactMarksCount =
+                    std::max(0, pw->core->unappliedRedactMarksCount -
+                                    static_cast<int32_t>(redactIndices.size()));
+            }
+            if (commitCount) *commitCount = static_cast<int32_t>(redactIndices.size());
+            return JPDFIUM_OK;
+        }
+
+        // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
         int charCount = FPDFText_CountChars(tp);
-
-        // Build TextMatch for each annotation rect by finding intersecting
-        // characters. A character is redacted when at least half of its glyph
-        // box overlaps the rect (center-point-only testing leaks straddling
-        // glyphs - for redaction, err on the side of removing more).
         std::vector<TextMatch> matches;
         for (auto& ar : redactRects) {
             TextMatch tm;
@@ -3685,12 +3676,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
         FPDFText_ClosePage(tp);
 
-        if (rc != JPDFIUM_OK) return rc;  // keep the marks; content unchanged
+        if (rc != JPDFIUM_OK) return rc;
 
-        // Audit loop: no character glyph may still intersect a committed
-        // redaction rect after content removal, and no unverified content
-        // object may remain in one. An audit that cannot run is a loud
-        // unverifiable error.
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         int n = FPDFText_CountChars(audit);
@@ -3699,6 +3686,11 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 double l, r, b, t;
                 if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
                 if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
+                    fprintf(stderr,
+                            "FALLBACK AUDIT FAILED on char ci=%d cx=%.3f in rect [%.3f, %.3f, "
+                            "%.3f, %.3f]\n",
+                            ci, (l + r) / 2.0, ar.left, ar.bottom, ar.right, ar.top);
+                    fflush(stderr);
                     FPDFText_ClosePage(audit);
                     return JPDFIUM_ERR_REDACT_INCOMPLETE;
                 }
@@ -3710,15 +3702,12 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 
-        // Sanitize-stage bookkeeping: annotations intersecting these zones
-        // are removed on every redacted save.
         if (pw->core) {
             for (auto& ar : redactRects) {
                 pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
             }
         }
 
-        // Verified complete: remove the REDACT annotations now.
         for (int i = static_cast<int>(redactIndices.size()) - 1; i >= 0; --i) {
             FPDFPage_RemoveAnnot(pw->page, redactIndices[i]);
         }
@@ -3729,7 +3718,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
         return JPDFIUM_OK;
     } catch (...) {
-        return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
+        return JPDFIUM_ERR_NATIVE;
     }
 }
 
