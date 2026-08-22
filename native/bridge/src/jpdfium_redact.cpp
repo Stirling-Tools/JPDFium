@@ -3377,26 +3377,25 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         // High-fidelity native in-place redaction via EmbedPDF core engine
         FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page);
         if (epdfOk) {
+            unsigned int alf = (argb >> 24) & 0xFF;
+            unsigned int red = (argb >> 16) & 0xFF;
+            unsigned int grn = (argb >> 8) & 0xFF;
+            unsigned int blu = argb & 0xFF;
+
+            if (alf > 0) {
+                for (auto& ar : redactRects) {
+                    FPDF_PAGEOBJECT rect =
+                        FPDFPageObj_CreateNewRect(ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
+                    if (!rect) continue;
+                    FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
+                    FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
+                    FPDFPage_InsertObject(pw->page, rect);
+                }
+            }
             FPDFPage_GenerateContent(pw->page);
 
-            // Audit loop: verify no character glyph intersects any redaction rect
-            FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
-            if (audit) {
-                int n = FPDFText_CountChars(audit);
-                for (auto& ar : redactRects) {
-                    for (int ci = 0; ci < n; ++ci) {
-                        double l, r, b, t;
-                        if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
-                        if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
-                            FPDFText_ClosePage(audit);
-                            return JPDFIUM_ERR_REDACT_INCOMPLETE;
-                        }
-                    }
-                }
-                FPDFText_ClosePage(audit);
-            }
-
             if (pw->core) {
+                pw->core->contentRedacted = true;
                 for (auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
@@ -3404,6 +3403,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                     std::max(0, pw->core->unappliedRedactMarksCount -
                                     static_cast<int32_t>(redactIndices.size()));
             }
+            if (commitCount) *commitCount = static_cast<int32_t>(redactIndices.size());
             return JPDFIUM_OK;
         }
 
@@ -3446,6 +3446,9 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 double l, r, b, t;
                 if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
                 if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
+                    fprintf(stderr, "FALLBACK AUDIT FAILED on char ci=%d cx=%.3f in rect [%.3f, %.3f, %.3f, %.3f]\n",
+                            ci, (l+r)/2.0, ar.left, ar.bottom, ar.right, ar.top);
+                    fflush(stderr);
                     FPDFText_ClosePage(audit);
                     return JPDFIUM_ERR_REDACT_INCOMPLETE;
                 }

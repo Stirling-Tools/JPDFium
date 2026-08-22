@@ -14,9 +14,11 @@ fi
 echo "Building Rust dependencies..."
 bash "${SCRIPT_DIR}/build-rust.sh"
 
+BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build-real}"
+
 echo "Building libjpdfium..."
 CMAKE_ARGS=(
-    -B "${SCRIPT_DIR}/build-real"
+    -B "${BUILD_DIR}"
     -S "${SCRIPT_DIR}"
     -DJPDFIUM_USE_PDFIUM=ON
     -DPDFIUM_DIR="${PDFIUM_DIR}"
@@ -37,7 +39,7 @@ if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
 fi
 
 cmake "${CMAKE_ARGS[@]}"
-cmake --build "${SCRIPT_DIR}/build-real" --parallel --config Release
+cmake --build "${BUILD_DIR}" --parallel --config Release
 
 # Copy built library to native/dist/<platform> so Gradle stageNatives stays in sync
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -49,7 +51,7 @@ elif [ "$OS" = "linux" ]; then
     if [ "$ARCH" = "aarch64" ]; then PLATFORM="linux-arm64"; else PLATFORM="linux-x64"; fi
 fi
 mkdir -p "${SCRIPT_DIR}/dist/${PLATFORM}"
-find "${SCRIPT_DIR}/build-real" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
 
 echo ""
 echo "Built: $(find "${SCRIPT_DIR}/build-real" -name 'libjpdfium.*' -type f)"
