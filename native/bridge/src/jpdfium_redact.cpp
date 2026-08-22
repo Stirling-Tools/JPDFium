@@ -3384,8 +3384,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             if (alf > 0) {
                 for (auto& ar : redactRects) {
-                    FPDF_PAGEOBJECT rect =
-                        FPDFPageObj_CreateNewRect(ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
+                    FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
+                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
                     if (!rect) continue;
                     FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
                     FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
@@ -3446,8 +3446,10 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 double l, r, b, t;
                 if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
                 if (charInRect(l, b, r, t, ar.left, ar.bottom, ar.right, ar.top)) {
-                    fprintf(stderr, "FALLBACK AUDIT FAILED on char ci=%d cx=%.3f in rect [%.3f, %.3f, %.3f, %.3f]\n",
-                            ci, (l+r)/2.0, ar.left, ar.bottom, ar.right, ar.top);
+                    fprintf(stderr,
+                            "FALLBACK AUDIT FAILED on char ci=%d cx=%.3f in rect [%.3f, %.3f, "
+                            "%.3f, %.3f]\n",
+                            ci, (l + r) / 2.0, ar.left, ar.bottom, ar.right, ar.top);
                     fflush(stderr);
                     FPDFText_ClosePage(audit);
                     return JPDFIUM_ERR_REDACT_INCOMPLETE;
