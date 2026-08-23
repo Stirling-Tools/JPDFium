@@ -25,7 +25,6 @@
 #include <pugixml.hpp>
 #endif
 #ifdef JPDFIUM_HAS_HARFBUZZ
-#include <hb-subset.h>
 #include <hb.h>
 #endif
 
@@ -321,63 +320,6 @@ std::string rebuildCmap(const std::vector<CmapEntry>& entries, const std::set<in
     os << "endbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
     return os.str();
 }
-
-// ---- hb-subset font program erasure ----
-
-#ifdef JPDFIUM_HAS_HARFBUZZ
-bool subsetFontWithUnicodes(const std::vector<uint8_t>& fontData,
-                            const std::set<uint32_t>& unicodes, std::vector<uint8_t>& out) {
-    hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(fontData.data()),
-                                     static_cast<unsigned>(fontData.size()),
-                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
-    if (!blob) return false;
-    hb_face_t* face = hb_face_create(blob, 0);
-    if (!face) {
-        hb_blob_destroy(blob);
-        return false;
-    }
-    hb_set_t* uniSet = hb_set_create();
-    for (uint32_t u : unicodes) hb_set_add(uniSet, u);
-
-    hb_subset_input_t* input = hb_subset_input_create_or_fail();
-    if (!input) {
-        hb_set_destroy(uniSet);
-        hb_face_destroy(face);
-        hb_blob_destroy(blob);
-        return false;
-    }
-    // hb_subset_input_set RETURNS the set to populate; unicodes go there.
-    hb_set_t* inSet = hb_subset_input_set(input, HB_SUBSET_SETS_UNICODE);
-    hb_set_union(inSet, uniSet);
-    hb_subset_input_set_flags(input, HB_SUBSET_FLAGS_RETAIN_GIDS | HB_SUBSET_FLAGS_NOTDEF_OUTLINE |
-                                         HB_SUBSET_FLAGS_PASSTHROUGH_UNRECOGNIZED);
-    // RETAIN_GIDS keeps glyph indices stable; dropped glyphs lose their
-    // outlines and render .notdef. (RETAIN_NUM_GLYPHS would keep the glyph
-    // count but is HB_EXPERIMENTAL_API-only - the vendored build does not
-    // enable experimental APIs.)
-
-    bool ok = false;
-    hb_face_t* sub = hb_subset_or_fail(face, input);
-    if (sub) {
-        hb_blob_t* outBlob = hb_face_reference_blob(sub);
-        if (outBlob) {
-            unsigned len = 0;
-            const char* d = hb_blob_get_data(outBlob, &len);
-            if (d && len > 0) {
-                out.assign(d, d + len);
-                ok = true;
-            }
-            hb_blob_destroy(outBlob);
-        }
-        hb_face_destroy(sub);
-    }
-    hb_subset_input_destroy(input);
-    hb_set_destroy(uniSet);
-    hb_face_destroy(face);
-    hb_blob_destroy(blob);
-    return ok;
-}
-#endif
 
 void blankStringValue(QPDFObjectHandle obj, const std::string& key,
                       const std::vector<std::string>& lits, int& counter) {
@@ -789,97 +731,12 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                 }
             }
 
-            // Font program erasure for redaction-touched fonts.
-            bool touched = false;
-            for (const auto& t : core.touchedFontNames) {
-                if (!t.empty() && baseFont.find(t) != std::string::npos) {
-                    touched = true;
-                    break;
-                }
-            }
-            if (!touched) continue;
-
-#ifdef JPDFIUM_HAS_HARFBUZZ
-            // Surviving unicodes: (a) used codes mapped through the font's
-            // ToUnicode, plus (b) ASCII codes that appear in the content as
-            // plain bytes (fission re-emits text with identity codes when
-            // the font has no usable mapping - those decode as their own
-            // ASCII values). When a used code is neither mapped nor ASCII
-            // (e.g. a WinAnsi high byte), the survival set cannot be
-            // determined reliably and the font is NOT subset (skipped and
-            // reported - erasing to a wrong set would corrupt survivors).
-            std::set<uint32_t> survivingUnicodes;
-            bool fullyAccounted = true;
-            std::set<int> accounted;
-            for (const auto& e : cmapEntries) {
-                if (!usedCodes.count(e.code)) continue;
-                uint32_t u = 0;
-                for (unsigned char c : e.utf16be) u = (u << 8) | c;
-                if (u > 0 && u != 0xFFFF) {
-                    survivingUnicodes.insert(u);
-                    accounted.insert(e.code);
-                }
-            }
-            for (int c : usedCodes) {
-                if (accounted.count(c)) continue;
-                if (c >= 0x20 && c <= 0x7E) {
-                    survivingUnicodes.insert(static_cast<uint32_t>(c));
-                    accounted.insert(c);
-                } else {
-                    fullyAccounted = false;
-                }
-            }
-            const char* fontFileKeys[] = {"/FontFile", "/FontFile2", "/FontFile3"};
-            QPDFObjectHandle fileStream = QPDFObjectHandle::newNull();
-            auto findFile = [&](QPDFObjectHandle dict) -> QPDFObjectHandle {
-                for (const char* k : fontFileKeys) {
-                    if (dict.hasKey(k)) return dict.getKey(k);
-                }
-                return QPDFObjectHandle::newNull();
-            };
-            // FontFile(2/3) lives either directly on the font dict, on the
-            // DESCENDANT CIDFont of a Type0 font, or inside the
-            // /FontDescriptor referenced from either.
-            auto followFontDescriptor = [&](QPDFObjectHandle dict) -> QPDFObjectHandle {
-                if (dict.isDictionary() && dict.hasKey("/FontDescriptor") &&
-                    dict.getKey("/FontDescriptor").isDictionary()) {
-                    return findFile(dict.getKey("/FontDescriptor"));
-                }
-                return QPDFObjectHandle::newNull();
-            };
-            fileStream = findFile(font);
-            if (!fileStream.isStream() && font.hasKey("/DescendantFonts") &&
-                font.getKey("/DescendantFonts").isArray() &&
-                font.getKey("/DescendantFonts").getArrayNItems() > 0) {
-                QPDFObjectHandle desc = font.getKey("/DescendantFonts").getArrayItem(0);
-                if (desc.isDictionary()) {
-                    fileStream = findFile(desc);
-                    if (!fileStream.isStream()) fileStream = followFontDescriptor(desc);
-                }
-            }
-            bool isType0 = (font.hasKey("/Subtype") && font.getKey("/Subtype").isName() &&
-                            font.getKey("/Subtype").getName() == "/Type0");
-            bool subsetted = false;
-            if (fileStream.isStream() && isType0 && fullyAccounted) {
-                auto fb = streamData(fileStream);
-                if (fb) {
-                    std::vector<uint8_t> fontData(fb->getBuffer(), fb->getBuffer() + fb->getSize());
-                    std::vector<uint8_t> sub;
-                    if (subsetFontWithUnicodes(fontData, survivingUnicodes, sub)) {
-                        auto newBuf = std::make_shared<Buffer>(sub.size());
-                        memcpy(newBuf->getBuffer(), sub.data(), sub.size());
-                        fileStream.replaceStreamData(newBuf, QPDFObjectHandle::newNull(),
-                                                     QPDFObjectHandle::newNull());
-                        st.fontsSubset++;
-                        subsetted = true;
-                    }
-                }
-            }
-            if (!subsetted) st.fontsSubsetSkipped++;
-#else
-            (void)baseFont;
+            // Font program erasure: In-place TrueType/CIDFont stream rewriting
+            // via hb-subset is unsafe on arbitrary embedded PDF fonts because PDF
+            // text operators address glyphs via CIDs / character codes that do not
+            // match TrueType Unicode cmaps and can span across multiple page trees.
+            // Redacted text content is already removed from the content streams.
             st.fontsSubsetSkipped++;
-#endif
         }
 
         // 1. Dead-object purge + full rewrite.
