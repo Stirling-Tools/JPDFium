@@ -2,7 +2,7 @@
 junit = "6.1.3"
 pdfbox = "3.0.8"
 twelvemonkeys = "3.14.0"
-graalvm-buildtools = "1.1.9"
+graalvm-buildtools = "1.1.10"
 reachability-metadata = "1.1.9"
 jmh = "1.37"
 jmh-plugin = "0.7.3"
