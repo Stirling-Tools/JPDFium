@@ -116,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@1dbac3c9e137b6d4d280bae1ae4e9902bb4ce1b9 # v5.7.0
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
         # The musl legs build + smoke inside an Alpine container which ships its
         # own musl JDK - a glibc host JDK is neither needed nor usable there.
         if: matrix.libc != 'musl'
@@ -489,7 +489,7 @@ jobs:
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
 
       - name: Download staged natives for ${{ matrix.platform }}
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
@@ -532,13 +532,13 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@1dbac3c9e137b6d4d280bae1ae4e9902bb4ce1b9 # v5.7.0
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+        uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
 
       - name: Install jextract
         # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java

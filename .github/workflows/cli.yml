@@ -36,7 +36,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
 
-      - uses: gradle/actions/setup-gradle@889dc537cf3672c0c060560c9ead940a2b8b7077 # v6.3.0
+      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
 
       - name: Install build deps (Linux)
         run: |
