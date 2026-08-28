@@ -214,7 +214,9 @@ jobs:
               'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
           arch -x86_64 /usr/local/bin/brew install \
-            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
+            pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
+          # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
+          arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
           {
             echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
