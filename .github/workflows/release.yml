@@ -735,3 +735,151 @@ jobs:
           else
             echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> $GITHUB_STEP_SUMMARY
           fi
+
+
+  # ── Post-Release Verification: Pull from Central and execute full smoke ──
+  validate-maven-central:
+    name: Verify Maven Central (${{ matrix.platform }})
+    needs: publish
+    if: inputs.autoRelease == true || startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            VERSION="${REF#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Maven Central availability & execute standalone validation
+        shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -e
+          echo "Verifying JPDFium $VERSION ($PLATFORM) from Maven Central..."
+          
+          # Poll Maven Central with backoff up to 25 minutes
+          CENTRAL_URL="https://repo1.maven.org/maven2/com/stirling/jpdfium-natives-vips-${PLATFORM}/${VERSION}/jpdfium-natives-vips-${PLATFORM}-${VERSION}.jar"
+          echo "Polling $CENTRAL_URL..."
+          
+          MAX_ATTEMPTS=50
+          ATTEMPT=0
+          FOUND=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$CENTRAL_URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Found published artifact on Maven Central (attempt $ATTEMPT)!"
+              FOUND=1
+              break
+            fi
+            echo "Attempt $ATTEMPT: artifact not yet visible (HTTP $STATUS), waiting 30s..."
+            sleep 30
+          done
+
+          if [ $FOUND -ne 1 ]; then
+            echo "ERROR: Artifact $CENTRAL_URL did not become available on Maven Central within timeout."
+            exit 1
+          fi
+
+          # Create a standalone Gradle validation project that pulls solely from Maven Central
+          WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'jpdfium-verify')
+          cd "$WORK_DIR"
+
+          cat << 'BUILD' > settings.gradle.kts
+          rootProject.name = "jpdfium-central-verifier"
+BUILD
+
+          cat << BUILD > build.gradle.kts
+          plugins {
+              `java-application`
+          }
+
+          repositories {
+              mavenCentral()
+          }
+
+          dependencies {
+              implementation("com.stirling:jpdfium:${VERSION}")
+              implementation("com.stirling:jpdfium-vips:${VERSION}")
+              runtimeOnly("com.stirling:jpdfium-natives-${PLATFORM}:${VERSION}")
+              runtimeOnly("com.stirling:jpdfium-natives-vips-${PLATFORM}:${VERSION}")
+          }
+
+          application {
+              mainClass.set("VerifyCentral")
+          }
+BUILD
+
+          mkdir -p src/main/java
+          cat << 'JAVA' > src/main/java/VerifyCentral.java
+          import java.io.*;
+          import java.nio.file.*;
+          import java.util.*;
+          import stirling.software.jpdfium.*;
+          import stirling.software.jpdfium.vips.*;
+
+          public class VerifyCentral {
+              public static void main(String[] args) throws Exception {
+                  System.out.println("=== Verifying Central Published JPDFium + Libvips Natives ===");
+                  
+                  // 1. Initialize natives
+                  VipsNatives.configure();
+                  NativeLoader.ensureLoaded();
+
+                  // 2. Probe libvips availability and all format savers
+                  VipsAvailability.State state = VipsAvailability.probe();
+                  System.out.println("Libvips available: " + state.available());
+                  System.out.println("Platform: " + state.platform());
+                  System.out.println("Version: " + state.version());
+                  System.out.println("Savers: PNG=" + state.pngsave() + ", JPEG=" + state.jpegsave() + ", WEBP=" + state.webpsave()
+                          + ", TIFF=" + state.tiffsave() + ", HEIF=" + state.heifsave() + ", JXL=" + state.jxlsave());
+
+                  if (!state.available()) {
+                      throw new IllegalStateException("Libvips not available: " + VipsAvailability.installMessage(state));
+                  }
+                  if (!state.pngsave() || !state.jpegsave() || !state.webpsave() || !state.tiffsave()) {
+                      throw new IllegalStateException("Essential savers missing from bundled libvips!");
+                  }
+
+                  // 3. Create a blank PDF via PdfDocument, render page to PNG, JPEG, WEBP, TIFF, HEIF, JXL
+                  try (PdfDocument doc = PdfDocument.blank(612, 792)) {
+                      System.out.println("Testing PDF page conversion to multiple image formats...");
+                      for (VipsFormat format : VipsFormat.values()) {
+                          byte[] img = VipsImageConverter.pageToBytes(doc, 0, 150, format);
+                          if (img == null || img.length < 32) {
+                              throw new IllegalStateException("Failed to encode page to " + format);
+                          }
+                          System.out.println("  [PASS] " + format + " (bytes: " + img.length + ")");
+                      }
+                  }
+
+                  System.out.println("=== Maven Central JPDFium verification successful! ===");
+              }
+          }
+JAVA
+
+          # Run the standalone verification using gradle
+          gradle run --no-daemon --jvm-args="--enable-native-access=ALL-UNNAMED"
+

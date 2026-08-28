@@ -29,15 +29,6 @@ dependencies {
     testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testVipsNatives"))
 }
 
-tasks.withType<Test> {
-    if (org.gradle.internal.os.OperatingSystem.current().isMacOsX &&
-        file("/opt/homebrew/lib/libvips.42.dylib").exists()) {
-        jvmArgs("-Dvipsffm.libpath.vips.override=/opt/homebrew/lib/libvips.42.dylib")
-        jvmArgs("-Dvipsffm.libpath.glib.override=/opt/homebrew/lib/libglib-2.0.dylib")
-        jvmArgs("-Dvipsffm.libpath.gobject.override=/opt/homebrew/lib/libgobject-2.0.dylib")
-    }
-}
-
 // Run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=<platform> -Pjpdfium.testVipsNatives=vips-<platform>
 // Functional smoke of the bundled vips natives: renders a real PDF through the
 // production NativeLoader path and encodes it to every major format (HEIF,
@@ -56,6 +47,7 @@ tasks.register<Test>("vipsSmokeTest") {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = "2g"
     testLogging {
+        events("passed", "skipped", "failed", "standardOut", "standardError")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         showStackTraces = true
         showCauses = true
