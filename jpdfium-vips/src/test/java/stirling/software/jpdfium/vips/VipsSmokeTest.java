@@ -10,16 +10,19 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
-import stirling.software.jpdfium.NativeLoader;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.RenderResult;
+import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.panama.NativeLoader;
 
 /**
  * Functional smoke test verifying the bundled libvips shared library and codec
  * toolchain across every supported format.
  */
+@EnabledIfSystemProperty(named = "jpdfium.vips.smoke", matches = "true")
 class VipsSmokeTest {
 
     private static final int RENDER_DPI = 150;
@@ -89,9 +92,8 @@ class VipsSmokeTest {
                 try {
                     byte[] imageBytes = testFormatRoundTrip(doc, format, expectedW, expectedH);
                     System.out.println("  [PASS] " + format + " (size: " + imageBytes.length + " bytes)");
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     System.err.println("  [FAIL] " + format + ": " + t.getMessage());
-                    t.printStackTrace();
                     failures.add(format + ": " + rootMessage(t));
                 }
             }

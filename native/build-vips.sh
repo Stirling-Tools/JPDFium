@@ -69,6 +69,12 @@ if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
 else
     cp -v "$VIPS_LOC" "$DIST/"
+    # If libvips has dynamic modules (e.g. Homebrew vips-modules-*/vips-heif.dylib, vips-jxl.dylib),
+    # copy them directly into DIST so their symbols & codecs are bundled and resolved alongside libvips
+    VIPS_LIB_DIR="$(dirname "$VIPS_LOC")"
+    find "$VIPS_LIB_DIR"/vips-modules* -name "*.dylib" -o -name "*.so" 2>/dev/null | while read -r mod; do
+        [ -f "$mod" ] && cp -v "$mod" "$DIST/"
+    done || true
 fi
 
 export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
