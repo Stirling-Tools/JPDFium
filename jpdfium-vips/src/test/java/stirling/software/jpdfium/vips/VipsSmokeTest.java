@@ -1,14 +1,7 @@
 package stirling.software.jpdfium.vips;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.internal.JpdfiumLib;
-import stirling.software.jpdfium.internal.RenderedPageView;
-import stirling.software.jpdfium.model.ImageToPdfOptions;
-import stirling.software.jpdfium.model.PageSize;
-import stirling.software.jpdfium.panama.NativeLoader;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -16,32 +9,17 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.NativeLoader;
+import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.RenderResult;
+import stirling.software.jpdfium.model.PageSize;
 
 /**
- * End-to-end functional smoke test for the bundled libvips natives.
- *
- * <p>Verifies:
- * <ol>
- *   <li><b>Bundled Natives Discovery & Extraction:</b> {@link VipsNatives#configure()}
- *       finds the bundled libvips JAR on the classpath, unpacks it into a temp directory,
- *       and successfully loads libvips, glib, gobject via FFM bindings without requiring
- *       host package manager binaries.</li>
- *   <li><b>Full Codec Capabilities:</b> Probes all required savers and loaders
- *       (PNG, JPEG, WebP, TIFF, HEIF/HEIC, AVIF, JXL). Fails if any saver is missing.</li>
- *   <li><b>PDF → Image Conversion:</b> Renders a PDF page to every image format,
- *       verifies magic header bytes, and verifies the image payload size is plausible.</li>
- *   <li><b>Image Decoding:</b> Decodes the produced image bytes back to raw RGBA via
- *       {@link VipsDecoder#decodeToRgba(byte[])} and confirms the decoded pixel dimensions
- *       match the original page within tolerance.</li>
- *   <li><b>Image → PDF Conversion:</b> Embeds the encoded image bytes back into a PDF
- *       using {@link VipsImageToPdf} and verifies the newly generated PDF opens, contains the
- *       correct page count, and has page dimensions matching the image aspect ratio.</li>
- * </ol>
+ * Functional smoke test verifying the bundled libvips shared library and codec
+ * toolchain across every supported format.
  */
-@EnabledIfSystemProperty(named = "jpdfium.vips.smoke", matches = "true")
 class VipsSmokeTest {
 
     private static final int RENDER_DPI = 150;
@@ -96,10 +74,10 @@ class VipsSmokeTest {
         int expectedH;
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             assertTrue(doc.pageCount() >= 1, "PDF document must report >= 1 page");
-            try (PdfPage page = doc.page(0);
-                 RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), RENDER_DPI)) {
-                expectedW = view.width();
-                expectedH = view.height();
+            try (PdfPage page = doc.page(0)) {
+                RenderResult render = page.renderAt(RENDER_DPI);
+                expectedW = render.width();
+                expectedH = render.height();
             }
 
             System.out.println("Source PDF page 0 rendered dimensions: " + expectedW + "x" + expectedH + " at " + RENDER_DPI + " DPI");
