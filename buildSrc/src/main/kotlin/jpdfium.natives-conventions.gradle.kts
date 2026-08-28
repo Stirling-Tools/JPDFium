@@ -30,28 +30,25 @@ val platform: String = project.name.removePrefix("jpdfium-natives-")
 val distDir = rootProject.layout.projectDirectory.dir("native/dist/$platform")
 val stagedRoot = layout.buildDirectory.dir("staged-natives")           // added as resources srcDir
 val stagedPlatformDir = stagedRoot.map { it.dir("natives/$platform") } // real files land here
+val stagedLicensesDir = stagedRoot.map { it.dir("licenses") }
+val licensesDir = rootProject.layout.projectDirectory.dir("native/licenses")
 
 val stageNatives = tasks.register<Copy>("stageNatives") {
-    description = "Copy pre-built native libraries from native/dist/$platform/ into the jar resource tree"
+    description = "Copy pre-built native libraries and license notices into the jar resource tree"
     group = "build"
     from(distDir) {
-        // Match every shared library shape we ship: the bridge, PDFium itself,
-        // every PDFium component lib (e.g. libchrome_zlib.so - no version
-        // suffix), every bundled third-party dependency (versioned like
-        // libicuuc.so.74 on Linux, base name on macOS), every Windows DLL.
-        // Earlier this list was narrower and silently dropped Linux PDFium
-        // component libs because their basename matched lib*.so but not
-        // *.so.* (no version) - the consumer-side System.load on libpdfium.so
-        // then failed with "libthird_party_abseil-cpp_absl.so: cannot open
-        // shared object file".
         include(
             "*.so",        // Linux: lib*.so (incl. PDFium components, bridge)
             "*.so.*",      // Linux: versioned bundled deps (libicuuc.so.74 etc.)
             "*.dylib",     // macOS: lib*.dylib
             "*.dll"        // Windows: *.dll (incl. vcpkg runtime DLLs)
         )
+        into("natives/$platform")
     }
-    into(stagedPlatformDir)
+    from(licensesDir) {
+        into("licenses")
+    }
+    into(stagedRoot)
     // Don't fail the build when the dist dir is absent (local dev, stub builds, etc.).
     // CI is responsible for populating it before `publish`.
     onlyIf { distDir.asFile.isDirectory && distDir.asFile.listFiles()?.isNotEmpty() == true }
@@ -76,17 +73,9 @@ val writeNativeManifest = tasks.register("writeNativeManifest") {
 }
 
 sourceSets.named("main") {
-    // stagedRoot contains natives/<platform>/..., so jar entries become natives/<platform>/<file>.
-    // Listed FIRST deliberately: the CMake build also drops the bridge + a partial
-    // native-libs.txt into src/main/resources, and with duplicatesStrategy EXCLUDE
-    // the complete staged set (full dependency manifest) must win that collision -
-    // a partial manifest skips dependency preloading and breaks Windows loading.
     resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
 }
 
-// Gradle 9 sees the staged natives twice (srcDir scan + stageNatives task
-// outputs) and hard-fails processResources/jar on the duplicate entries.
-// They are the same physical files - keep the first occurrence.
 tasks.withType<AbstractCopyTask>().configureEach {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
@@ -95,8 +84,6 @@ tasks.named("processResources") {
     dependsOn(writeNativeManifest)
 }
 
-// sourcesJar / javadocJar also walk the resources srcDirs, so they need an
-// explicit dep on the manifest-generating task to keep Gradle's task-validator happy.
 tasks.named("sourcesJar") {
     dependsOn(writeNativeManifest)
 }

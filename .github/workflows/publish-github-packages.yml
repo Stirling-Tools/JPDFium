@@ -155,7 +155,9 @@ jobs:
               'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
           arch -x86_64 /usr/local/bin/brew install \
-            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
+            pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
+          # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
+          arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
           # Use the host (arm64) cmake/ninja - they emit x64 builds when
           # CMAKE_OSX_ARCHITECTURES=x86_64 is set. Pkg-config from x86_64
           # brew points at x86_64 deps.

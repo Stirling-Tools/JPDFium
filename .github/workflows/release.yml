@@ -171,7 +171,9 @@ jobs:
               'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
           fi
           arch -x86_64 /usr/local/bin/brew install \
-            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak pkg-config
+            pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
+          # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
+          arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
           {
             echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
@@ -525,9 +527,106 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # ── Fan out: build and bundle libvips natives on each platform ─────────────
+  build-vips-natives:
+    name: Build vips natives (${{ matrix.platform }})
+    needs: build-natives
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+
+      - name: Download core natives for ${{ matrix.platform }}
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+
+      - name: Build full-codec libvips (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        continue-on-error: true
+        run: bash native/build-vips-full-codecs.sh
+
+      - name: Install libvips (Linux, fallback)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          [ -f /usr/local/lib/libvips.so.42 ] || \
+            sudo apt-get install -y --no-install-recommends libvips-dev patchelf
+
+      - name: Install libvips (macOS, fallback)
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
+
+      - name: Fetch prebuilt libvips (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: |
+          set -e
+          url=$(curl -fsSL https://api.github.com/repos/libvips/build-win64-mxe/releases/latest \
+                | grep -oE 'https://[^"]*vips-dev-w64-all-[0-9.]+\.zip|https://[^"]*vips-dev-w64-webp-[0-9.]+\.zip' | head -n1 || true)
+          [ -z "$url" ] && { echo "No prebuilt libvips Windows zip found - skipping"; exit 0; }
+          curl -fsSL "$url" -o /tmp/vips.zip
+          mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
+          VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)
+          if [ -n "$VIPS_DIR" ]; then
+            echo "VIPS_WIN_DIST=$(dirname "$VIPS_DIR")" >> "$GITHUB_ENV"
+          else
+            echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
+          fi
+
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "::warning::no macOS signing cert configured - darwin vips natives will be ad-hoc signed"
+            echo "MACOS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            bash native/import-macos-cert.sh
+          fi
+
+      - name: Stage libvips + codec chain
+        run: bash native/build-vips.sh ${{ matrix.platform }}
+
+      - name: Build vips natives jar
+        run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
+
+      - name: Vips smoke test (render PDF -> all major formats)
+        run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
+        timeout-minutes: 60
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: natives-vips-${{ matrix.platform }}
+          path: native/dist/vips-${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+
   # ── Fan in: assemble, sign, publish everything from one runner ────────────
   publish:
-    needs: [build-natives, cli-binaries]
+    needs: [build-natives, build-vips-natives, cli-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
@@ -638,3 +737,151 @@ jobs:
           else
             echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> $GITHUB_STEP_SUMMARY
           fi
+
+
+  # ── Post-Release Verification: Pull from Central and execute full smoke ──
+  validate-maven-central:
+    name: Verify Maven Central (${{ matrix.platform }})
+    needs: publish
+    if: inputs.autoRelease == true || startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            VERSION="${REF#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for Maven Central availability & execute standalone validation
+        shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -e
+          echo "Verifying JPDFium $VERSION ($PLATFORM) from Maven Central..."
+          
+          # Poll Maven Central with backoff up to 25 minutes
+          CENTRAL_URL="https://repo1.maven.org/maven2/com/stirling/jpdfium-natives-vips-${PLATFORM}/${VERSION}/jpdfium-natives-vips-${PLATFORM}-${VERSION}.jar"
+          echo "Polling $CENTRAL_URL..."
+          
+          MAX_ATTEMPTS=50
+          ATTEMPT=0
+          FOUND=0
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$CENTRAL_URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Found published artifact on Maven Central (attempt $ATTEMPT)!"
+              FOUND=1
+              break
+            fi
+            echo "Attempt $ATTEMPT: artifact not yet visible (HTTP $STATUS), waiting 30s..."
+            sleep 30
+          done
+
+          if [ $FOUND -ne 1 ]; then
+            echo "ERROR: Artifact $CENTRAL_URL did not become available on Maven Central within timeout."
+            exit 1
+          fi
+
+          # Create a standalone Gradle validation project that pulls solely from Maven Central
+          WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'jpdfium-verify')
+          cd "$WORK_DIR"
+
+          cat << 'BUILD' > settings.gradle.kts
+          rootProject.name = "jpdfium-central-verifier"
+BUILD
+
+          cat << BUILD > build.gradle.kts
+          plugins {
+              `java-application`
+          }
+
+          repositories {
+              mavenCentral()
+          }
+
+          dependencies {
+              implementation("com.stirling:jpdfium:${VERSION}")
+              implementation("com.stirling:jpdfium-vips:${VERSION}")
+              runtimeOnly("com.stirling:jpdfium-natives-${PLATFORM}:${VERSION}")
+              runtimeOnly("com.stirling:jpdfium-natives-vips-${PLATFORM}:${VERSION}")
+          }
+
+          application {
+              mainClass.set("VerifyCentral")
+          }
+BUILD
+
+          mkdir -p src/main/java
+          cat << 'JAVA' > src/main/java/VerifyCentral.java
+          import java.io.*;
+          import java.nio.file.*;
+          import java.util.*;
+          import stirling.software.jpdfium.*;
+          import stirling.software.jpdfium.vips.*;
+
+          public class VerifyCentral {
+              public static void main(String[] args) throws Exception {
+                  System.out.println("=== Verifying Central Published JPDFium + Libvips Natives ===");
+                  
+                  // 1. Initialize natives
+                  VipsNatives.configure();
+                  NativeLoader.ensureLoaded();
+
+                  // 2. Probe libvips availability and all format savers
+                  VipsAvailability.State state = VipsAvailability.probe();
+                  System.out.println("Libvips available: " + state.available());
+                  System.out.println("Platform: " + state.platform());
+                  System.out.println("Version: " + state.version());
+                  System.out.println("Savers: PNG=" + state.pngsave() + ", JPEG=" + state.jpegsave() + ", WEBP=" + state.webpsave()
+                          + ", TIFF=" + state.tiffsave() + ", HEIF=" + state.heifsave() + ", JXL=" + state.jxlsave());
+
+                  if (!state.available()) {
+                      throw new IllegalStateException("Libvips not available: " + VipsAvailability.installMessage(state));
+                  }
+                  if (!state.pngsave() || !state.jpegsave() || !state.webpsave() || !state.tiffsave()) {
+                      throw new IllegalStateException("Essential savers missing from bundled libvips!");
+                  }
+
+                  // 3. Create a blank PDF via PdfDocument, render page to PNG, JPEG, WEBP, TIFF, HEIF, JXL
+                  try (PdfDocument doc = PdfDocument.blank(612, 792)) {
+                      System.out.println("Testing PDF page conversion to multiple image formats...");
+                      for (VipsFormat format : VipsFormat.values()) {
+                          byte[] img = VipsImageConverter.pageToBytes(doc, 0, 150, format);
+                          if (img == null || img.length < 32) {
+                              throw new IllegalStateException("Failed to encode page to " + format);
+                          }
+                          System.out.println("  [PASS] " + format + " (bytes: " + img.length + ")");
+                      }
+                  }
+
+                  System.out.println("=== Maven Central JPDFium verification successful! ===");
+              }
+          }
+JAVA
+
+          # Run the standalone verification using gradle
+          gradle run --no-daemon --jvm-args="--enable-native-access=ALL-UNNAMED"
+

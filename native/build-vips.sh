@@ -2,23 +2,8 @@
 # Stage a hermetic libvips (+ glib/gobject + the codec chain: libheif, libjxl,
 # libaom, libwebp, libpng, libjpeg, ...) into native/dist/vips-<platform>/ for
 # the jpdfium-natives-vips-* jars.
-#
-# libvips is sourced from the system package manager (brew on macOS, apt on
-# Linux) or a prebuilt Windows dist (libvips/build-win64-mxe, pointed at by
-# VIPS_WIN_DIST), then bundle-runtime-deps.sh recursively copies its transitive
-# shared deps next to it and rewrites RUNPATH / @loader_path / $ORIGIN so
-# libvips resolves its sibling codecs in the same dir at runtime.
-#
-# The resulting natives jar is consumed on the Java side by VipsNatives, which
-# extracts it and points vips-ffm at the bundled libvips (optional - the
-# jpdfium-vips module also works with a system libvips when no jar is present).
-#
-# Usage: build-vips.sh <platform>   e.g. linux-x64, darwin-arm64, windows-x64
 set -euo pipefail
 
-# Vips natives are in bring-up (continue-on-error CI job, publishes nothing
-# yet), so allow unsigned macOS dylibs. When vips graduates to a publishing
-# workflow, set MACOS_SIGN_IDENTITY there instead.
 export MACOS_ALLOW_UNSIGNED="${MACOS_ALLOW_UNSIGNED:-1}"
 
 PLATFORM="${1:?platform required}"
@@ -45,10 +30,6 @@ esac
 DIST="native/dist/vips-$PLATFORM"
 mkdir -p "$DIST"
 
-# Resolve the source libvips. echoes either the lib path (POSIX) or, on
-# Windows, the prebuilt dist's bin/ dir (we copy its whole DLL tree).
-# Prefers the full-codec libvips built by build-vips-full-codecs.sh into
-# /usr/local (HEIF/HEIC/AVIF/JXL/WebP/PNG/JPEG/TIFF) over the distro package.
 resolve_libvips() {
     case "$OS" in
         linux)
@@ -70,6 +51,7 @@ resolve_libvips() {
         windows)
             local d="${VIPS_WIN_DIST:-}"
             [ -n "$d" ] && [ -d "$d/bin" ] && { echo "$d/bin"; return 0; }
+            [ -n "$d" ] && [ -f "$d/bin/vips.dll" ] && { echo "$d/bin"; return 0; }
             ;;
     esac
     return 1
@@ -84,16 +66,17 @@ if [ -z "$VIPS_LOC" ]; then
 fi
 
 if [ "$OS" = "windows" ]; then
-    # The prebuilt Windows dist already ships its full hermetic DLL tree in
-    # bin/ - copy it wholesale. The bundler below then walks vips.dll's import
-    # table but finds every sibling already present in DIST.
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
 else
     cp -v "$VIPS_LOC" "$DIST/"
+    # If libvips has dynamic modules (e.g. Homebrew vips-modules-*/vips-heif.dylib, vips-jxl.dylib),
+    # copy them directly into DIST so their symbols & codecs are bundled and resolved alongside libvips
+    VIPS_LIB_DIR="$(dirname "$VIPS_LOC")"
+    find "$VIPS_LIB_DIR"/vips-modules* -name "*.dylib" -o -name "*.so" 2>/dev/null | while read -r mod; do
+        [ -f "$mod" ] && cp -v "$mod" "$DIST/"
+    done || true
 fi
 
-# Recursively bundle libvips's transitive deps + rewrite load paths by reusing
-# the bridge bundler rooted at the staged libvips (BUNDLE_ROOT).
 export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
 bash "$(dirname "$0")/bundle-runtime-deps.sh" "vips-$PLATFORM"
 
