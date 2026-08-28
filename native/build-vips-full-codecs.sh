@@ -8,16 +8,16 @@ echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
 
 VIPS_TAG="${VIPS_VERSION:-}"
 LIBHEIF_TAG="${LIBHEIF_VERSION:-}"
-PREFIX=/usr/local
-SUDO=""
 case "$(uname -s)" in
     Linux*)
         OS=linux
+        PREFIX=/usr/local
         SUDO=sudo
         ;;
     Darwin*)
         OS=darwin
-        SUDO=sudo
+        PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        SUDO=""
         ;;
     *)
         echo "build-vips-full-codecs.sh: unsupported OS $(uname -s)" >&2
