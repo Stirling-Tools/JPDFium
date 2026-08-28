@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# Build libvips from source with ALL major codecs into /usr/local, so the
-# jpdfium-natives-vips-* bundles can render PDF pages to every major image
-# format (HEIF/HEIC, AVIF, JXL, WebP, PNG, JPEG, TIFF).
-#
-# ALWAYS TRACKS LATEST: libvips and libheif are resolved to their newest
-# GitHub release tag on every run (override with VIPS_VERSION / LIBHEIF_VERSION,
-# e.g. VIPS_VERSION=8.16.1). The apt/brew codec deps are likewise the latest
-# the package manager provides. This is deliberate - the vips bundles must not
-# drift behind upstream codec fixes.
-#
-# The distro-package libvips (apt libvips-dev / brew vips) is frequently built
-# WITHOUT libjxl / libheif, so its savers are missing (jxlsave/heifsave are
-# absent and jpdfium-vips cannot render PDF to those formats). Building from
-# source with -Dauto_features=disabled + the codec savers explicitly enabled
-# yields a minimal libvips that links exactly the codecs we ship. build-vips.sh
-# prefers this copy over the distro one.
-#
-# Usage: build-vips-full-codecs.sh   (Linux + macOS only)
+# Build libvips (+ libheif with static codecs) from source against whatever
+# codec libraries (libjxl, libaom, libx265, libde265, libwebp, libpng, libjpeg,
+# libtiff) the package manager provides.
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
@@ -32,8 +17,6 @@ case "$(uname -s)" in
         ;;
     Darwin*)
         OS=darwin
-        # GitHub macOS runners allow passwordless sudo; /usr/local may be
-        # root-owned even when Homebrew lives in /opt/homebrew.
         SUDO=sudo
         ;;
     *)
@@ -42,7 +25,6 @@ case "$(uname -s)" in
         ;;
 esac
 
-# Resolve the latest release tag for a GitHub repo, e.g. "v8.18.5".
 resolve_latest_tag() {
     local repo="$1"
     curl -fsSL --retry 3 --retry-delay 3 \
@@ -79,13 +61,6 @@ resolve_versions() {
 install_deps() {
     echo "==> build-vips-full-codecs.sh: installing codec + build deps"
     if [ "$OS" = linux ]; then
-        # ubuntu 24.04: libjxl / libaom / libx265 / libde265 all in universe.
-        # --no-install-recommends keeps the image lean (avoid pulling a second
-        # system libvips via recommends).
-        # NOTE: libheif is NOT installed from apt - Ubuntu's libheif ships the
-        # HEVC/AV1 encoders as separate dlopened plugins (libheif-plugin-x265/
-        # aom) that the bundler can't ship, so we build it from source with the
-        # codecs statically linked (see build_libheif_linux).
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config build-essential cmake \
@@ -101,19 +76,12 @@ install_deps() {
     fi
 }
 
-# Ubuntu's libheif is plugin-based: the HEVC (x265) / AV1 (aom) encoders are
-# separate .so plugins that libheif dlopens at runtime. The bundler only ships
-# ldd-referenced libraries, so the plugins would never reach the bundle and
-# heifsave would fail with "Unsupported compression". Build libheif from source
-# with ENABLE_PLUGIN_LOADING=OFF so the codecs are linked into libheif itself.
-# Linux only - brew's libheif already links x265/aom statically.
 build_libheif_linux() {
     echo "==> build-vips-full-codecs.sh: building libheif ${LIBHEIF_TAG} (static codecs)"
     local work
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' EXIT
 
-    # Remove any distro libheif package so it cannot shadow our custom build
     $SUDO apt-get remove -y libheif* 2>/dev/null || true
 
     curl -fsSL --retry 3 --retry-delay 3 \
@@ -166,12 +134,6 @@ build_vips() {
     tar -xzf "$work/vips.tar.gz" -C "$work"
     local src="$work/libvips-${VIPS_TAG#v}"
 
-    # -Dauto_features=disabled turns OFF every optional dep (magick, poppler,
-    # pdfium, openexr, ...) so we don't link a pile of unrelated loaders; the
-    # saver/loader deps we DO want are enabled explicitly below (heif for
-    # HEIC/HEIF/AVIF via libheif, jpeg-xl for JXL, plus the standard codecs).
-    # Option names track the latest libvips meson_options.txt (8.18+ renamed
-    # the docs option; docs/cpp-docs default off, so no flag needed).
     meson setup "$work/build" "$src" \
         --prefix="$PREFIX" --libdir=lib \
         --buildtype=release \
@@ -189,8 +151,12 @@ build_vips() {
     nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
     ninja -C "$work/build" -j"$nproc" \
         || { echo "build-vips-full-codecs.sh: ninja build failed" >&2; exit 1; }
-    $SUDO ninja -C "$work/build" install
-    if [ "$OS" = linux ]; then $SUDO ldconfig 2>/dev/null || true; fi
+    if [ "$OS" = darwin ]; then
+        ninja -C "$work/build" install
+    else
+        $SUDO ninja -C "$work/build" install
+        $SUDO ldconfig 2>/dev/null || true
+    fi
 
     echo "==> build-vips-full-codecs.sh: installed to $PREFIX/lib:"
     ls -la "$PREFIX"/lib/libvips.so* "$PREFIX"/lib/libvips.*.dylib 2>/dev/null || true

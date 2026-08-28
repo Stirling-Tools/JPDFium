@@ -1,0 +1,68 @@
+JPDFium Native Libraries - Third-Party Notices and Licenses
+===========================================================
+
+This distribution bundles binary forms of the following open-source projects:
+
+1. PDFium
+   - Copyright (c) 2014 PDFium Authors. All rights reserved.
+   - License: BSD 3-Clause License (see PDFIUM-BSD-3.txt)
+
+2. QPDF
+   - Copyright (c) 2005-2024 Jay Berkenbilt
+   - License: Apache License 2.0 (see QPDF-APACHE-2.0.txt)
+
+3. libvips
+   - Copyright (c) 1991-2024 The libvips Open Source Project
+   - License: GNU Lesser General Public License v2.1 or later (see LIBVIPS-LGPL-2.1.txt)
+
+4. GLib / GObject
+   - Copyright (c) 1995-2024 GLib Team
+   - License: GNU Lesser General Public License v2.1 or later (see GLIB-LGPL-2.1.txt)
+
+5. libheif
+   - Copyright (c) 2017-2024 struktur AG
+   - License: GNU Lesser General Public License v3.0 or later (see LIBHEIF-LGPL-3.0.txt)
+
+6. libjxl (JPEG XL reference implementation)
+   - Copyright (c) 2019-2024 JPEG XL Project Authors
+   - License: BSD 3-Clause License (see LIBJXL-BSD-3.txt)
+
+7. libwebp
+   - Copyright (c) 2010 Google Inc.
+   - License: BSD 3-Clause License (see LIBWEBP-BSD-3.txt)
+
+8. libjpeg-turbo
+   - Copyright (c) 2009-2024 D. R. Commander. All rights reserved.
+   - License: Custom (IJG / BSD-style / zlib) (see LIBJPEG-TURBO.txt)
+
+9. libpng
+   - Copyright (c) 1995-2024 The PNG Reference Library Authors.
+   - License: libpng License (see LIBPNG.txt)
+
+10. libtiff
+    - Copyright (c) 1988-1997 Sam Leffler, 1991-1997 Silicon Graphics, Inc.
+    - License: libtiff License (see LIBTIFF.txt)
+
+11. FreeType
+    - Copyright (c) 1996-2024 David Turner, Robert Wilhelm, and Werner Lemberg.
+    - License: FreeType License / FTL (see FREETYPE.txt)
+
+12. HarfBuzz
+    - Copyright (c) 2010-2024 HarfBuzz Authors.
+    - License: MIT/Old MIT License (see HARFBUZZ.txt)
+
+13. Little CMS (lcms2)
+    - Copyright (c) 1998-2024 Marti Maria Saguer
+    - License: MIT License (see LCMS2-MIT.txt)
+
+14. ICU (International Components for Unicode)
+    - Copyright (c) 1991-2024 Unicode, Inc.
+    - License: Unicode License / ICU License (see ICU.txt)
+
+15. zlib
+    - Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler
+    - License: zlib License (see ZLIB.txt)
+
+16. zstd
+    - Copyright (c) Meta Platforms, Inc. and affiliates.
+    - License: BSD 3-Clause License (see ZSTD-BSD-3.txt)

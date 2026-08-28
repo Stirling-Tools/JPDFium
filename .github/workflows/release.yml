@@ -525,9 +525,106 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # ── Fan out: build and bundle libvips natives on each platform ─────────────
+  build-vips-natives:
+    name: Build vips natives (${{ matrix.platform }})
+    needs: build-natives
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+
+      - name: Download core natives for ${{ matrix.platform }}
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        with:
+          name: natives-${{ matrix.platform }}
+          path: native/dist/${{ matrix.platform }}/
+
+      - name: Build full-codec libvips (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        continue-on-error: true
+        run: bash native/build-vips-full-codecs.sh
+
+      - name: Install libvips (Linux, fallback)
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          [ -f /usr/local/lib/libvips.so.42 ] || \
+            sudo apt-get install -y --no-install-recommends libvips-dev patchelf
+
+      - name: Install libvips (macOS, fallback)
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
+
+      - name: Fetch prebuilt libvips (Windows)
+        if: matrix.platform == 'windows-x64'
+        run: |
+          set -e
+          url=$(curl -fsSL https://api.github.com/repos/libvips/build-win64-mxe/releases/latest \
+                | grep -oE 'https://[^"]*vips-dev-w64-all-[0-9.]+\.zip|https://[^"]*vips-dev-w64-webp-[0-9.]+\.zip' | head -n1 || true)
+          [ -z "$url" ] && { echo "No prebuilt libvips Windows zip found - skipping"; exit 0; }
+          curl -fsSL "$url" -o /tmp/vips.zip
+          mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
+          VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)
+          if [ -n "$VIPS_DIR" ]; then
+            echo "VIPS_WIN_DIST=$(dirname "$VIPS_DIR")" >> "$GITHUB_ENV"
+          else
+            echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
+          fi
+
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'darwin-')
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE_P12_BASE64" ]; then
+            echo "::warning::no macOS signing cert configured - darwin vips natives will be ad-hoc signed"
+            echo "MACOS_ALLOW_UNSIGNED=1" >> "$GITHUB_ENV"
+          else
+            bash native/import-macos-cert.sh
+          fi
+
+      - name: Stage libvips + codec chain
+        run: bash native/build-vips.sh ${{ matrix.platform }}
+
+      - name: Build vips natives jar
+        run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
+
+      - name: Vips smoke test (render PDF -> all major formats)
+        run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
+        timeout-minutes: 60
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: natives-vips-${{ matrix.platform }}
+          path: native/dist/vips-${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+
   # ── Fan in: assemble, sign, publish everything from one runner ────────────
   publish:
-    needs: [build-natives, cli-binaries]
+    needs: [build-natives, build-vips-natives, cli-binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
