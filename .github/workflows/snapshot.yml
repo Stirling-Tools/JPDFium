@@ -577,11 +577,13 @@ jobs:
           [ -f /usr/local/lib/libvips.so.42 ] || \
             sudo apt-get install -y --no-install-recommends libvips-dev patchelf
       - name: Install libvips (macOS, fallback)
-        if: matrix.platform == 'darwin-arm64'
+        if: startsWith(matrix.platform, 'darwin-')
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
-          [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
+          if [ ! -f /usr/local/lib/libvips.42.dylib ] && [ ! -f /opt/homebrew/lib/libvips.42.dylib ]; then
+            brew install vips || brew link --overwrite vips
+          fi
       - name: Fetch prebuilt libvips (Windows)
         # Asset name/version may need updating to match a current
         # libvips/build-win64-mxe release. Non-blocking (job-level

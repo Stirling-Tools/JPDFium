@@ -574,7 +574,9 @@ jobs:
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
-          [ -f /usr/local/lib/libvips.42.dylib ] || brew install vips
+          if [ ! -f /usr/local/lib/libvips.42.dylib ] && [ ! -f /opt/homebrew/lib/libvips.42.dylib ]; then
+            brew install vips || brew link --overwrite vips
+          fi
 
       - name: Fetch prebuilt libvips (Windows)
         if: matrix.platform == 'windows-x64'
