@@ -561,7 +561,6 @@ jobs:
 
       - name: Build full-codec libvips (Linux + macOS)
         if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
-        continue-on-error: true
         run: bash native/build-vips-full-codecs.sh
 
       - name: Install libvips (Linux, fallback)
