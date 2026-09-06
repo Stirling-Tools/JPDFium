@@ -293,14 +293,14 @@ tasks.register("finalizePortalDeployment") {
         val response = client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
 
         if (response.statusCode() in 200..299) {
-            println("✓ Deployment finalized successfully (HTTP ${response.statusCode()})")
+            println("[OK] Deployment finalized successfully (HTTP ${response.statusCode()})")
             if (autoRelease) {
                 println("  Auto-release enabled - artifacts will appear on Maven Central after validation (~10-30 min)")
             } else {
                 println("  Go to https://central.sonatype.com/publishing/deployments to review and publish")
             }
         } else {
-            error("✗ Failed to finalize deployment: HTTP ${response.statusCode()}\n${response.body()}")
+            error("[ERROR] Failed to finalize deployment: HTTP ${response.statusCode()}\n${response.body()}")
         }
     }
 }

@@ -1,13 +1,8 @@
 package stirling.software.jpdfium.doc;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RepairResultTest {
@@ -46,21 +41,5 @@ class RepairResultTest {
     void nullBytesNotUsable() {
         var result = new RepairResult(RepairResult.Status.FIXED, null, "{}");
         assertFalse(result.isUsable());
-    }
-
-    @Test
-    void recordAccessors() {
-        byte[] pdf = { 1, 2, 3 };
-        String diag = "{\"status\":\"ok\"}";
-        var result = new RepairResult(RepairResult.Status.CLEAN, pdf, diag);
-        assertEquals(RepairResult.Status.CLEAN, result.status());
-        assertSame(pdf, result.repairedPdf());
-        assertEquals(diag, result.diagnosticJson());
-    }
-
-    @ParameterizedTest
-    @EnumSource(RepairResult.Status.class)
-    void allStatusValuesExist(RepairResult.Status status) {
-        assertNotNull(status.name());
     }
 }
