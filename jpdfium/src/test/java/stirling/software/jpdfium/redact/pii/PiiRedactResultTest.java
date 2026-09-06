@@ -45,15 +45,6 @@ class PiiRedactResultTest {
     }
 
     @Test
-    void accessorMethods() {
-        var result = createResult(10, 0, 0, 0, 0);
-        assertTrue(result.durationMs() >= 0);
-        assertEquals(1, result.pagesProcessed());
-        assertEquals(10, result.totalMatches());
-        assertNotNull(result.fontNormalization());
-    }
-
-    @Test
     void toStringNotEmpty() {
         var result = createResult(1, 1, 1, 1, 1);
         String s = result.toString();

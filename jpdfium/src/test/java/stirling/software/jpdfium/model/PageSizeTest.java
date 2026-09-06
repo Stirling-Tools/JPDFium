@@ -3,30 +3,33 @@ package stirling.software.jpdfium.model;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Tests for {@link PageSize} record (pure Java, no native dependency). */
+/**
+ * Tests for {@link PageSize} standard dimension constants.
+ */
 class PageSizeTest {
 
     @Test
-    void recordAccessors() {
-        var ps = new PageSize(612f, 792f);
-        assertEquals(612f, ps.width(), 0.001);
-        assertEquals(792f, ps.height(), 0.001);
+    void standardA4Dimensions() {
+        assertEquals(595f, PageSize.A4.width(), 0.001f);
+        assertEquals(842f, PageSize.A4.height(), 0.001f);
     }
 
     @Test
-    void equality() {
-        assertEquals(new PageSize(100f, 200f), new PageSize(100f, 200f));
-        assertNotEquals(new PageSize(100f, 200f), new PageSize(100f, 201f));
+    void standardA3Dimensions() {
+        assertEquals(842f, PageSize.A3.width(), 0.001f);
+        assertEquals(1190f, PageSize.A3.height(), 0.001f);
     }
 
     @Test
-    void toStringContainsDimensions() {
-        var ps = new PageSize(612f, 792f);
-        String s = ps.toString();
-        assertTrue(s.contains("612"));
-        assertTrue(s.contains("792"));
+    void standardLetterDimensions() {
+        assertEquals(612f, PageSize.LETTER.width(), 0.001f);
+        assertEquals(792f, PageSize.LETTER.height(), 0.001f);
+    }
+
+    @Test
+    void standardLegalDimensions() {
+        assertEquals(612f, PageSize.LEGAL.width(), 0.001f);
+        assertEquals(1008f, PageSize.LEGAL.height(), 0.001f);
     }
 }

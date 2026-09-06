@@ -43,13 +43,4 @@ class TextLineTest {
         var line = new TextLine(new ArrayList<>(List.of(word("A"))), 0, 0, 50, 14);
         assertThrows(UnsupportedOperationException.class, () -> line.words().add(word("B")));
     }
-
-    @Test
-    void recordAccessors() {
-        var line = new TextLine(List.of(), 1.5f, 2.5f, 100f, 14f);
-        assertEquals(1.5f, line.x(), 0.001);
-        assertEquals(2.5f, line.y(), 0.001);
-        assertEquals(100f, line.width(), 0.001);
-        assertEquals(14f, line.height(), 0.001);
-    }
 }

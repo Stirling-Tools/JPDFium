@@ -40,7 +40,7 @@ public class S68_FontAudit {
                 }
 
                 if (!report.nonEmbeddedFonts().isEmpty()) {
-                    System.out.println("    ⚠ Non-embedded fonts:");
+                    System.out.println("    [WARNING] Non-embedded fonts:");
                     for (PdfFontAuditor.FontInfo fi : report.nonEmbeddedFonts()) {
                         System.out.printf("      - %s (family: %s)%n", fi.baseName(), fi.familyName());
                     }

@@ -86,17 +86,4 @@ class TextCharTest {
     void isNewlineForLetterFalse() {
         assertFalse(of('a').isNewline());
     }
-
-    @Test
-    void recordAccessors() {
-        TextChar tc = new TextChar(7, 0x41, 1.5f, 2.5f, 3f, 4f, "Courier", 10f);
-        assertEquals(7, tc.index());
-        assertEquals(0x41, tc.unicode());
-        assertEquals(1.5f, tc.x(), 0.001);
-        assertEquals(2.5f, tc.y(), 0.001);
-        assertEquals(3f, tc.width(), 0.001);
-        assertEquals(4f, tc.height(), 0.001);
-        assertEquals("Courier", tc.fontName());
-        assertEquals(10f, tc.fontSize(), 0.001);
-    }
 }

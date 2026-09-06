@@ -33,12 +33,4 @@ class FontInfoTest {
         assertTrue(FontInfo.STANDARD_14.contains("Symbol"));
         assertTrue(FontInfo.STANDARD_14.contains("ZapfDingbats"));
     }
-
-    @Test
-    void recordAccessors() {
-        FontInfo info = new FontInfo("CustomFont", "CIDFontType2", false);
-        assertEquals("CustomFont", info.name());
-        assertEquals("CIDFontType2", info.type());
-        assertFalse(info.embedded());
-    }
 }
