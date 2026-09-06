@@ -14,16 +14,31 @@ local.properties
 *.iws
 *.ipr
 out/
+/out/
+**/out/
+target/
+**/target/
+.jreleaser/
+**/jreleaser/
 .idea_modules/
+.vscode/
+.settings/
+.classpath
+.project
 
 *.class
 *.jar
 *.war
 *.ear
 *.nar
+*.jnilib
 hs_err_pid*
 replay_pid*
 
+.cxx/
+**/.cxx/
+cmake-build-*/
+**/cmake-build-*/
 native/build/
 native/build-*/
 native/cmake-build-*/
