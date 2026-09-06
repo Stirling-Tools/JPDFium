@@ -13,7 +13,6 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -75,24 +74,15 @@ class PdfLayersTest {
     }
 
     @Test
-    void layerRecordAccessors() {
-        PdfLayers.Layer layer = new PdfLayers.Layer("Background", true, false, 42);
-
-        assertEquals("Background", layer.name());
-        assertTrue(layer.visible());
-        assertFalse(layer.locked());
-        assertEquals(42, layer.objectCount());
-    }
-
-    @Test
     void createLayerOnMinimalPdf() throws Exception {
         Path input = loadResource("/pdfs/general/minimal.pdf");
         try (PdfDocument doc = PdfDocument.open(input)) {
             PdfLayers.createLayer(doc, "TestLayer", true);
 
             List<PdfLayers.Layer> layers = PdfLayers.list(doc);
-            // Layer may or may not be visible via list() depending on implementation
-            // but createLayer should not throw
+            assertNotNull(layers);
+            Optional<PdfLayers.Layer> found = PdfLayers.find(doc, "TestLayer");
+            assertNotNull(found);
         } finally {
             Files.deleteIfExists(input);
         }

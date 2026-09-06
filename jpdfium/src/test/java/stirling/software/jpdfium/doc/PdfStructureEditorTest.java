@@ -59,14 +59,30 @@ class PdfStructureEditorTest {
     void manualTagAppliesWithoutError() throws Exception {
         Path input = loadResource("/pdfs/general/minimal.pdf");
         try (PdfDocument doc = PdfDocument.open(input)) {
-            PdfStructureEditor.tag(doc)
+            PdfStructureEditor.Builder builder = PdfStructureEditor.tag(doc)
                     .setLanguage("en-US")
                     .setTitle("Test Document")
                     .addHeading(0, Rect.of(72, 700, 468, 30), 1, "Introduction")
                     .addParagraph(0, Rect.of(72, 600, 468, 80), "Body text")
-                    .addFigure(0, Rect.of(72, 400, 200, 150), "Test figure")
-                    .apply();
-            // No exception means success
+                    .addFigure(0, Rect.of(72, 400, 200, 150), "Test figure");
+
+            assertEquals("en-US", builder.language());
+            assertEquals("Test Document", builder.title());
+            assertEquals(3, builder.tags().size());
+            assertEquals("H1", builder.tags().get(0).type());
+            assertEquals("Introduction", builder.tags().get(0).text());
+            assertEquals("P", builder.tags().get(1).type());
+            assertEquals("Figure", builder.tags().get(2).type());
+            assertEquals("Test figure", builder.tags().get(2).altText());
+
+            String xml = PdfStructureEditor.toXml(builder.tags(), builder.language(), builder.title());
+            assertTrue(xml.contains("<StructTreeRoot lang=\"en-US\" title=\"Test Document\">"));
+            assertTrue(xml.contains("<H1 page=\"0\""));
+            assertTrue(xml.contains("Introduction</H1>"));
+            assertTrue(xml.contains("<P page=\"0\""));
+            assertTrue(xml.contains("alt=\"Test figure\""));
+
+            builder.apply();
         } finally {
             Files.deleteIfExists(input);
         }
@@ -76,11 +92,25 @@ class PdfStructureEditorTest {
     void manualTagWithTableAndList() throws Exception {
         Path input = loadResource("/pdfs/general/minimal.pdf");
         try (PdfDocument doc = PdfDocument.open(input)) {
-            PdfStructureEditor.tag(doc)
+            PdfStructureEditor.Builder builder = PdfStructureEditor.tag(doc)
                     .addTable(0, Rect.of(72, 500, 400, 200), 3, 4)
                     .addList(0, Rect.of(72, 250, 400, 100))
-                    .addArtifact(0, Rect.of(72, 50, 468, 30))
-                    .apply();
+                    .addArtifact(0, Rect.of(72, 50, 468, 30));
+
+            assertEquals(3, builder.tags().size());
+            assertEquals("Table", builder.tags().get(0).type());
+            assertEquals("3x4 table", builder.tags().get(0).text());
+            assertEquals("Table with 3 rows and 4 columns", builder.tags().get(0).altText());
+            assertEquals("L", builder.tags().get(1).type());
+            assertEquals("Artifact", builder.tags().get(2).type());
+
+            String xml = PdfStructureEditor.toXml(builder.tags(), builder.language(), builder.title());
+            assertTrue(xml.contains("<Table"));
+            assertTrue(xml.contains("Table with 3 rows and 4 columns"));
+            assertTrue(xml.contains("<L"));
+            assertTrue(xml.contains("<Artifact"));
+
+            builder.apply();
         } finally {
             Files.deleteIfExists(input);
         }

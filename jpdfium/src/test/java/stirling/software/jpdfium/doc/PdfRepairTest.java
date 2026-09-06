@@ -4,7 +4,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -78,13 +78,12 @@ class PdfRepairTest {
 
     @Test
     void inspectHandlesEmptyInput() {
-        assertDoesNotThrow(() -> {
-            try {
-                PdfRepair.inspect(EMPTY_BYTES);
-            } catch (Exception e) {
-                // Expected for zero-length input
-            }
-        });
+        assertEquals("{\"error\":\"empty input\"}", PdfRepair.inspect(EMPTY_BYTES));
+    }
+
+    @Test
+    void inspectHandlesNullInput() {
+        assertEquals("{\"error\":\"empty input\"}", PdfRepair.inspect((byte[]) null));
     }
 
     @Test

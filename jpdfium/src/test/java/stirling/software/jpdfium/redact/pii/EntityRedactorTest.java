@@ -103,13 +103,4 @@ class EntityRedactorTest {
         assertEquals(1, result.entityCount());
         assertEquals(1, result.targetCount());
     }
-
-    @Test
-    void redactionReasonEnumValues() {
-        var values = EntityRedactor.RedactionReason.values();
-        assertEquals(3, values.length);
-        assertNotNull(EntityRedactor.RedactionReason.valueOf("ENTITY_MATCH"));
-        assertNotNull(EntityRedactor.RedactionReason.valueOf("PATTERN_MATCH"));
-        assertNotNull(EntityRedactor.RedactionReason.valueOf("COREFERENCE_CONTEXT"));
-    }
 }

@@ -19,8 +19,8 @@ import java.util.List;
  * <p>This is the vips replacement for the core module's {@code ImageIO} image
  * codec path. A page is rendered straight into a native {@link RenderedPageView}
  * (a {@code MemorySegment} owned by PDFium) and handed to vips via
- * {@link VImage#newFromMemory} — that single native-to-vips copy is the only
- * allocation in the render→encode path. Encoding supports every format libvips
+ * {@link VImage#newFromMemory} - that single native-to-vips copy is the only
+ * allocation in the render -> encode path. Encoding supports every format libvips
  * ships a saver for (PNG, JPEG, WEBP, HEIC, HEIF, AVIF, JXL, TIFF), and decoding
  * flows {@code image bytes -> VipsDecoder -> the bridge's raw-RGBA (format=3)
  * embed}. No {@code BufferedImage}, no {@code ImageIO}, no AWT raster.
