@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/editorconfig-checker/editorconfig-checker/v4.0.1/.editorconfig-checker.schema.json",
+  "Exclude": [
+    "\\.gradle/",
+    "build/",
+    "\\.git/",
+    "native/pdfium/",
+    "native/vendor/",
+    "native/licenses/",
+    "native/vcpkg-overlay/"
+  ],
+  "Disable": {
+    "IndentSize": true
+  }
+}

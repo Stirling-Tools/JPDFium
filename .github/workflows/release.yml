@@ -781,11 +781,11 @@ jobs:
         run: |
           set -e
           echo "Verifying JPDFium $VERSION ($PLATFORM) from Maven Central..."
-          
+
           # Poll Maven Central with backoff up to 25 minutes
           CENTRAL_URL="https://repo1.maven.org/maven2/com/stirling/jpdfium-natives-vips-${PLATFORM}/${VERSION}/jpdfium-natives-vips-${PLATFORM}-${VERSION}.jar"
           echo "Polling $CENTRAL_URL..."
-          
+
           MAX_ATTEMPTS=50
           ATTEMPT=0
           FOUND=0
@@ -846,7 +846,7 @@ BUILD
           public class VerifyCentral {
               public static void main(String[] args) throws Exception {
                   System.out.println("=== Verifying Central Published JPDFium + Libvips Natives ===");
-                  
+
                   // 1. Initialize natives
                   VipsNatives.configure();
                   NativeLoader.ensureLoaded();
