@@ -212,9 +212,20 @@ public final class EmbedPdfAnnotations {
      *
      * @param page  raw FPDF_PAGE
      * @param index annotation index of a REDACT annotation
+     */
+    public static void applyRedaction(MemorySegment page, int index) {
+        applyRedactionWithCount(page, index);
+    }
+
+    /**
+     * Apply a single redact annotation, permanently removing content underneath,
+     * and return the count of non-redact annotations removed as a side effect.
+     *
+     * @param page  raw FPDF_PAGE
+     * @param index annotation index of a REDACT annotation
      * @return count of non-redact annotations removed as a side effect
      */
-    public static int applyRedaction(MemorySegment page, int index) {
+    public static int applyRedactionWithCount(MemorySegment page, int index) {
         MethodHandle apply = EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction;
         if (apply == null) {
             throw new UnsupportedOperationException("EPDFAnnot_ApplyRedaction is not supported by this PDFium build");
