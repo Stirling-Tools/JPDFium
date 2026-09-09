@@ -9,8 +9,7 @@ import stirling.software.jpdfium.redact.pii.EntityRedactor;
 import stirling.software.jpdfium.redact.pii.GlyphRedactor;
 import stirling.software.jpdfium.redact.pii.PatternEngine;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
-import stirling.software.jpdfium.text.PdfTextExtractor;
-import stirling.software.jpdfium.text.PageText;
+import stirling.software.jpdfium.text.PdfBoundedText;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -130,8 +129,7 @@ public final class PdfRedactor {
         if (!options.piiPatterns().isEmpty()) {
             try (PatternEngine engine = PatternEngine.create(options.piiPatterns())) {
                 for (int i = 0; i < totalPages; i++) {
-                    PageText pageText = PdfTextExtractor.extractPage(doc, i);
-                    String text = pageText.plainText();
+                    String text = extractPageText(doc, i);
                     if (text.isEmpty()) continue;
 
                     List<PatternEngine.Match> matches = engine.findAll(text);
@@ -280,8 +278,7 @@ public final class PdfRedactor {
             }
 
             for (int i = 0; i < totalPages; i++) {
-                PageText pageText = PdfTextExtractor.extractPage(doc, i);
-                String text = pageText.plainText();
+                String text = extractPageText(doc, i);
                 if (text.isEmpty()) continue;
 
                 String json = FlashTextLib.find(handle, text);
@@ -316,6 +313,21 @@ public final class PdfRedactor {
         }
 
         return total;
+    }
+
+    /**
+     * Raw text of one page via a single {@code FPDFText_GetText} dump.
+     *
+     * <p>The PII/NER pre-scan only needs the raw character stream - building
+     * the structured char/line/word model (per-char JSON round-trip plus
+     * geometry parsing) is wasted work here. This matches the unnormalized
+     * character stream the native redaction pass scans, so matches found here
+     * are the same matches the native pass verifies.
+     */
+    private static String extractPageText(PdfDocument doc, int pageIndex) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            return PdfBoundedText.extractAll(page.rawHandle());
+        }
     }
 
     private static String escapeForRedact(String text, boolean regexMode) {
