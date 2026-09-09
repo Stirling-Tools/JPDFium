@@ -133,10 +133,14 @@ if(JPDFIUM_USE_PDFIUM)
     if(WIN32)
         if(EXISTS "${PDFIUM_LIB_DIR}/pdfium.lib")
             set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/pdfium.lib")
+        elseif(EXISTS "${PDFIUM_LIB_DIR}/embedpdf.lib")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/embedpdf.lib")
         endif()
     else()
         if(EXISTS "${PDFIUM_LIB_DIR}/libpdfium.a")
             set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/libpdfium.a")
+        elseif(EXISTS "${PDFIUM_LIB_DIR}/libembedpdf.a")
+            set(PDFIUM_STATIC_LIB "${PDFIUM_LIB_DIR}/libembedpdf.a")
         endif()
     endif()
 
@@ -146,7 +150,7 @@ if(JPDFIUM_USE_PDFIUM)
         message(STATUS "PDFium link mode: static (${PDFIUM_LIB})")
     else()
         find_library(PDFIUM_LIB
-            NAMES pdfium
+            NAMES pdfium embedpdf
             PATHS "${PDFIUM_LIB_DIR}"
             NO_DEFAULT_PATH)
         if(NOT PDFIUM_LIB)

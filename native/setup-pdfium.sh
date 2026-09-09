@@ -343,6 +343,18 @@ PY_EOF
     fi
 fi
 
+# Fix output library name in BUILD.gn to ensure standard libpdfium.* / pdfium.* naming
+if [ -f BUILD.gn ] && grep -q 'output_name = "embedpdf"' BUILD.gn; then
+    echo "  Patching BUILD.gn output_name to pdfium..."
+    sed_i 's/output_name = "embedpdf"/output_name = "pdfium"/g' BUILD.gn
+fi
+
+# Apply Skia geometry-only-stroke patch if present (needed for cpdf_path_redactor / SkStrokeRec)
+if [ -d third_party/skia ] && [ -f patches/embedpdf-runtime/skia/geometry-only-stroke.patch ]; then
+    echo "  Applying Skia geometry-only-stroke patch..."
+    (cd third_party/skia && patch --forward --batch -p1 < ../../patches/embedpdf-runtime/skia/geometry-only-stroke.patch 2>/dev/null || true)
+fi
+
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"
@@ -378,10 +390,10 @@ OUT_DIR="out/Release"
 JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
 case "$JPDFIUM_BUILD_MODE" in
     component)
-        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     static)
-        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     *)
         echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
@@ -505,14 +517,14 @@ if [ "$JPDFIUM_BUILD_MODE" = "static" ]; then
     # gn places static archives under out/Release/obj/<target>.<ext> on
     # POSIX targets and out/Release/<target>.<ext> on Windows. Find the
     # archive wherever ninja put it.
-    SRC=$(find "${OUT_DIR}" -maxdepth 3 -type f -name "${MAIN_LIB}" 2>/dev/null | head -1)
+    SRC=$(find "${OUT_DIR}" -maxdepth 3 -type f \( -name "${MAIN_LIB}" -o -name "libembedpdf.${STATIC_EXT}" -o -name "embedpdf.${STATIC_EXT}" \) 2>/dev/null | head -1)
     if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then
         echo "  ERROR: ${MAIN_LIB} not produced - check pdf_is_complete_lib args" >&2
         exit 1
     fi
     cp "$SRC" "${TARGET_DIR}/lib/${MAIN_LIB}"
     LIB_COUNT=1
-    echo "  Copied static archive: ${SRC} ($(du -h "$SRC" | cut -f1)) -> ${TARGET_DIR}/lib/"
+    echo "  Copied static archive: ${SRC} ($(du -h "$SRC" | cut -f1)) -> ${TARGET_DIR}/lib/${MAIN_LIB}"
 else
     MAIN_LIB="$MAIN_LIB_COMPONENT"
     # Component build: copy all shared libraries from the output directory.
@@ -534,6 +546,14 @@ HEADER_COUNT="$(ls -1 public/*.h | wc -l)"
 echo "  Copied ${HEADER_COUNT} headers -> ${TARGET_DIR}/include/"
 
 MAIN_LIB_PATH="${TARGET_DIR}/lib/${MAIN_LIB}"
+if [ ! -f "${MAIN_LIB_PATH}" ]; then
+    if [ "${LIB_EXT}" = "dll" ] && [ -f "${TARGET_DIR}/lib/embedpdf.dll" ]; then
+        cp "${TARGET_DIR}/lib/embedpdf.dll" "${MAIN_LIB_PATH}"
+        cp "${TARGET_DIR}/lib/embedpdf.dll.lib" "${TARGET_DIR}/lib/pdfium.dll.lib" 2>/dev/null || true
+    elif [ -f "${TARGET_DIR}/lib/libembedpdf.${LIB_EXT}" ]; then
+        cp "${TARGET_DIR}/lib/libembedpdf.${LIB_EXT}" "${MAIN_LIB_PATH}"
+    fi
+fi
 if [ ! -f "${MAIN_LIB_PATH}" ]; then
     echo "  ERROR: Main library not found at ${MAIN_LIB_PATH}" >&2
     exit 1
