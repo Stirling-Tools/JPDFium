@@ -312,6 +312,42 @@ if [ -f "${CONTENTGEN}" ]; then
     fi
 fi
 
+# Fix ambiguous span conditional in the EmbedPDF annotation-font subsetter.
+# EmbedPDF mainline (since ~Aug 2026) chooses between the original font span
+# and the HarfBuzz-subset buffer with a ternary whose two branch types (one
+# raw_ptr-backed span, one plain-pointer span, both under
+# pdf_use_partition_alloc=true) convert into each other - clang rejects the
+# conditional as ambiguous, which broke every Prebuild PDFium run. Rewriting
+# as an if/else makes each branch convert to the declared span type
+# independently, so the build compiles again under the CI GN args.
+ANNOT_SUBSET="core/fpdfdoc/cpdf_annotfontsubset.cpp"
+if [ -f "${ANNOT_SUBSET}" ]; then
+    if grep -q 'pdfium::span<const uint8_t> font_data = subset_font_data.empty()' "${ANNOT_SUBSET}"; then
+        echo "  Patching cpdf_annotfontsubset.cpp ambiguous span conditional..."
+        python3 - "${ANNOT_SUBSET}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = """  pdfium::span<const uint8_t> font_data = subset_font_data.empty()
+                                              ? font->GetFontSpan()
+                                              : pdfium::span(subset_font_data);"""
+new = """  pdfium::span<const uint8_t> font_data;
+  if (subset_font_data.empty()) {
+    font_data = font->GetFontSpan();
+  } else {
+    font_data = pdfium::span<const uint8_t>(subset_font_data);
+  }"""
+if old not in src:
+    print("  WARNING: expected ternary not found in cpdf_annotfontsubset.cpp - skipping")
+    sys.exit(0)
+with open(path, 'w') as f:
+    f.write(src.replace(old, new, 1))
+print("  Rewrote cpdf_annotfontsubset.cpp font_data ternary as if/else.")
+PY_EOF
+    fi
+fi
+
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"
