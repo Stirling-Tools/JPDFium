@@ -83,4 +83,44 @@ public final class EmbedPdfDocumentBindings {
     /** Render annotation without AP rotation applied. */
     public static final MethodHandle EPDF_RenderAnnotBitmapUnrotated = downcall("EPDF_RenderAnnotBitmapUnrotated",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
+
+    // --- Extended Page Box & Identity APIs (EmbedPDF) ---
+
+    public static final int EPDF_PAGE_BOX_MEDIA = 0;
+    public static final int EPDF_PAGE_BOX_CROP  = 1;
+    public static final int EPDF_PAGE_BOX_BLEED = 2;
+    public static final int EPDF_PAGE_BOX_TRIM  = 3;
+    public static final int EPDF_PAGE_BOX_ART   = 4;
+
+    /** Get page user unit (/UserUnit) without loading the page. */
+    public static final MethodHandle EPDF_GetPageUserUnitByIndex = Symbols.downcallOptional("EPDF_GetPageUserUnitByIndex",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
+
+    /** Get page box without loading the page. */
+    public static final MethodHandle EPDF_GetPageBoxByIndex = Symbols.downcallOptional("EPDF_GetPageBoxByIndex",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
+
+    /** Load a page by its indirect object number. */
+    public static final MethodHandle EPDFDoc_LoadPageByObjectNumber = Symbols.downcallOptional("EPDFDoc_LoadPageByObjectNumber",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+
+    /** Load a page by its indirect object number with rotation normalized to 0. */
+    public static final MethodHandle EPDFDoc_LoadPageByObjectNumberNormalized = Symbols.downcallOptional("EPDFDoc_LoadPageByObjectNumberNormalized",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+
+    /** Get the indirect object number of a page by page index without loading the page. */
+    public static final MethodHandle EPDFDoc_GetPageObjectNumberByIndex = Symbols.downcallOptional("EPDFDoc_GetPageObjectNumberByIndex",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Delete a page by its indirect object number. */
+    public static final MethodHandle EPDFDoc_DeletePageByObjectNumber = Symbols.downcallOptional("EPDFDoc_DeletePageByObjectNumber",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Set page rotation by its indirect object number without loading the page. */
+    public static final MethodHandle EPDFDoc_SetPageRotationByObjectNumber = Symbols.downcallOptional("EPDFDoc_SetPageRotationByObjectNumber",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
+
+    /** Set runtime owner permissions override. */
+    public static final MethodHandle EPDF_SetRuntimeOwnerPermissions = Symbols.downcallOptional("EPDF_SetRuntimeOwnerPermissions",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 }
