@@ -278,15 +278,79 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetOverlayTextRepeat = downcallCritical("EPDFAnnot_GetOverlayTextRepeat",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Apply a single redact annotation (burns content under it). */
-    public static final MethodHandle EPDFAnnot_ApplyRedaction = downcall("EPDFAnnot_ApplyRedaction",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+    /** Apply a single redact annotation (burns content under it).
+     * Signature: FPDF_BOOL EPDFAnnot_ApplyRedaction(FPDF_PAGE, FPDF_ANNOTATION, uint32_t* out_removed_count)
+     */
+    public static final MethodHandle EPDFAnnot_ApplyRedaction = downcallOptional("EPDFAnnot_ApplyRedaction",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
-    /** Apply all redact annotations on a page. */
-    public static final MethodHandle EPDFPage_ApplyRedactions = downcall("EPDFPage_ApplyRedactions",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+    /** Apply all redact annotations on a page.
+     * Signature: FPDF_BOOL EPDFPage_ApplyRedactions(FPDF_PAGE, uint32_t* out_removed_count)
+     */
+    public static final MethodHandle EPDFPage_ApplyRedactions = downcallOptional("EPDFPage_ApplyRedactions",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Flatten a single annotation's AP to page content. */
-    public static final MethodHandle EPDFAnnot_Flatten = downcall("EPDFAnnot_Flatten",
+    public static final MethodHandle EPDFAnnot_Flatten = downcallOptional("EPDFAnnot_Flatten",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Flatten every eligible annotation appearance on a page (layer-safe). */
+    public static final MethodHandle EPDFPage_Flatten = downcallOptional("EPDFPage_Flatten",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Flatten a chosen set of annotations on a page. */
+    public static final MethodHandle EPDFPage_FlattenAnnotations = downcallOptional("EPDFPage_FlattenAnnotations",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS));
+
+    /** Export normal appearances of a chosen set of annotations as a new standalone PDF document. */
+    public static final MethodHandle EPDFPage_ExportAnnotationsAsDocument = downcallOptional("EPDFPage_ExportAnnotationsAsDocument",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS, JAVA_INT));
+
+    /** Remove arbitrary key from annotation dictionary. */
+    public static final MethodHandle EPDFAnnot_RemoveKey = downcallOptional("EPDFAnnot_RemoveKey",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Set /Name entry of an annotation. */
+    public static final MethodHandle EPDFAnnot_SetName = downcallOptional("EPDFAnnot_SetName",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Get /Name entry of an annotation. */
+    public static final MethodHandle EPDFAnnot_GetName = downcallOptional("EPDFAnnot_GetName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+
+    /** Set annotation rect without modifying appearance streams. */
+    public static final MethodHandle EPDFAnnot_SetRect = downcallOptional("EPDFAnnot_SetRect",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Remove /A action entry from link annotation. */
+    public static final MethodHandle EPDFAnnot_RemoveAction = downcallOptional("EPDFAnnot_RemoveAction",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Remove direct /Dest entry from link annotation. */
+    public static final MethodHandle EPDFAnnot_RemoveDest = downcallOptional("EPDFAnnot_RemoveDest",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get indirect PDF object number of annotation dictionary (> 0, or 0 if direct/invalid). */
+    public static final MethodHandle EPDFAnnot_GetObjectNumber = downcallOptional("EPDFAnnot_GetObjectNumber",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get annotation by indirect object number. */
+    public static final MethodHandle EPDFPage_GetAnnotByObjectNumber = downcallOptional("EPDFPage_GetAnnotByObjectNumber",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+
+    /** Remove annotation on page by index and clean up indirect object. */
+    public static final MethodHandle EPDFPage_RemoveAnnot = downcallOptional("EPDFPage_RemoveAnnot",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Remove annotation on page by object number and clean up indirect object. */
+    public static final MethodHandle EPDFPage_RemoveAnnotByObjectNumber = downcallOptional("EPDFPage_RemoveAnnotByObjectNumber",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Move contiguous block of annotations within /Annots array. */
+    public static final MethodHandle EPDFPage_MoveAnnots = downcallOptional("EPDFPage_MoveAnnots",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
+
+    /** Get page object number from destination handle. */
+    public static final MethodHandle EPDFDest_GetPageObjectNumber = downcallOptional("EPDFDest_GetPageObjectNumber",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
 }

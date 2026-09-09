@@ -234,8 +234,7 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y cmake --version=4.4.2
-          choco install -y ninja --version=1.13.2
+          choco install -y --allow-downgrade cmake ninja
           if command -v pkg-config >/dev/null 2>&1; then
             echo "pkg-config already on PATH"
           elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then
