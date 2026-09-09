@@ -3091,9 +3091,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             return JPDFIUM_OK;
         }
 
-        // Only now build the raw unicode sequence needed for grapheme
-        // alignment - it is a full second per-char pass over the text page,
-        // so zero-match pages (the common case) never pay for it.
+        // Grapheme alignment needs the raw char sequence. Build it only when
+        // matches exist; zero-match pages skip this second per-char pass.
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
@@ -3273,9 +3272,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             return JPDFIUM_OK;
         }
 
-        // Only now build the raw unicode sequence needed for grapheme
-        // alignment - it is a full second per-char pass over the text page,
-        // so zero-match pages (the common case) never pay for it.
+        // Grapheme alignment needs the raw char sequence. Build it only when
+        // matches exist; zero-match pages skip this second per-char pass.
         std::vector<uint32_t> unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
