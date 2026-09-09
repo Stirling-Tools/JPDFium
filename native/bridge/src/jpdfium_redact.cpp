@@ -3056,15 +3056,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 
         // Build the search buffer: NFKC-normalized text (ligature and
         // compatibility characters decomposed) with an index map back to the
-        // original character indices, plus the raw unicode sequence used for
-        // grapheme-cluster boundary alignment.
+        // original character indices.
         std::vector<int> idxMap;
         std::u32string wtext = buildNormalizedText(tp, count, idxMap);
-        std::vector<uint32_t> unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
-        }
 
         // Compile the pattern (PCRE2 UTF/UCP, JIT, hardened limits).
         // Sanitize-stage bookkeeping: metadata/outlines/form values containing
@@ -3091,6 +3085,19 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 #else
         (void)wtext;
 #endif
+
+        if (matches.empty()) {
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_OK;
+        }
+
+        // Grapheme alignment needs the raw char sequence. Build it only when
+        // matches exist; zero-match pages skip this second per-char pass.
+        std::vector<uint32_t> unicodeSeq;
+        unicodeSeq.reserve(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
+        }
         alignMatchesToGraphemes(tp, unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
         // Snap every span to shaped-cluster boundaries (ligature safety):
@@ -3098,11 +3105,6 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // unrenderable, so the span grows to the whole cluster.
         alignMatchesToShapedClusters(tp, matches);
 #endif
-
-        if (matches.empty()) {
-            FPDFText_ClosePage(tp);
-            return JPDFIUM_OK;
-        }
 
         // Expected surviving-text fingerprint (pre-redaction).
         std::vector<char> redactSet(count, 0);
@@ -3182,15 +3184,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 
         int count = FPDFText_CountChars(tp);
 
-        // Build the search buffer: NFKC-normalized text with an index map,
-        // plus the raw unicode sequence for grapheme boundary alignment.
+        // Build the search buffer: NFKC-normalized text with an index map.
         std::vector<int> idxMap;
         std::u32string wtext = buildNormalizedText(tp, count, idxMap);
-        std::vector<uint32_t> unicodeSeq;
-        unicodeSeq.reserve(static_cast<size_t>(count));
-        for (int i = 0; i < count; ++i) {
-            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
-        }
 
         std::vector<TextMatch> matches;
 #ifdef JPDFIUM_HAS_PCRE2
@@ -3261,18 +3257,6 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 #endif
             }
         }
-        alignMatchesToGraphemes(tp, unicodeSeq, matches);
-#ifdef JPDFIUM_HAS_HARFBUZZ
-        // Snap every span to shaped-cluster boundaries (ligature safety):
-        // a cut inside a shaped cluster would leave the survivor
-        // unrenderable, so the span grows to the whole cluster.
-        alignMatchesToShapedClusters(tp, matches);
-#endif
-        std::vector<char> redactSet(count, 0);
-        for (auto& m : matches)
-            for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
-
         if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
 
         // Every supplied pattern failed to compile: the caller believes the
@@ -3287,6 +3271,25 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             FPDFText_ClosePage(tp);
             return JPDFIUM_OK;
         }
+
+        // Grapheme alignment needs the raw char sequence. Build it only when
+        // matches exist; zero-match pages skip this second per-char pass.
+        std::vector<uint32_t> unicodeSeq;
+        unicodeSeq.reserve(static_cast<size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
+        }
+        alignMatchesToGraphemes(tp, unicodeSeq, matches);
+#ifdef JPDFIUM_HAS_HARFBUZZ
+        // Snap every span to shaped-cluster boundaries (ligature safety):
+        // a cut inside a shaped cluster would leave the survivor
+        // unrenderable, so the span grows to the whole cluster.
+        alignMatchesToShapedClusters(tp, matches);
+#endif
+        std::vector<char> redactSet(count, 0);
+        for (auto& m : matches)
+            for (int ci : m.charIndices) redactSet[ci] = 1;
+        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
         // Apply Object Fission redaction (all matches in one pass)
         int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);

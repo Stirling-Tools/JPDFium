@@ -316,13 +316,12 @@ public final class PdfRedactor {
     }
 
     /**
-     * Raw text of one page via a single {@code FPDFText_GetText} dump.
+     * Raw page text from one FPDFText_GetText dump.
      *
-     * <p>The PII/NER pre-scan only needs the raw character stream - building
-     * the structured char/line/word model (per-char JSON round-trip plus
-     * geometry parsing) is wasted work here. This matches the unnormalized
-     * character stream the native redaction pass scans, so matches found here
-     * are the same matches the native pass verifies.
+     * <p>The PII/NER prescan only needs the character stream. Building the
+     * structured char/line/word model (per-char JSON round-trip plus geometry
+     * parsing) is wasted work here. The native redaction pass scans the same
+     * unnormalized stream, so matches found here match what it verifies.
      */
     private static String extractPageText(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
