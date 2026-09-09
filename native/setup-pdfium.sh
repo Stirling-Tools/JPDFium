@@ -356,10 +356,32 @@ if [ -d third_party/skia ] && [ -f patches/embedpdf-runtime/skia/geometry-only-s
 fi
 
 # On Windows component builds without full Skia (pdf_use_skia=false), skia_config must not define SKIA_DLL,
-# otherwise SkPathBuilder/SkStrokeRec symbols get marked __declspec(dllimport) causing lld-link LNK4217.
+# and SkPdfiumUserConfig.h must not define SK_API as COMPONENT_EXPORT(SKIA). Otherwise SkPathBuilder/SkStrokeRec
+# symbols get marked __declspec(dllimport) while being statically linked into pdfium.dll, causing lld-link LNK4217.
 if [ -f skia/BUILD.gn ] && grep -q 'if (is_component_build) {' skia/BUILD.gn; then
     echo "  Patching skia/BUILD.gn to gate SKIA_DLL on pdf_use_skia..."
     sed_i 's/if (is_component_build) {/if (is_component_build \&\& pdf_use_skia) {/g' skia/BUILD.gn
+fi
+SK_USER_CONFIG="skia/config/SkPdfiumUserConfig.h"
+if [ -f "${SK_USER_CONFIG}" ] && grep -q '#define SK_API COMPONENT_EXPORT(SKIA)' "${SK_USER_CONFIG}"; then
+    echo "  Patching SkPdfiumUserConfig.h to gate SK_API export on PDF_USE_SKIA..."
+    python3 - "${SK_USER_CONFIG}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = "#define SK_API COMPONENT_EXPORT(SKIA)"
+replacement = """#if defined(PDF_USE_SKIA)
+#define SK_API COMPONENT_EXPORT(SKIA)
+#else
+#undef SKIA_DLL
+#define SK_API
+#endif"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Rewrote SK_API in SkPdfiumUserConfig.h.")
+PY_EOF
 fi
 
 # ---------- Step 5: GN configuration ----------
