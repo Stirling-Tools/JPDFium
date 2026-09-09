@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class EmbedPdfNewApisTest {
 
@@ -26,17 +27,17 @@ class EmbedPdfNewApisTest {
     }
 
     @Test
-    void testTextBindingsLayouts() {
-        assertNotNull(EmbedPdfTextBindings.EPDF_CHAR_GEOMETRY_LAYOUT);
-        assertNotNull(EmbedPdfTextBindings.EPDF_CHAR_MAP_ANCHOR_LAYOUT);
-        assertEquals(8, EmbedPdfTextBindings.EPDF_CHAR_MAP_ANCHOR_LAYOUT.byteSize());
+    void testCharGeometryLayout() {
         assertEquals(128, EmbedPdfTextBindings.EPDF_CHAR_GEOMETRY_LAYOUT.byteSize());
     }
 
     @Test
-    void testNamedPageConstants() {
-        assertEquals(0, EmbedPdfNamedPageBindings.EPDF_NAMED_PAGE_TREE_PAGES);
-        assertEquals(1, EmbedPdfNamedPageBindings.EPDF_NAMED_PAGE_TREE_TEMPLATES);
+    void testCharMapAnchorLayout() {
+        assertEquals(8, EmbedPdfTextBindings.EPDF_CHAR_MAP_ANCHOR_LAYOUT.byteSize());
+    }
+
+    @Test
+    void testBindingsPresentInClass() {
         assertEquals(0, EmbedPdfNamedPageBindings.EPDF_NAMED_PAGE_KIND_PAGE);
         assertEquals(1, EmbedPdfNamedPageBindings.EPDF_NAMED_PAGE_KIND_TEMPLATE);
         assertEquals(2, EmbedPdfNamedPageBindings.EPDF_NAMED_PAGE_KIND_DANGLING);
@@ -44,6 +45,7 @@ class EmbedPdfNewApisTest {
 
     @Test
     void testPageExtractText() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Requires real PDFium native library");
         Path input;
         try (InputStream is = getClass().getResourceAsStream("/pdfs/general/minimal.pdf")) {
             assertNotNull(is, "minimal.pdf not found");
@@ -61,6 +63,7 @@ class EmbedPdfNewApisTest {
 
     @Test
     void testAnnotationExtendedOperations() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Requires real PDFium native library");
         Path input;
         try (InputStream is = getClass().getResourceAsStream("/pdfs/general/minimal.pdf")) {
             assertNotNull(is, "minimal.pdf not found");

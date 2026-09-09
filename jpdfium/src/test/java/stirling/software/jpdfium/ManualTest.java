@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import javax.imageio.ImageIO;
 import java.io.File;
@@ -11,6 +12,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Quick manual smoke-test right-click -> Run in IntelliJ or via Gradle test.
@@ -22,6 +24,7 @@ public class ManualTest {
 
     @Test
     void runManualSmokeTest() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Manual smoke test requires real PDFium native library");
         Path input;
         try (InputStream is = getClass().getResourceAsStream("/pdfs/general/minimal.pdf")) {
             assertNotNull(is, "minimal.pdf not found");

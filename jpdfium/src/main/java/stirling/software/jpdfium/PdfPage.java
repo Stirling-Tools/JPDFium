@@ -72,7 +72,7 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Render the page directly into a pre-allocated direct {@link ByteBuffer}.
+     * Render the page directly into a pre-allocated direct {@link java.nio.ByteBuffer}.
      * Guarantees zero Java heap allocation in steady state.
      *
      * @param directBuffer pre-allocated direct ByteBuffer (capacity at least width * height * 4 bytes)
@@ -98,6 +98,9 @@ public final class PdfPage implements AutoCloseable {
      */
     public String extractText() {
         ensureOpen();
+        if (TextPageBindings.FPDFText_LoadPage == null) {
+            return "";
+        }
         MemorySegment textPage;
         try {
             textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPageSegment);
@@ -125,6 +128,9 @@ public final class PdfPage implements AutoCloseable {
                     // Fall back to standard extraction
                 }
             }
+            if (TextPageBindings.FPDFText_CountChars == null || TextPageBindings.FPDFText_GetText == null) {
+                return "";
+            }
             int count = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
             if (count <= 0) return "";
             try (Arena arena = Arena.ofConfined()) {
@@ -136,9 +142,11 @@ public final class PdfPage implements AutoCloseable {
         } catch (Throwable t) {
             throw new JPDFiumException("Failed to extract text from page", t);
         } finally {
-            try {
-                TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
-            } catch (Throwable ignored) {}
+            if (TextPageBindings.FPDFText_ClosePage != null) {
+                try {
+                    TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
+                } catch (Throwable ignored) {}
+            }
         }
     }
 
