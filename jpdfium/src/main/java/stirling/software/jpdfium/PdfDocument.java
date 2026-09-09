@@ -3,23 +3,33 @@ package stirling.software.jpdfium;
 import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
+import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
+import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
+import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
@@ -153,6 +163,147 @@ public final class PdfDocument implements AutoCloseable {
      */
     public static byte[] mergeBytes(List<byte[]> inputs) {
         return PdfMerger.mergeBytes(inputs);
+    }
+
+    /**
+     * Merge multiple open PDF documents into a single new document.
+     *
+     * @param documents list of documents to merge in order
+     * @return merged document
+     */
+    public static PdfDocument mergeDocuments(List<PdfDocument> documents) {
+        return PdfMerge.merge(documents);
+    }
+
+    /**
+     * Merge multiple open PDF documents into a single new document.
+     *
+     * @param documents documents to merge in order
+     * @return merged document
+     */
+    public static PdfDocument merge(PdfDocument... documents) {
+        if (documents == null || documents.length == 0) {
+            throw new IllegalArgumentException("At least one document is required");
+        }
+        return PdfMerge.merge(List.of(documents));
+    }
+
+    /**
+     * Append all pages from another document to the end of this document.
+     *
+     * @param other document to import pages from
+     */
+    public void appendDocument(PdfDocument other) {
+        ensureOpen();
+        if (other == null) throw new IllegalArgumentException("other document must not be null");
+        other.ensureOpen();
+        insertDocument(pageCount(), other);
+    }
+
+    /**
+     * Insert all pages from another document into this document at the specified page index.
+     *
+     * @param atPageIndex zero-based index where pages should be inserted
+     * @param other       document to import pages from
+     */
+    public void insertDocument(int atPageIndex, PdfDocument other) {
+        ensureOpen();
+        if (other == null) throw new IllegalArgumentException("other document must not be null");
+        other.ensureOpen();
+        if (atPageIndex < 0 || atPageIndex > pageCount()) {
+            throw new IndexOutOfBoundsException("Invalid insertion index: " + atPageIndex);
+        }
+        if (other.pageCount() == 0) return;
+        PdfPageImporter.importPages(rawHandle(), other.rawHandle(), null, atPageIndex);
+    }
+
+    /**
+     * Get all five page boxes for the page at the given index without requiring the page to be loaded.
+     *
+     * @param pageIndex zero-based page index
+     * @return {@link PageBoxes} containing MediaBox, CropBox, BleedBox, TrimBox, and ArtBox
+     */
+    public PageBoxes getPageBoxes(int pageIndex) {
+        ensureOpen();
+        MethodHandle getBox = EmbedPdfDocumentBindings.EPDF_GetPageBoxByIndex;
+        if (getBox != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment rectBuf = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
+                Rect mediaBox = queryBoxByIndex(getBox, pageIndex, 0, rectBuf)
+                        .orElseGet(() -> {
+                            try (PdfPage p = page(pageIndex)) {
+                                return new Rect(0, 0, p.size().width(), p.size().height());
+                            }
+                        });
+                Optional<Rect> cropBox = queryBoxByIndex(getBox, pageIndex, 1, rectBuf);
+                Optional<Rect> bleedBox = queryBoxByIndex(getBox, pageIndex, 2, rectBuf);
+                Optional<Rect> trimBox = queryBoxByIndex(getBox, pageIndex, 3, rectBuf);
+                Optional<Rect> artBox = queryBoxByIndex(getBox, pageIndex, 4, rectBuf);
+                return new PageBoxes(mediaBox, cropBox, bleedBox, trimBox, artBox);
+            } catch (Throwable ignored) {}
+        }
+        try (PdfPage p = page(pageIndex)) {
+            return p.boxes();
+        }
+    }
+
+    private Optional<Rect> queryBoxByIndex(MethodHandle getBox, int pageIndex, int boxType, MemorySegment rectBuf) {
+        try {
+            int ok = (int) getBox.invokeExact(rawDocSegment, pageIndex, boxType, rectBuf);
+            if (ok == 0) return Optional.empty();
+            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")));
+            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")));
+            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")));
+            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")));
+            return Optional.of(new Rect(left, bottom, right - left, top - bottom));
+        } catch (Throwable t) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Get the rotation of the page at the given index without requiring the page to be loaded.
+     *
+     * @param pageIndex zero-based page index
+     * @return page rotation in degrees (0, 90, 180, 270)
+     */
+    public int getPageRotation(int pageIndex) {
+        ensureOpen();
+        MethodHandle getRot = EmbedPdfDocumentBindings.EPDF_GetPageRotationByIndex;
+        if (getRot != null) {
+            try {
+                int rot = (int) getRot.invokeExact(rawDocSegment, pageIndex);
+                if (rot >= 0) return rot;
+            } catch (Throwable ignored) {}
+        }
+        try (PdfPage p = page(pageIndex)) {
+            int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandle());
+            return r * 90;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /**
+     * Get the user unit (/UserUnit) scale factor for the page at the given index without requiring the page to be loaded.
+     * Defaults to 1.0 (72 points per inch) per PDF specification.
+     *
+     * @param pageIndex zero-based page index
+     * @return user unit scale factor
+     */
+    public float getPageUserUnit(int pageIndex) {
+        ensureOpen();
+        MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
+        if (getUnit != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
+                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+                if (ok != 0) {
+                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                }
+            } catch (Throwable ignored) {}
+        }
+        return 1.0f;
     }
 
     public int pageCount() {
