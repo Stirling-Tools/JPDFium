@@ -7,13 +7,20 @@ import stirling.software.jpdfium.doc.PdfLinks;
 import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.TextPageBindings;
 
 import java.awt.image.BufferedImage;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -78,6 +85,61 @@ public final class PdfPage implements AutoCloseable {
             throw new IllegalArgumentException("targetBuffer must be a direct ByteBuffer");
         }
         renderInto(MemorySegment.ofBuffer(directBuffer), width, height);
+    }
+
+    /**
+     * Extract plain text from this page.
+     *
+     * <p>Uses high-fidelity UTF-16LE text extraction ({@code EPDFText_GetTextFull})
+     * with emoji and surrogate pair preservation when available in the native runtime,
+     * and falls back cleanly to standard {@code FPDFText_GetText}.
+     *
+     * @return extracted plain text from the page
+     */
+    public String extractText() {
+        ensureOpen();
+        MemorySegment textPage;
+        try {
+            textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPageSegment);
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to load text page", t);
+        }
+        if (textPage == null || textPage.equals(MemorySegment.NULL)) {
+            return "";
+        }
+        try {
+            MethodHandle fullText = EmbedPdfTextBindings.EPDFText_GetTextFull;
+            if (fullText != null) {
+                try (Arena arena = Arena.ofConfined()) {
+                    int req = (int) fullText.invokeExact(textPage, MemorySegment.NULL, 0);
+                    if (req > 1) {
+                        MemorySegment buf = arena.allocate(ValueLayout.JAVA_SHORT, req);
+                        int written = (int) fullText.invokeExact(textPage, buf, req);
+                        if (written > 1) {
+                            return FfmHelper.fromWideString(buf, written * 2L);
+                        }
+                    } else if (req <= 1) {
+                        return "";
+                    }
+                } catch (Throwable ignored) {
+                    // Fall back to standard extraction
+                }
+            }
+            int count = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
+            if (count <= 0) return "";
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buf = arena.allocate(ValueLayout.JAVA_SHORT, count + 1);
+                int written = (int) TextPageBindings.FPDFText_GetText.invokeExact(textPage, 0, count, buf);
+                if (written <= 1) return "";
+                return FfmHelper.fromWideString(buf, written * 2L);
+            }
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to extract text from page", t);
+        } finally {
+            try {
+                TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
+            } catch (Throwable ignored) {}
+        }
     }
 
     /** Returns raw character data as JSON: [{i,u,x,y,w,h,font,size}, ...] */

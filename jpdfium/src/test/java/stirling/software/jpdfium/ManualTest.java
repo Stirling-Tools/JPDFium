@@ -1,18 +1,59 @@
 package stirling.software.jpdfium;
 
+import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 import javax.imageio.ImageIO;
 import java.io.File;
+import java.io.InputStream;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 /**
- * Quick manual smoke-test right-click -> Run in IntelliJ.
+ * Quick manual smoke-test right-click -> Run in IntelliJ or via Gradle test.
  * Pass a PDF path as the first argument, or drop a file at /tmp/test.pdf.
  * <p>
  * JVM args required: --enable-native-access=ALL-UNNAMED
  */
 public class ManualTest {
+
+    @Test
+    void runManualSmokeTest() throws Exception {
+        Path input;
+        try (InputStream is = getClass().getResourceAsStream("/pdfs/general/minimal.pdf")) {
+            assertNotNull(is, "minimal.pdf not found");
+            input = Files.createTempFile("manual-smoke-", ".pdf");
+            Files.write(input, is.readAllBytes());
+        }
+        Path outPng = Files.createTempFile("manual-page0-", ".png");
+        Path outPdf = Files.createTempFile("manual-out-", ".pdf");
+
+        try (var doc = PdfDocument.open(input)) {
+            assertTrue(doc.pageCount() > 0);
+            try (var page = doc.page(0)) {
+                var render = page.renderAt(150);
+                ImageIO.write(render.toBufferedImage(), "PNG", outPng.toFile());
+                assertTrue(Files.size(outPng) > 0);
+
+                String textJson = page.extractTextJson();
+                assertNotNull(textJson);
+
+                String text = page.extractText();
+                assertNotNull(text);
+
+                page.flatten();
+            }
+            doc.save(outPdf);
+            assertTrue(Files.size(outPdf) > 0);
+        } finally {
+            Files.deleteIfExists(input);
+            Files.deleteIfExists(outPng);
+            Files.deleteIfExists(outPdf);
+        }
+    }
 
     static void main(String[] args) throws Exception {
         NativeLoader.ensureLoaded();

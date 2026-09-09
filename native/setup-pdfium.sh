@@ -355,6 +355,13 @@ if [ -d third_party/skia ] && [ -f patches/embedpdf-runtime/skia/geometry-only-s
     (cd third_party/skia && patch --forward --batch -p1 < ../../patches/embedpdf-runtime/skia/geometry-only-stroke.patch 2>/dev/null || true)
 fi
 
+# On Windows component builds without full Skia (pdf_use_skia=false), skia_config must not define SKIA_DLL,
+# otherwise SkPathBuilder/SkStrokeRec symbols get marked __declspec(dllimport) causing lld-link LNK4217.
+if [ -f skia/BUILD.gn ] && grep -q 'if (is_component_build) {' skia/BUILD.gn; then
+    echo "  Patching skia/BUILD.gn to gate SKIA_DLL on pdf_use_skia..."
+    sed_i 's/if (is_component_build) {/if (is_component_build \&\& pdf_use_skia) {/g' skia/BUILD.gn
+fi
+
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"

@@ -9,6 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.util.Optional;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -211,12 +212,19 @@ public final class EmbedPdfAnnotations {
      *
      * @param page  raw FPDF_PAGE
      * @param index annotation index of a REDACT annotation
+     * @return count of non-redact annotations removed as a side effect
      */
-    public static void applyRedaction(MemorySegment page, int index) {
+    public static int applyRedaction(MemorySegment page, int index) {
+        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction;
+        if (apply == null) {
+            throw new UnsupportedOperationException("EPDFAnnot_ApplyRedaction is not supported by this PDFium build");
+        }
         MemorySegment annot = openAnnot(page, index);
-        try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction.invokeExact(page, annot);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countSeg = arena.allocate(JAVA_INT);
+            int ok = (int) apply.invokeExact(page, annot, countSeg);
             if (ok == 0) throw new JPDFiumException("EPDFAnnot_ApplyRedaction failed");
+            return countSeg.get(JAVA_INT, 0);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
@@ -228,8 +236,31 @@ public final class EmbedPdfAnnotations {
      * @return true if any redactions were applied
      */
     public static boolean applyAllRedactions(MemorySegment page) {
-        try {
-            return (int) EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions.invokeExact(page) != 0;
+        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions;
+        if (apply == null) {
+            throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countSeg = arena.allocate(JAVA_INT);
+            return (int) apply.invokeExact(page, countSeg) != 0;
+        } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
+    }
+
+    /**
+     * Apply all redact annotations on a page and return the count of side-effect removed annotations.
+     *
+     * @param page raw FPDF_PAGE
+     * @return count of non-redact annotations removed as a side effect
+     */
+    public static int applyAllRedactionsWithCount(MemorySegment page) {
+        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions;
+        if (apply == null) {
+            throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment countSeg = arena.allocate(JAVA_INT);
+            int ok = (int) apply.invokeExact(page, countSeg);
+            return (ok != 0) ? countSeg.get(JAVA_INT, 0) : 0;
         } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
     }
 
@@ -329,6 +360,110 @@ public final class EmbedPdfAnnotations {
             return (int) getIcon.invokeExact(annot);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
+    }
+
+    /**
+     * Remove an arbitrary key from an annotation's dictionary.
+     *
+     * @param page raw FPDF_PAGE
+     * @param index annotation index
+     * @param key key to remove (e.g. "Contents", "Subj", "State")
+     * @return true if the key was removed or already absent
+     */
+    public static boolean removeKey(MemorySegment page, int index, String key) {
+        MethodHandle removeKey = EmbedPdfAnnotationBindings.EPDFAnnot_RemoveKey;
+        if (removeKey == null) {
+            throw new UnsupportedOperationException("EPDFAnnot_RemoveKey is not supported by this PDFium build");
+        }
+        MemorySegment annot = openAnnot(page, index);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment keySeg = arena.allocateFrom(key);
+            return (int) removeKey.invokeExact(annot, keySeg) != 0;
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        finally { closeAnnot(annot); }
+    }
+
+    /**
+     * Set the annotation rectangle without modifying appearance streams.
+     *
+     * @param page raw FPDF_PAGE
+     * @param index annotation index
+     * @param left left coordinate
+     * @param bottom bottom coordinate
+     * @param right right coordinate
+     * @param top top coordinate
+     */
+    public static void setRect(MemorySegment page, int index, float left, float bottom, float right, float top) {
+        MethodHandle setRect = EmbedPdfAnnotationBindings.EPDFAnnot_SetRect;
+        if (setRect == null) {
+            throw new UnsupportedOperationException("EPDFAnnot_SetRect is not supported by this PDFium build");
+        }
+        MemorySegment annot = openAnnot(page, index);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment rect = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
+            rect.set(ValueLayout.JAVA_FLOAT, 0, left);
+            rect.set(ValueLayout.JAVA_FLOAT, 4, top);
+            rect.set(ValueLayout.JAVA_FLOAT, 8, right);
+            rect.set(ValueLayout.JAVA_FLOAT, 12, bottom);
+            int ok = (int) setRect.invokeExact(annot, rect);
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetRect failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        finally { closeAnnot(annot); }
+    }
+
+    /**
+     * Get the indirect PDF object number of an annotation.
+     *
+     * @param page raw FPDF_PAGE
+     * @param index annotation index
+     * @return object number (> 0), or 0 if direct/invalid
+     */
+    public static int getObjectNumber(MemorySegment page, int index) {
+        MethodHandle getObjNum = EmbedPdfAnnotationBindings.EPDFAnnot_GetObjectNumber;
+        if (getObjNum == null) {
+            throw new UnsupportedOperationException("EPDFAnnot_GetObjectNumber is not supported by this PDFium build");
+        }
+        MemorySegment annot = openAnnot(page, index);
+        try {
+            return (int) getObjNum.invokeExact(annot);
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        finally { closeAnnot(annot); }
+    }
+
+    /**
+     * Remove an annotation by its indirect object number.
+     *
+     * @param page raw FPDF_PAGE
+     * @param objNum indirect object number
+     * @return true on success
+     */
+    public static boolean removeAnnotByObjectNumber(MemorySegment page, int objNum) {
+        MethodHandle removeObj = EmbedPdfAnnotationBindings.EPDFPage_RemoveAnnotByObjectNumber;
+        if (removeObj == null) {
+            throw new UnsupportedOperationException("EPDFPage_RemoveAnnotByObjectNumber is not supported by this PDFium build");
+        }
+        try {
+            return (int) removeObj.invokeExact(page, objNum) != 0;
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+    }
+
+    /**
+     * Move annotations within a page's /Annots array.
+     *
+     * @param page raw FPDF_PAGE
+     * @param fromIndices source indices in /Annots to move
+     * @param toIndex destination index in post-removal index space
+     * @return true on success
+     */
+    public static boolean moveAnnots(MemorySegment page, int[] fromIndices, int toIndex) {
+        MethodHandle move = EmbedPdfAnnotationBindings.EPDFPage_MoveAnnots;
+        if (move == null) {
+            throw new UnsupportedOperationException("EPDFPage_MoveAnnots is not supported by this PDFium build");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment fromSeg = arena.allocateFrom(ValueLayout.JAVA_INT, fromIndices);
+            return (int) move.invokeExact(page, fromSeg, fromIndices.length, toIndex) != 0;
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     private static MemorySegment openAnnot(MemorySegment page, int index) {

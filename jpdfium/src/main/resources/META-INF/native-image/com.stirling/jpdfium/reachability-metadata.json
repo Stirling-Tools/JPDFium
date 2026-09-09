@@ -74,6 +74,12 @@
       "type": "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings"
     },
     {
+      "type": "stirling.software.jpdfium.panama.EmbedPdfNamedPageBindings"
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.EmbedPdfTextBindings"
+    },
+    {
       "type": "stirling.software.jpdfium.panama.FormFillBindings"
     },
     {
@@ -216,6 +222,36 @@
   ],
   "foreign": {
     "downcalls": [
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jint",
+          "jint",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jint"
+        ]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "jint",
+          "void*",
+          "jlong",
+          "void*",
+          "void*"
+        ]
+      },
       {
         "returnType": "jint",
         "parameterTypes": []
