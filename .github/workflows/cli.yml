@@ -95,6 +95,15 @@ jobs:
       - name: CLI correctness tests (JVM, real native)
         run: ./gradlew :jpdfium:cliTest -Pjpdfium.testNatives=linux-x64 --no-daemon --stacktrace
 
+      - name: Upload CLI test failures
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-test-failures
+          path: |
+            jpdfium/build/reports/tests/cliTest/
+            **/hs_err_pid*.log
+
       - name: Build CLI native image
         run: ./gradlew :jpdfium:nativeCliCompile -Pjpdfium.testNatives=linux-x64 --no-daemon
 

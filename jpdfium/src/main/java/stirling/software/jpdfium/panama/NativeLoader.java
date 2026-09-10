@@ -84,9 +84,12 @@ public final class NativeLoader {
             // know the topological order at runtime. Keep retrying failed
             // loads until either all succeed or a pass makes no progress.
             // Pre-load bundled dependencies in tmpDir before loading pdfium and bridge.
-            // On Windows this ensures LoadLibrary finds sibling DLLs; on Linux/macOS
-            // this ensures bundled copies are mapped into memory ahead of older system libraries.
-            if (!libs.isEmpty()) {
+            // On Windows this ensures LoadLibrary finds sibling DLLs.
+            // On Linux/macOS, RUNPATH=$ORIGIN / @loader_path resolves sibling dependencies
+            // hermetically; preloading via System.load causes host symbol collisions (e.g. ICU).
+            boolean isWindows =
+                    System.getProperty("os.name").toLowerCase().contains("win");
+            if (isWindows && !libs.isEmpty()) {
                 preloadDependencies(tmpDir, libs, pdfiumName, bridgeName);
             }
 

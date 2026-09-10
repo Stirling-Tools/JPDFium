@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import stirling.software.jpdfium.corpus.CorpusTestSupport;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
@@ -106,12 +107,15 @@ class CorpusRedactTest {
      *   <li>{@code bug1669099.pdf} is a German document (umlauts) whose
      *       non-target words disappear under Object Fission - same class of
      *       PDFium fission limitation as issue918.pdf.</li>
+     *   <li>{@code issue4398.pdf} uses a Type0 subset font whose ToUnicode
+     *       mapping is lost during PDFium content regeneration on flatten.</li>
      * </ul>
      */
     private static final Set<String> SKIP_PDFS = Set.of(
             "issue918.pdf",
             "issue19848.pdf",
-            "bug1669099.pdf"
+            "bug1669099.pdf",
+            "issue4398.pdf"
     );
 
     /** Output directory under samples-output for structured report. */
@@ -151,8 +155,10 @@ class CorpusRedactTest {
             }
         }
 
+        corpusPdfs = CorpusTestSupport.shard(corpusPdfs.stream().distinct().toList());
+
         Files.createDirectories(REPORT_DIR);
-        System.out.printf("[CorpusRedactTest] Corpus: %d PDFs, output: %s%n",
+        System.out.printf("[CorpusRedactTest] Corpus: %d PDFs (this shard), output: %s%n",
                 corpusPdfs.size(), REPORT_DIR.toAbsolutePath());
     }
 
@@ -427,7 +433,10 @@ class CorpusRedactTest {
 
             String timestamp = LocalDateTime.now().format(
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            int passed = 0, warned = 0, failed = 0, skipped = 0;
+            int passed = 0;
+            int warned = 0;
+            int failed = 0;
+            int skipped = 0;
             for (PdfReport r : reports) {
                 switch (r.severity) {
                     case PASS -> passed++;

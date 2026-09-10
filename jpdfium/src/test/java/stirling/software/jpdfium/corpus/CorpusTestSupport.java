@@ -22,7 +22,7 @@ import com.sun.management.ThreadMXBean;
  * environment-sensitive and must not hard-fail the build. Correctness
  * (page counts, parseable output, no native crash) is asserted by the tests.
  */
-final class CorpusTestSupport {
+public final class CorpusTestSupport {
 
     /** Report directory: {@code build/reports/corpus/} - wiped by clean builds. */
     static final Path REPORT_DIR = Path.of("build", "reports", "corpus");
@@ -96,7 +96,7 @@ final class CorpusTestSupport {
      * {@code jpdfium.corpus.shard.total} are set, returns the slice
      * {@code [index * size / total, (index + 1) * size / total)}.
      */
-    static List<Path> shard(List<Path> pdfs) {
+    public static List<Path> shard(List<Path> pdfs) {
         int total = Integer.getInteger("jpdfium.corpus.shard.total", 1);
         int index = Integer.getInteger("jpdfium.corpus.shard.index", 0);
         if (total <= 1) return pdfs;

@@ -24,6 +24,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -46,11 +47,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
-    private final MemorySegment rawDocSegment;
+    private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;
+        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+    }
+
+    /**
+     * Re-queries the raw FPDF_DOCUMENT handle from the native bridge.
+     * Called when native operations (such as QPDF metadata or font stripping)
+     * reload the underlying document.
+     */
+    public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
     }
 
@@ -135,24 +145,74 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Merge multiple PDF files into a single output file using the fast, lossless QPDF engine.
+     * Merge multiple PDF files into a single output file using the fast, lossless QPDF engine
+     * with automatic fallback to safe PDFium page import if QPDF is unavailable.
      *
      * @param inputPaths  list of input PDF file paths
      * @param outputPath destination PDF file path
      * @throws IOException on I/O error
      */
     public static void merge(List<Path> inputPaths, Path outputPath) throws IOException {
-        PdfMerger.merge(inputPaths, outputPath);
+        try (PdfDocument merged = PdfMerge.mergeFiles(inputPaths)) {
+            merged.save(outputPath);
+        }
     }
 
     /**
      * Merge multiple PDF byte arrays into a single merged PDF byte array.
+     * Uses QPDF when available with fallback to safe PDFium page import.
      *
      * @param inputs list of PDF byte arrays
      * @return merged PDF bytes, or {@code null} on failure
      */
     public static byte[] mergeBytes(List<byte[]> inputs) {
-        return PdfMerger.mergeBytes(inputs);
+        if (inputs == null || inputs.isEmpty()) {
+            return null;
+        }
+        if (PdfMerger.isSupported()) {
+            byte[] result = PdfMerger.mergeBytes(inputs);
+            if (result != null) return result;
+        }
+        List<PdfDocument> docs = new ArrayList<>(inputs.size());
+        try {
+            for (byte[] b : inputs) docs.add(PdfDocument.open(b));
+            try (PdfDocument merged = PdfMerge.merge(docs)) {
+                return merged.saveBytes();
+            }
+        } finally {
+            for (PdfDocument d : docs) {
+                try { d.close(); } catch (Exception _) {}
+            }
+        }
+    }
+
+    /**
+     * Merge multiple open PDF documents into a single new document.
+     *
+     * <p>Delegates to {@link PdfMerge#merge(List)} to ensure bookmarks are preserved,
+     * objects deduplicated, and stale references avoided.
+     *
+     * @param documents list of documents to merge in order
+     * @return merged document
+     */
+    public static PdfDocument mergeDocuments(List<PdfDocument> documents) {
+        return PdfMerge.merge(documents);
+    }
+
+    /**
+     * Merge multiple open PDF documents into a single new document.
+     *
+     * <p>Delegates to {@link PdfMerge#merge(List)} to ensure bookmarks are preserved,
+     * objects deduplicated, and stale references avoided.
+     *
+     * @param documents documents to merge in order
+     * @return merged document
+     */
+    public static PdfDocument merge(PdfDocument... documents) {
+        if (documents == null || documents.length == 0) {
+            throw new IllegalArgumentException("At least one document is required");
+        }
+        return PdfMerge.merge(List.of(documents));
     }
 
     public int pageCount() {

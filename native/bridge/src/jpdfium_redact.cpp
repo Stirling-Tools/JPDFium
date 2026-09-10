@@ -1,5 +1,6 @@
 // jpdfium_redact.cpp - Redaction engine.
 
+#include <epdf_redact.h>
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
@@ -2621,12 +2622,33 @@ static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<ui
             if (ci > last) last = ci;
         }
         if (first < 0) continue;
+        int origFirst = first;
+        int origLast = last;
         // libunibreak fills brks[i] with the status of the boundary AFTER
         // character i (same convention as its line/word breakers).
-        while (first > 0 && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) first--;
-        while (last + 1 < static_cast<int>(unicodeSeq.size()) &&
-               brks[last] == GRAPHEMEBREAK_NOBREAK)
+        // A grapheme cluster MUST NOT cross whitespace boundaries or text object boundaries,
+        // and cannot span more than 3 combining marks (max 4 chars total).
+        while (first > 0 && (origFirst - first < 3) && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) {
+            uint32_t u = unicodeSeq[first - 1];
+            if (u <= 0x20 || u == 0xA0) break;
+            if (textPage) {
+                FPDF_PAGEOBJECT oCurr = FPDFText_GetTextObject(textPage, first);
+                FPDF_PAGEOBJECT oPrev = FPDFText_GetTextObject(textPage, first - 1);
+                if (oCurr != oPrev || oCurr == nullptr) break;
+            }
+            first--;
+        }
+        while (last + 1 < static_cast<int>(unicodeSeq.size()) && (last - origLast < 3) &&
+               brks[last] == GRAPHEMEBREAK_NOBREAK) {
+            uint32_t u = unicodeSeq[last + 1];
+            if (u <= 0x20 || u == 0xA0) break;
+            if (textPage) {
+                FPDF_PAGEOBJECT oCurr = FPDFText_GetTextObject(textPage, last);
+                FPDF_PAGEOBJECT oNext = FPDFText_GetTextObject(textPage, last + 1);
+                if (oCurr != oNext || oCurr == nullptr) break;
+            }
             last++;
+        }
         // Rebuild the (possibly extended) char index list.
         m.charIndices.clear();
         for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
@@ -2671,14 +2693,20 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
         if (!f) return nullptr;
         auto it = hbCache.find(reinterpret_cast<uintptr_t>(f));
         if (it != hbCache.end()) return it->second.font;
-        std::vector<uint8_t> fontData;
-        if (!loadFontDataWithFallback(f, fontData) || fontData.empty()) {
+        size_t buflen = 0;
+        if (!FPDFFont_GetFontData(f, nullptr, 0, &buflen) || buflen == 0) {
+            hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
+            return nullptr;
+        }
+        std::vector<uint8_t> fontData(buflen);
+        size_t actual = 0;
+        if (!FPDFFont_GetFontData(f, fontData.data(), buflen, &actual) || actual == 0) {
             hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
             return nullptr;
         }
         hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(fontData.data()),
-                                         static_cast<unsigned>(fontData.size()),
-                                         HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+                                         static_cast<unsigned>(actual), HB_MEMORY_MODE_READONLY,
+                                         nullptr, nullptr);
         if (!blob) return nullptr;
         hb_face_t* face = hb_face_create(blob, 0);
         hb_blob_destroy(blob);  // face holds its own reference
@@ -2759,9 +2787,80 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
             int cs = run.clusterOf[fp];
             int ce = lp;
             for (int p = lp + 1; p < static_cast<int>(run.clusterOf.size()) &&
-                                 run.clusterOf[p] == run.clusterOf[lp];
+                                 run.clusterOf[p] == run.clusterOf[lp] && (p - lp <= 3);
                  p++)
                 ce = p;
+
+            // A ligature cluster (e.g. fi, ffi) spans at most 3-4 codepoints.
+            // If the cluster spans across a large range or expands by more than 3 chars,
+            // the font shaping failed or assigned a fallback/unshaped cluster ID.
+            if (fp - cs > 3) cs = fp;
+            if (ce - lp > 3) ce = lp;
+            if (ce - cs + 1 > 4) {
+                cs = fp;
+                ce = lp;
+            }
+
+            // Never expand backwards across whitespace or kerning gaps
+            for (int p = fp - 1; p >= cs; p--) {
+                uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
+                if (u <= 0x20 || u == 0xA0) {
+                    cs = p + 1;
+                    break;
+                }
+                double l1 = 0, r1 = 0, b1 = 0, t1 = 0;
+                double l2 = 0, r2 = 0, b2 = 0, t2 = 0;
+                if (FPDFText_GetCharBox(tp, run.chars[p], &l1, &r1, &b1, &t1) &&
+                    FPDFText_GetCharBox(tp, run.chars[p + 1], &l2, &r2, &b2, &t2)) {
+                    double w1 = std::abs(r1 - l1);
+                    double h1 = std::abs(t1 - b1);
+                    if (w1 >= h1) {
+                        double gap = std::abs(l2 - r1);
+                        if ((w1 > 0.01 && gap > w1 * 0.25) || std::abs(b2 - b1) > h1 * 0.5) {
+                            cs = p + 1;
+                            break;
+                        }
+                    } else {
+                        double gap = std::abs(b1 - t2);
+                        if ((h1 > 0.01 && gap > h1 * 0.25) || std::abs(l2 - l1) > w1 * 0.5) {
+                            cs = p + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Never expand forwards across whitespace or kerning gaps
+            for (int p = lp + 1; p <= ce; p++) {
+                uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
+                if (u <= 0x20 || u == 0xA0) {
+                    ce = p - 1;
+                    break;
+                }
+                double l1 = 0, r1 = 0, b1 = 0, t1 = 0;
+                double l2 = 0, r2 = 0, b2 = 0, t2 = 0;
+                if (FPDFText_GetCharBox(tp, run.chars[p - 1], &l1, &r1, &b1, &t1) &&
+                    FPDFText_GetCharBox(tp, run.chars[p], &l2, &r2, &b2, &t2)) {
+                    double w1 = std::abs(r1 - l1);
+                    double h1 = std::abs(t1 - b1);
+                    if (w1 >= h1) {
+                        double gap = std::abs(l2 - r1);
+                        if ((w1 > 0.01 && gap > w1 * 0.25) || std::abs(b2 - b1) > h1 * 0.5) {
+                            ce = p - 1;
+                            break;
+                        }
+                    } else {
+                        double gap = std::abs(b1 - t2);
+                        if ((h1 > 0.01 && gap > h1 * 0.25) || std::abs(l2 - l1) > w1 * 0.5) {
+                            ce = p - 1;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (cs > fp) cs = fp;
+            if (ce < lp) ce = lp;
+
             if (cs == fp && ce == lp) continue;
             for (int p = cs; p <= ce; p++) m.charIndices.push_back(run.chars[p]);
             extended = true;
@@ -3112,10 +3211,77 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             for (int ci : m.charIndices) redactSet[ci] = 1;
         std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
-        // Apply Object Fission redaction
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
-        FPDFText_ClosePage(tp);
-        if (rc != JPDFIUM_OK) return rc;
+        // Best case scenario: Wrap EmbedPDF core engine (EPDFAnnot_ApplyRedaction)
+        // High-fidelity native in-place redaction via EmbedPDF core engine.
+        std::vector<TextMatch> sortedMatches = matches;
+        std::sort(sortedMatches.begin(), sortedMatches.end(),
+                  [](const TextMatch& a, const TextMatch& b) {
+                      if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
+                          return a.bboxB < b.bboxB;
+                      }
+                      return a.bboxL > b.bboxL;
+                  });
+
+        std::vector<FS_RECTF> appliedRects;
+        appliedRects.reserve(sortedMatches.size());
+        bool epdfOk = true;
+        for (const auto& m : sortedMatches) {
+            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+            if (!annot) {
+                epdfOk = false;
+                break;
+            }
+            FS_RECTF rect;
+            rect.left = m.bboxL;
+            rect.bottom = m.bboxB;
+            rect.right = m.bboxR;
+            rect.top = m.bboxT;
+            FPDFAnnot_SetRect(annot, &rect);
+
+            uint32_t rem = 0;
+            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
+            FPDFPage_CloseAnnot(annot);
+            if (!ok) {
+                epdfOk = false;
+                break;
+            }
+            appliedRects.push_back(rect);
+        }
+        if (epdfOk) {
+            FPDFText_ClosePage(tp);
+            tp = nullptr;
+
+            unsigned int alf = (argb >> 24) & 0xFF;
+            unsigned int red = (argb >> 16) & 0xFF;
+            unsigned int grn = (argb >> 8) & 0xFF;
+            unsigned int blu = argb & 0xFF;
+
+            if (alf > 0) {
+                for (const auto& ar : appliedRects) {
+                    FPDF_PAGEOBJECT rectObj = FPDFPageObj_CreateNewRect(
+                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
+                    if (rectObj) {
+                        FPDFPageObj_SetFillColor(rectObj, red, grn, blu, alf);
+                        FPDFPath_SetDrawMode(rectObj, FPDF_FILLMODE_ALTERNATE, 0);
+                        FPDFPage_InsertObject(pw->page, rectObj);
+                    }
+                }
+            }
+            FPDFPage_GenerateContent(pw->page);
+
+            if (pw->core) {
+                pw->core->contentRedacted = true;
+                for (const auto& ar : appliedRects) {
+                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+                }
+            }
+        } else {
+            // Fallback: Object Fission engine if EPDFAnnot_ApplyRedaction is unavailable
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            FPDFText_ClosePage(tp);
+            tp = nullptr;
+            if (rc != JPDFIUM_OK) return rc;
+        }
 
         // Audit loop: re-extract the page text and verify the pattern no
         // longer matches and the surviving fingerprint is bit-identical.
@@ -3291,10 +3457,80 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             for (int ci : m.charIndices) redactSet[ci] = 1;
         std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
-        // Apply Object Fission redaction (all matches in one pass)
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
-        FPDFText_ClosePage(tp);
-        if (rc != JPDFIUM_OK) return rc;
+        // Best case scenario: Wrap EmbedPDF core engine (EPDFAnnot_ApplyRedaction)
+        // High-fidelity native in-place redaction via EmbedPDF core engine.
+        // We apply annotations one by one in reverse reading order (bottom-to-top, right-to-left).
+        // This ensures that trailing/middle text in shared text objects is removed BEFORE any
+        // leading text, avoiding premature text matrix shifting in PDFium's redactor.
+        std::vector<TextMatch> sortedMatches = matches;
+        std::sort(sortedMatches.begin(), sortedMatches.end(),
+                  [](const TextMatch& a, const TextMatch& b) {
+                      if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
+                          return a.bboxB < b.bboxB;
+                      }
+                      return a.bboxL > b.bboxL;
+                  });
+
+        std::vector<FS_RECTF> appliedRects;
+        appliedRects.reserve(sortedMatches.size());
+        bool epdfOk = true;
+        for (const auto& m : sortedMatches) {
+            FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
+            if (!annot) {
+                epdfOk = false;
+                break;
+            }
+            FS_RECTF rect;
+            rect.left = m.bboxL;
+            rect.bottom = m.bboxB;
+            rect.right = m.bboxR;
+            rect.top = m.bboxT;
+            FPDFAnnot_SetRect(annot, &rect);
+
+            uint32_t rem = 0;
+            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
+            FPDFPage_CloseAnnot(annot);
+            if (!ok) {
+                epdfOk = false;
+                break;
+            }
+            appliedRects.push_back(rect);
+        }
+        if (epdfOk) {
+            FPDFText_ClosePage(tp);
+            tp = nullptr;
+
+            unsigned int alf = (argb >> 24) & 0xFF;
+            unsigned int red = (argb >> 16) & 0xFF;
+            unsigned int grn = (argb >> 8) & 0xFF;
+            unsigned int blu = argb & 0xFF;
+
+            if (alf > 0) {
+                for (const auto& ar : appliedRects) {
+                    FPDF_PAGEOBJECT rectObj = FPDFPageObj_CreateNewRect(
+                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
+                    if (rectObj) {
+                        FPDFPageObj_SetFillColor(rectObj, red, grn, blu, alf);
+                        FPDFPath_SetDrawMode(rectObj, FPDF_FILLMODE_ALTERNATE, 0);
+                        FPDFPage_InsertObject(pw->page, rectObj);
+                    }
+                }
+            }
+            FPDFPage_GenerateContent(pw->page);
+
+            if (pw->core) {
+                pw->core->contentRedacted = true;
+                for (const auto& ar : appliedRects) {
+                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+                }
+            }
+        } else {
+            // Fallback: Object Fission engine if EPDFAnnot_ApplyRedaction is unavailable
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            FPDFText_ClosePage(tp);
+            tp = nullptr;
+            if (rc != JPDFIUM_OK) return rc;
+        }
 
         // Audit loop: after content removal, re-extract the page text and
         // verify none of the patterns still match (strategy-fallback-preserved
@@ -3547,8 +3783,6 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         alignMatchesToShapedClusters(tp, matches);
 #endif
 
-        FPDFText_ClosePage(tp);
-
         // Create REDACT annotations from matches (zero content mutation)
         unsigned int r = (argb >> 16) & 0xFF;
         unsigned int g = (argb >> 8) & 0xFF;
@@ -3569,6 +3803,8 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
             FPDFPage_CloseAnnot(annot);
             createdCount++;
         }
+
+        FPDFText_ClosePage(tp);
 
         if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
 
@@ -3593,9 +3829,14 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
     }
 
     try {
-        // Collect all REDACT annotation rects
+        // Collect all REDACT annotations and rects
         int total = FPDFPage_GetAnnotCount(pw->page);
-        std::vector<FS_RECTF> redactRects;
+        struct AnnotItem {
+            FPDF_ANNOTATION annot = nullptr;
+            FS_RECTF rect{};
+            std::vector<FS_QUADPOINTSF> quads;
+        };
+        std::vector<AnnotItem> redactAnnots;
         std::vector<int> redactIndices;
 
         for (int i = 0; i < total; ++i) {
@@ -3604,22 +3845,54 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
                 FS_RECTF rect;
                 if (FPDFAnnot_GetRect(a, &rect)) {
-                    redactRects.push_back(rect);
+                    AnnotItem item;
+                    item.annot = a;
+                    item.rect = rect;
+                    size_t qc = FPDFAnnot_CountAttachmentPoints(a);
+                    for (size_t qi = 0; qi < qc; ++qi) {
+                        FS_QUADPOINTSF qp;
+                        if (FPDFAnnot_GetAttachmentPoints(a, qi, &qp)) {
+                            item.quads.push_back(qp);
+                        }
+                    }
+                    redactAnnots.push_back(std::move(item));
                     redactIndices.push_back(i);
+                    continue;
                 }
             }
             FPDFPage_CloseAnnot(a);
         }
 
-        if (commitCount) *commitCount = static_cast<int32_t>(redactRects.size());
+        if (commitCount) *commitCount = static_cast<int32_t>(redactAnnots.size());
 
-        if (redactRects.empty()) {
+        if (redactAnnots.empty()) {
             return JPDFIUM_OK;
         }
 
-        // High-fidelity native in-place redaction via EmbedPDF core engine
-        uint32_t removedCount = 0;
-        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page, &removedCount);
+        // Apply in reverse reading order (bottom-to-top, right-to-left) to avoid
+        // text matrix shifting artifacts across multiple regions in the same text object.
+        std::sort(redactAnnots.begin(), redactAnnots.end(),
+                  [](const AnnotItem& a, const AnnotItem& b) {
+                      if (std::abs(a.rect.bottom - b.rect.bottom) > 2.0f) {
+                          return a.rect.bottom < b.rect.bottom;
+                      }
+                      return a.rect.left > b.rect.left;
+                  });
+
+        std::vector<FS_RECTF> redactRects;
+        redactRects.reserve(redactAnnots.size());
+        for (const auto& item : redactAnnots) redactRects.push_back(item.rect);
+
+        bool epdfOk = true;
+        for (auto& item : redactAnnots) {
+            uint32_t rem = 0;
+            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, item.annot, &rem);
+            FPDFPage_CloseAnnot(item.annot);
+            if (!ok) {
+                epdfOk = false;
+                break;
+            }
+        }
         if (epdfOk) {
             unsigned int alf = (argb >> 24) & 0xFF;
             unsigned int red = (argb >> 16) & 0xFF;
@@ -3627,27 +3900,43 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             unsigned int blu = argb & 0xFF;
 
             if (alf > 0) {
-                for (auto& ar : redactRects) {
-                    FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
-                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
-                    if (!rect) continue;
-                    FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
-                    FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
-                    FPDFPage_InsertObject(pw->page, rect);
+                for (const auto& item : redactAnnots) {
+                    if (!item.quads.empty()) {
+                        for (const auto& q : item.quads) {
+                            FPDF_PAGEOBJECT pObj = FPDFPageObj_CreateNewPath(q.x1, q.y1);
+                            if (!pObj) continue;
+                            FPDFPath_LineTo(pObj, q.x2, q.y2);
+                            FPDFPath_LineTo(pObj, q.x4, q.y4);
+                            FPDFPath_LineTo(pObj, q.x3, q.y3);
+                            FPDFPath_Close(pObj);
+                            FPDFPageObj_SetFillColor(pObj, red, grn, blu, alf);
+                            FPDFPath_SetDrawMode(pObj, FPDF_FILLMODE_ALTERNATE, 0);
+                            FPDFPage_InsertObject(pw->page, pObj);
+                        }
+                    } else {
+                        FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
+                            item.rect.left, item.rect.bottom, item.rect.right - item.rect.left,
+                            item.rect.top - item.rect.bottom);
+                        if (rect) {
+                            FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
+                            FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
+                            FPDFPage_InsertObject(pw->page, rect);
+                        }
+                    }
                 }
             }
             FPDFPage_GenerateContent(pw->page);
 
             if (pw->core) {
                 pw->core->contentRedacted = true;
-                for (auto& ar : redactRects) {
+                for (const auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
                 pw->core->unappliedRedactMarksCount =
                     std::max(0, pw->core->unappliedRedactMarksCount -
-                                    static_cast<int32_t>(redactIndices.size()));
+                                    static_cast<int32_t>(redactRects.size()));
             }
-            if (commitCount) *commitCount = static_cast<int32_t>(redactIndices.size());
+            if (commitCount) *commitCount = static_cast<int32_t>(redactRects.size());
             return JPDFIUM_OK;
         }
 

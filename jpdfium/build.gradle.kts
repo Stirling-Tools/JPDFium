@@ -429,6 +429,8 @@ tasks.register<Test>("cliTest") {
     useJUnitPlatform()
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler", "-Xmx2g")
+    maxHeapSize     = "2g"
     systemProperty("jpdfium.smoke", "true")
     filter { includeTestsMatching("*JpdfiumCliTest") }
     testLogging {
