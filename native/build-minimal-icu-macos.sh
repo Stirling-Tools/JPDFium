@@ -50,25 +50,26 @@ for cand in "$SHARED_DAT_DIR"/icudt*l.dat; do
     break
 done
 if [ -z "$TRIMMED_DAT" ]; then
-    echo "build-minimal-icu-macos.sh: no prepared icudt<MAJ>l.dat under $SHARED_DAT_DIR; skipping" >&2
+    echo "build-minimal-icu-macos.sh: ERROR: no prepared icudt<MAJ>l.dat under $SHARED_DAT_DIR" >&2
+    echo "  Trimmed ICU data is required to meet macOS bundle size budget." >&2
     ls -la "$SHARED_DAT_DIR" 2>/dev/null >&2 || true
-    exit 0
+    exit 1
 fi
 
 # Parse "icudt78l.dat" → MAJ.
 DAT_BASE=$(basename "$TRIMMED_DAT")
 ICU_VER=$(echo "$DAT_BASE" | sed -n 's/^icudt\([0-9][0-9]*\)l\.dat$/\1/p')
 if [ -z "$ICU_VER" ]; then
-    echo "build-minimal-icu-macos.sh: can't parse MAJOR from $DAT_BASE; skipping" >&2
-    exit 0
+    echo "build-minimal-icu-macos.sh: ERROR: can't parse MAJOR from $DAT_BASE" >&2
+    exit 1
 fi
 echo "Input .dat  : $TRIMMED_DAT ($(du -h "$TRIMMED_DAT" | cut -f1)) [ICU $ICU_VER, $TARGET_ARCH]"
 
 # Sanity-check ICU header magic (bytes 2..3 = 0xda 0x27).
 MAGIC_HEX=$(xxd -p -l 4 "$TRIMMED_DAT" 2>/dev/null)
 if [[ ! "$MAGIC_HEX" =~ ....da27$ ]]; then
-    echo "build-minimal-icu-macos.sh: $TRIMMED_DAT has bad ICU magic (got $MAGIC_HEX); skipping" >&2
-    exit 0
+    echo "build-minimal-icu-macos.sh: ERROR: $TRIMMED_DAT has bad ICU magic (got $MAGIC_HEX)" >&2
+    exit 1
 fi
 
 # Verify the workflow's brew icu4c is the same MAJOR. If brew is at a
@@ -93,8 +94,8 @@ if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/lib" ]; then
     if [ -n "$BREW_SONAME" ]; then
         BREW_VER=$(basename "$BREW_SONAME" | sed -n 's/^libicudata\.\([0-9][0-9]*\)\.dylib$/\1/p')
         if [ -n "$BREW_VER" ] && [ "$BREW_VER" != "$ICU_VER" ]; then
-            echo "build-minimal-icu-macos.sh: prep ICU $ICU_VER ≠ brew ICU $BREW_VER; skipping" >&2
-            exit 0
+            echo "build-minimal-icu-macos.sh: ERROR: prep ICU $ICU_VER ≠ brew ICU $BREW_VER" >&2
+            exit 1
         fi
         echo "  brew icu4c  : ICU $BREW_VER ($BREW_SONAME) - matches"
     fi
@@ -122,7 +123,7 @@ clang -arch "$TARGET_ARCH" -dynamiclib \
     -current_version "${ICU_VER}.1.0" \
     -o "$NEW_LIB" \
     "$ASM" \
-    || { echo "build-minimal-icu-macos.sh: clang link failed; skipping" >&2; exit 0; }
+    || { echo "build-minimal-icu-macos.sh: ERROR: clang link failed" >&2; exit 1; }
 
 echo "Built       : $NEW_LIB ($(du -h "$NEW_LIB" | cut -f1))"
 
@@ -130,8 +131,8 @@ echo "--- otool -D ---"
 otool -D "$NEW_LIB" || true
 echo "--- exported symbol ---"
 if ! nm -gU "$NEW_LIB" 2>/dev/null | grep -qE "_icudt${ICU_VER}_dat"; then
-    echo "build-minimal-icu-macos.sh: _icudt${ICU_VER}_dat not exported; skipping" >&2
-    exit 0
+    echo "build-minimal-icu-macos.sh: ERROR: _icudt${ICU_VER}_dat not exported" >&2
+    exit 1
 fi
 
 # Pre-stage into native/dist/<platform>/. bundle-runtime-deps.sh's

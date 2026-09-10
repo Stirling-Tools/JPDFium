@@ -198,4 +198,14 @@ if [ "$OS" = "linux" ]; then
         [ -e "$old" ] || continue
         sudo mv "$old" "${old}.disabled" 2>/dev/null || true
     done
+elif [ "$OS" = "darwin" ]; then
+    HB_PREFIX="$(brew --prefix harfbuzz 2>/dev/null || true)"
+    HB_CELLAR="$(brew --cellar harfbuzz 2>/dev/null || true)"
+    for old in "$PREFIX"/lib/libharfbuzz*.dylib \
+               ${HB_PREFIX:+"$HB_PREFIX/lib"/libharfbuzz*.dylib} \
+               ${HB_CELLAR:+"$HB_CELLAR"/*/lib/libharfbuzz*.dylib}; do
+        [ -e "$old" ] || continue
+        mv "$old" "${old}.disabled" 2>/dev/null || true
+    done
 fi
+
