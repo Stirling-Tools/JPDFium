@@ -170,12 +170,12 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetTextAlignment = downcallCritical("EPDFAnnot_GetTextAlignment",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Set vertical alignment. */
-    public static final MethodHandle EPDFAnnot_SetVerticalAlignment = downcall("EPDFAnnot_SetVerticalAlignment",
+    /** Set vertical alignment. Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_SetVerticalAlignment = downcallOptional("EPDFAnnot_SetVerticalAlignment",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    /** Get vertical alignment. */
-    public static final MethodHandle EPDFAnnot_GetVerticalAlignment = downcallCritical("EPDFAnnot_GetVerticalAlignment",
+    /** Get vertical alignment. Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_GetVerticalAlignment = downcallOptional("EPDFAnnot_GetVerticalAlignment",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get annotation by /NM name. */
@@ -233,20 +233,20 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetRotate = downcall("EPDFAnnot_GetRotate",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
-    /** Set extended (custom /EPDFRotate) rotation. */
-    public static final MethodHandle EPDFAnnot_SetExtendedRotation = downcall("EPDFAnnot_SetExtendedRotation",
+    /** Set extended (custom /EPDFRotate) rotation. Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_SetExtendedRotation = downcallOptional("EPDFAnnot_SetExtendedRotation",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT));
 
-    /** Get extended rotation. */
-    public static final MethodHandle EPDFAnnot_GetExtendedRotation = downcall("EPDFAnnot_GetExtendedRotation",
+    /** Get extended rotation. Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_GetExtendedRotation = downcallOptional("EPDFAnnot_GetExtendedRotation",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
-    /** Set unrotated rect (custom /EPDFUnrotatedRect). */
-    public static final MethodHandle EPDFAnnot_SetUnrotatedRect = downcall("EPDFAnnot_SetUnrotatedRect",
+    /** Set unrotated rect (custom /EPDFUnrotatedRect). Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_SetUnrotatedRect = downcallOptional("EPDFAnnot_SetUnrotatedRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
-    /** Get unrotated rect. */
-    public static final MethodHandle EPDFAnnot_GetUnrotatedRect = downcall("EPDFAnnot_GetUnrotatedRect",
+    /** Get unrotated rect. Optional: absent from some builds. */
+    public static final MethodHandle EPDFAnnot_GetUnrotatedRect = downcallOptional("EPDFAnnot_GetUnrotatedRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Get normalized annotation rect (left &lt;= right, bottom &lt;= top). */

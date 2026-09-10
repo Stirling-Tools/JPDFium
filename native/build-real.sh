@@ -52,6 +52,7 @@ elif [ "$OS" = "linux" ]; then
 fi
 mkdir -p "${SCRIPT_DIR}/dist/${PLATFORM}"
 find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+find "${SCRIPT_DIR}/pdfium/lib" -maxdepth 1 \( -name '*.dylib' -o -name '*.so*' -o -name '*.dll' \) -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
 
 echo ""
 echo "Built: $(find "${SCRIPT_DIR}/build-real" -name 'libjpdfium.*' -type f)"
