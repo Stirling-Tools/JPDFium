@@ -1,13 +1,13 @@
 // jpdfium_redact.cpp - Redaction engine.
 
+#include <epdf_redact.h>
+#include <epdf_text.h>
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
 #include <fpdf_flatten.h>
 #include <fpdf_save.h>
 #include <fpdf_text.h>
 #include <fpdfview.h>
-#include <epdf_redact.h>
-#include <epdf_text.h>
 
 #include <algorithm>
 #include <cctype>
@@ -3215,15 +3215,16 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // Best case scenario: Wrap EmbedPDF core engine (EPDFAnnot_ApplyRedaction)
         // High-fidelity native in-place redaction via EmbedPDF core engine.
         std::vector<TextMatch> sortedMatches = matches;
-        std::sort(sortedMatches.begin(), sortedMatches.end(), [](const TextMatch& a, const TextMatch& b) {
-            if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
-                return a.bboxB < b.bboxB;
-            }
-            return a.bboxL > b.bboxL;
-        });
+        std::sort(sortedMatches.begin(), sortedMatches.end(),
+                  [](const TextMatch& a, const TextMatch& b) {
+                      if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
+                          return a.bboxB < b.bboxB;
+                      }
+                      return a.bboxL > b.bboxL;
+                  });
 
         struct AppliedMatch {
-            FS_RECTF rect;
+            FS_RECTF rect{};
             std::vector<FS_QUADPOINTSF> quads;
         };
         std::vector<AppliedMatch> appliedMatches;
@@ -3246,7 +3247,8 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             am.rect = rect;
             for (int ci : m.charIndices) {
                 EPDF_CHAR_GEOMETRY geo;
-                if (EPDFText_GetCharGeometry(tp, ci, &geo) && (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
+                if (EPDFText_GetCharGeometry(tp, ci, &geo) &&
+                    (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
                     FPDFAnnot_AppendAttachmentPoints(annot, &geo.loose_quad);
                     am.quads.push_back(geo.loose_quad);
                 }
@@ -3492,15 +3494,16 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // This ensures that trailing/middle text in shared text objects is removed BEFORE any
         // leading text, avoiding premature text matrix shifting in PDFium's redactor.
         std::vector<TextMatch> sortedMatches = matches;
-        std::sort(sortedMatches.begin(), sortedMatches.end(), [](const TextMatch& a, const TextMatch& b) {
-            if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
-                return a.bboxB < b.bboxB;
-            }
-            return a.bboxL > b.bboxL;
-        });
+        std::sort(sortedMatches.begin(), sortedMatches.end(),
+                  [](const TextMatch& a, const TextMatch& b) {
+                      if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
+                          return a.bboxB < b.bboxB;
+                      }
+                      return a.bboxL > b.bboxL;
+                  });
 
         struct AppliedMatch {
-            FS_RECTF rect;
+            FS_RECTF rect{};
             std::vector<FS_QUADPOINTSF> quads;
         };
         std::vector<AppliedMatch> appliedMatches;
@@ -3523,7 +3526,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             am.rect = rect;
             for (int ci : m.charIndices) {
                 EPDF_CHAR_GEOMETRY geo;
-                if (EPDFText_GetCharGeometry(tp, ci, &geo) && (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
+                if (EPDFText_GetCharGeometry(tp, ci, &geo) &&
+                    (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
                     FPDFAnnot_AppendAttachmentPoints(annot, &geo.loose_quad);
                     am.quads.push_back(geo.loose_quad);
                 }
@@ -3858,7 +3862,8 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
             FPDFAnnot_SetRect(annot, &rect);
             for (int ci : m.charIndices) {
                 EPDF_CHAR_GEOMETRY geo;
-                if (EPDFText_GetCharGeometry(tp, ci, &geo) && (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
+                if (EPDFText_GetCharGeometry(tp, ci, &geo) &&
+                    (geo.flags & EPDF_CHARGEO_HAS_LOOSE_QUAD)) {
                     FPDFAnnot_AppendAttachmentPoints(annot, &geo.loose_quad);
                 }
             }
@@ -3895,10 +3900,9 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         // Collect all REDACT annotations and rects
         int total = FPDFPage_GetAnnotCount(pw->page);
         struct AnnotItem {
-            FPDF_ANNOTATION annot;
-            FS_RECTF rect;
+            FPDF_ANNOTATION annot = nullptr;
+            FS_RECTF rect{};
             std::vector<FS_QUADPOINTSF> quads;
-            int origIndex;
         };
         std::vector<AnnotItem> redactAnnots;
         std::vector<int> redactIndices;
@@ -3912,7 +3916,6 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                     AnnotItem item;
                     item.annot = a;
                     item.rect = rect;
-                    item.origIndex = i;
                     size_t qc = FPDFAnnot_CountAttachmentPoints(a);
                     for (size_t qi = 0; qi < qc; ++qi) {
                         FS_QUADPOINTSF qp;
@@ -3936,12 +3939,13 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
         // Apply in reverse reading order (bottom-to-top, right-to-left) to avoid
         // text matrix shifting artifacts across multiple regions in the same text object.
-        std::sort(redactAnnots.begin(), redactAnnots.end(), [](const AnnotItem& a, const AnnotItem& b) {
-            if (std::abs(a.rect.bottom - b.rect.bottom) > 2.0f) {
-                return a.rect.bottom < b.rect.bottom;
-            }
-            return a.rect.left > b.rect.left;
-        });
+        std::sort(redactAnnots.begin(), redactAnnots.end(),
+                  [](const AnnotItem& a, const AnnotItem& b) {
+                      if (std::abs(a.rect.bottom - b.rect.bottom) > 2.0f) {
+                          return a.rect.bottom < b.rect.bottom;
+                      }
+                      return a.rect.left > b.rect.left;
+                  });
 
         std::vector<FS_RECTF> redactRects;
         redactRects.reserve(redactAnnots.size());
