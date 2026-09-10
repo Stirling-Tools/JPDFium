@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.doc.Annotation;
+import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfLink;
 import stirling.software.jpdfium.doc.PdfLinks;
@@ -11,10 +12,12 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.TextPageBindings;
+import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.awt.image.BufferedImage;
 import java.lang.foreign.Arena;
@@ -34,18 +37,28 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfPage implements AutoCloseable {
 
     private final long handle;
+    private final int pageIndex;
     private final MemorySegment rawPageSegment;
     private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private PdfPage(long handle) {
+    private PdfPage(long handle, int pageIndex) {
         this.handle = handle;
+        this.pageIndex = pageIndex;
         this.rawPageSegment = JpdfiumLib.pageRawHandle(handle);
         this.rawDocSegment = JpdfiumLib.pageDocRawHandle(handle);
     }
 
     static PdfPage open(long docHandle, int index) {
-        return new PdfPage(JpdfiumLib.pageOpen(docHandle, index));
+        return new PdfPage(JpdfiumLib.pageOpen(docHandle, index), index);
+    }
+
+    /**
+     * Returns the zero-based index of this page within its parent document.
+     */
+    public int pageIndex() {
+        ensureOpen();
+        return pageIndex;
     }
 
     public PageSize size() {
@@ -434,6 +447,143 @@ public final class PdfPage implements AutoCloseable {
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+    }
+
+    /**
+     * Get all five page boxes for this page.
+     *
+     * @return {@link PageBoxes} containing MediaBox, CropBox, BleedBox, TrimBox, and ArtBox
+     */
+    public PageBoxes boxes() {
+        ensureOpen();
+        return PdfPageBoxes.getAll(rawPageSegment);
+    }
+
+    /**
+     * Crop this page to the specified rectangle.
+     * Sets the CropBox of this page.
+     *
+     * @param cropBox crop bounding box
+     */
+    public void crop(Rect cropBox) {
+        setCropBox(cropBox);
+    }
+
+    /**
+     * Crop this page to the specified dimensions.
+     *
+     * @param x      left coordinate
+     * @param y      bottom coordinate
+     * @param width  crop width
+     * @param height crop height
+     */
+    public void crop(float x, float y, float width, float height) {
+        crop(new Rect(x, y, width, height));
+    }
+
+    /**
+     * Get the CropBox of this page, if set.
+     */
+    public Optional<Rect> getCropBox() {
+        ensureOpen();
+        return PdfPageBoxes.getCropBox(rawPageSegment);
+    }
+
+    /**
+     * Set the CropBox of this page.
+     */
+    public void setCropBox(Rect box) {
+        ensureOpen();
+        if (box == null) throw new IllegalArgumentException("box must not be null");
+        PdfPageBoxes.setCropBox(rawPageSegment, box);
+    }
+
+    /**
+     * Get the MediaBox of this page.
+     */
+    public Rect getMediaBox() {
+        ensureOpen();
+        return PdfPageBoxes.getMediaBox(rawPageSegment)
+                .orElseGet(() -> new Rect(0, 0, size().width(), size().height()));
+    }
+
+    /**
+     * Set the MediaBox of this page.
+     */
+    public void setMediaBox(Rect box) {
+        ensureOpen();
+        if (box == null) throw new IllegalArgumentException("box must not be null");
+        PdfPageBoxes.setMediaBox(rawPageSegment, box);
+    }
+
+    /**
+     * Get the BleedBox of this page, if set.
+     */
+    public Optional<Rect> getBleedBox() {
+        ensureOpen();
+        return PdfPageBoxes.getBleedBox(rawPageSegment);
+    }
+
+    /**
+     * Set the BleedBox of this page.
+     */
+    public void setBleedBox(Rect box) {
+        ensureOpen();
+        if (box == null) throw new IllegalArgumentException("box must not be null");
+        PdfPageBoxes.setBleedBox(rawPageSegment, box);
+    }
+
+    /**
+     * Get the TrimBox of this page, if set.
+     */
+    public Optional<Rect> getTrimBox() {
+        ensureOpen();
+        return PdfPageBoxes.getTrimBox(rawPageSegment);
+    }
+
+    /**
+     * Set the TrimBox of this page.
+     */
+    public void setTrimBox(Rect box) {
+        ensureOpen();
+        if (box == null) throw new IllegalArgumentException("box must not be null");
+        PdfPageBoxes.setTrimBox(rawPageSegment, box);
+    }
+
+    /**
+     * Get the ArtBox of this page, if set.
+     */
+    public Optional<Rect> getArtBox() {
+        ensureOpen();
+        return PdfPageBoxes.getArtBox(rawPageSegment);
+    }
+
+    /**
+     * Set the ArtBox of this page.
+     */
+    public void setArtBox(Rect box) {
+        ensureOpen();
+        if (box == null) throw new IllegalArgumentException("box must not be null");
+        PdfPageBoxes.setArtBox(rawPageSegment, box);
+    }
+
+    /**
+     * Returns the user unit scale factor (/UserUnit) for this page.
+     * Defaults to 1.0 (72 points per inch) per PDF specification.
+     */
+    public float getUserUnit() {
+        ensureOpen();
+        MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
+        if (getUnit != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
+                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+                if (ok != 0) {
+                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                }
+            } catch (Throwable ignored) {}
+        }
+        return 1.0f;
     }
 
     /**
