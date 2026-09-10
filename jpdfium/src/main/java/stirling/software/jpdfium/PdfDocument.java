@@ -47,11 +47,20 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class PdfDocument implements AutoCloseable {
 
     private final long handle;
-    private final MemorySegment rawDocSegment;
+    private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
     PdfDocument(long handle) {
         this.handle = handle;
+        this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+    }
+
+    /**
+     * Re-queries the raw FPDF_DOCUMENT handle from the native bridge.
+     * Called when native operations (such as QPDF metadata or font stripping)
+     * reload the underlying document.
+     */
+    public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
     }
 

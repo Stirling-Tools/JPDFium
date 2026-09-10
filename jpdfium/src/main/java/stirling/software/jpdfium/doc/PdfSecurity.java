@@ -344,7 +344,9 @@ public final class PdfSecurity {
 
     private static int doRemoveFonts(PdfDocument doc) {
         try {
-            return FontLib.stripFonts(doc.nativeHandle());
+            int count = FontLib.stripFonts(doc.nativeHandle());
+            doc.refreshRawHandle();
+            return count;
         } catch (JPDFiumException ignored) { return 0; }
     }
 

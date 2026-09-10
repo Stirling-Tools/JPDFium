@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.lang.foreign.Arena;
@@ -67,6 +68,7 @@ public final class PdfMetadata {
             MemorySegment tagSegment = arena.allocateFrom(tag.pdfKey());
 
             long needed;
+            NativeGuard.acquire();
             try {
                 if (DocBindings.FPDF_GetMetaText == null) return Optional.empty();
                 needed = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment,
@@ -74,16 +76,21 @@ public final class PdfMetadata {
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 return Optional.empty();
+            } finally {
+                NativeGuard.release();
             }
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment bufferSegment = arena.allocate(needed);
+            NativeGuard.acquire();
             try {
                 long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 return Optional.empty();
+            } finally {
+                NativeGuard.release();
             }
 
             String value = FfmHelper.fromWideString(bufferSegment, needed);
@@ -107,12 +114,15 @@ public final class PdfMetadata {
      * See PDF Reference Table 3.20 for bit definitions.
      */
     public int permissions() {
+        NativeGuard.acquire();
         try {
             if (DocBindings.FPDF_GetDocPermissions == null) return -1;
             return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return -1;
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -120,12 +130,15 @@ public final class PdfMetadata {
      * Returns the security handler revision, or 0 if the document is not encrypted.
      */
     public int securityHandlerRevision() {
+        NativeGuard.acquire();
         try {
             if (DocBindings.FPDF_GetSecurityHandlerRevision == null) return 0;
             return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return 0;
+        } finally {
+            NativeGuard.release();
         }
     }
 
@@ -138,20 +151,27 @@ public final class PdfMetadata {
     public Optional<String> pageLabel(int pageIndex) {
         try (Arena arena = Arena.ofConfined()) {
             long needed;
+            NativeGuard.acquire();
             try {
+                if (DocBindings.FPDF_GetPageLabel == null) return Optional.empty();
                 needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
                         MemorySegment.NULL, 0L);
             } catch (Throwable t) {
                 throw new JPDFiumException("FPDF_GetPageLabel size call", t);
+            } finally {
+                NativeGuard.release();
             }
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment bufferSegment = arena.allocate(needed);
+            NativeGuard.acquire();
             try {
                 long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException("FPDF_GetPageLabel fill call", t);
+            } finally {
+                NativeGuard.release();
             }
 
             String label = FfmHelper.fromWideString(bufferSegment, needed);
