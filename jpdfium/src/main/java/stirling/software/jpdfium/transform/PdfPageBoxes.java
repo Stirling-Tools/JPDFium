@@ -35,6 +35,41 @@ public final class PdfPageBoxes {
     }
 
     /**
+     * Read the MediaBox.
+     */
+    public static Optional<Rect> getMediaBox(MemorySegment rawPage) {
+        return getBox(PageEditBindings.FPDFPage_GetMediaBox, rawPage);
+    }
+
+    /**
+     * Read the CropBox.
+     */
+    public static Optional<Rect> getCropBox(MemorySegment rawPage) {
+        return getBox(PageEditBindings.FPDFPage_GetCropBox, rawPage);
+    }
+
+    /**
+     * Read the BleedBox.
+     */
+    public static Optional<Rect> getBleedBox(MemorySegment rawPage) {
+        return getBox(PageEditBindings.FPDFPage_GetBleedBox, rawPage);
+    }
+
+    /**
+     * Read the TrimBox.
+     */
+    public static Optional<Rect> getTrimBox(MemorySegment rawPage) {
+        return getBox(PageEditBindings.FPDFPage_GetTrimBox, rawPage);
+    }
+
+    /**
+     * Read the ArtBox.
+     */
+    public static Optional<Rect> getArtBox(MemorySegment rawPage) {
+        return getBox(PageEditBindings.FPDFPage_GetArtBox, rawPage);
+    }
+
+    /**
      * Set the MediaBox.
      */
     public static void setMediaBox(MemorySegment rawPage, Rect box) {
