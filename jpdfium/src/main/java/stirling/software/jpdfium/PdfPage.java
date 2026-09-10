@@ -1,10 +1,12 @@
 package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.doc.Annotation;
+import stirling.software.jpdfium.doc.EmbedPdfAnnotations;
 import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfLink;
 import stirling.software.jpdfium.doc.PdfLinks;
+import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
@@ -21,6 +23,7 @@ import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.awt.image.BufferedImage;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -584,6 +587,69 @@ public final class PdfPage implements AutoCloseable {
             } catch (Throwable ignored) {}
         }
         return 1.0f;
+    }
+
+    /**
+     * Redact text within the specified bounding rectangle in place without creating annotations.
+     *
+     * @param rect           target rectangle in PDF points
+     * @param recurseForms   whether to redact inside nested Form XObjects
+     * @param drawBlackBoxes whether to paint filled black boxes over the redacted region
+     * @return true if redaction succeeded
+     */
+    public boolean redactInRect(Rect rect, boolean recurseForms, boolean drawBlackBoxes) {
+        ensureOpen();
+        if (rect == null) throw new IllegalArgumentException("rect must not be null");
+        MethodHandle redactHandle = EmbedPdfTextBindings.EPDFText_RedactInRect;
+        if (redactHandle == null) {
+            throw new UnsupportedOperationException("EPDFText_RedactInRect is not supported by this PDFium build");
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment rectSeg = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
+            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")), rect.x());
+            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")), rect.y());
+            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")), rect.x() + rect.width());
+            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")), rect.y() + rect.height());
+            int ok = (int) redactHandle.invokeExact(rawPageSegment, rectSeg, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
+            if (ok != 0) {
+                PdfPageEditor.generateContent(rawPageSegment);
+                return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            throw new JPDFiumException("EPDFText_RedactInRect failed", t);
+        }
+    }
+
+    /**
+     * Redact text within the specified bounding rectangle in place with black boxes enabled.
+     *
+     * @param rect target rectangle in PDF points
+     * @return true if redaction succeeded
+     */
+    public boolean redactInRect(Rect rect) {
+        return redactInRect(rect, true, true);
+    }
+
+    /**
+     * Apply a single redact annotation on this page, permanently removing content underneath.
+     *
+     * @param annotIndex index of the REDACT annotation on this page
+     * @return count of non-redact annotations removed as a side effect
+     */
+    public int applyRedaction(int annotIndex) {
+        ensureOpen();
+        return EmbedPdfAnnotations.applyRedactionWithCount(rawPageSegment, annotIndex);
+    }
+
+    /**
+     * Apply all redact annotations on this page, permanently removing content underneath.
+     *
+     * @return true if any redactions were applied
+     */
+    public boolean applyRedactions() {
+        ensureOpen();
+        return EmbedPdfAnnotations.applyAllRedactions(rawPageSegment);
     }
 
     /**

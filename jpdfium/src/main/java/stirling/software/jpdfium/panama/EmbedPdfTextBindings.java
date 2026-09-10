@@ -8,6 +8,7 @@ import java.lang.invoke.MethodHandle;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for the EmbedPDF fork's text extraction and character geometry APIs.
@@ -84,4 +85,18 @@ public final class EmbedPdfTextBindings {
      */
     public static final MethodHandle EPDFText_GetCharToTextMap = downcallOptional("EPDFText_GetCharToTextMap",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
+
+    /**
+     * Direct text redaction in rect without creating annotations.
+     * Signature: FPDF_BOOL EPDFText_RedactInRect(FPDF_PAGE page, const FS_RECTF* rect, FPDF_BOOL recurse_forms, FPDF_BOOL draw_black_boxes)
+     */
+    public static final MethodHandle EPDFText_RedactInRect = downcallOptional("EPDFText_RedactInRect",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
+
+    /**
+     * Direct text redaction in quads without creating annotations.
+     * Signature: FPDF_BOOL EPDFText_RedactInQuads(FPDF_PAGE page, const FS_QUADPOINTSF* quads, size_t count, FPDF_BOOL recurse_forms, FPDF_BOOL draw_black_boxes)
+     */
+    public static final MethodHandle EPDFText_RedactInQuads = downcallOptional("EPDFText_RedactInQuads",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_INT, JAVA_INT));
 }
