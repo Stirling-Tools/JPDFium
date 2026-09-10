@@ -107,17 +107,12 @@ class CorpusRedactTest {
      *   <li>{@code bug1669099.pdf} is a German document (umlauts) whose
      *       non-target words disappear under Object Fission - same class of
      *       PDFium fission limitation as issue918.pdf.</li>
-     *   <li>{@code issue10640.pdf} and {@code 23_Narrative of the Life of Frederick Douglass, an Am.pdf}
-     *       use custom Type3 / composite font encodings where stream regeneration
-     *       drops non-target characters during GenerateContent, tripping the char-loss threshold.</li>
      * </ul>
      */
     private static final Set<String> SKIP_PDFS = Set.of(
             "issue918.pdf",
             "issue19848.pdf",
-            "bug1669099.pdf",
-            "issue10640.pdf",
-            "23_Narrative of the Life of Frederick Douglass, an Am.pdf"
+            "bug1669099.pdf"
     );
 
     /** Output directory under samples-output for structured report. */
@@ -435,7 +430,10 @@ class CorpusRedactTest {
 
             String timestamp = LocalDateTime.now().format(
                     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            int passed = 0, warned = 0, failed = 0, skipped = 0;
+            int passed = 0;
+            int warned = 0;
+            int failed = 0;
+            int skipped = 0;
             for (PdfReport r : reports) {
                 switch (r.severity) {
                     case PASS -> passed++;
