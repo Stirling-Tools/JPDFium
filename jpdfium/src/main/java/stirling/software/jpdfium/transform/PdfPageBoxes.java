@@ -105,6 +105,9 @@ public final class PdfPageBoxes {
     }
 
     private static Optional<Rect> getBox(MethodHandle getter, MemorySegment rawPage) {
+        if (getter == null || rawPage == null || rawPage.equals(MemorySegment.NULL)) {
+            return Optional.empty();
+        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment l = arena.allocate(ValueLayout.JAVA_FLOAT);
             MemorySegment b = arena.allocate(ValueLayout.JAVA_FLOAT);
@@ -117,16 +120,29 @@ public final class PdfPageBoxes {
             float right = r.get(ValueLayout.JAVA_FLOAT, 0);
             float top = t.get(ValueLayout.JAVA_FLOAT, 0);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
-        } catch (Throwable e) { return Optional.empty(); }
+        } catch (Throwable e) {
+            return Optional.empty();
+        }
     }
 
     private static void setBox(MethodHandle setter, MemorySegment rawPage, Rect box) {
+        if (setter == null) {
+            throw new UnsupportedOperationException("Page box setting is not supported by this PDFium build");
+        }
+        if (rawPage == null || rawPage.equals(MemorySegment.NULL)) {
+            throw new IllegalArgumentException("rawPage must not be null");
+        }
+        if (box == null) {
+            throw new IllegalArgumentException("box must not be null");
+        }
         try {
             float left = box.x();
             float bottom = box.y();
             float right = box.x() + box.width();
             float top = box.y() + box.height();
             setter.invokeExact(rawPage, left, bottom, right, top);
-        } catch (Throwable t) { throw new JPDFiumException("Failed to set page box", t); }
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to set page box", t);
+        }
     }
 }

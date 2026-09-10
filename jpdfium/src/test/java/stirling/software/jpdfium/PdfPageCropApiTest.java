@@ -3,15 +3,18 @@ package stirling.software.jpdfium;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfPageCropApiTest {
 
     @Test
     void testPageBoxesGettersSettersAndCrop() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Page crop and box inspection requires real PDFium native library");
         byte[] pdfBytes = SyntheticPdfFactory.createDiverse(2);
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
             assertEquals(2, doc.pageCount());
@@ -74,6 +77,7 @@ class PdfPageCropApiTest {
 
     @Test
     void testCropCoordinateOverload() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Page crop and box inspection requires real PDFium native library");
         byte[] pdfBytes = SyntheticPdfFactory.createDiverse(1);
         byte[] savedBytes;
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
@@ -105,6 +109,20 @@ class PdfPageCropApiTest {
                 assertEquals(400f, crop.get().height(), 0.01f);
                 // Also verify it renders without crashing
                 assertNotNull(p.renderAt(72));
+            }
+        }
+    }
+
+    @Test
+    void testStubModeGracefulDegradation() throws Exception {
+        assumeTrue(NativeRuntime.isStub(), "Stub mode specific verification");
+        byte[] pdfBytes = SyntheticPdfFactory.createDiverse(1);
+        try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
+            try (PdfPage page = doc.page(0)) {
+                PageBoxes boxes = page.boxes();
+                assertNotNull(boxes);
+                assertNotNull(boxes.mediaBox());
+                assertThrows(UnsupportedOperationException.class, () -> page.crop(new Rect(10, 10, 100, 100)));
             }
         }
     }
