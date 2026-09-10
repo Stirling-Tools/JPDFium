@@ -3618,7 +3618,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         // High-fidelity native in-place redaction via EmbedPDF core engine
-        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page);
+        uint32_t removedCount = 0;
+        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page, &removedCount);
         if (epdfOk) {
             unsigned int alf = (argb >> 24) & 0xFF;
             unsigned int red = (argb >> 16) & 0xFF;
