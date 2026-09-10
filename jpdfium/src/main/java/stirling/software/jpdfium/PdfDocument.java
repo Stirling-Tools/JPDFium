@@ -2,10 +2,13 @@ package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
+import stirling.software.jpdfium.doc.CompressOptions;
+import stirling.software.jpdfium.doc.CompressPreset;
 import stirling.software.jpdfium.doc.MetadataTag;
 import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
+import stirling.software.jpdfium.doc.PdfCompressor;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
@@ -16,6 +19,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
@@ -34,6 +38,7 @@ import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -213,6 +218,65 @@ public final class PdfDocument implements AutoCloseable {
             throw new IllegalArgumentException("At least one document is required");
         }
         return PdfMerge.merge(List.of(documents));
+    }
+
+    /**
+     * Compress this document using the specified preset.
+     *
+     * @param preset the compression preset (e.g. {@link CompressPreset#WEB}, {@link CompressPreset#MAXIMUM})
+     * @return newly opened compressed document
+     */
+    public PdfDocument compress(CompressPreset preset) {
+        return compress(CompressOptions.builder().preset(preset).build());
+    }
+
+    /**
+     * Compress this document using custom compression options.
+     *
+     * @param options compression options
+     * @return newly opened compressed document
+     */
+    public PdfDocument compress(CompressOptions options) {
+        ensureOpen();
+        PdfCompressor.CompressResultWithBytes result = PdfCompressor.compress(this, options);
+        return PdfDocument.open(result.bytes());
+    }
+
+    /**
+     * Compress this document and return the result containing detailed statistics and raw bytes.
+     *
+     * @param options compression options
+     * @return compression result with statistics and output bytes
+     */
+    public PdfCompressor.CompressResultWithBytes compressWithStats(CompressOptions options) {
+        ensureOpen();
+        return PdfCompressor.compress(this, options);
+    }
+
+    /**
+     * Compress a PDF byte array using the specified preset.
+     *
+     * @param input PDF byte array
+     * @param preset compression preset
+     * @return compressed PDF bytes
+     */
+    public static byte[] compressBytes(byte[] input, CompressPreset preset) {
+        if (input == null || input.length == 0) return input;
+        return compressBytes(input, CompressOptions.builder().preset(preset).build());
+    }
+
+    /**
+     * Compress a PDF byte array using custom options.
+     *
+     * @param input PDF byte array
+     * @param options compression options
+     * @return compressed PDF bytes
+     */
+    public static byte[] compressBytes(byte[] input, CompressOptions options) {
+        if (input == null || input.length == 0) return input;
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            return PdfCompressor.compress(doc, options).bytes();
+        }
     }
 
     /**
@@ -468,6 +532,75 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Set a metadata property in the document's Info dictionary.
+     * Supports both standard keys ("Title", "Author", "Subject", "Keywords", "Creator", "Producer")
+     * and arbitrary custom keys.
+     *
+     * @param key   the metadata key
+     * @param value the string value to set
+     */
+    public void setMetadata(String key, String value) {
+        ensureOpen();
+        if (key == null || value == null) return;
+        MethodHandle setMeta = EmbedPdfDocumentBindings.EPDF_SetMetaText;
+        if (setMeta != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment keySeg = arena.allocateFrom(key);
+                MemorySegment valSeg = FfmHelper.toWideString(arena, value);
+                int ok = (int) setMeta.invokeExact(rawDocSegment, keySeg, valSeg);
+                if (ok != 0) return;
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    /**
+     * Get all metadata keys present in the document's Info dictionary, including custom keys.
+     *
+     * @return set of all metadata key names
+     */
+    public Set<String> metadataKeys() {
+        ensureOpen();
+        MethodHandle countHandle = EmbedPdfDocumentBindings.EPDF_GetMetaKeyCount;
+        MethodHandle nameHandle = EmbedPdfDocumentBindings.EPDF_GetMetaKeyName;
+        if (countHandle != null && nameHandle != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                int count = (int) countHandle.invokeExact(rawDocSegment, 0 /* all keys */);
+                Set<String> keys = new LinkedHashSet<>();
+                MemorySegment buf = arena.allocate(256);
+                for (int i = 0; i < count; i++) {
+                    long len = (long) nameHandle.invokeExact(rawDocSegment, i, 0 /* all keys */, buf, 256L);
+                    if (len > 0) {
+                        keys.add(buf.getString(0));
+                    }
+                }
+                if (!keys.isEmpty()) return keys;
+            } catch (Throwable ignored) {}
+        }
+        return metadata().keySet();
+    }
+
+    /**
+     * Get the primary document language specification (/Lang from Catalog) if set.
+     *
+     * @return optional RFC 3066 language code (e.g. "en-US")
+     */
+    public Optional<String> language() {
+        ensureOpen();
+        MethodHandle getLang = EmbedPdfDocumentBindings.EPDFCatalog_GetLanguage;
+        if (getLang != null) {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buf = arena.allocate(128);
+                int ok = (int) getLang.invokeExact(rawDocSegment, buf, 128L);
+                if (ok != 0) {
+                    String lang = buf.getString(0);
+                    if (!lang.isBlank()) return Optional.of(lang);
+                }
+            } catch (Throwable ignored) {}
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Get the document's permission flags.
      */
     public long permissions() {
@@ -505,6 +638,74 @@ public final class PdfDocument implements AutoCloseable {
      */
     public Optional<Bookmark> findBookmark(String title) {
         return PdfBookmarks.find(rawHandle(), title);
+    }
+
+    /**
+     * Add a new top-level bookmark targeting the specified page.
+     *
+     * @param title           the bookmark title
+     * @param targetPageIndex zero-based target page index
+     * @return created Bookmark, or null on error
+     */
+    public Bookmark addBookmark(String title, int targetPageIndex) {
+        ensureOpen();
+        return PdfBookmarks.create(rawHandle(), title, targetPageIndex);
+    }
+
+    /**
+     * Add a new top-level bookmark targeting an external URI.
+     *
+     * @param title the bookmark title
+     * @param uri   the external destination URI (e.g. "https://...")
+     * @return created Bookmark, or null on error
+     */
+    public Bookmark addBookmark(String title, String uri) {
+        ensureOpen();
+        return PdfBookmarks.createWithUri(rawHandle(), title, uri);
+    }
+
+    /**
+     * Add a new child bookmark under an existing parent bookmark.
+     *
+     * @param parentTitle     title of the parent bookmark
+     * @param title           child bookmark title
+     * @param targetPageIndex zero-based target page index
+     * @return created child Bookmark, or null on error
+     */
+    public Bookmark addChildBookmark(String parentTitle, String title, int targetPageIndex) {
+        ensureOpen();
+        return PdfBookmarks.appendChild(rawHandle(), parentTitle, title, targetPageIndex);
+    }
+
+    /**
+     * Delete a bookmark and its subtree by exact title.
+     *
+     * @param title bookmark title
+     * @return true if deleted
+     */
+    public boolean deleteBookmark(String title) {
+        ensureOpen();
+        return PdfBookmarks.delete(rawHandle(), title);
+    }
+
+    /**
+     * Update the title of an existing bookmark.
+     *
+     * @param currentTitle current title of the bookmark
+     * @param newTitle     new title to set
+     * @return true if updated
+     */
+    public boolean updateBookmarkTitle(String currentTitle, String newTitle) {
+        ensureOpen();
+        return PdfBookmarks.setTitle(rawHandle(), currentTitle, newTitle);
+    }
+
+    /**
+     * Clear all bookmarks from the document.
+     */
+    public void clearBookmarks() {
+        ensureOpen();
+        PdfBookmarks.clear(rawHandle());
     }
 
     /**

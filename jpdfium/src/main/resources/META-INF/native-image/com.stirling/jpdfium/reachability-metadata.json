@@ -71,6 +71,9 @@
       "type": "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings"
     },
     {
+      "type": "stirling.software.jpdfium.panama.EmbedPdfBookmarkBindings"
+    },
+    {
       "type": "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings"
     },
     {
@@ -1500,6 +1503,46 @@
           "jint",
           "void*",
           "void*"
+        ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "jfloat",
+          "jint",
+          "jfloat",
+          "jint",
+          "jfloat"
+        ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "void*",
+          "jlong"
+        ]
+      },
+      {
+        "returnType": "jlong",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "jint",
+          "void*",
+          "jlong"
         ]
       }
     ],

@@ -123,4 +123,26 @@ public final class EmbedPdfDocumentBindings {
     /** Set runtime owner permissions override. */
     public static final MethodHandle EPDF_SetRuntimeOwnerPermissions = Symbols.downcallOptional("EPDF_SetRuntimeOwnerPermissions",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    // --- Extended Metadata APIs (EmbedPDF) ---
+
+    /** Get number of metadata keys in the document's Info dictionary. */
+    public static final MethodHandle EPDF_GetMetaKeyCount = Symbols.downcallOptional("EPDF_GetMetaKeyCount",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /** Get the name of the Info dictionary key at index. */
+    public static final MethodHandle EPDF_GetMetaKeyName = Symbols.downcallOptional("EPDF_GetMetaKeyName",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    /** Set metadata tag content in document. */
+    public static final MethodHandle EPDF_SetMetaText = Symbols.downcallOptional("EPDF_SetMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Check if metadata tag exists in document. */
+    public static final MethodHandle EPDF_HasMetaText = Symbols.downcallOptional("EPDF_HasMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
+    /** Get primary document language (/Lang from Catalog). */
+    public static final MethodHandle EPDFCatalog_GetLanguage = Symbols.downcallOptional("EPDFCatalog_GetLanguage",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
 }

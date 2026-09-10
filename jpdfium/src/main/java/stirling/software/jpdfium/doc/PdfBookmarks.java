@@ -2,10 +2,13 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.ActionBindings;
 import stirling.software.jpdfium.panama.BookmarkBindings;
+import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.EmbedPdfBookmarkBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -217,6 +220,166 @@ public final class PdfBookmarks {
                 throw new JPDFiumException(t);
             }
             return FfmHelper.fromByteString(bufferSegment, needed);
+        }
+    }
+
+    /**
+     * Create a new top-level bookmark.
+     *
+     * @param rawDocSegment   raw FPDF_DOCUMENT segment
+     * @param title           the bookmark title
+     * @param targetPageIndex 0-based target page index, or -1 for no target
+     * @return created Bookmark, or null on error/unsupported
+     */
+    public static Bookmark create(MemorySegment rawDocSegment, String title, int targetPageIndex) {
+        MethodHandle createHandle = EmbedPdfBookmarkBindings.EPDFBookmark_Create;
+        if (createHandle == null) return null;
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment titleSeg = FfmHelper.toWideString(arena, title);
+            MemorySegment bmSeg = (MemorySegment) createHandle.invokeExact(rawDocSegment, titleSeg);
+            if (bmSeg.equals(MemorySegment.NULL)) return null;
+
+            if (targetPageIndex >= 0 && EmbedPdfBookmarkBindings.EPDFDest_CreateXYZ != null
+                    && EmbedPdfBookmarkBindings.EPDFBookmark_SetDest != null) {
+                MemorySegment pageSeg = (MemorySegment) DocBindings.FPDF_LoadPage.invokeExact(rawDocSegment, targetPageIndex);
+                if (!pageSeg.equals(MemorySegment.NULL)) {
+                    try {
+                        MemorySegment destSeg = (MemorySegment) EmbedPdfBookmarkBindings.EPDFDest_CreateXYZ.invokeExact(
+                                pageSeg, 0, 0.0f, 0, 0.0f, 0, 0.0f);
+                        if (!destSeg.equals(MemorySegment.NULL)) {
+                            int setDestRes = (int) EmbedPdfBookmarkBindings.EPDFBookmark_SetDest.invokeExact(rawDocSegment, bmSeg, destSeg);
+                        }
+                    } finally {
+                        DocBindings.FPDF_ClosePage.invokeExact(pageSeg);
+                    }
+                }
+            }
+
+            Set<Long> visited = new HashSet<>();
+            return toBookmark(rawDocSegment, bmSeg, 0, visited);
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to create bookmark", t);
+        }
+    }
+
+    /**
+     * Create a new top-level bookmark pointing to an external URI.
+     */
+    public static Bookmark createWithUri(MemorySegment rawDocSegment, String title, String uri) {
+        MethodHandle createHandle = EmbedPdfBookmarkBindings.EPDFBookmark_Create;
+        MethodHandle uriHandle = EmbedPdfBookmarkBindings.EPDFAction_CreateURI;
+        MethodHandle setActionHandle = EmbedPdfBookmarkBindings.EPDFBookmark_SetAction;
+        if (createHandle == null || uriHandle == null || setActionHandle == null) return null;
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment titleSeg = FfmHelper.toWideString(arena, title);
+            MemorySegment bmSeg = (MemorySegment) createHandle.invokeExact(rawDocSegment, titleSeg);
+            if (bmSeg.equals(MemorySegment.NULL)) return null;
+
+            MemorySegment uriSeg = arena.allocateFrom(uri);
+            MemorySegment actSeg = (MemorySegment) uriHandle.invokeExact(rawDocSegment, uriSeg);
+            if (!actSeg.equals(MemorySegment.NULL)) {
+                int setActRes = (int) setActionHandle.invokeExact(rawDocSegment, bmSeg, actSeg);
+            }
+
+            Set<Long> visited = new HashSet<>();
+            return toBookmark(rawDocSegment, bmSeg, 0, visited);
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to create bookmark with URI", t);
+        }
+    }
+
+    /**
+     * Create and append a child bookmark under an existing parent bookmark.
+     */
+    public static Bookmark appendChild(MemorySegment rawDocSegment, String parentTitle, String title, int targetPageIndex) {
+        MethodHandle appendHandle = EmbedPdfBookmarkBindings.EPDFBookmark_AppendChild;
+        if (appendHandle == null) return null;
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment parentTitleSeg = FfmHelper.toWideString(arena, parentTitle);
+            MemorySegment parentBm = (MemorySegment) BookmarkBindings.FPDFBookmark_Find.invokeExact(rawDocSegment, parentTitleSeg);
+            if (parentBm.equals(MemorySegment.NULL)) return null;
+
+            MemorySegment titleSeg = FfmHelper.toWideString(arena, title);
+            MemorySegment childBm = (MemorySegment) appendHandle.invokeExact(rawDocSegment, parentBm, titleSeg);
+            if (childBm.equals(MemorySegment.NULL)) return null;
+
+            if (targetPageIndex >= 0 && EmbedPdfBookmarkBindings.EPDFDest_CreateXYZ != null
+                    && EmbedPdfBookmarkBindings.EPDFBookmark_SetDest != null) {
+                MemorySegment pageSeg = (MemorySegment) DocBindings.FPDF_LoadPage.invokeExact(rawDocSegment, targetPageIndex);
+                if (!pageSeg.equals(MemorySegment.NULL)) {
+                    try {
+                        MemorySegment destSeg = (MemorySegment) EmbedPdfBookmarkBindings.EPDFDest_CreateXYZ.invokeExact(
+                                pageSeg, 0, 0.0f, 0, 0.0f, 0, 0.0f);
+                        if (!destSeg.equals(MemorySegment.NULL)) {
+                            int setDestRes = (int) EmbedPdfBookmarkBindings.EPDFBookmark_SetDest.invokeExact(rawDocSegment, childBm, destSeg);
+                        }
+                    } finally {
+                        DocBindings.FPDF_ClosePage.invokeExact(pageSeg);
+                    }
+                }
+            }
+
+            Set<Long> visited = new HashSet<>();
+            return toBookmark(rawDocSegment, childBm, 0, visited);
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to append child bookmark", t);
+        }
+    }
+
+    /**
+     * Delete a bookmark and its subtree by exact title.
+     */
+    public static boolean delete(MemorySegment rawDocSegment, String title) {
+        MethodHandle deleteHandle = EmbedPdfBookmarkBindings.EPDFBookmark_Delete;
+        if (deleteHandle == null) return false;
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment titleSeg = FfmHelper.toWideString(arena, title);
+            MemorySegment bm = (MemorySegment) BookmarkBindings.FPDFBookmark_Find.invokeExact(rawDocSegment, titleSeg);
+            if (bm.equals(MemorySegment.NULL)) return false;
+
+            int ok = (int) deleteHandle.invokeExact(rawDocSegment, bm);
+            return ok != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to delete bookmark", t);
+        }
+    }
+
+    /**
+     * Clear all bookmarks from the document.
+     */
+    public static boolean clear(MemorySegment rawDocSegment) {
+        MethodHandle clearHandle = EmbedPdfBookmarkBindings.EPDFBookmark_Clear;
+        if (clearHandle == null) return false;
+
+        try {
+            int ok = (int) clearHandle.invokeExact(rawDocSegment);
+            return ok != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to clear bookmarks", t);
+        }
+    }
+
+    /**
+     * Update the title of an existing bookmark.
+     */
+    public static boolean setTitle(MemorySegment rawDocSegment, String currentTitle, String newTitle) {
+        MethodHandle setTitleHandle = EmbedPdfBookmarkBindings.EPDFBookmark_SetTitle;
+        if (setTitleHandle == null) return false;
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment curSeg = FfmHelper.toWideString(arena, currentTitle);
+            MemorySegment bm = (MemorySegment) BookmarkBindings.FPDFBookmark_Find.invokeExact(rawDocSegment, curSeg);
+            if (bm.equals(MemorySegment.NULL)) return false;
+
+            MemorySegment newSeg = FfmHelper.toWideString(arena, newTitle);
+            int ok = (int) setTitleHandle.invokeExact(bm, newSeg);
+            return ok != 0;
+        } catch (Throwable t) {
+            throw new JPDFiumException("Failed to update bookmark title", t);
         }
     }
 }
