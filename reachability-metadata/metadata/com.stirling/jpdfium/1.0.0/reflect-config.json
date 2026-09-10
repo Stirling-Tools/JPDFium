@@ -70,7 +70,16 @@
     "name": "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings"
   },
   {
+    "name": "stirling.software.jpdfium.panama.EmbedPdfBookmarkBindings"
+  },
+  {
     "name": "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.EmbedPdfNamedPageBindings"
+  },
+  {
+    "name": "stirling.software.jpdfium.panama.EmbedPdfTextBindings"
   },
   {
     "name": "stirling.software.jpdfium.panama.FormFillBindings"

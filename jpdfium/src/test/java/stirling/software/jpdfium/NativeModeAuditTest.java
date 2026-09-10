@@ -9,7 +9,10 @@ import stirling.software.jpdfium.panama.AttachmentBindings;
 import stirling.software.jpdfium.panama.BookmarkBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
+import stirling.software.jpdfium.panama.EmbedPdfBookmarkBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
+import stirling.software.jpdfium.panama.EmbedPdfNamedPageBindings;
+import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.FlashTextLib;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.FormFillBindings;
@@ -72,7 +75,10 @@ class NativeModeAuditTest {
             BookmarkBindings.class,
             DocBindings.class,
             EmbedPdfAnnotationBindings.class,
+            EmbedPdfBookmarkBindings.class,
             EmbedPdfDocumentBindings.class,
+            EmbedPdfNamedPageBindings.class,
+            EmbedPdfTextBindings.class,
             FlashTextLib.class,
             FontLib.class,
             FormFillBindings.class,

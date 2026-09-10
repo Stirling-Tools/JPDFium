@@ -113,6 +113,10 @@ public final class CompressOptions {
             this.convertPngToJpeg = preset.convertPngToJpeg();
             this.optimizeStreams = preset.optimizeStreams();
             this.removeMetadata = preset.removeMetadata();
+            this.useZopfliDeflate = preset.useZopfliDeflate();
+            if (preset.zopfliIterations() > 0) {
+                this.zopfliIterations = preset.zopfliIterations();
+            }
             return this;
         }
 

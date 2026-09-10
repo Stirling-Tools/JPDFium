@@ -28,6 +28,12 @@ public final class DocBindings {
     public static final MethodHandle FPDF_GetPageLabel = downcall("FPDF_GetPageLabel",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 
+    public static final MethodHandle FPDF_LoadPage = downcall("FPDF_LoadPage",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+
+    public static final MethodHandle FPDF_ClosePage = downcall("FPDF_ClosePage",
+            FunctionDescriptor.ofVoid(ADDRESS));
+
     public static final MethodHandle FPDF_GetDocPermissions = downcallCritical("FPDF_GetDocPermissions",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
