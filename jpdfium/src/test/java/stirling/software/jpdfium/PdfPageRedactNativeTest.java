@@ -4,13 +4,16 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.doc.AnnotationType;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfPageRedactNativeTest {
 
     @Test
     void testDirectNativeRedactInRect() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Direct native text redaction requires real PDFium native library");
         byte[] pdfBytes = SyntheticPdfFactory.createDiverse(1);
         byte[] savedBytes;
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
@@ -42,6 +45,7 @@ class PdfPageRedactNativeTest {
 
     @Test
     void testApplyAnnotationRedactions() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Applying annotation redactions requires real PDFium native library");
         byte[] pdfBytes = SyntheticPdfFactory.createDiverse(1);
         byte[] savedBytes;
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
@@ -74,5 +78,17 @@ class PdfPageRedactNativeTest {
         // Verify valid PDF produced via PDFBox
         assertNotNull(savedBytes);
         assertEquals(1, PdfVerifier.pageCount(savedBytes, "applied redactions doc"));
+    }
+
+    @Test
+    void testStubModeGracefulDegradation() throws Exception {
+        assumeTrue(NativeRuntime.isStub(), "Stub mode specific verification");
+        byte[] pdfBytes = SyntheticPdfFactory.createDiverse(1);
+        try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
+            try (PdfPage page = doc.page(0)) {
+                assertThrows(UnsupportedOperationException.class, () -> page.redactInRect(new Rect(10, 10, 100, 100)));
+                assertThrows(UnsupportedOperationException.class, page::applyRedactions);
+            }
+        }
     }
 }
