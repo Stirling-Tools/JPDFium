@@ -2621,10 +2621,13 @@ static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<ui
             if (ci > last) last = ci;
         }
         if (first < 0) continue;
+        int origFirst = first;
+        int origLast = last;
         // libunibreak fills brks[i] with the status of the boundary AFTER
         // character i (same convention as its line/word breakers).
-        // A grapheme cluster MUST NOT cross whitespace boundaries or text object boundaries.
-        while (first > 0 && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) {
+        // A grapheme cluster MUST NOT cross whitespace boundaries or text object boundaries,
+        // and cannot span more than 3 combining marks (max 4 chars total).
+        while (first > 0 && (origFirst - first < 3) && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) {
             uint32_t u = unicodeSeq[first - 1];
             if (u <= 0x20 || u == 0xA0) break;
             if (textPage) {
@@ -2634,7 +2637,7 @@ static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<ui
             }
             first--;
         }
-        while (last + 1 < static_cast<int>(unicodeSeq.size()) &&
+        while (last + 1 < static_cast<int>(unicodeSeq.size()) && (last - origLast < 3) &&
                brks[last] == GRAPHEMEBREAK_NOBREAK) {
             uint32_t u = unicodeSeq[last + 1];
             if (u <= 0x20 || u == 0xA0) break;
@@ -2783,24 +2786,74 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
             int cs = run.clusterOf[fp];
             int ce = lp;
             for (int p = lp + 1; p < static_cast<int>(run.clusterOf.size()) &&
-                                 run.clusterOf[p] == run.clusterOf[lp];
+                                 run.clusterOf[p] == run.clusterOf[lp] && (p - lp <= 3);
                  p++)
                 ce = p;
 
-            // Never expand backwards across whitespace
+            // A ligature cluster (e.g. fi, ffi) spans at most 3-4 codepoints.
+            // If the cluster spans across a large range or expands by more than 3 chars,
+            // the font shaping failed or assigned a fallback/unshaped cluster ID.
+            if (fp - cs > 3) cs = fp;
+            if (ce - lp > 3) ce = lp;
+            if (ce - cs + 1 > 4) {
+                cs = fp;
+                ce = lp;
+            }
+
+            // Never expand backwards across whitespace or kerning gaps
             for (int p = fp - 1; p >= cs; p--) {
                 uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
                 if (u <= 0x20 || u == 0xA0) {
                     cs = p + 1;
                     break;
                 }
+                double l1 = 0, r1 = 0, b1 = 0, t1 = 0;
+                double l2 = 0, r2 = 0, b2 = 0, t2 = 0;
+                if (FPDFText_GetCharBox(tp, run.chars[p], &l1, &r1, &b1, &t1) &&
+                    FPDFText_GetCharBox(tp, run.chars[p + 1], &l2, &r2, &b2, &t2)) {
+                    double w1 = std::abs(r1 - l1);
+                    double h1 = std::abs(t1 - b1);
+                    if (w1 >= h1) {
+                        double gap = std::abs(l2 - r1);
+                        if ((w1 > 0.01 && gap > w1 * 0.25) || std::abs(b2 - b1) > h1 * 0.5) {
+                            cs = p + 1;
+                            break;
+                        }
+                    } else {
+                        double gap = std::abs(b1 - t2);
+                        if ((h1 > 0.01 && gap > h1 * 0.25) || std::abs(l2 - l1) > w1 * 0.5) {
+                            cs = p + 1;
+                            break;
+                        }
+                    }
+                }
             }
-            // Never expand forwards across whitespace
+            // Never expand forwards across whitespace or kerning gaps
             for (int p = lp + 1; p <= ce; p++) {
                 uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
                 if (u <= 0x20 || u == 0xA0) {
                     ce = p - 1;
                     break;
+                }
+                double l1 = 0, r1 = 0, b1 = 0, t1 = 0;
+                double l2 = 0, r2 = 0, b2 = 0, t2 = 0;
+                if (FPDFText_GetCharBox(tp, run.chars[p - 1], &l1, &r1, &b1, &t1) &&
+                    FPDFText_GetCharBox(tp, run.chars[p], &l2, &r2, &b2, &t2)) {
+                    double w1 = std::abs(r1 - l1);
+                    double h1 = std::abs(t1 - b1);
+                    if (w1 >= h1) {
+                        double gap = std::abs(l2 - r1);
+                        if ((w1 > 0.01 && gap > w1 * 0.25) || std::abs(b2 - b1) > h1 * 0.5) {
+                            ce = p - 1;
+                            break;
+                        }
+                    } else {
+                        double gap = std::abs(b1 - t2);
+                        if ((h1 > 0.01 && gap > h1 * 0.25) || std::abs(l2 - l1) > w1 * 0.5) {
+                            ce = p - 1;
+                            break;
+                        }
+                    }
                 }
             }
 
