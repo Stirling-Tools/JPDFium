@@ -77,6 +77,7 @@ public final class XmpRedactor {
      */
     public static void stripKeys(PdfDocument doc, String... keys) {
         XmpLib.metadataStrip(doc.nativeHandle(), keys);
+        doc.refreshRawHandle();
     }
 
     /**
@@ -95,6 +96,7 @@ public final class XmpRedactor {
      */
     public static void stripAll(PdfDocument doc) {
         XmpLib.metadataStripAll(doc.nativeHandle());
+        doc.refreshRawHandle();
     }
 
     /**

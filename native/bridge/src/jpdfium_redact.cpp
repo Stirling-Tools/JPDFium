@@ -2623,10 +2623,28 @@ static void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<ui
         if (first < 0) continue;
         // libunibreak fills brks[i] with the status of the boundary AFTER
         // character i (same convention as its line/word breakers).
-        while (first > 0 && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) first--;
+        // A grapheme cluster MUST NOT cross whitespace boundaries or text object boundaries.
+        while (first > 0 && brks[first - 1] == GRAPHEMEBREAK_NOBREAK) {
+            uint32_t u = unicodeSeq[first - 1];
+            if (u <= 0x20 || u == 0xA0) break;
+            if (textPage) {
+                FPDF_PAGEOBJECT oCurr = FPDFText_GetTextObject(textPage, first);
+                FPDF_PAGEOBJECT oPrev = FPDFText_GetTextObject(textPage, first - 1);
+                if (oCurr != oPrev || oCurr == nullptr) break;
+            }
+            first--;
+        }
         while (last + 1 < static_cast<int>(unicodeSeq.size()) &&
-               brks[last] == GRAPHEMEBREAK_NOBREAK)
+               brks[last] == GRAPHEMEBREAK_NOBREAK) {
+            uint32_t u = unicodeSeq[last + 1];
+            if (u <= 0x20 || u == 0xA0) break;
+            if (textPage) {
+                FPDF_PAGEOBJECT oCurr = FPDFText_GetTextObject(textPage, last);
+                FPDF_PAGEOBJECT oNext = FPDFText_GetTextObject(textPage, last + 1);
+                if (oCurr != oNext || oCurr == nullptr) break;
+            }
             last++;
+        }
         // Rebuild the (possibly extended) char index list.
         m.charIndices.clear();
         for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
