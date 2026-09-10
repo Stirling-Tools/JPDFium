@@ -1,17 +1,20 @@
 package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.util.List;
 import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfDocumentMergeSplitTest {
 
-
     @Test
     void testStaticMergeMethods() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "PDF merge and split methods require real PDFium native library");
         byte[] pdf1 = SyntheticPdfFactory.createDiverse(2);
         byte[] pdf2 = SyntheticPdfFactory.createDiverse(3);
 
@@ -42,6 +45,7 @@ class PdfDocumentMergeSplitTest {
 
     @Test
     void testSplitAndExtractMethods() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "PDF merge and split methods require real PDFium native library");
         byte[] pdf = SyntheticPdfFactory.createDiverse(5);
 
         try (PdfDocument doc = PdfDocument.open(pdf)) {
@@ -77,6 +81,15 @@ class PdfDocumentMergeSplitTest {
                     chunk.close();
                 }
             }
+        }
+    }
+
+    @Test
+    void testStubMode() throws Exception {
+        assumeTrue(NativeRuntime.isStub(), "Stub mode specific verification");
+        byte[] pdf = SyntheticPdfFactory.singlePageWithText("Stub test");
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertNotNull(doc);
         }
     }
 }
