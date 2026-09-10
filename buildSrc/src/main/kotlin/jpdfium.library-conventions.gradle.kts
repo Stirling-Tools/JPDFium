@@ -113,9 +113,10 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
-tasks.withType<Test> {
+tasks.withType<Test>().configureEach {
     useJUnitPlatform()
-    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler", "-Xmx2g")
+    maxHeapSize = "2g"
     systemProperties(System.getProperties().mapKeys { it.key.toString() }.filterKeys { it.startsWith("jpdfium.") })
 }
 

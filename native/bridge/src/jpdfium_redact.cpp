@@ -2671,14 +2671,20 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
         if (!f) return nullptr;
         auto it = hbCache.find(reinterpret_cast<uintptr_t>(f));
         if (it != hbCache.end()) return it->second.font;
-        std::vector<uint8_t> fontData;
-        if (!loadFontDataWithFallback(f, fontData) || fontData.empty()) {
+        size_t buflen = 0;
+        if (!FPDFFont_GetFontData(f, nullptr, 0, &buflen) || buflen == 0) {
+            hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
+            return nullptr;
+        }
+        std::vector<uint8_t> fontData(buflen);
+        size_t actual = 0;
+        if (!FPDFFont_GetFontData(f, fontData.data(), buflen, &actual) || actual == 0) {
             hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
             return nullptr;
         }
         hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(fontData.data()),
-                                         static_cast<unsigned>(fontData.size()),
-                                         HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+                                         static_cast<unsigned>(actual), HB_MEMORY_MODE_READONLY,
+                                         nullptr, nullptr);
         if (!blob) return nullptr;
         hb_face_t* face = hb_face_create(blob, 0);
         hb_blob_destroy(blob);  // face holds its own reference
@@ -2762,6 +2768,27 @@ static void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch
                                  run.clusterOf[p] == run.clusterOf[lp];
                  p++)
                 ce = p;
+
+            // Never expand backwards across whitespace
+            for (int p = fp - 1; p >= cs; p--) {
+                uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
+                if (u <= 0x20 || u == 0xA0) {
+                    cs = p + 1;
+                    break;
+                }
+            }
+            // Never expand forwards across whitespace
+            for (int p = lp + 1; p <= ce; p++) {
+                uint32_t u = FPDFText_GetUnicode(tp, run.chars[p]);
+                if (u <= 0x20 || u == 0xA0) {
+                    ce = p - 1;
+                    break;
+                }
+            }
+
+            if (cs > fp) cs = fp;
+            if (ce < lp) ce = lp;
+
             if (cs == fp && ce == lp) continue;
             for (int p = cs; p <= ce; p++) m.charIndices.push_back(run.chars[p]);
             extended = true;
@@ -3618,8 +3645,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         }
 
         // High-fidelity native in-place redaction via EmbedPDF core engine
-        uint32_t removedCount = 0;
-        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page, &removedCount);
+        FPDF_BOOL epdfOk = EPDFPage_ApplyRedactions(pw->page);
         if (epdfOk) {
             unsigned int alf = (argb >> 24) & 0xFF;
             unsigned int red = (argb >> 16) & 0xFF;
