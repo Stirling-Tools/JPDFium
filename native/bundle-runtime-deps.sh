@@ -133,17 +133,27 @@ bundle_macos() {
             esac
             [ -f "$dep" ] || continue
 
-            # Canonicalize through symlinks before bundling. Homebrew
-            # versioned libs are alias chains (libicuuc.dylib ->
-            # libicuuc.78.dylib -> libicuuc.78.3.dylib); a plain cp follows
-            # each alias into a full duplicate copy. Converging on the real
-            # file bundles one copy that every alias rewrites to.
-            dep=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dep")
-            [ -f "$dep" ] || continue
-
+            # If the referenced name is already bundled, keep it. This covers
+            # pre-staged shadows: build-minimal-icu-macos.sh stages a trimmed
+            # libicudata.<MAJ>.dylib ahead of time precisely so the bundler
+            # picks it up instead of brew's full copy.
             local base
             base=$(basename "$dep")
             local dest="$DIST_DIR/$base"
+            if [ -e "$dest" ]; then
+                chmod u+w "$dest" 2>/dev/null || true
+                install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
+                continue
+            fi
+
+            # New name: converge Homebrew alias chains on the real file
+            # (libicuuc.dylib -> libicuuc.78.dylib -> libicuuc.78.3.dylib).
+            # A plain cp follows each alias into a full duplicate copy;
+            # bundling one real file that every alias rewrites to avoids it.
+            dep=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dep")
+            [ -f "$dep" ] || continue
+            base=$(basename "$dep")
+            dest="$DIST_DIR/$base"
             local is_new=0
             if [ ! -e "$dest" ]; then
                 cp -v "$dep" "$dest"
