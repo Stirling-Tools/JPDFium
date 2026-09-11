@@ -11,11 +11,13 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Hand-linked direct downcall method handles configured with {@link Linker.Option#critical(boolean)}
- * for hot leaf native operations.
+ * Hand-linked direct downcall method handles for hot leaf native operations.
  *
- * <p>These direct handles are not wrapped by combinators; callers must explicitly acquire
- * {@link NativeGuard} before invoking them.
+ * <p>Linked with {@link Linker.Option#critical(boolean)} {@code false}
+ * ({@code DONT_ALLOW_HEAP}): strict critical ABI skipping thread-state
+ * transitions, valid because every handle here takes native-only segments,
+ * never blocks, and never calls back into Java (dossier §1, JDK-8303240).
+ * Callers must still explicitly acquire {@link NativeGuard} before invoking them.
  */
 public final class FastLinks {
 

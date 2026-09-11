@@ -23,10 +23,10 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  *   <li><b>Sequential</b> - processes pages in order on the calling thread.</li>
  *   <li><b>Streaming</b> - processes pages one at a time with periodic save/reload
  *       cycles to release PDFium internal caches and reduce memory pressure.</li>
- *   <li><b>Parallel</b> - uses a thread pool to execute page operations
- *       concurrently. PDFium calls are serialized via {@link #PDFIUM_LOCK}
- *       (the library is not thread-safe), but Java-side processing between
- *       PDFium calls runs in true parallel across worker threads.</li>
+  *   <li><b>Parallel</b> - uses a thread pool to execute page operations
+  *       concurrently. PDFium calls serialize internally via NativeGuard
+  *       (the library is not thread-safe), but Java-side processing between
+  *       PDFium calls runs in true parallel across worker threads.</li>
  *   <li><b>Streaming + Parallel</b> - combines both: parallel worker threads
  *       with streaming flush to keep memory low.</li>
  * </ul>
@@ -58,10 +58,11 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
  *     (doc, pageIndex) -> {
  *         String text;
- *         synchronized (PdfPipeline.PDFIUM_LOCK) {
- *             try (PdfPage page = doc.page(pageIndex)) {
- *                 text = page.extractTextJson();
- *             }
+ *         // No caller locking: NativeGuard serializes internally. Do NOT wrap
+ *         // in synchronized(PDFIUM_LOCK): holding a monitor across a downcall
+ *         // pins virtual-thread carriers for the native duration (JEP 444/491).
+ *         try (PdfPage page = doc.page(pageIndex)) {
+ *             text = page.extractTextJson();
  *         }
  *         // Runs in parallel across 4 threads:
  *         processText(text);
@@ -71,10 +72,8 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * PdfPipeline.processAndSave(input, output,
  *     ProcessingMode.parallel(4),
  *     (doc, pageIndex) -> {
- *         synchronized (PdfPipeline.PDFIUM_LOCK) {
- *             try (PdfPage page = doc.page(pageIndex)) {
- *                 page.flatten();
- *             }
+ *         try (PdfPage page = doc.page(pageIndex)) {
+ *             page.flatten();
  *         }
  *     });
  * }</pre>
@@ -101,9 +100,8 @@ public final class PdfPipeline {
     /**
      * A page-level operation applied to each page of a document.
      *
-     * <p>In parallel mode, wrap PDFium calls with
-     * {@code synchronized(PdfPipeline.PDFIUM_LOCK)}. Java-side work
-     * outside the lock block runs in parallel across worker threads.
+     * <p>No caller locking needed: native calls serialize via NativeGuard.
+     * Java-side work runs in parallel across worker threads.
      */
     @FunctionalInterface
     public interface PageOperation {
@@ -171,8 +169,8 @@ public final class PdfPipeline {
      * Read-only iteration over pages from byte array.
      *
      * <p>In parallel mode, a single shared document is opened and page
-     * operations are dispatched to a thread pool. The consumer <b>must</b>
-     * synchronize PDFium calls via {@link #PDFIUM_LOCK}.
+     * operations are dispatched to a thread pool. Native calls serialize
+     * internally; consumers must not add their own locking.
      */
     public static void forEach(byte[] sourceBytes, ProcessingMode mode,
                                BiConsumer<PdfDocument, Integer> consumer) {
@@ -297,7 +295,7 @@ public final class PdfPipeline {
 
     /**
      * Opens a single shared document and dispatches per-page tasks to a pool.
-     * The consumer MUST use {@link #PDFIUM_LOCK} around PDFium calls.
+     * Native calls serialize via NativeGuard; consumers add no locking.
      */
     private static void forEachParallel(byte[] sourceBytes, ProcessingMode mode,
                                         BiConsumer<PdfDocument, Integer> consumer) {
@@ -312,7 +310,7 @@ public final class PdfPipeline {
             List<Future<?>> futures = new ArrayList<>();
             // Submit one task per page for maximum pipeline overlap:
             // while thread A does Java work on page N, thread B can acquire
-            // PDFIUM_LOCK for page N+1's extraction.
+            // NativeGuard for page N+1's extraction.
             for (int i = 0; i < totalPages; i++) {
                 final int pi = i;
                 futures.add(executor.submit(() -> consumer.accept(doc, pi)));
@@ -326,18 +324,13 @@ public final class PdfPipeline {
 
     /**
      * Process a chunk with optional streaming flushes.
-     * All PDFium calls must be synchronized by the caller's operation.
+     * Native calls serialize internally via NativeGuard; no caller locking here
+     * (holding a monitor across a downcall pins vthread carriers).
      */
     private static byte[] processChunkBytes(byte[] chunkBytes, ProcessingMode mode, PageOperation op) {
-        PdfDocument doc;
-        synchronized (PDFIUM_LOCK) {
-            doc = PdfDocument.open(chunkBytes);
-        }
+        PdfDocument doc = PdfDocument.open(chunkBytes);
         try {
-            int pages;
-            synchronized (PDFIUM_LOCK) {
-                pages = doc.pageCount();
-            }
+            int pages = doc.pageCount();
             boolean streaming = mode.isStreaming();
             int flushInterval = mode.flushInterval();
 
@@ -345,18 +338,12 @@ public final class PdfPipeline {
                 op.apply(doc, i);
 
                 if (streaming && (i + 1) % flushInterval == 0 && (i + 1) < pages) {
-                    synchronized (PDFIUM_LOCK) {
-                        doc = flushViaTempFile(doc);
-                    }
+                    doc = flushViaTempFile(doc);
                 }
             }
-            synchronized (PDFIUM_LOCK) {
-                return doc.saveBytes();
-            }
+            return doc.saveBytes();
         } finally {
-            synchronized (PDFIUM_LOCK) {
-                doc.close();
-            }
+            doc.close();
         }
     }
 

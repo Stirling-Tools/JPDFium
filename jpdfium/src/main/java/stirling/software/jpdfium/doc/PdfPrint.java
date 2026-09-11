@@ -146,7 +146,7 @@ public final class PdfPrint {
         int beforeCount;
         try {
             beforeCount = (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDest);
-        } catch (Throwable t) { return; }
+        } catch (Throwable _) { return; }
 
         PdfPageImporter.importPagesByIndex(rawDest, rawSrc, new int[]{srcPageIndex}, beforeCount);
     }

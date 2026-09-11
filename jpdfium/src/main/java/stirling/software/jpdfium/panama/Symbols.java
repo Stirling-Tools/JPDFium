@@ -77,10 +77,17 @@ public final class Symbols {
     }
 
     /**
-     * Create a downcall method handle (delegates to guarded downcall).
+     * Create a guarded strict-critical downcall for a trivial leaf symbol.
+     *
+     * <p>{@code critical(false)} ({@code DONT_ALLOW_HEAP}) skips thread-state
+     * transitions (dossier §1, JDK-8303240). Safe only for non-blocking,
+     * callback-free getters taking native-only segments: every
+     * current caller (permissions, counts, rotation, bounds queries).
+     *
+     * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
      */
     public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return downcall(name, desc);
+        return downcall(name, desc, Linker.Option.critical(false));
     }
 
     /**

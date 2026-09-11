@@ -83,7 +83,7 @@ public final class DocInfo {
         // Tagged
         try {
             b.tagged = (int) DocBindings.FPDFCatalog_IsTagged.invokeExact(rawDoc) != 0;
-        } catch (Throwable t) { b.tagged = false; }
+        } catch (Throwable _) { b.tagged = false; }
 
         // Encrypted
         PdfMetadata meta = PdfMetadata.of(rawDoc);
@@ -150,7 +150,7 @@ public final class DocInfo {
         try {
             b.javaScriptCount = (int) JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
             b.hasJavaScript = b.javaScriptCount > 0;
-        } catch (Throwable t) { b.hasJavaScript = false; b.javaScriptCount = 0; }
+        } catch (Throwable _) { b.hasJavaScript = false; b.javaScriptCount = 0; }
 
         // Signatures
         b.signatureCount = PdfSignatures.count(rawDoc);

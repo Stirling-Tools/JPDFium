@@ -71,7 +71,7 @@ public final class PdfMerge {
                     }
                     candidate.close();
                 } catch (Exception _) {
-                    if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                    if (candidate != null) try { candidate.close(); } catch (Exception _) {}
                 }
             }
         }
@@ -141,7 +141,7 @@ public final class PdfMerge {
                             }
                             candidate.close();
                         } catch (Exception _) {
-                            if (candidate != null) try { candidate.close(); } catch (Exception __) {}
+                            if (candidate != null) try { candidate.close(); } catch (Exception _) {}
                         }
                     }
                 }

@@ -755,7 +755,7 @@ public final class JpdfiumCli {
         if (binPath != null) {
             try {
                 binSize = Files.size(binPath);
-            } catch (IOException ignored) {}
+            } catch (IOException _) {}
         }
 
         System.out.println("JPDFium CLI");
@@ -899,7 +899,7 @@ public final class JpdfiumCli {
                     return p;
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
         try {
             var src = JpdfiumCli.class.getProtectionDomain().getCodeSource();
             if (src != null && src.getLocation() != null) {
@@ -908,7 +908,7 @@ public final class JpdfiumCli {
                     return p;
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable _) {}
         return null;
     }
 

@@ -70,7 +70,7 @@ public final class PdfCompressor {
         } finally {
             try {
                 Files.deleteIfExists(originalProbe);
-            } catch (IOException ignored) {
+            } catch (IOException _) {
             }
         }
         int metadataRemoved = 0;
@@ -230,7 +230,7 @@ public final class PdfCompressor {
 
     private static void deleteQuietly(Path p) {
         if (p != null) {
-            try { Files.deleteIfExists(p); } catch (IOException ignored) {}
+            try { Files.deleteIfExists(p); } catch (IOException _) {}
         }
     }
 

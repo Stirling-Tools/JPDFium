@@ -21,6 +21,11 @@ endif()
 #   cmake -DJPDFIUM_SANITIZE=address,undefined
 # Applies -fsanitize=<san> + -fno-omit-frame-pointer to all native targets
 # (stub and real bridge). thread is also supported for TSan runs.
+# Run under the JVM (local only) as:
+#   LD_PRELOAD=$(gcc -print-file-name=libasan.so) \
+#   ASAN_OPTIONS=handle_segv=0 java --enable-native-access=ALL-UNNAMED ...
+# handle_segv=0 keeps ASan from fighting HotSpot's SIGSEGV use; the ASan DSO
+# must preload first and match the build compiler.
 option(JPDFIUM_SANITIZE "Comma-separated sanitizers (address,undefined,thread)" "")
 if(JPDFIUM_SANITIZE AND NOT MSVC)
   string(REPLACE "," ";" JPDFIUM_SANITIZERS "${JPDFIUM_SANITIZE}")
@@ -33,6 +38,16 @@ if(JPDFIUM_SANITIZE AND NOT MSVC)
   if(_jpdfium_san_flags)
     add_compile_options(${_jpdfium_san_flags} -fno-omit-frame-pointer)
     add_link_options(${_jpdfium_san_flags})
+    # Shared sanitizer runtime: an uninstrumented host (java) loading an
+    # ASan-instrumented .so fails on unresolved __asan_* without it.
+    # GCC spells it -shared-libasan, Clang spells it -shared-libsan.
+    if("address" IN_LIST JPDFIUM_SANITIZERS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+      if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_link_options(-shared-libsan)
+      else()
+        add_link_options(-shared-libasan)
+      endif()
+    endif()
     message(STATUS "Sanitizers enabled: ${JPDFIUM_SANITIZE}")
   endif()
 endif()

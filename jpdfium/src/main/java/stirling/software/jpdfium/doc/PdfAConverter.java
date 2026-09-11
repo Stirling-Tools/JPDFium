@@ -141,7 +141,7 @@ public final class PdfAConverter {
 
             return new ConversionResult(output, level, inputSize, outputSize, icc.toString());
         } finally {
-            try { Files.deleteIfExists(pdfaDef); } catch (IOException ignored) {}
+            try { Files.deleteIfExists(pdfaDef); } catch (IOException _) {}
         }
     }
 
@@ -211,7 +211,7 @@ public final class PdfAConverter {
                 Path found = Path.of(output);
                 if (Files.isReadable(found)) return found;
             }
-        } catch (IOException | InterruptedException ignored) {}
+        } catch (IOException | InterruptedException _) {}
 
         return null;
     }

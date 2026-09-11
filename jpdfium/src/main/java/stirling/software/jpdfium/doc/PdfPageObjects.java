@@ -26,7 +26,7 @@ public final class PdfPageObjects {
         int count;
         try {
             count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-        } catch (Throwable t) { return Collections.emptyList(); }
+        } catch (Throwable _) { return Collections.emptyList(); }
 
         List<PageObject> result = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -170,7 +170,7 @@ public final class PdfPageObjects {
     private static List<String> getMarks(MemorySegment obj) {
         int markCount;
         try { markCount = (int) PageEditBindings.FPDFPageObj_CountMarks.invokeExact(obj); }
-        catch (Throwable t) { return Collections.emptyList(); }
+        catch (Throwable _) { return Collections.emptyList(); }
 
         List<String> marks = new ArrayList<>(markCount);
         for (int i = 0; i < markCount; i++) {

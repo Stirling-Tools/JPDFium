@@ -229,24 +229,24 @@ public final class PdfDiff {
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
-            } catch (Throwable t) { return null; }
+            } catch (Throwable _) { return null; }
             if (bitmap.equals(MemorySegment.NULL)) return null;
 
             try {
                 try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, bmpW, bmpH, 0xFFFFFFFFL); }
-                catch (Throwable t) { return null; }
+                catch (Throwable _) { return null; }
 
                 int flags = RenderBindings.FPDF_PRINTING;
                 try { RenderBindings.FPDF_RenderPageBitmap.invokeExact(bitmap, rawPage, 0, 0, bmpW, bmpH, 0, flags); }
-                catch (Throwable t) { return null; }
+                catch (Throwable _) { return null; }
 
                 MemorySegment bufferPtr;
                 try { bufferPtr = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap); }
-                catch (Throwable t) { return null; }
+                catch (Throwable _) { return null; }
 
                 int stride;
                 try { stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap); }
-                catch (Throwable t) { return null; }
+                catch (Throwable _) { return null; }
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 
@@ -270,14 +270,14 @@ public final class PdfDiff {
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
-            } catch (Throwable t) { return ""; }
+            } catch (Throwable _) { return ""; }
             if (textPage.equals(MemorySegment.NULL)) return "";
 
             try {
                 int charCount;
                 try {
                     charCount = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
-                } catch (Throwable t) { return ""; }
+                } catch (Throwable _) { return ""; }
                 if (charCount <= 0) return "";
 
                 try (Arena arena = Arena.ofConfined()) {
@@ -286,7 +286,7 @@ public final class PdfDiff {
                     try {
                         actual = (int) TextPageBindings.FPDFText_GetText.invokeExact(
                                 textPage, 0, charCount, buf);
-                    } catch (Throwable t) { return ""; }
+                    } catch (Throwable _) { return ""; }
                     return FfmHelper.fromWideString(buf, (long) actual * 2);
                 }
             } finally {

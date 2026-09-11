@@ -255,10 +255,10 @@ public final class PageEditBindings {
             JAVA_FLOAT.withName("e"), JAVA_FLOAT.withName("f")
     );
 
-    /** Layout of FS_RECTF: { float left, bottom, right, top }. */
+    /** Layout of FS_RECTF: { float left, top, right, bottom } per fpdfview.h. */
     public static final StructLayout FS_RECTF_LAYOUT = MemoryLayout.structLayout(
-            JAVA_FLOAT.withName("left"), JAVA_FLOAT.withName("bottom"),
-            JAVA_FLOAT.withName("right"), JAVA_FLOAT.withName("top")
+            JAVA_FLOAT.withName("left"), JAVA_FLOAT.withName("top"),
+            JAVA_FLOAT.withName("right"), JAVA_FLOAT.withName("bottom")
     );
 
     /** Transform all page content with clipping. matrix and clipRect are FS_MATRIX* and FS_RECTF*. */

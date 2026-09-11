@@ -328,7 +328,7 @@ public final class PdfSecurity {
         int count = doc.metadata().size();
         try {
             XmpRedactor.stripAll(doc);
-        } catch (JPDFiumException ignored) { return 0; }
+        } catch (JPDFiumException _) { return 0; }
         return count;
     }
 
@@ -338,7 +338,7 @@ public final class PdfSecurity {
                 .count();
         try {
             XmpRedactor.stripPiiKeys(doc);
-        } catch (JPDFiumException ignored) { return 0; }
+        } catch (JPDFiumException _) { return 0; }
         return count;
     }
 
@@ -347,7 +347,7 @@ public final class PdfSecurity {
             int count = FontLib.stripFonts(doc.nativeHandle());
             doc.refreshRawHandle();
             return count;
-        } catch (JPDFiumException ignored) { return 0; }
+        } catch (JPDFiumException _) { return 0; }
     }
 
     private static int doRemoveComments(PdfDocument doc) {
@@ -403,23 +403,23 @@ public final class PdfSecurity {
     private static int removeHiddenTextObjects(MemorySegment rawPage) {
         int count;
         try { count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage); }
-        catch (Throwable t) { return 0; }
+        catch (Throwable _) { return 0; }
 
         int removed = 0;
         for (int i = count - 1; i >= 0; i--) {
             MemorySegment obj;
             try { obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i); }
-            catch (Throwable t) { continue; }
+            catch (Throwable _) { continue; }
             if (obj.equals(MemorySegment.NULL)) continue;
 
             int type;
             try { type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj); }
-            catch (Throwable t) { continue; }
+            catch (Throwable _) { continue; }
             if (type != 1) continue; // TEXT only
 
             int renderMode;
             try { renderMode = (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj); }
-            catch (Throwable t) { continue; }
+            catch (Throwable _) { continue; }
             if (renderMode == 3) { // invisible
                 try { int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
             if (ok == 0) {

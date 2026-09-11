@@ -81,24 +81,24 @@ public final class PdfDeskew {
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
-            } catch (Throwable t) { return new DeskewResult(0, 0, false); }
+            } catch (Throwable _) { return new DeskewResult(0, 0, false); }
             if (bitmap.equals(MemorySegment.NULL)) return new DeskewResult(0, 0, false);
 
             try {
                 try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, bmpW, bmpH, 0xFFFFFFFFL); }
-                catch (Throwable t) { return new DeskewResult(0, 0, false); }
+                catch (Throwable _) { return new DeskewResult(0, 0, false); }
 
                 try { RenderBindings.FPDF_RenderPageBitmap.invokeExact(
                         bitmap, rawPage, 0, 0, bmpW, bmpH, 0, RenderBindings.FPDF_PRINTING); }
-                catch (Throwable t) { return new DeskewResult(0, 0, false); }
+                catch (Throwable _) { return new DeskewResult(0, 0, false); }
 
                 MemorySegment bufferPtr;
                 try { bufferPtr = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap); }
-                catch (Throwable t) { return new DeskewResult(0, 0, false); }
+                catch (Throwable _) { return new DeskewResult(0, 0, false); }
 
                 int stride;
                 try { stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap); }
-                catch (Throwable t) { return new DeskewResult(0, 0, false); }
+                catch (Throwable _) { return new DeskewResult(0, 0, false); }
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 
@@ -269,13 +269,13 @@ public final class PdfDeskew {
             int objCount;
             try {
                 objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-            } catch (Throwable t) { return; }
+            } catch (Throwable _) { return; }
 
             for (int i = 0; i < objCount; i++) {
                 MemorySegment obj;
                 try {
                     obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                } catch (Throwable t) { continue; }
+                } catch (Throwable _) { continue; }
                 if (obj.equals(MemorySegment.NULL)) continue;
 
                 try {

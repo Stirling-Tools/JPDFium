@@ -33,7 +33,7 @@ public record ExtractedImage(
                 try {
                     BufferedImage img = ImageIO.read(new ByteArrayInputStream(rawBytes));
                     if (img != null) return img;
-                } catch (IOException ignored) {}
+                } catch (IOException _) {}
             }
             return new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
         }

@@ -62,7 +62,7 @@ public final class FlashTextLib {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_flashtext_find(handle, a.allocateFrom(text), ptrSeg), "flashtextFind");
                 MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
@@ -78,7 +78,9 @@ public final class FlashTextLib {
                 try {
                     FastLinks.FLASHTEXT_FREE.invokeExact(handle);
                     return;
-                } catch (Throwable _) {}
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                }
             }
             JpdfiumH.jpdfium_flashtext_free(handle);
         } finally {

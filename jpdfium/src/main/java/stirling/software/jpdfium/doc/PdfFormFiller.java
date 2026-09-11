@@ -413,7 +413,7 @@ public final class PdfFormFiller {
                 setAnnotString(arena, annot, AnnotationKeys.AS, targetValue);
                 return true;
             }
-        } catch (Throwable t) { return false; }
+        } catch (Throwable _) { return false; }
     }
 
     private boolean handleCombo(MemorySegment formHandle, MemorySegment rawPage, MemorySegment annot,
@@ -606,7 +606,10 @@ public final class PdfFormFiller {
             float right  = rect.get(ValueLayout.JAVA_FLOAT, 8);
             float bottom = rect.get(ValueLayout.JAVA_FLOAT, 12);
             return new double[]{(left + right) / 2.0, (top + bottom) / 2.0};
-        } catch (Throwable t) { return null; }
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return null;
+        }
     }
 
     static String readWideString(MethodHandle mh, MemorySegment arg1, MemorySegment arg2) {
@@ -617,7 +620,10 @@ public final class PdfFormFiller {
             @SuppressWarnings("unused")
             long written = (long) mh.invokeExact(arg1, arg2, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
-        } catch (Throwable t) { return ""; }
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return "";
+        }
     }
 
     private static String readOptionLabel(MemorySegment formHandle, MemorySegment annot, int index) {
@@ -629,7 +635,10 @@ public final class PdfFormFiller {
             @SuppressWarnings("unused")
             long written = (long) AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
-        } catch (Throwable t) { return ""; }
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return "";
+        }
     }
 
     static void setAnnotString(Arena arena, MemorySegment annot, String key, String value) {
@@ -641,7 +650,9 @@ public final class PdfFormFiller {
             MemorySegment valueSeg = FfmHelper.toWideString(arena, value);
             @SuppressWarnings("unused")
             int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, keyBuf, valueSeg);
-        } catch (Throwable _) {}
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
     }
 
     // Typed invokers
@@ -654,43 +665,63 @@ public final class PdfFormFiller {
 
     /** Invoke void(ADDRESS) silently. */
     private static void safeSilent0(MethodHandle mh, MemorySegment a) {
-        try { mh.invokeExact(a); } catch (Throwable _) {}
+        try { mh.invokeExact(a); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
     }
 
     /** Invoke void(ADDRESS, ADDRESS) silently. */
     @SuppressWarnings("unused")
     private static void safeSilent0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
-        try { mh.invokeExact(a, b); } catch (Throwable _) {}
+        try { mh.invokeExact(a, b); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
     }
 
     /** Invoke int(ADDRESS) -> 0 on error. */
     private static int safeInt0(MethodHandle mh, MemorySegment a) {
-        try { return (int) mh.invokeExact(a); } catch (Throwable t) { return 0; }
+        try { return (int) mh.invokeExact(a); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
     }
 
     /** Invoke int(ADDRESS, ADDRESS) -> 0 on error. */
     private static int safeInt0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
-        try { return (int) mh.invokeExact(a, b); } catch (Throwable t) { return 0; }
+        try { return (int) mh.invokeExact(a, b); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
     }
 
     /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
     private static void safeSilentInt2(MethodHandle mh, MemorySegment a, int b) {
-        try { mh.invokeExact(a, b); } catch (Throwable _) {}
+        try { mh.invokeExact(a, b); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
     }
 
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
     private static int safeInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
-        try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) { return 0; }
+        try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
     }
 
     /** Invoke void(ADDRESS, ADDRESS, int, int) silently. */
     private static void safeSilentInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
-        try { mh.invokeExact(a, b, c, d); } catch (Throwable _) {}
+        try { mh.invokeExact(a, b, c, d); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
     }
 
     /** Invoke ADDRESS(ADDRESS, int) -> NULL on error. */
     private static MemorySegment safeSegment(MethodHandle mh, MemorySegment a, int b) {
-        try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) { return MemorySegment.NULL; }
+        try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return MemorySegment.NULL;
+        }
     }
 
     // Internal records
