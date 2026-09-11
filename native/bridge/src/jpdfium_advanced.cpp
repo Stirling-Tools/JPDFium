@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <set>
 #include <sstream>
 #include <string>
@@ -22,9 +23,17 @@
 #include <pcre2.h>
 
 struct Pcre2Pattern {
-    pcre2_code* code;
-    pcre2_match_data* match_data;
+    pcre2_code* code = nullptr;
+    pcre2_match_data* match_data = nullptr;
+    pcre2_match_context* match_ctx = nullptr;
+    pcre2_jit_stack* jit_stack = nullptr;
 };
+
+// Same ReDoS budget as the redact engine (jpdfium_redact.cpp): match work
+// is capped, and JIT matching gets a dedicated bounded stack instead of the
+// 32 KiB machine-stack default.
+static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
+static constexpr uint32_t kPcre2DepthLimit = 1'000u;
 
 int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* handle) {
     if (!pattern || !handle) return JPDFIUM_ERR_INVALID;
@@ -46,9 +55,37 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
     // JIT compile for speed - failure is non-fatal (falls back to interpreter)
     pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
 
-    auto* pw = new Pcre2Pattern();
+    pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
+    if (!md) {
+        pcre2_code_free(code);
+        return JPDFIUM_ERR_NATIVE;
+    }
+    pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+    if (!mctx) {
+        pcre2_match_data_free(md);
+        pcre2_code_free(code);
+        return JPDFIUM_ERR_NATIVE;
+    }
+    pcre2_set_match_limit(mctx, kPcre2MatchLimit);
+    pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+    // Dedicated JIT stack (32 KiB initial, 512 KiB max); owned by the pattern.
+    // Every native call runs under the global NativeGuard lock, so sharing one
+    // stack across this pattern's sequential matches is safe.
+    pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
+    if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
+
+    auto* pw = new (std::nothrow) Pcre2Pattern();
+    if (!pw) {
+        if (jst) pcre2_jit_stack_free(jst);
+        pcre2_match_context_free(mctx);
+        pcre2_match_data_free(md);
+        pcre2_code_free(code);
+        return JPDFIUM_ERR_NATIVE;
+    }
     pw->code = code;
-    pw->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+    pw->match_data = md;
+    pw->match_ctx = mctx;
+    pw->jit_stack = jst;
 
     *handle = reinterpret_cast<int64_t>(pw);
     return JPDFIUM_OK;
@@ -66,8 +103,14 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
 
     while (offset < subject_len) {
         int rc = pcre2_match(pw->code, (PCRE2_SPTR)text, subject_len, offset, 0, pw->match_data,
-                             nullptr);
-        if (rc < 0) break;
+                             pw->match_ctx);
+        if (rc == PCRE2_ERROR_NOMATCH) break;
+        if (rc < 0) {
+            // Match aborted (limit hit, JIT stack exhausted, bad UTF, ...).
+            // Returning the partial list with OK would silently drop PII, so
+            // fail loud and let the caller surface it.
+            return JPDFIUM_ERR_NATIVE;
+        }
 
         PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(pw->match_data);
         PCRE2_SIZE start = ovector[0];
@@ -117,6 +160,8 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
 void jpdfium_pcre2_free(int64_t pattern_handle) {
     auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
     if (!pw) return;
+    if (pw->jit_stack) pcre2_jit_stack_free(pw->jit_stack);
+    if (pw->match_ctx) pcre2_match_context_free(pw->match_ctx);
     if (pw->match_data) pcre2_match_data_free(pw->match_data);
     if (pw->code) pcre2_code_free(pw->code);
     delete pw;

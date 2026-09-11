@@ -299,4 +299,3 @@ public final class EntityRedactor implements AutoCloseable {
         return matches;
     }
 }
-
