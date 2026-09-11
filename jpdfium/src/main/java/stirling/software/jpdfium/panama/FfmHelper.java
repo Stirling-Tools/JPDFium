@@ -3,6 +3,7 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -105,5 +106,163 @@ public final class FfmHelper {
      */
     public static MemorySegment ptrToSegment(long address) {
         return address == 0 ? MemorySegment.NULL : MemorySegment.ofAddress(address);
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; internal callers use direct
+     * downcalls plus {@code NativeRuntime.rethrowFatal}. Preserved with original
+     * semantics.
+     */
+    @Deprecated
+    public static void invokeCheck(MethodHandle methodHandle, Object... args) {
+        try {
+            int result = (int) methodHandle.invokeExact(args);
+            if (result != 0) {
+                throw new RuntimeException("FFM call failed with code " + result);
+            }
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new RuntimeException("FFM call failed", t);
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static int invokeOrDefault(MethodHandle methodHandle, int defaultValue, Object... args) {
+        try {
+            int result = (int) methodHandle.invokeExact(args);
+            return result != 0 ? defaultValue : result;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return defaultValue;
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static MemorySegment invokeSegment(MethodHandle methodHandle, Object... args) {
+        try {
+            return (MemorySegment) methodHandle.invokeExact(args);
+        } catch (Throwable _) {
+            return MemorySegment.NULL;
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static MemorySegment allocateRect(Arena arena) {
+        return arena.allocate(16, 4);
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static float[] readRect(MemorySegment targetSegment) {
+        return new float[]{
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 0),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 4),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 8),
+            targetSegment.get(ValueLayout.JAVA_FLOAT, 12)
+        };
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static MemorySegment allocateColor(Arena arena) {
+        return arena.allocate(16, 4);
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static int[] readColor(MemorySegment targetSegment) {
+        return new int[]{
+            targetSegment.get(ValueLayout.JAVA_INT, 0),
+            targetSegment.get(ValueLayout.JAVA_INT, 4),
+            targetSegment.get(ValueLayout.JAVA_INT, 8),
+            targetSegment.get(ValueLayout.JAVA_INT, 12)
+        };
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static MemorySegment allocateIntPair(Arena arena) {
+        return arena.allocate(8, 2);
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static int[] readIntPair(MemorySegment targetSegment) {
+        return new int[]{
+            targetSegment.get(ValueLayout.JAVA_INT, 0),
+            targetSegment.get(ValueLayout.JAVA_INT, 4)
+        };
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static int safeInt(MethodHandle methodHandle, Object... args) {
+        try {
+            return (int) methodHandle.invokeExact(args);
+        } catch (Throwable _) {
+            return 0;
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static long safeLong(MethodHandle methodHandle, Object... args) {
+        try {
+            return (long) methodHandle.invokeExact(args);
+        } catch (Throwable _) {
+            return 0;
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static void safeSilent(MethodHandle methodHandle, Object... args) {
+        try {
+            methodHandle.invokeExact(args);
+        } catch (Throwable _) {
+            // Ignore
+        }
+    }
+
+    /**
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
+     */
+    @Deprecated
+    public static int setStringKeyValue(Arena arena, MethodHandle methodHandle,
+                                         MemorySegment target, String key, String value) {
+        try {
+            MemorySegment keySegment = arena.allocateFrom(key);
+            MemorySegment valueSegment = toWideString(arena, value);
+            return (int) methodHandle.invokeExact(target, keySegment, valueSegment);
+        } catch (Throwable _) {
+            return 0;
+        }
     }
 }

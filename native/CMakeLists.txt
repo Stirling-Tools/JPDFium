@@ -38,14 +38,15 @@ if(JPDFIUM_SANITIZE AND NOT MSVC)
   if(_jpdfium_san_flags)
     add_compile_options(${_jpdfium_san_flags} -fno-omit-frame-pointer)
     add_link_options(${_jpdfium_san_flags})
-    # Shared sanitizer runtime: an uninstrumented host (java) loading an
-    # ASan-instrumented .so fails on unresolved __asan_* without it.
-    # GCC spells it -shared-libasan, Clang spells it -shared-libsan.
+    # Shared sanitizer runtime for SHARED libs loaded into an uninstrumented
+    # host (java): applied per shared target below, never globally. A global
+    # flag would also hit executables (fuzzer, smoke) where the static runtime
+    # must stay first. GCC spells it -shared-libasan, Clang -shared-libsan.
     if("address" IN_LIST JPDFIUM_SANITIZERS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
       if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        add_link_options(-shared-libsan)
+        set(_jpdfium_shared_san_flag "-shared-libsan" CACHE INTERNAL "")
       else()
-        add_link_options(-shared-libasan)
+        set(_jpdfium_shared_san_flag "-shared-libasan" CACHE INTERNAL "")
       endif()
     endif()
     message(STATUS "Sanitizers enabled: ${JPDFIUM_SANITIZE}")
@@ -121,6 +122,9 @@ endif()
 set_target_properties(jpdfium_stub PROPERTIES
     OUTPUT_NAME "jpdfium_stub"
     POSITION_INDEPENDENT_CODE ON)
+if(DEFINED _jpdfium_shared_san_flag)
+  target_link_options(jpdfium_stub PRIVATE ${_jpdfium_shared_san_flag})
+endif()
 
 
 if(JPDFIUM_USE_PDFIUM)
@@ -446,6 +450,9 @@ if(JPDFIUM_USE_PDFIUM)
     set_target_properties(jpdfium PROPERTIES
         OUTPUT_NAME "jpdfium"
         POSITION_INDEPENDENT_CODE ON)
+    if(DEFINED _jpdfium_shared_san_flag)
+      target_link_options(jpdfium PRIVATE ${_jpdfium_shared_san_flag})
+    endif()
 
     # Platform-specific linker flags
     # Under a sanitizer build the bridge references __asan_*/__ubsan_* runtime
