@@ -122,7 +122,7 @@ jobs:
 
   build-natives:
     needs: [preflight-assets, prep-windows-icu]
-    if: !cancelled() && needs.preflight-assets.result == 'success' && needs.prep-windows-icu.result == 'success'
+    if: ${{ !cancelled() && needs.preflight-assets.result == 'success' && needs.prep-windows-icu.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
