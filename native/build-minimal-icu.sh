@@ -6,9 +6,11 @@
 # JPDFium's ICU usage (verified by grep over native/bridge/src/):
 #   - u_strFromUTF8                  (UTF-8 <-> UTF-16; needs cnvalias)
 #   - icu::Normalizer / unorm_*      (NFC / NFKC; needs nfc, nfkc, nfkc_cf)
-#   - icu::BreakIterator             (sentence/word/line boundaries; needs brkitr/*)
 #   - ubidi_*                        (BiDi text; needs ubidi data)
 #   - basic uchar properties         (always needed)
+#
+# Sentence segmentation is NOT here: it moved to java.text.BreakIterator,
+# so brkitr/* stays out and icu-i18n is no longer linked at all.
 #
 # We DON'T need: full locale data, region data, currency data, transliterations,
 # collations (sorting), RBNF (spell-out numbers), units, or non-essential
@@ -126,7 +128,6 @@ echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_V
 #   icu::Normalizer NFC     → nfc.nrm  (NFC normalization data - bridge
 #                                       only uses UNORM_NFC at
 #                                       jpdfium_advanced.cpp:828)
-#   icu::BreakIterator      → brkitr/* (sentence/word/line/char boundaries)
 #   ubidi_*                 → ubidi.icu + ucase.icu + uchar.icu (BiDi
 #                                       + case folding + character props)
 #   icu::Locale::getDefault → root.res + en.res (default locale fallback)
@@ -146,7 +147,6 @@ KEEP=(
     '^ulayout\.icu$'
     '^ucase\.icu$'
     '^nfc\.nrm$'
-    '^brkitr/'
     '^root\.res$'
     '^en\.res$'
 )
@@ -158,7 +158,7 @@ echo "Total items in source : $TOTAL"
 
 # Extract every item to loose files. icupkg -x '*' extracts everything that
 # matches the glob; -d sets the destination directory. This gives us a tree
-# like $EXTRACT/uchar.icu, $EXTRACT/nfc.nrm, $EXTRACT/brkitr/sent.brk, etc.
+# like $EXTRACT/uchar.icu, $EXTRACT/nfc.nrm, $EXTRACT/ubidi.icu, etc.
 EXTRACT="$WORK/extract"
 mkdir -p "$EXTRACT"
 icupkg -x '*' -d "$EXTRACT" "$DAT_FILE" \

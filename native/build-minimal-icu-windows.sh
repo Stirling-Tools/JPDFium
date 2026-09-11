@@ -16,7 +16,7 @@
 #      .dat archive format has been stable since ICU 4.x and items inside
 #      keep their original ICU 78 byte content untouched)
 #   4. Build keep-list (same patterns as the Linux trim - cnvalias, uchar,
-#      ubidi, unames, ulayout, ucase, uemoji, nfc/nfkc/nfkc_cf, brkitr/,
+#      ubidi, unames, ulayout, ucase, uemoji, nfc/nfkc/nfkc_cf,
 #      root.res + en.res + en_US.res + pool.res)
 #   5. pkgdata -m archive packages the kept items into a fresh .dat
 #   6. mingw-w64 objcopy + gcc -shared wraps the trimmed .dat into a new
@@ -107,12 +107,13 @@ echo "Total items in source : $TOTAL"
 
 # Step 4: Build keep list - same patterns as the Linux trim. See
 # build-minimal-icu.sh for the full rationale; bridge doesn't use
-# unames/uemoji/nfkc/nfkc_cf/en_US so they're dropped.
+# unames/uemoji/nfkc/nfkc_cf/en_US/brkitr so they're dropped (sentence
+# segmentation moved to java.text.BreakIterator).
 KEEP=(
     '^cnvalias\.icu$' '^uchar\.icu$' '^ubidi\.icu$'
     '^ulayout\.icu$' '^ucase\.icu$'
     '^nfc\.nrm$'
-    '^brkitr/' '^root\.res$' '^en\.res$'
+    '^root\.res$' '^en\.res$'
 )
 
 : > "$WORK/keep.lst"

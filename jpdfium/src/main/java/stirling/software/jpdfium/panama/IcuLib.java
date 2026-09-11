@@ -30,6 +30,12 @@ public final class IcuLib {
         }
     }
 
+    /**
+     * @deprecated Sentence segmentation moved to {@code java.text.BreakIterator};
+     * the native side no longer links icu-i18n and this always fails. Retained
+     * for binary compatibility.
+     */
+    @Deprecated
     public static String breakSentences(String text) {
         NativeGuard.acquire();
         try {

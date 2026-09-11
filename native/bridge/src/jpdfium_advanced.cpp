@@ -831,7 +831,6 @@ int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* f) 
 
 #ifdef JPDFIUM_HAS_ICU
 
-#include <unicode/brkiter.h>
 #include <unicode/normlzr.h>
 #include <unicode/ubidi.h>
 #include <unicode/unistr.h>
@@ -855,71 +854,13 @@ int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
-    if (!text || !json_result) return JPDFIUM_ERR_INVALID;
-
-    UErrorCode status = U_ZERO_ERROR;
-    std::unique_ptr<icu::BreakIterator> bi(
-        icu::BreakIterator::createSentenceInstance(icu::Locale::getDefault(), status));
-
-    if (U_FAILURE(status)) {
-        *json_result = strdup("[]");
-        return JPDFIUM_ERR_NATIVE;
-    }
-
-    icu::UnicodeString utext = icu::UnicodeString::fromUTF8(text);
-    bi->setText(utext);
-
-    std::string json = "[";
-    bool first = true;
-    int32_t start = bi->first();
-    int32_t end = bi->next();
-
-    while (end != icu::BreakIterator::DONE) {
-        if (!first) json += ",";
-        first = false;
-
-        icu::UnicodeString segment;
-        utext.extractBetween(start, end, segment);
-        std::string segUtf8;
-        segment.toUTF8String(segUtf8);
-
-        // Escape for JSON
-        std::string escaped;
-        for (char c : segUtf8) {
-            switch (c) {
-                case '"':
-                    escaped += "\\\"";
-                    break;
-                case '\\':
-                    escaped += "\\\\";
-                    break;
-                case '\n':
-                    escaped += "\\n";
-                    break;
-                case '\r':
-                    escaped += "\\r";
-                    break;
-                case '\t':
-                    escaped += "\\t";
-                    break;
-                default:
-                    escaped += c;
-            }
-        }
-
-        char buf[4096];
-        snprintf(buf, sizeof(buf), "{\"start\":%d,\"end\":%d,\"text\":\"%s\"}", start, end,
-                 escaped.c_str());
-        json += buf;
-
-        start = end;
-        end = bi->next();
-    }
-
-    json += "]";
-    *json_result = strdup(json.c_str());
-    return JPDFIUM_OK;
+int32_t jpdfium_icu_break_sentences(const char*, char** json_result) {
+    // Sentence segmentation moved to java.text.BreakIterator (same UAX #29);
+    // the bridge no longer links icu-i18n. Tombstone kept so existing
+    // bindings resolve.
+    if (!json_result) return JPDFIUM_ERR_INVALID;
+    *json_result = strdup("[]");
+    return JPDFIUM_ERR_NOT_FOUND;
 }
 
 int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {

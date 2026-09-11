@@ -375,8 +375,11 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
-    # ICU4C - Unicode normalization, BiDi, sentence segmentation
-    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc icu-i18n)
+    # ICU4C (common only) - Unicode normalization (NFC/NFKC) and BiDi.
+    # Sentence segmentation lives in java.text.BreakIterator, so icu-i18n
+    # is deliberately not linked: it saves ~3 MB of bundled libs plus the
+    # brkitr data tables, with no native caller left for it.
+    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
     target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
 
