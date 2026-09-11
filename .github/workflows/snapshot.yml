@@ -110,19 +110,19 @@ jobs:
         with:
           name: windows-icu-trimmed
           path: native/dist/windows-x64/icudt78.dll
-          if-no-files-found: warn  # script bails out -> windows job uses vcpkg's full 33 MB dll
+          if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/icudt*l.dat
-          if-no-files-found: warn  # macOS jobs fall back to brew's 33 MB libicudata
+          if-no-files-found: error
           retention-days: 1
 
   build-natives:
     needs: [preflight-assets, prep-windows-icu]
-    if: always()  # build even if prep failed; windows job falls back to vcpkg's full icudt78.dll
+    if: !cancelled() && needs.preflight-assets.result == 'success' && needs.prep-windows-icu.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -358,7 +358,6 @@ jobs:
         # .dat is platform-agnostic.
         if: startsWith(matrix.platform, 'darwin-')
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
-        continue-on-error: true        # missing -> macOS bundler falls back to brew's 33 MB libicudata
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/
