@@ -51,10 +51,8 @@ class NativeLoaderPlatformTest {
 
     @Test
     void windowsPreloadOrderLoadsIcuBeforeHarfbuzzNg() {
-        // Regression: windows-arm64 crashed with fatal 0xC0000139 because
-        // third_party_harfbuzz-ng.dll (needs bundled icuuc.dll) was
-        // preloaded before icuuc.dll and bound against the OS ICU copy.
-        // Leaves must sort before their consumers.
+        // windows-arm64 died with 0xC0000139 when harfbuzz-ng loaded
+        // before the bundled icuuc.dll.
         assertTrue(
                 NativeLoader.windowsLoadTier("icuuc.dll")
                         < NativeLoader.windowsLoadTier("third_party_harfbuzz-ng.dll"),

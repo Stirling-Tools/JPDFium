@@ -150,24 +150,12 @@ public final class NativeLoader {
                 remaining.add(lib);
             }
         }
-        // Topological load order: Windows resolves a DLL's imports at load
-        // time via the standard search (app dir, System32, PATH) - NOT the
-        // DLL's own directory. If a bundled dep isn't already loaded, the
-        // loader can bind against an incompatible OS copy (e.g. System32's
-        // icuuc.dll) and die with a fatal STATUS_ENTRYPOINT_NOT_FOUND
-        // (0xC0000139) inside ntdll - an Internal Error the JVM cannot turn
-        // into a catchable UnsatisfiedLinkError, so the multi-pass retry
-        // below never gets a second chance. Seen on windows-arm64 where
-        // third_party_harfbuzz-ng.dll (needs bundled icuuc.dll) was loaded
-        // before icuuc.dll and crashed against the OS ICU.
-        //
-        // Sort leaves-first so the first pass already respects the
-        // dependency graph (verified via dumpbin on the windows bundles):
-        //   tier 0: CRT + leaf libs with no bundled deps
-        //   tier 1: needs only tier 0
-        //   tier 2: freetype / allocator_core / qpdf
-        //   tier 3: harfbuzz consumers
-        //   tier 4: harfbuzz-subset (needs harfbuzz)
+        // Windows looks for deps in the app dir, System32 and PATH, not in
+        // the extract dir. Sort leaves first so bundled copies are already
+        // loaded when consumers need them. Wrong order crashed windows-arm64
+        // with 0xC0000139 when harfbuzz-ng picked up the OS icuuc.dll.
+        // Tiers: 0 = CRT + leaves, 1 = needs tier 0, 2 = freetype/qpdf,
+        // 3 = harfbuzz, 4 = harfbuzz-subset.
         remaining.sort((a, b) -> {
             int ta = windowsLoadTier(a);
             int tb = windowsLoadTier(b);
@@ -204,14 +192,12 @@ public final class NativeLoader {
     }
 
     /**
-     * Topological tier for Windows preload ordering (lower loads first).
-     * Derived from the dumpbin import tables of the windows-x64/arm64
-     * bundles; unknown names land on tier 2 (after the leaf/CRT tiers so
-     * their likely deps are already mapped, before the harfbuzz tiers).
+     * Load tier for Windows preload order, lower first.
+     * From dumpbin of the windows bundles. Unknown names go to tier 2.
      */
     static int windowsLoadTier(String lib) {
         String l = lib.toLowerCase();
-        // Tier 0: CRT runtimes + leaf libs with no bundled deps.
+        // Tier 0: CRT + leaves with no bundled deps.
         if (l.contains("libc++")
                 || l.startsWith("vcruntime")
                 || l.startsWith("msvcp")
@@ -227,9 +213,7 @@ public final class NativeLoader {
                 || l.equals("pugixml.dll")) {
             return 0;
         }
-        // Tier 1: needs only tier 0 (icuuc->libc++, icuuc78->icudt78,
-        // brotlidec->brotlicommon, libpng16->z, third_party_libpng->
-        // third_party_zlib, allocator_base->libc++, abseil->libc++).
+        // Tier 1: needs only tier 0.
         if (l.equals("brotlidec.dll")
                 || l.equals("libpng16.dll")
                 || l.startsWith("icuuc")
@@ -238,24 +222,22 @@ public final class NativeLoader {
                 || l.contains("abseil")) {
             return 1;
         }
-        // Tier 2: freetype (z/bz2/libpng/brotlidec), allocator_core
-        // (allocator_base), qpdf (z/jpeg).
+        // Tier 2: freetype, allocator_core, qpdf.
         if (l.equals("freetype.dll")
                 || l.contains("allocator_core")
                 || l.startsWith("qpdf")) {
             return 2;
         }
-        // Tier 3: harfbuzz (freetype), harfbuzz-ng (icuuc). Must NOT load
-        // before their tier-1/2 deps - an early load falls back to the OS
-        // ICU and hard-crashes the JVM with 0xC0000139.
+        // Tier 3: harfbuzz needs freetype, harfbuzz-ng needs icuuc.
+        // Keep after tier 1/2 or the OS copy gets picked up.
         if (l.contains("harfbuzz") && !l.contains("subset")) {
             return 3;
         }
-        // Tier 4: harfbuzz-subset (harfbuzz).
+        // Tier 4: subset needs harfbuzz.
         if (l.contains("harfbuzz-subset") || l.contains("harfbuzz_subset")) {
             return 4;
         }
-        // Unknown future PDFium component: after leaves, before harfbuzz.
+        // Unknown later PDFium split: load after leaves, before harfbuzz.
         return 2;
     }
 
