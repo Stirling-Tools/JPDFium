@@ -108,11 +108,16 @@ public final class PdfPageBoxes {
         if (getter == null || rawPage == null || rawPage.equals(MemorySegment.NULL)) {
             return Optional.empty();
         }
+        // Cold path only (page boxes are queried rarely): one arena block plus
+        // four slice views. Each asSlice is a heap view object, so this is not
+        // a certified zero-alloc path; that is fine here and must not be copied
+        // into hot paths without the escape-analysis caveat.
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment l = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment b = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment r = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment t = arena.allocate(ValueLayout.JAVA_FLOAT);
+            MemorySegment box = arena.allocate(16, 4);
+            MemorySegment l = box.asSlice(0, 4);
+            MemorySegment b = box.asSlice(4, 4);
+            MemorySegment r = box.asSlice(8, 4);
+            MemorySegment t = box.asSlice(12, 4);
             int ok = (int) getter.invokeExact(rawPage, l, b, r, t);
             if (ok == 0) return Optional.empty();
             float left = l.get(ValueLayout.JAVA_FLOAT, 0);
@@ -120,7 +125,8 @@ public final class PdfPageBoxes {
             float right = r.get(ValueLayout.JAVA_FLOAT, 0);
             float top = t.get(ValueLayout.JAVA_FLOAT, 0);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
-        } catch (Throwable e) {
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
             return Optional.empty();
         }
     }

@@ -77,21 +77,21 @@ public final class PdfPageScaler {
             float offsetY = (tgtH - scaledH) / 2f;
 
             try (Arena arena = Arena.ofConfined()) {
-                // Build FS_MATRIX: [a=sx, b=0, c=0, d=sy, e=offsetX, f=offsetY]
+                // Centered uniform scale: matrix slots follow FS_MATRIX order a..f.
                 MemorySegment matrix = arena.allocate(PageEditBindings.FS_MATRIX_LAYOUT);
-                matrix.set(ValueLayout.JAVA_FLOAT, 0, sx);        // a
-                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);        // b
-                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);        // c
-                matrix.set(ValueLayout.JAVA_FLOAT, 12, sy);       // d
-                matrix.set(ValueLayout.JAVA_FLOAT, 16, offsetX);  // e
-                matrix.set(ValueLayout.JAVA_FLOAT, 20, offsetY);  // f
+                matrix.set(ValueLayout.JAVA_FLOAT, 0, sx);
+                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 12, sy);
+                matrix.set(ValueLayout.JAVA_FLOAT, 16, offsetX);
+                matrix.set(ValueLayout.JAVA_FLOAT, 20, offsetY);
 
-                // Build clip rect: full target area
+                // Full-target clip so nothing is cut before the box update.
                 MemorySegment clip = arena.allocate(PageEditBindings.FS_RECTF_LAYOUT);
-                clip.set(ValueLayout.JAVA_FLOAT, 0, 0f);          // left
-                clip.set(ValueLayout.JAVA_FLOAT, 4, 0f);          // bottom
-                clip.set(ValueLayout.JAVA_FLOAT, 8, tgtW);        // right
-                clip.set(ValueLayout.JAVA_FLOAT, 12, tgtH);       // top
+                clip.set(ValueLayout.JAVA_FLOAT, 0, 0f);
+                clip.set(ValueLayout.JAVA_FLOAT, 4, 0f);
+                clip.set(ValueLayout.JAVA_FLOAT, 8, tgtW);
+                clip.set(ValueLayout.JAVA_FLOAT, 12, tgtH);
 
                 int ok;
                 try {

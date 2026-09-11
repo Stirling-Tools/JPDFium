@@ -11,8 +11,17 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Hand-linked direct downcall method handles configured with {@link Linker.Option#critical(boolean)}
- * for hot leaf native operations.
+ * Hand-linked direct downcall method handles for hot leaf native operations.
+ *
+ * <p>Plain (non-critical) downcalls: every signature here already has a
+ * foreign entry in {@code reachability-metadata.json}, which is what keeps
+ * GraalVM native-image working since the whole {@code panama} package is
+ * {@code initialize-at-run-time} and every handle is created at image
+ * runtime. A strict {@code critical(false)} variant skips thread-state
+ * transitions but its leaf stubs have no metadata representation that the
+ * current GraalVM accepts (blank snippet in
+ * {@code MissingForeignRegistrationError}), so it stays off until the
+ * metadata supports it and a benchmark proves the need.
  *
  * <p>These direct handles are not wrapped by combinators; callers must explicitly acquire
  * {@link NativeGuard} before invoking them.
@@ -47,7 +56,7 @@ public final class FastLinks {
 
     private static MethodHandle link(String name, FunctionDescriptor desc) {
         Optional<MemorySegment> sym = Symbols.find(name);
-        return sym.map(memorySegment -> LINKER.downcallHandle(memorySegment, desc, Linker.Option.critical(false))).orElse(null);
+        return sym.map(memorySegment -> LINKER.downcallHandle(memorySegment, desc)).orElse(null);
     }
 
     private FastLinks() {}

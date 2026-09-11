@@ -54,6 +54,8 @@ public class S06_RedactWords {
         RedactOptions opts = RedactOptions.builder()
                 // Word list
                 .addWord("Hello")
+                .addWord("FREDERICK")
+                .addWord("AMERICAN")
                 .addWord("World")
                 .addWord("Overview")
                 .addWord("Dummy")

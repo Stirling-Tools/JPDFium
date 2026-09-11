@@ -108,7 +108,7 @@ public final class RepairLib {
                         jsonPtrSeg);
 
                 MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
@@ -276,7 +276,7 @@ public final class RepairLib {
                         expectedComponents, jsonPtrSeg);
 
                 MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
@@ -338,7 +338,7 @@ public final class RepairLib {
                         dataSeg, jpxData.length, jsonPtrSeg);
 
                 MemorySegment strPtr = jsonPtrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }

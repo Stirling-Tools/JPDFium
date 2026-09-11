@@ -45,7 +45,10 @@ public final class PdfVersionConverter {
     private static final FunctionDescriptor WRITE_BLOCK_DESC = FunctionDescriptor.of(
             JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG);
 
-    // Thread-local buffer for the upcall to write into
+    // Thread-local buffer for the upcall to write into. Short-lived and always
+    // removed in finally; cold version-convert path only (not renders), so no
+    // per-thread footprint concern. ScopedValue would require restructuring the
+    // fixed native callback signature for no hot-path gain.
     private static final ThreadLocal<ByteArrayOutputStream> WRITE_BUFFER = new ThreadLocal<>();
 
     /**
@@ -61,7 +64,9 @@ public final class PdfVersionConverter {
             if (ok != 0) {
                 return PdfVersion.fromCode(versionSeg.get(JAVA_INT, 0));
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
         return PdfVersion.V1_7;
     }
 
@@ -92,7 +97,6 @@ public final class PdfVersionConverter {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         WRITE_BUFFER.set(baos);
         try (Arena arena = Arena.ofConfined()) {
-            // Create the upcall stub for WriteBlock
             MethodHandle writeBlockMH;
             try {
                 writeBlockMH = MethodHandles.lookup().findStatic(
@@ -105,12 +109,10 @@ public final class PdfVersionConverter {
             MemorySegment writeBlockStub = Linker.nativeLinker().upcallStub(
                     writeBlockMH, WRITE_BLOCK_DESC, arena);
 
-            // Allocate FPDF_FILEWRITE struct
             MemorySegment fileWrite = arena.allocate(FPDF_FILEWRITE_LAYOUT);
-            fileWrite.set(JAVA_INT, 0, 1); // version = 1
-            fileWrite.set(ADDRESS, 8, writeBlockStub); // WriteBlock function pointer
+            fileWrite.set(JAVA_INT, 0, 1);
+            fileWrite.set(ADDRESS, 8, writeBlockStub);
 
-            // Call FPDF_SaveWithVersion
             int ok;
             try {
                 ok = (int) DocBindings.FPDF_SaveWithVersion.invokeExact(

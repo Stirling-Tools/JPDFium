@@ -55,7 +55,7 @@ public final class FontLib {
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_classify(
                         a.allocateFrom(JAVA_BYTE, fontData), fontData.length, ptrSeg), "fontClassify");
                 MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
@@ -97,7 +97,7 @@ public final class FontLib {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_normalize_page(doc, pageIndex, ptrSeg), "fontNormalizePage");
                 MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }

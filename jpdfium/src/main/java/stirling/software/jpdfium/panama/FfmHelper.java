@@ -20,7 +20,42 @@ import java.nio.charset.StandardCharsets;
  */
 public final class FfmHelper {
 
+    /**
+     * Upper bound for a single NUL-terminated native string view.
+     *
+     * <p>Native JSON/text payloads scale with page content; without a cap a missing
+     * NUL terminator turns {@code getString(0)} into an unbounded scan. The view
+     * itself allocates nothing: this only limits how far the scan may read before
+     * failing loudly instead of segfaulting.
+     */
+    public static final long MAX_NATIVE_STRING_BYTES = 256L * 1024L * 1024L;
+
     private FfmHelper() {}
+
+    /**
+     * Read a NUL-terminated UTF-8 native string with an explicit bound.
+     *
+     * @param strPtr native {@code char*} (must not be {@code NULL})
+     * @return decoded string
+     * @throws stirling.software.jpdfium.exception.JPDFiumException if the pointer is NULL
+     */
+    public static String readNativeString(MemorySegment strPtr) {
+        return readNativeString(strPtr, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Read a NUL-terminated native string with an explicit bound and charset.
+     *
+     * @param strPtr  native pointer (must not be {@code NULL})
+     * @param charset charset for decoding
+     * @return decoded string
+     */
+    public static String readNativeString(MemorySegment strPtr, java.nio.charset.Charset charset) {
+        if (strPtr == null || strPtr.equals(MemorySegment.NULL)) {
+            throw new stirling.software.jpdfium.exception.JPDFiumException("native string pointer is NULL");
+        }
+        return strPtr.reinterpret(MAX_NATIVE_STRING_BYTES).getString(0, charset);
+    }
 
     /**
      * Encode a Java String to a null-terminated UTF-16LE MemorySegment (FPDF_WIDESTRING).
@@ -64,19 +99,21 @@ public final class FfmHelper {
     /**
      * Convenience: convert a raw pointer (as long) into a MemorySegment.
      * Returns {@code MemorySegment.NULL} if the address is 0.
+     *
+     * <p>The returned segment is a zero-length view: it must not outlive the native
+     * object it points to and must not be dereferenced. Callers holding it past
+     * {@code close()} cause native use-after-free.
      */
     public static MemorySegment ptrToSegment(long address) {
         return address == 0 ? MemorySegment.NULL : MemorySegment.ofAddress(address);
     }
 
     /**
-     * Invoke a MethodHandle that returns an int status code, throwing on non-zero.
-     * Many PDFium functions return 0 for success and non-zero for error.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param args         arguments to pass to the MethodHandle
-     * @throws RuntimeException if invocation fails or returns non-zero
+     * @deprecated Retained for binary compatibility; internal callers use direct
+     * downcalls plus {@code NativeRuntime.rethrowFatal}. Preserved with original
+     * semantics.
      */
+    @Deprecated
     public static void invokeCheck(MethodHandle methodHandle, Object... args) {
         try {
             int result = (int) methodHandle.invokeExact(args);
@@ -92,13 +129,9 @@ public final class FfmHelper {
     }
 
     /**
-     * Invoke a MethodHandle that returns an int status code, returning a default on failure.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param defaultValue value to return if invocation fails or returns non-zero
-     * @param args         arguments to pass to the MethodHandle
-     * @return the result or defaultValue on failure
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static int invokeOrDefault(MethodHandle methodHandle, int defaultValue, Object... args) {
         try {
             int result = (int) methodHandle.invokeExact(args);
@@ -110,36 +143,29 @@ public final class FfmHelper {
     }
 
     /**
-     * Invoke a MethodHandle that returns a MemorySegment, returning MemorySegment.NULL on failure.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param args         arguments to pass to the MethodHandle
-     * @return the result or MemorySegment.NULL on failure
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static MemorySegment invokeSegment(MethodHandle methodHandle, Object... args) {
         try {
             return (MemorySegment) methodHandle.invokeExact(args);
-        } catch (Throwable t) {
+        } catch (Throwable _) {
             return MemorySegment.NULL;
         }
     }
 
     /**
-     * Allocate four floats in an Arena for rectangle coordinates (left, bottom, right, top).
-     *
-     * @param arena the Arena to allocate in
-     * @return MemorySegment containing four consecutive floats (16 bytes total)
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static MemorySegment allocateRect(Arena arena) {
         return arena.allocate(16, 4);
     }
 
     /**
-     * Read four floats from a MemorySegment as a rectangle (left, bottom, right, top).
-     *
-     * @param targetSegment MemorySegment containing four floats
-     * @return array of [left, bottom, right, top]
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static float[] readRect(MemorySegment targetSegment) {
         return new float[]{
             targetSegment.get(ValueLayout.JAVA_FLOAT, 0),
@@ -150,21 +176,17 @@ public final class FfmHelper {
     }
 
     /**
-     * Allocate four ints in an Arena for RGBA color values.
-     *
-     * @param arena the Arena to allocate in
-     * @return MemorySegment containing four consecutive ints (16 bytes total)
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static MemorySegment allocateColor(Arena arena) {
         return arena.allocate(16, 4);
     }
 
     /**
-     * Read four ints from a MemorySegment as RGBA color values.
-     *
-     * @param targetSegment MemorySegment containing four ints
-     * @return array of [r, g, b, a]
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static int[] readColor(MemorySegment targetSegment) {
         return new int[]{
             targetSegment.get(ValueLayout.JAVA_INT, 0),
@@ -175,21 +197,17 @@ public final class FfmHelper {
     }
 
     /**
-     * Allocate two ints in an Arena for start index and count values.
-     *
-     * @param arena the Arena to allocate in
-     * @return MemorySegment containing two consecutive ints (8 bytes total)
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static MemorySegment allocateIntPair(Arena arena) {
         return arena.allocate(8, 2);
     }
 
     /**
-     * Read two ints from a MemorySegment as a pair.
-     *
-     * @param targetSegment MemorySegment containing two ints
-     * @return array of [first, second]
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static int[] readIntPair(MemorySegment targetSegment) {
         return new int[]{
             targetSegment.get(ValueLayout.JAVA_INT, 0),
@@ -198,69 +216,52 @@ public final class FfmHelper {
     }
 
     /**
-     * Invoke a MethodHandle that returns an int, returning 0 on failure.
-     * Use for fire-and-forget calls where failure is acceptable.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param args         arguments to pass to the MethodHandle
-     * @return the result or 0 on failure
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static int safeInt(MethodHandle methodHandle, Object... args) {
         try {
             return (int) methodHandle.invokeExact(args);
-        } catch (Throwable t) {
+        } catch (Throwable _) {
             return 0;
         }
     }
 
     /**
-     * Invoke a MethodHandle that returns a long, returning 0 on failure.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param args         arguments to pass to the MethodHandle
-     * @return the result or 0 on failure
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static long safeLong(MethodHandle methodHandle, Object... args) {
         try {
             return (long) methodHandle.invokeExact(args);
-        } catch (Throwable t) {
+        } catch (Throwable _) {
             return 0;
         }
     }
 
     /**
-     * Invoke a MethodHandle silently, ignoring all exceptions.
-     * Use for cleanup calls where failure is acceptable.
-     *
-     * @param methodHandle MethodHandle to invoke
-     * @param args         arguments to pass to the MethodHandle
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static void safeSilent(MethodHandle methodHandle, Object... args) {
         try {
             methodHandle.invokeExact(args);
-        } catch (Throwable t) {
+        } catch (Throwable _) {
             // Ignore
         }
     }
 
     /**
-     * Allocate a UTF-8 string and invoke a MethodHandle that takes (segment, string).
-     * Returns the int result or 0 on failure.
-     *
-     * @param arena        Arena for allocation
-     * @param methodHandle MethodHandle expecting (MemorySegment, MemorySegment)
-     * @param target       The target segment (e.g., annotation)
-     * @param key          The string key
-     * @param value        The string value
-     * @return the result or 0 on failure
+     * @deprecated Retained for binary compatibility; preserved with original semantics.
      */
+    @Deprecated
     public static int setStringKeyValue(Arena arena, MethodHandle methodHandle,
                                          MemorySegment target, String key, String value) {
         try {
             MemorySegment keySegment = arena.allocateFrom(key);
             MemorySegment valueSegment = toWideString(arena, value);
             return (int) methodHandle.invokeExact(target, keySegment, valueSegment);
-        } catch (Throwable t) {
+        } catch (Throwable _) {
             return 0;
         }
     }

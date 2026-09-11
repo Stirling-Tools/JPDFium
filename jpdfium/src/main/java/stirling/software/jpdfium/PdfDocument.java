@@ -113,8 +113,25 @@ public final class PdfDocument implements AutoCloseable {
         return open(file.toPath(), password);
     }
 
+    /**
+     * Open a document from a byte buffer.
+     *
+     * <p>Direct buffers use a zero-copy view; the position advances to the limit,
+     * matching the heap path which consumes remaining bytes via {@code get}.
+     * Heap buffers copy once via {@code docOpenBytes} because the generated
+     * downcalls reject heap segments.
+     */
     public static PdfDocument open(ByteBuffer buffer) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        if (buffer.isDirect()) {
+            // View, don't copy: the bridge copies synchronously inside the downcall,
+            // so peak heap cost is zero instead of one full-document byte[] transient.
+            // Heap buffers still copy once via docOpenBytes (jextract downcalls reject them).
+            MemorySegment seg = MemorySegment.ofBuffer(buffer.duplicate());
+            long handle = JpdfiumLib.docOpenSegment(seg, seg.byteSize());
+            buffer.position(buffer.limit());
+            return new PdfDocument(handle);
+        }
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         return open(bytes);
@@ -122,6 +139,8 @@ public final class PdfDocument implements AutoCloseable {
 
     public static PdfDocument open(ByteBuffer buffer, String password) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        if (password == null || password.isEmpty()) return open(buffer);
+        // Password path still needs heap bytes (no segment+password ABI); single copy only.
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         return open(bytes, password);
@@ -330,7 +349,7 @@ public final class PdfDocument implements AutoCloseable {
                 Optional<Rect> trimBox = queryBoxByIndex(getBox, pageIndex, 3, rectBuf);
                 Optional<Rect> artBox = queryBoxByIndex(getBox, pageIndex, 4, rectBuf);
                 return new PageBoxes(mediaBox, cropBox, bleedBox, trimBox, artBox);
-            } catch (Throwable ignored) {}
+            } catch (Throwable _) {}
         }
         try (PdfPage p = page(pageIndex)) {
             return p.boxes();
@@ -371,12 +390,15 @@ public final class PdfDocument implements AutoCloseable {
             try {
                 int rot = (int) getRot.invokeExact(rawDocSegment, pageIndex);
                 if (rot >= 0) return rot;
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) {
+                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            }
         }
         try (PdfPage p = page(pageIndex)) {
             int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandle());
             return r * 90;
         } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
@@ -398,7 +420,9 @@ public final class PdfDocument implements AutoCloseable {
                 if (ok != 0) {
                     return buf.get(ValueLayout.JAVA_FLOAT, 0);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) {
+                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            }
         }
         return 1.0f;
     }
@@ -486,6 +510,10 @@ public final class PdfDocument implements AutoCloseable {
 
     /**
      * Returns the raw FPDF_DOCUMENT MemorySegment for direct PDFium FFM calls.
+     *
+     * <p><strong>Lifetime:</strong> zero-length view owned by this {@code PdfDocument}.
+     * Must not outlive {@link #close()}, must stay on the owning thread, and native
+     * calls using it must hold {@code NativeGuard}.
      */
     public MemorySegment rawHandle() {
         ensureOpen();
@@ -520,7 +548,9 @@ public final class PdfDocument implements AutoCloseable {
             if (DocBindings.FPDF_GetDocPermissions != null) {
                 return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
         return 0L;
     }
 
@@ -533,7 +563,9 @@ public final class PdfDocument implements AutoCloseable {
             if (DocBindings.FPDF_GetSecurityHandlerRevision != null) {
                 return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+        }
         return 0;
     }
 

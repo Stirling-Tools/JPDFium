@@ -151,8 +151,20 @@ jobs:
           # The runner has /usr/local pre-populated by some Apple tools; clear
           # any leftover non-brew files that would clash.
           if [ ! -x /usr/local/bin/brew ]; then
-            arch -x86_64 /bin/bash -c \
-              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL --max-time 120 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+            # install.sh at HEAD refuses Rosetta (Apple Silicon only), so lay
+            # down the Intel-prefix brew from a tarball instead.
+            sudo mkdir -p /usr/local/Homebrew /usr/local/etc /usr/local/include \
+              /usr/local/lib /usr/local/sbin /usr/local/var /usr/local/opt \
+              /usr/local/share/zsh/site-functions /usr/local/var/homebrew/linked \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            sudo chown -R "$(whoami):admin" /usr/local/Homebrew /usr/local/etc \
+              /usr/local/include /usr/local/lib /usr/local/sbin /usr/local/var \
+              /usr/local/opt /usr/local/share/zsh /usr/local/var/homebrew \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 \
+              https://github.com/Homebrew/brew/tarball/main -o /tmp/brew.tgz
+            tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
+            sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
           fi
           arch -x86_64 /usr/local/bin/brew install \
             pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config

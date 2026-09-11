@@ -77,7 +77,14 @@ public final class Symbols {
     }
 
     /**
-     * Create a downcall method handle (delegates to guarded downcall).
+     * Create a guarded downcall method handle for a required symbol.
+     *
+     * <p>The {@code Critical} suffix is historical (required, not a promise of
+     * {@link Linker.Option#critical(boolean)}). Handles stay plain so GraalVM
+     * native-image needs no per signature leaf registration and heap segments
+     * keep working. FastLinks keeps strict critical for the hottest ten.
+     *
+     * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
      */
     public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
         return downcall(name, desc);

@@ -650,7 +650,7 @@ public final class PdfBookmarkEditor {
 
     private static void deleteQuietly(Path path) {
         if (path != null) {
-            try { Files.deleteIfExists(path); } catch (IOException ignored) {}
+            try { Files.deleteIfExists(path); } catch (IOException _) {}
         }
     }
 

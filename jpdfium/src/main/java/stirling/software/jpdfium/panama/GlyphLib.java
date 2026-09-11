@@ -39,7 +39,7 @@ public final class GlyphLib {
                         argb, padding, flags, countSeg, jsonSeg), "redactGlyphAware");
                 int count = countSeg.get(JAVA_INT, 0);
                 MemorySegment strPtr = jsonSeg.get(ADDRESS, 0);
-                String json = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String json = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return new GlyphRedactResult(count, json);
             }

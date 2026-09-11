@@ -76,7 +76,8 @@ public final class PdfPage implements AutoCloseable {
 
     /**
      * Render the page directly into a pre-allocated native memory segment.
-     * Guarantees zero Java heap allocation in steady state.
+     * Guarantees zero Java heap allocation in steady state when the same cached
+     * {@code targetBitmap} view is reused (wrapping per call allocates a view object).
      *
      * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
      * @param width        render width in pixels
@@ -84,12 +85,14 @@ public final class PdfPage implements AutoCloseable {
      */
     public void renderInto(MemorySegment targetBitmap, int width, int height) {
         ensureOpen();
-        JpdfiumLib.renderPageInto(handle, targetBitmap, width, height, 0x10 | 0x01 /* FPDF_REVERSE_BYTE_ORDER | FPDF_ANNOT */);
+        JpdfiumLib.renderPageIntoSegment(rawPageSegment, targetBitmap, width, height, 0x10 | 0x01 /* FPDF_REVERSE_BYTE_ORDER | FPDF_ANNOT */);
     }
 
     /**
      * Render the page directly into a pre-allocated direct {@link java.nio.ByteBuffer}.
-     * Guarantees zero Java heap allocation in steady state.
+     * Convenience overload: wrapping the buffer per call allocates a segment view
+     * (escape-analysis dependent); certified callers reuse a cached
+     * {@code MemorySegment} via {@link #renderInto(MemorySegment, int, int)}.
      *
      * @param directBuffer pre-allocated direct ByteBuffer (capacity at least width * height * 4 bytes)
      * @param width        render width in pixels
@@ -140,7 +143,8 @@ public final class PdfPage implements AutoCloseable {
                     } else if (req <= 1) {
                         return "";
                     }
-                } catch (Throwable ignored) {
+                } catch (Throwable t) {
+                    stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
                     // Fall back to standard extraction
                 }
             }
@@ -161,7 +165,9 @@ public final class PdfPage implements AutoCloseable {
             if (TextPageBindings.FPDFText_ClosePage != null) {
                 try {
                     TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
-                } catch (Throwable ignored) {}
+                } catch (Throwable t) {
+                    stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                }
             }
         }
     }
@@ -391,6 +397,11 @@ public final class PdfPage implements AutoCloseable {
 
     /**
      * Returns the raw FPDF_PAGE MemorySegment for direct PDFium FFM calls.
+     *
+     * <p><strong>Lifetime:</strong> zero-length view of native memory owned by this
+     * {@code PdfPage}. Must not outlive {@link #close()}, must stay on the thread
+     * that owns this page, and every native call using it must hold
+     * {@code NativeGuard} (via the {@code *Bindings} or {@code JpdfiumLib} helpers).
      */
     public MemorySegment rawHandle() {
         ensureOpen();
@@ -399,6 +410,9 @@ public final class PdfPage implements AutoCloseable {
 
     /**
      * Returns the raw FPDF_DOCUMENT MemorySegment from this page's parent document.
+     *
+     * <p><strong>Lifetime:</strong> same contract as {@link #rawHandle()}: invalid
+     * after this page is closed.
      */
     public MemorySegment rawDocHandle() {
         ensureOpen();
@@ -584,7 +598,9 @@ public final class PdfPage implements AutoCloseable {
                 if (ok != 0) {
                     return buf.get(ValueLayout.JAVA_FLOAT, 0);
                 }
-            } catch (Throwable ignored) {}
+            } catch (Throwable t) {
+                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            }
         }
         return 1.0f;
     }

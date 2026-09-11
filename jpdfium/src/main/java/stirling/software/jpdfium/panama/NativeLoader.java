@@ -93,13 +93,12 @@ public final class NativeLoader {
                 preloadDependencies(tmpDir, libs, pdfiumName, bridgeName);
             }
 
-            // Load pdfium
+            // Order matters: pdfium first so the bridge resolves against it.
             Path pdfiumPath = tmpDir.resolve(pdfiumName);
             if (Files.exists(pdfiumPath)) {
                 System.load(pdfiumPath.toAbsolutePath().toString());
             }
 
-            // Then load the bridge
             Path bridge = tmpDir.resolve(bridgeName);
             if (!Files.exists(bridge)) {
                 bridge = extractLib(resourceBase + bridgeName, tmpDir, bridgeName);
@@ -124,7 +123,7 @@ public final class NativeLoader {
                     }
                 }
             }
-        } catch (IOException ignored) {
+        } catch (IOException _) {
             // Missing index is not fatal; fall through with empty list
         }
         return result;
@@ -276,7 +275,7 @@ public final class NativeLoader {
         for (String libDir : libDirs) {
             try (var dir = Files.newDirectoryStream(Path.of(libDir), "ld-musl-*")) {
                 if (dir.iterator().hasNext()) return true;
-            } catch (IOException | RuntimeException ignored) {
+            } catch (IOException | RuntimeException _) {
                 // Directory missing or unreadable; try the next one
             }
         }
@@ -286,7 +285,7 @@ public final class NativeLoader {
         // (see VerificationToolsAreTestOnlyTest).
         try {
             return Files.readString(Path.of("/proc/self/maps")).contains("ld-musl");
-        } catch (IOException | RuntimeException ignored) {
+        } catch (IOException | RuntimeException _) {
             // /proc unavailable; assume glibc
         }
         return false;

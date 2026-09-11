@@ -45,14 +45,14 @@ public final class PdfJavaScriptInspector {
         int count;
         try {
             count = (int) JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
-        } catch (Throwable t) { return Collections.emptyList(); }
+        } catch (Throwable _) { return Collections.emptyList(); }
 
         List<JsAction> scripts = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             MemorySegment jsAction;
             try {
                 jsAction = (MemorySegment) JavaScriptBindings.FPDFDoc_GetJavaScriptAction.invokeExact(rawDoc, i);
-            } catch (Throwable t) { continue; }
+            } catch (Throwable _) { continue; }
             if (jsAction.equals(MemorySegment.NULL)) continue;
 
             try {
@@ -97,13 +97,13 @@ public final class PdfJavaScriptInspector {
                 int annotCount;
                 try {
                     annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(pages.get(p));
-                } catch (Throwable t) { continue; }
+                } catch (Throwable _) { continue; }
 
                 for (int ai = 0; ai < annotCount; ai++) {
                     MemorySegment annot;
                     try {
                         annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(pages.get(p), ai);
-                    } catch (Throwable t) { continue; }
+                    } catch (Throwable _) { continue; }
                     if (annot.equals(MemorySegment.NULL)) continue;
 
                     try {
@@ -135,7 +135,7 @@ public final class PdfJavaScriptInspector {
             MemorySegment buf = arena.allocate(needed);
             mh.invokeExact(jsAction, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
-        } catch (Throwable t) { return ""; }
+        } catch (Throwable _) { return ""; }
     }
 
     private static String getAnnotActionJs(MemorySegment formHandle, MemorySegment annot, int event) {
@@ -147,6 +147,6 @@ public final class PdfJavaScriptInspector {
             long written = (long) AnnotationBindings.FPDFAnnot_GetFormAdditionalActionJavaScript.invokeExact(
                     formHandle, annot, event, buf, needed);
             return FfmHelper.fromWideString(buf, written);
-        } catch (Throwable t) { return ""; }
+        } catch (Throwable _) { return ""; }
     }
 }

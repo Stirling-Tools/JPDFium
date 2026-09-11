@@ -38,12 +38,12 @@ public final class PdfPageMirror {
             try (Arena arena = Arena.ofConfined()) {
                 // Horizontal flip: scale x by -1, translate by width
                 MemorySegment matrix = arena.allocate(PageEditBindings.FS_MATRIX_LAYOUT);
-                matrix.set(ValueLayout.JAVA_FLOAT, 0, -1f);   // a
-                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);    // b
-                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);    // c
-                matrix.set(ValueLayout.JAVA_FLOAT, 12, 1f);   // d
-                matrix.set(ValueLayout.JAVA_FLOAT, 16, w);    // e
-                matrix.set(ValueLayout.JAVA_FLOAT, 20, 0f);   // f
+                matrix.set(ValueLayout.JAVA_FLOAT, 0, -1f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 12, 1f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 16, w);
+                matrix.set(ValueLayout.JAVA_FLOAT, 20, 0f);
 
                 MemorySegment clip = arena.allocate(PageEditBindings.FS_RECTF_LAYOUT);
                 clip.set(ValueLayout.JAVA_FLOAT, 0, 0f);
@@ -75,12 +75,12 @@ public final class PdfPageMirror {
             try (Arena arena = Arena.ofConfined()) {
                 // Vertical flip: scale y by -1, translate by height
                 MemorySegment matrix = arena.allocate(PageEditBindings.FS_MATRIX_LAYOUT);
-                matrix.set(ValueLayout.JAVA_FLOAT, 0, 1f);    // a
-                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);    // b
-                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);    // c
-                matrix.set(ValueLayout.JAVA_FLOAT, 12, -1f);  // d
-                matrix.set(ValueLayout.JAVA_FLOAT, 16, 0f);   // e
-                matrix.set(ValueLayout.JAVA_FLOAT, 20, h);    // f
+                matrix.set(ValueLayout.JAVA_FLOAT, 0, 1f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 4, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 8, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 12, -1f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 16, 0f);
+                matrix.set(ValueLayout.JAVA_FLOAT, 20, h);
 
                 MemorySegment clip = arena.allocate(PageEditBindings.FS_RECTF_LAYOUT);
                 clip.set(ValueLayout.JAVA_FLOAT, 0, 0f);

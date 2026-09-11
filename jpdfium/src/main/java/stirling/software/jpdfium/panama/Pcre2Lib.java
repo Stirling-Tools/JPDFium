@@ -51,7 +51,7 @@ public final class Pcre2Lib {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_match_all(patternHandle, a.allocateFrom(text), ptrSeg), "pcre2MatchAll");
                 MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-                String result = strPtr.reinterpret(Long.MAX_VALUE).getString(0);
+                String result = FfmHelper.readNativeString(strPtr);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
@@ -67,7 +67,9 @@ public final class Pcre2Lib {
                 try {
                     FastLinks.PCRE2_FREE.invokeExact(patternHandle);
                     return;
-                } catch (Throwable _) {}
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                }
             }
             JpdfiumH.jpdfium_pcre2_free(patternHandle);
         } finally {

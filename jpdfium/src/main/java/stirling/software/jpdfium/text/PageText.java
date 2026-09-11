@@ -41,8 +41,12 @@ public record PageText(
     /** Total number of characters. */
     public int charCount() { return chars.size(); }
 
-    /** Total number of words. */
-    public int wordCount() { return allWords().size(); }
+    /** Total number of words without materializing the flattened list. */
+    public int wordCount() {
+        int total = 0;
+        for (int i = 0; i < lines.size(); i++) total += lines.get(i).words().size();
+        return total;
+    }
 
     /** Total number of lines. */
     public int lineCount() { return lines.size(); }
