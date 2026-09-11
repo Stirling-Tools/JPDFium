@@ -142,24 +142,38 @@ public final class NativeLoader {
     private static void preloadDependencies(
             Path tmpDir, List<String> libs, String pdfiumName, String bridgeName) {
         List<String> remaining = new ArrayList<>();
-        List<String> priority = new ArrayList<>();
         for (String lib : libs) {
             if (lib.equals(pdfiumName) || lib.equals(bridgeName)) continue;
             if (isJvmHazardLib(lib)) continue;
             Path p = tmpDir.resolve(lib);
             if (Files.exists(p)) {
-                String l = lib.toLowerCase();
-                // Preload foundational runtimes and core libraries first so dependent libraries resolve
-                // against the bundled copies in memory rather than incompatible host libraries.
-                if (l.contains("libc++") || l.startsWith("vcruntime") || l.startsWith("msvcp") || l.startsWith("concrt")
-                        || (l.contains("harfbuzz") && !l.contains("subset"))) {
-                    priority.add(lib);
-                } else {
-                    remaining.add(lib);
-                }
+                remaining.add(lib);
             }
         }
-        remaining.addAll(0, priority);
+        // Topological load order: Windows resolves a DLL's imports at load
+        // time via the standard search (app dir, System32, PATH) - NOT the
+        // DLL's own directory. If a bundled dep isn't already loaded, the
+        // loader can bind against an incompatible OS copy (e.g. System32's
+        // icuuc.dll) and die with a fatal STATUS_ENTRYPOINT_NOT_FOUND
+        // (0xC0000139) inside ntdll - an Internal Error the JVM cannot turn
+        // into a catchable UnsatisfiedLinkError, so the multi-pass retry
+        // below never gets a second chance. Seen on windows-arm64 where
+        // third_party_harfbuzz-ng.dll (needs bundled icuuc.dll) was loaded
+        // before icuuc.dll and crashed against the OS ICU.
+        //
+        // Sort leaves-first so the first pass already respects the
+        // dependency graph (verified via dumpbin on the windows bundles):
+        //   tier 0: CRT + leaf libs with no bundled deps
+        //   tier 1: needs only tier 0
+        //   tier 2: freetype / allocator_core / qpdf
+        //   tier 3: harfbuzz consumers
+        //   tier 4: harfbuzz-subset (needs harfbuzz)
+        remaining.sort((a, b) -> {
+            int ta = windowsLoadTier(a);
+            int tb = windowsLoadTier(b);
+            if (ta != tb) return Integer.compare(ta, tb);
+            return a.compareToIgnoreCase(b);
+        });
 
         int maxPasses = 8;
         while (maxPasses > 0 && !remaining.isEmpty()) {
@@ -187,6 +201,62 @@ public final class NativeLoader {
         return l.contains("allocator_shim")
                 || l.contains("raw_ptr")
                 || l.startsWith("api-ms-win-") || l.startsWith("ext-ms-");
+    }
+
+    /**
+     * Topological tier for Windows preload ordering (lower loads first).
+     * Derived from the dumpbin import tables of the windows-x64/arm64
+     * bundles; unknown names land on tier 2 (after the leaf/CRT tiers so
+     * their likely deps are already mapped, before the harfbuzz tiers).
+     */
+    static int windowsLoadTier(String lib) {
+        String l = lib.toLowerCase();
+        // Tier 0: CRT runtimes + leaf libs with no bundled deps.
+        if (l.contains("libc++")
+                || l.startsWith("vcruntime")
+                || l.startsWith("msvcp")
+                || l.startsWith("concrt")
+                || l.startsWith("vcomp")
+                || l.startsWith("icudt")
+                || l.equals("z.dll")
+                || l.equals("third_party_zlib.dll")
+                || l.equals("brotlicommon.dll")
+                || l.equals("bz2.dll")
+                || l.startsWith("jpeg")
+                || l.startsWith("pcre2-")
+                || l.equals("pugixml.dll")) {
+            return 0;
+        }
+        // Tier 1: needs only tier 0 (icuuc->libc++, icuuc78->icudt78,
+        // brotlidec->brotlicommon, libpng16->z, third_party_libpng->
+        // third_party_zlib, allocator_base->libc++, abseil->libc++).
+        if (l.equals("brotlidec.dll")
+                || l.equals("libpng16.dll")
+                || l.startsWith("icuuc")
+                || l.equals("third_party_libpng.dll")
+                || (l.contains("allocator_base") && !l.contains("shim"))
+                || l.contains("abseil")) {
+            return 1;
+        }
+        // Tier 2: freetype (z/bz2/libpng/brotlidec), allocator_core
+        // (allocator_base), qpdf (z/jpeg).
+        if (l.equals("freetype.dll")
+                || l.contains("allocator_core")
+                || l.startsWith("qpdf")) {
+            return 2;
+        }
+        // Tier 3: harfbuzz (freetype), harfbuzz-ng (icuuc). Must NOT load
+        // before their tier-1/2 deps - an early load falls back to the OS
+        // ICU and hard-crashes the JVM with 0xC0000139.
+        if (l.contains("harfbuzz") && !l.contains("subset")) {
+            return 3;
+        }
+        // Tier 4: harfbuzz-subset (harfbuzz).
+        if (l.contains("harfbuzz-subset") || l.contains("harfbuzz_subset")) {
+            return 4;
+        }
+        // Unknown future PDFium component: after leaves, before harfbuzz.
+        return 2;
     }
 
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {
