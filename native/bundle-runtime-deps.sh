@@ -133,6 +133,14 @@ bundle_macos() {
             esac
             [ -f "$dep" ] || continue
 
+            # Canonicalize through symlinks before bundling. Homebrew
+            # versioned libs are alias chains (libicuuc.dylib ->
+            # libicuuc.78.dylib -> libicuuc.78.3.dylib); a plain cp follows
+            # each alias into a full duplicate copy. Converging on the real
+            # file bundles one copy that every alias rewrites to.
+            dep=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dep")
+            [ -f "$dep" ] || continue
+
             local base
             base=$(basename "$dep")
             local dest="$DIST_DIR/$base"
