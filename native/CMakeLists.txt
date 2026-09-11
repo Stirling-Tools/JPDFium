@@ -41,13 +41,21 @@ if(JPDFIUM_SANITIZE AND NOT MSVC)
     # Shared sanitizer runtime for SHARED libs loaded into an uninstrumented
     # host (java): applied per shared target below, never globally. A global
     # flag would also hit executables (fuzzer, smoke) where the static runtime
-    # must stay first. GCC spells it -shared-libasan, Clang -shared-libsan.
-    if("address" IN_LIST JPDFIUM_SANITIZERS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    # must stay first. Skipped entirely for fuzzer builds: the fully
+    # instrumented fuzzer executable and the bridge must share one static
+    # runtime, mixing static and shared ASan runtimes aborts at startup.
+    # GCC spells it -shared-libasan, Clang -shared-libsan.
+    if("address" IN_LIST JPDFIUM_SANITIZERS
+        AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows"
+        AND NOT JPDFIUM_BUILD_FUZZERS)
       if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set(_jpdfium_shared_san_flag "-shared-libsan" CACHE INTERNAL "")
+        set(_jpdfium_shared_san_flag "-shared-libsan")
       else()
-        set(_jpdfium_shared_san_flag "-shared-libasan" CACHE INTERNAL "")
+        set(_jpdfium_shared_san_flag "-shared-libasan")
       endif()
+    else()
+      unset(_jpdfium_shared_san_flag)
+      unset(_jpdfium_shared_san_flag CACHE)
     endif()
     message(STATUS "Sanitizers enabled: ${JPDFIUM_SANITIZE}")
   endif()
