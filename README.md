@@ -93,7 +93,7 @@ Native libraries for the PII pipeline (all MIT/Apache-2.0-compatible):
 | PCRE2 | BSD-3 | JIT regex engine |
 | FreeType | FTL/MIT | Font parsing, classification, widths |
 | HarfBuzz | MIT | Shaping, glyph-safe redaction |
-| ICU4C | Unicode | Normalization, BiDi, segmentation |
+| ICU4C | Unicode | Normalization, BiDi (sentences split in Java; icu-i18n not linked) |
 | qpdf | Apache-2.0 | Structure manipulation, repair |
 | pugixml | MIT | XMP metadata parsing |
 | libunibreak | zlib | Grapheme cluster boundaries |

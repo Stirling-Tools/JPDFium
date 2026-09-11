@@ -2,11 +2,11 @@ package stirling.software.jpdfium.redact.pii;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.FlashTextLib;
-import stirling.software.jpdfium.panama.IcuLib;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.util.NativeJsonParser;
 
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -27,7 +27,8 @@ import java.util.Set;
  * <p>Pipeline:
  * <ol>
  *   <li>Extract all text with PDFium's FPDFText_*</li>
- *   <li>ICU4C BreakIterator tokenizes into sentences</li>
+ *   <li>Split into sentences with {@code java.text.BreakIterator} (same UAX #29
+ *       rules the native ICU segmenter used, without the native dependency)</li>
  *   <li>FlashText trie-based NER finds known entities at O(n)</li>
  *   <li>PCRE2 pattern engine finds structural PII (dates, IDs, numbers)</li>
  *   <li>Coreference window: sentences adjacent to an entity match are flagged for
@@ -99,8 +100,7 @@ public final class EntityRedactor implements AutoCloseable {
                 }
             }
 
-            String sentenceJson = IcuLib.breakSentences(text);
-            List<Sentence> sentences = parseSentenceJson(sentenceJson);
+            List<Sentence> sentences = splitSentences(text);
 
             Set<Integer> entitySentenceIndices = new HashSet<>();
             for (EntityMatch em : pageEntities) {
@@ -268,6 +268,25 @@ public final class EntityRedactor implements AutoCloseable {
 
     private record Sentence(int start, int end) {}
 
+    /**
+     * Split text into sentence ranges. Offsets are char indices into
+     * {@code text}, matching what the coreference window expects.
+     */
+    static List<Sentence> splitSentences(String text) {
+        if (text == null || text.isEmpty()) return List.of();
+        BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
+        sentences.setText(text);
+        List<Sentence> result = new ArrayList<>();
+        int start = sentences.first();
+        int end = sentences.next();
+        while (end != BreakIterator.DONE) {
+            result.add(new Sentence(start, end));
+            start = end;
+            end = sentences.next();
+        }
+        return result;
+    }
+
     public static List<EntityMatch> parseEntityJson(String json, int pageIndex) {
         List<EntityMatch> matches = new ArrayList<>();
         for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
@@ -278,15 +297,5 @@ public final class EntityRedactor implements AutoCloseable {
             matches.add(new EntityMatch(pageIndex, start, end, keyword, label));
         }
         return matches;
-    }
-
-    private static List<Sentence> parseSentenceJson(String json) {
-        List<Sentence> sentences = new ArrayList<>();
-        for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
-            int start = Integer.parseInt(fields.getOrDefault("start", "0"));
-            int end = Integer.parseInt(fields.getOrDefault("end", "0"));
-            sentences.add(new Sentence(start, end));
-        }
-        return sentences;
     }
 }

@@ -348,8 +348,9 @@ JPDFIUM_EXPORT int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed);
 // Caller must free *result with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_icu_normalize_nfc(const char* text, char** result);
 
-// Segment text into sentences using ICU BreakIterator.
-// Returns JSON array of sentence boundaries: [{"start":0,"end":42,"text":"First sentence."},...]
+// Segment text into sentences. Tombstoned: segmentation moved to
+// java.text.BreakIterator and icu-i18n is no longer linked. Kept for
+// binding compatibility; always reports NOT_FOUND with empty JSON.
 // Caller must free *json_result with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_icu_break_sentences(const char* text, char** json_result);
 
