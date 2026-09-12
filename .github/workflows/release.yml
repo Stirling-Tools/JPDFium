@@ -575,8 +575,8 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
-      - name: Build full-codec libvips (Linux + macOS)
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+      - name: Build full-codec libvips (Linux + darwin-arm64)
+        if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'darwin-arm64'
         run: bash native/build-vips-full-codecs.sh
 
       - name: Install libvips (Linux, fallback)
@@ -586,13 +586,39 @@ jobs:
             sudo apt-get install -y --no-install-recommends libvips-dev patchelf
 
       - name: Install libvips (macOS, fallback)
-        if: startsWith(matrix.platform, 'darwin-')
+        if: startsWith(matrix.platform, 'darwin-') && matrix.platform != 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           if [ ! -f /usr/local/lib/libvips.42.dylib ] && [ ! -f /opt/homebrew/lib/libvips.42.dylib ]; then
             brew install vips || brew link --overwrite vips
           fi
+
+      - name: Rosetta brew + x86_64 vips bottle (darwin-x64)
+        if: matrix.platform == 'darwin-x64'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          if [ ! -x /usr/local/bin/brew ]; then
+            sudo mkdir -p /usr/local/Homebrew /usr/local/etc /usr/local/include \
+              /usr/local/lib /usr/local/sbin /usr/local/var /usr/local/opt \
+              /usr/local/share/zsh/site-functions /usr/local/share/man/man1 \
+              /usr/local/var/homebrew/linked \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            sudo chown -R "$(whoami):admin" /usr/local/Homebrew /usr/local/etc \
+              /usr/local/include /usr/local/lib /usr/local/sbin /usr/local/var \
+              /usr/local/opt /usr/local/share/zsh /usr/local/share/man \
+              /usr/local/var/homebrew \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 \
+              https://github.com/Homebrew/brew/tarball/main -o /tmp/brew.tgz
+            tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
+            sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
+          fi
+          sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
+          arch -x86_64 /usr/local/bin/brew install vips
+          ls -la /usr/local/lib/libvips.42.dylib
 
       - name: Fetch prebuilt libvips (Windows)
         if: matrix.platform == 'windows-x64'
@@ -625,6 +651,18 @@ jobs:
 
       - name: Stage libvips + codec chain
         run: bash native/build-vips.sh ${{ matrix.platform }}
+
+      - name: Diagnose windows vips bundle
+        if: matrix.platform == 'windows-x64'
+        shell: bash
+        run: |
+          echo "DIST dll count:"; ls native/dist/vips-windows-x64/*.dll | wc -l
+          echo "VIPS_WIN_DIST=$VIPS_WIN_DIST"; ls "$VIPS_WIN_DIST/bin" | head -20
+          echo "--- pristine upstream vips.exe --version ---"
+          (cd "$VIPS_WIN_DIST/bin" && ./vips.exe --version) || true
+          echo "--- dumpbin dependents of staged libvips-42.dll ---"
+          DUMPBIN=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+          if [ -n "$DUMPBIN" ]; then "$DUMPBIN" //dependents native/dist/vips-windows-x64/libvips-42.dll | head -60; else echo "no dumpbin"; fi || true
 
       - name: Build vips natives jar
         run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
