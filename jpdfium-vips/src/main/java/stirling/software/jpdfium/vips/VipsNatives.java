@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import stirling.software.jpdfium.panama.NativeLoader;
 
@@ -45,11 +46,13 @@ public final class VipsNatives {
             String vips = null;
             String glib = null;
             String gobject = null;
+            List<Path> extracted = new ArrayList<>();
             for (String lib : libs) {
                 Path out = extract(base + lib, dir);
                 if (out == null) {
                     continue;
                 }
+                extracted.add(out);
                 String n = out.getFileName().toString();
                 if (vips == null && isVipsLib(n)) {
                     vips = out.toString();
@@ -58,6 +61,10 @@ public final class VipsNatives {
                 } else if (gobject == null && isGobjectLib(n)) {
                     gobject = out.toString();
                 }
+            }
+            if (!extracted.isEmpty()
+                    && System.getProperty("os.name", "").toLowerCase().contains("win")) {
+                preloadWindows(extracted);
             }
             if (vips != null) {
                 System.setProperty("vipsffm.libpath.vips.override", vips);
@@ -96,6 +103,34 @@ public final class VipsNatives {
             // Missing index is non-fatal
         }
         return out;
+    }
+
+    /**
+     * Windows resolves a DLL's dependencies without looking in that DLL's own
+     * directory (Linux/macOS bundles carry an $ORIGIN/@loader_path rpath
+     * instead), so load every bundled library up front in dependency order.
+     * Repeat passes until no progress; anything left cannot be loaded at all.
+     */
+    private static void preloadWindows(List<Path> libs) {
+        List<Path> remaining = new ArrayList<>(libs);
+        boolean progress = true;
+        while (!remaining.isEmpty() && progress) {
+            progress = false;
+            Iterator<Path> it = remaining.iterator();
+            while (it.hasNext()) {
+                Path lib = it.next();
+                try {
+                    System.load(lib.toAbsolutePath().toString());
+                    it.remove();
+                    progress = true;
+                } catch (UnsatisfiedLinkError _) {
+                    // Dependency not resident yet; retry in a later pass.
+                }
+            }
+        }
+        if (!remaining.isEmpty()) {
+            throw new UnsatisfiedLinkError("Could not preload bundled libs: " + remaining);
+        }
     }
 
     private static Path extract(String resource, Path dir) throws IOException {

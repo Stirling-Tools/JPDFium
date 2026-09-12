@@ -575,9 +575,17 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
-      - name: Build full-codec libvips (Linux + darwin-arm64)
-        if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'darwin-arm64'
-        run: bash native/build-vips-full-codecs.sh
+      - name: Build full-codec libvips (Linux + macOS)
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        run: |
+          if [ "${{ matrix.platform }}" = "darwin-x64" ]; then
+            # Cross leg: run the whole build translated so uname, brew and the
+            # compiler all resolve x86_64 (Rosetta brew must be first on PATH).
+            export PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+            arch -x86_64 bash native/build-vips-full-codecs.sh
+          else
+            bash native/build-vips-full-codecs.sh
+          fi
 
       - name: Install libvips (Linux, fallback)
         if: startsWith(matrix.platform, 'linux-')
@@ -594,7 +602,7 @@ jobs:
             brew install vips || brew link --overwrite vips
           fi
 
-      - name: Rosetta brew + x86_64 vips bottle (darwin-x64)
+      - name: Rosetta brew bootstrap (darwin-x64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -617,8 +625,7 @@ jobs:
             sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
           fi
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
-          arch -x86_64 /usr/local/bin/brew install vips
-          ls -la /usr/local/lib/libvips.42.dylib
+          arch -x86_64 /usr/local/bin/brew --prefix
 
       - name: Fetch prebuilt libvips (Windows)
         if: matrix.platform == 'windows-x64'
