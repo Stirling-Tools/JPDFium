@@ -599,8 +599,8 @@ jobs:
         run: |
           set -e
           url=$(curl -fsSL https://api.github.com/repos/libvips/build-win64-mxe/releases/latest \
-                | grep -oE 'https://[^"]*vips-dev-w64-all-[0-9.]+\.zip|https://[^"]*vips-dev-w64-webp-[0-9.]+\.zip' | head -n1 || true)
-          [ -z "$url" ] && { echo "No prebuilt libvips Windows zip found - skipping"; exit 0; }
+                | grep -oE 'https://[^"]*vips-dev-x64-all-[0-9.]+\.zip|https://[^"]*vips-dev-x64-web-[0-9.]+\.zip' | head -n1 || true)
+          [ -z "$url" ] && { echo "ERROR: No prebuilt libvips Windows zip found" >&2; exit 1; }
           curl -fsSL "$url" -o /tmp/vips.zip
           mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
           VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)

@@ -80,7 +80,7 @@ build_libheif_linux() {
     echo "==> build-vips-full-codecs.sh: building libheif ${LIBHEIF_TAG} (static codecs)"
     local work
     work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT
+    trap 'rm -rf "$work"' RETURN
 
     $SUDO apt-get remove -y libheif* 2>/dev/null || true
 
@@ -117,7 +117,7 @@ build_vips() {
     echo "==> build-vips-full-codecs.sh: building libvips ${VIPS_TAG}"
     local work
     work="$(mktemp -d)"
-    trap 'rm -rf "$work"' EXIT
+    trap 'rm -rf "$work"' RETURN
 
     if [ "$OS" = darwin ]; then
         local bp
