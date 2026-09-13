@@ -70,3 +70,7 @@ This distribution bundles binary forms of the following open-source projects:
 17. libde265 (H.265/HEVC decoder, used for HEIC decoding)
     - Copyright (c) struktur AG
     - License: GNU Lesser General Public License v3.0 or later (see LIBDE265-LGPL-3.0.txt)
+
+18. Kvazaar (H.265/HEVC encoder, used for HEIC encoding on Linux/macOS)
+    - Copyright (c) 2021 Tampere University, ITU/ISO/IEC, project contributors
+    - License: BSD 3-Clause License (see KVAZAAR-BSD-3.txt)

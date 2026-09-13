@@ -93,11 +93,12 @@ class VipsSmokeTest {
             List<String> failures = new ArrayList<>();
             for (VipsFormat format : VipsFormat.values()) {
                 System.out.println("Testing format: " + format + " ...");
-                // No bundled platform ships an HEVC encoder: x265 is GPL-2.0
-                // and this project does not distribute it, so HEIC/HEIF
-                // round-trips can never pass against the bundle.
-                if (format == VipsFormat.HEIC || format == VipsFormat.HEIF) {
-                    System.out.println("  [SKIP] " + format + " (no HEVC encoder in bundle)");
+                // The Windows bundle ships no HEVC encoder (upstream provides
+                // none, and x265 is GPL-2.0 which this project does not
+                // distribute). Linux/macOS encode HEVC via BSD-licensed kvazaar.
+                if (state.platform().startsWith("windows")
+                        && (format == VipsFormat.HEIC || format == VipsFormat.HEIF)) {
+                    System.out.println("  [SKIP] " + format + " (no HEVC encoder in Windows bundle)");
                     continue;
                 }
                 try {

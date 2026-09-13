@@ -64,6 +64,7 @@ install_deps() {
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config build-essential cmake \
+            autoconf automake libtool \
             libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
             libjxl-dev libaom-dev libde265-dev \
@@ -71,9 +72,35 @@ install_deps() {
     else
         brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif little-cms2 \
-            jpeg-xl aom libde265 \
+            jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff
     fi
+}
+
+build_kvazaar() {
+    # BSD-licensed HEVC encoder (the GPL x265 must not be bundled).
+    # macOS takes the bottled kvazaar from the brew list above; Linux has
+    # no kvazaar package on the runner distro, so build the pinned source.
+    [ "$OS" = linux ] || return 0
+    local tag="${KVAZAAR_TAG:-v2.3.2}"
+    echo "==> build-vips-full-codecs.sh: building kvazaar ${tag}"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://github.com/ultravideo/kvazaar/archive/refs/tags/${tag}.tar.gz" \
+        -o "$work/kvazaar.tar.gz"
+    tar -xzf "$work/kvazaar.tar.gz" -C "$work"
+    local src="$work/kvazaar-${tag#v}"
+
+    (cd "$src" && ./autogen.sh && ./configure --prefix="$PREFIX")
+    make -C "$src" -j"$(nproc 2>/dev/null || echo 4)" \
+        || { echo "build-vips-full-codecs.sh: kvazaar build failed" >&2; exit 1; }
+    $SUDO make -C "$src" install
+    $SUDO ldconfig 2>/dev/null || true
+    echo "==> build-vips-full-codecs.sh: kvazaar installed to $PREFIX/lib:"
+    ls -la "$PREFIX"/lib/libkvazaar.* 2>/dev/null || true
 }
 
 build_libheif() {
@@ -95,6 +122,7 @@ build_libheif() {
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
     else
         $SUDO apt-get remove -y libheif* 2>/dev/null || true
+        export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     fi
 
     curl -fsSL --retry 3 --retry-delay 3 \
@@ -109,7 +137,7 @@ build_libheif() {
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
-        -DWITH_LIBDE265=ON -DWITH_X265=OFF \
+        -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
         -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
         -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_KVAZAAR=OFF \
         -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
@@ -182,6 +210,7 @@ build_vips() {
 
 resolve_versions
 install_deps
+build_kvazaar
 build_libheif
 build_vips
 echo "build-vips-full-codecs.sh: done (libvips ${VIPS_TAG})"
