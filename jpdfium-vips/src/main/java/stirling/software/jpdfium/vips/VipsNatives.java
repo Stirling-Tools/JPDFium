@@ -75,6 +75,7 @@ public final class VipsNatives {
                     && System.getProperty("os.name", "").toLowerCase().contains("win")) {
                 addWindowsDllDirectory(dir);
                 preloadWindows(extracted);
+                loadVipsPlugins(dir, extracted);
             }
             if (vips != null) {
                 System.setProperty("vipsffm.libpath.vips.override", vips);
@@ -169,6 +170,59 @@ public final class VipsNatives {
         if (!remaining.isEmpty()) {
             throw new UnsatisfiedLinkError(
                     "Could not preload bundled libs: " + remaining + " first errors: " + firstError);
+        }
+    }
+
+    /**
+     * Opens staged vips codec plugins (e.g. vips-jxl.dll) via glib's module
+     * loader, mirroring what {@code vips --plugin} does. Opening a module
+     * runs its init entry and registers its operations. Needed on Windows
+     * where such codecs ship as separate files that libvips never scans for
+     * (it only looks next to its own install dir, which is our temp dir
+     * without the versioned modules subdirectory).
+     */
+    private static void loadVipsPlugins(Path dir, List<Path> extracted) {
+        List<Path> plugins = new ArrayList<>();
+        for (Path lib : extracted) {
+            String n = lib.getFileName().toString().toLowerCase();
+            if (n.startsWith("vips-")
+                    && (n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib"))) {
+                plugins.add(lib);
+            }
+        }
+        if (plugins.isEmpty()) {
+            return;
+        }
+        Linker linker = Linker.nativeLinker();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment openAddr = SymbolLookup.loaderLookup()
+                    .find("g_module_open")
+                    .orElseThrow(() -> new UnsatisfiedLinkError("g_module_open not found"));
+            MethodHandle open = linker.downcallHandle(
+                    openAddr,
+                    FunctionDescriptor.of(
+                            ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+            MemorySegment errorAddr = SymbolLookup.loaderLookup()
+                    .find("g_module_error")
+                    .orElseThrow(() -> new UnsatisfiedLinkError("g_module_error not found"));
+            MethodHandle errorFn = linker.downcallHandle(
+                    errorAddr, FunctionDescriptor.of(ValueLayout.ADDRESS));
+            for (Path plugin : plugins) {
+                MemorySegment path = arena.allocateFrom(
+                        plugin.toAbsolutePath().toString(), StandardCharsets.UTF_8);
+                MemorySegment module = (MemorySegment) open.invokeExact(path, 1);
+                if (module.equals(MemorySegment.NULL)) {
+                    MemorySegment message =
+                            (MemorySegment) errorFn.invokeExact();
+                    throw new UnsatisfiedLinkError("g_module_open failed for "
+                            + plugin.getFileName() + ": "
+                            + message.getString(0, StandardCharsets.UTF_8));
+                }
+            }
+        } catch (UnsatisfiedLinkError e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new UnsatisfiedLinkError("Could not load vips plugins: " + t);
         }
     }
 

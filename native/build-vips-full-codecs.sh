@@ -45,11 +45,11 @@ resolve_versions() {
         esac
         echo "==> build-vips-full-codecs.sh: libvips pinned by env: $VIPS_TAG"
     fi
-    if [ "$OS" = linux ] && [ -z "$LIBHEIF_TAG" ]; then
+    if [ -z "$LIBHEIF_TAG" ]; then
         LIBHEIF_TAG="$(resolve_latest_tag strukturag/libheif)"
         LIBHEIF_TAG="${LIBHEIF_TAG:-v1.19.5}"
         echo "==> build-vips-full-codecs.sh: libheif resolved to latest: $LIBHEIF_TAG"
-    elif [ "$OS" = linux ]; then
+    else
         case "$LIBHEIF_TAG" in
             v*) ;;
             *) LIBHEIF_TAG="v$LIBHEIF_TAG" ;;
@@ -64,25 +64,66 @@ install_deps() {
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config build-essential cmake \
+            autoconf automake libtool \
             libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
-            libjxl-dev libaom-dev libx265-dev libde265-dev \
+            libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev
     else
         brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif little-cms2 \
-            libheif jpeg-xl aom libde265 x265 \
+            jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff
     fi
 }
 
-build_libheif_linux() {
-    echo "==> build-vips-full-codecs.sh: building libheif ${LIBHEIF_TAG} (static codecs)"
+build_kvazaar() {
+    # BSD-licensed HEVC encoder (the GPL x265 must not be bundled).
+    # macOS takes the bottled kvazaar from the brew list above; Linux has
+    # no kvazaar package on the runner distro, so build the pinned source.
+    [ "$OS" = linux ] || return 0
+    local tag="${KVAZAAR_TAG:-v2.3.2}"
+    echo "==> build-vips-full-codecs.sh: building kvazaar ${tag}"
     local work
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' RETURN
 
-    $SUDO apt-get remove -y libheif* 2>/dev/null || true
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://github.com/ultravideo/kvazaar/archive/refs/tags/${tag}.tar.gz" \
+        -o "$work/kvazaar.tar.gz"
+    tar -xzf "$work/kvazaar.tar.gz" -C "$work"
+    local src="$work/kvazaar-${tag#v}"
+
+    (cd "$src" && ./autogen.sh && ./configure --prefix="$PREFIX")
+    make -C "$src" -j"$(nproc 2>/dev/null || echo 4)" \
+        || { echo "build-vips-full-codecs.sh: kvazaar build failed" >&2; exit 1; }
+    $SUDO make -C "$src" install
+    $SUDO ldconfig 2>/dev/null || true
+    echo "==> build-vips-full-codecs.sh: kvazaar installed to $PREFIX/lib:"
+    ls -la "$PREFIX"/lib/libkvazaar.* 2>/dev/null || true
+}
+
+build_libheif() {
+    echo "==> build-vips-full-codecs.sh: building libheif ${LIBHEIF_TAG} (no x265)"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    # x265 is GPL-2.0-only and must not be bundled, so libheif is built
+    # without HEVC encoding everywhere. de265 (LGPL) stays for decoding.
+    local heif_prefix="$PREFIX"
+    if [ "$OS" = darwin ]; then
+        # Keep our build out of the Homebrew prefix so it can never shadow
+        # (or be shadowed by) a bottled libheif.
+        heif_prefix="$HOME/vips-extra"
+        mkdir -p "$heif_prefix"
+        local bp
+        bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+    else
+        $SUDO apt-get remove -y libheif* 2>/dev/null || true
+        export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    fi
 
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/strukturag/libheif/archive/refs/tags/${LIBHEIF_TAG}.tar.gz" \
@@ -92,25 +133,30 @@ build_libheif_linux() {
 
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DCMAKE_INSTALL_PREFIX="$heif_prefix" \
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
-        -DWITH_LIBDE265=ON -DWITH_X265=ON \
+        -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
         -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
         -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_KVAZAAR=OFF \
         -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
         || { echo "build-vips-full-codecs.sh: libheif cmake configure failed" >&2; exit 1; }
 
     local nproc
-    nproc="$(nproc 2>/dev/null || echo 4)"
+    nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
     cmake --build "$work/build" --parallel "$nproc" \
         || { echo "build-vips-full-codecs.sh: libheif build failed" >&2; exit 1; }
-    $SUDO cmake --install "$work/build"
-    echo "$PREFIX/lib" | $SUDO tee /etc/ld.so.conf.d/00-local.conf >/dev/null
-    $SUDO ldconfig 2>/dev/null || true
-    echo "==> build-vips-full-codecs.sh: libheif installed to $PREFIX/lib:"
-    ls -la "$PREFIX"/lib/libheif.so* 2>/dev/null || true
+    if [ "$OS" = linux ]; then
+        $SUDO cmake --install "$work/build"
+        echo "$PREFIX/lib" | $SUDO tee /etc/ld.so.conf.d/00-local.conf >/dev/null
+        $SUDO ldconfig 2>/dev/null || true
+    else
+        cmake --install "$work/build"
+    fi
+    echo "==> build-vips-full-codecs.sh: libheif installed to $heif_prefix/lib:"
+    ls -la "$heif_prefix"/lib/libheif.* 2>/dev/null || true
+    export VIPS_EXTRA_PKG_CONFIG="$heif_prefix/lib/pkgconfig"
 }
 
 build_vips() {
@@ -122,7 +168,7 @@ build_vips() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-        export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export PKG_CONFIG_PATH="${VIPS_EXTRA_PKG_CONFIG:-$bp/lib/pkgconfig}:$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
@@ -164,8 +210,7 @@ build_vips() {
 
 resolve_versions
 install_deps
-if [ "$OS" = linux ]; then
-    build_libheif_linux
-fi
+build_kvazaar
+build_libheif
 build_vips
 echo "build-vips-full-codecs.sh: done (libvips ${VIPS_TAG})"

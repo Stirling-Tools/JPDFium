@@ -600,6 +600,15 @@ jobs:
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
           arch -x86_64 /usr/local/bin/brew --prefix
 
+      - name: Pre-link python to unblock later brews (darwin-x64)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          # python@3.14 is pulled in as a dependency below, but its `brew link`
+          # step fails on stale /usr/local/bin/python* symlinks from the runner
+          # image, aborting the whole install. Link it up front instead.
+          arch -x86_64 /usr/local/bin/brew install python@3.14 || true
+          arch -x86_64 /usr/local/bin/brew link --overwrite python@3.14 || true
+
       - name: Build full-codec libvips (Linux + macOS)
         if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         run: |
