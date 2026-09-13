@@ -67,6 +67,10 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
+    # Both bundles ship their own LLVM libc++ under the same file name and
+    # Windows binds loaded DLLs by name process-wide, so rename ours (plus
+    # every import reference to it) to coexist with the core bundle's copy.
+    "$(command -v python3 || command -v python)" "$(dirname "$0")/patch-windows-libcxx.py" "$DIST"
 else
     cp -v "$VIPS_LOC" "$DIST/"
     # If libvips has dynamic modules (e.g. Homebrew vips-modules-*/vips-heif.dylib, vips-jxl.dylib),
