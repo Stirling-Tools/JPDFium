@@ -575,6 +575,31 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
+      - name: Rosetta brew bootstrap (darwin-x64)
+        if: matrix.platform == 'darwin-x64'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license || true
+          if [ ! -x /usr/local/bin/brew ]; then
+            sudo mkdir -p /usr/local/Homebrew /usr/local/etc /usr/local/include \
+              /usr/local/lib /usr/local/sbin /usr/local/var /usr/local/opt \
+              /usr/local/share/zsh/site-functions /usr/local/share/man/man1 \
+              /usr/local/var/homebrew/linked \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            sudo chown -R "$(whoami):admin" /usr/local/Homebrew /usr/local/etc \
+              /usr/local/include /usr/local/lib /usr/local/sbin /usr/local/var \
+              /usr/local/opt /usr/local/share/zsh /usr/local/share/man \
+              /usr/local/var/homebrew \
+              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
+            curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 \
+              https://github.com/Homebrew/brew/tarball/main -o /tmp/brew.tgz
+            tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
+            sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
+          fi
+          sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
+          arch -x86_64 /usr/local/bin/brew --prefix
+
       - name: Build full-codec libvips (Linux + macOS)
         if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
         run: |
@@ -601,31 +626,6 @@ jobs:
           if [ ! -f /usr/local/lib/libvips.42.dylib ] && [ ! -f /opt/homebrew/lib/libvips.42.dylib ]; then
             brew install vips || brew link --overwrite vips
           fi
-
-      - name: Rosetta brew bootstrap (darwin-x64)
-        if: matrix.platform == 'darwin-x64'
-        env:
-          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
-        run: |
-          sudo softwareupdate --install-rosetta --agree-to-license || true
-          if [ ! -x /usr/local/bin/brew ]; then
-            sudo mkdir -p /usr/local/Homebrew /usr/local/etc /usr/local/include \
-              /usr/local/lib /usr/local/sbin /usr/local/var /usr/local/opt \
-              /usr/local/share/zsh/site-functions /usr/local/share/man/man1 \
-              /usr/local/var/homebrew/linked \
-              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
-            sudo chown -R "$(whoami):admin" /usr/local/Homebrew /usr/local/etc \
-              /usr/local/include /usr/local/lib /usr/local/sbin /usr/local/var \
-              /usr/local/opt /usr/local/share/zsh /usr/local/share/man \
-              /usr/local/var/homebrew \
-              /usr/local/Cellar /usr/local/Caskroom /usr/local/Frameworks
-            curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 \
-              https://github.com/Homebrew/brew/tarball/main -o /tmp/brew.tgz
-            tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
-            sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
-          fi
-          sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
-          arch -x86_64 /usr/local/bin/brew --prefix
 
       - name: Fetch prebuilt libvips (Windows)
         if: matrix.platform == 'windows-x64'
