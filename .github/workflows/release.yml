@@ -652,31 +652,6 @@ jobs:
             echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
           fi
 
-      - name: Build HEVC stack via vcpkg (Windows)
-        if: matrix.platform == 'windows-x64'
-        run: |
-          set -e
-          # The upstream bundle has no HEVC codecs (no x265 encoder, no
-          # libde265 decoder), so HEIC can never work with it alone. Build
-          # them with the same MSVC toolchain family as the rest and drop
-          # the DLLs next to the bundle; the stage step picks them up.
-          vcpkg install "libheif[aom,hevc]:x64-windows" --clean-after-build
-          SRC_BIN="$VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin"
-          ls "$SRC_BIN" | grep -iE "heif|x265|de265|aom" || true
-          if [ -f "$SRC_BIN/heif.dll" ]; then
-            cp -v "$SRC_BIN/heif.dll" "$VIPS_WIN_DIST/bin/libheif.dll"
-          elif [ -f "$SRC_BIN/libheif.dll" ]; then
-            cp -v "$SRC_BIN/libheif.dll" "$VIPS_WIN_DIST/bin/libheif.dll"
-          else
-            echo "ERROR: no libheif build output in $SRC_BIN" >&2; exit 1
-          fi
-          for pat in 'libx265*.dll' 'x265*.dll' 'libde265*.dll' 'de265*.dll' 'aom*.dll' 'libaom*.dll'; do
-            found="$(ls "$SRC_BIN"/$pat 2>/dev/null | head -n1 || true)"
-            if [ -n "$found" ]; then cp -v "$found" "$VIPS_WIN_DIST/bin"/; fi
-          done
-          echo "--- staged heif stack ---"
-          ls "$VIPS_WIN_DIST/bin" | grep -iE "heif|x265|de265|^aom|libaom"
-
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'darwin-')
         env:
