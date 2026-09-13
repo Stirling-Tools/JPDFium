@@ -66,3 +66,11 @@ This distribution bundles binary forms of the following open-source projects:
 16. zstd
     - Copyright (c) Meta Platforms, Inc. and affiliates.
     - License: BSD 3-Clause License (see ZSTD-BSD-3.txt)
+
+17. x265 (H.265/HEVC encoder, used for HEIC encoding)
+    - Copyright (c) MulticoreWare, Inc. and contributors.
+    - License: GNU General Public License v2.0 only (see X265-GPL-2.0.txt)
+
+18. libde265 (H.265/HEVC decoder, used for HEIC decoding)
+    - Copyright (c) struktur AG
+    - License: GNU Lesser General Public License v3.0 or later (see LIBDE265-LGPL-3.0.txt)

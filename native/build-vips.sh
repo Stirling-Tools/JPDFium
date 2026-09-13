@@ -67,6 +67,12 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
+    # The JXL codec ships as a loadable module, not linked into libvips.
+    if [ -f "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" ]; then
+        cp -v "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" "$DIST"/
+    else
+        echo "WARNING: vips-jxl.dll plugin not found under $VIPS_LOC" >&2
+    fi
     # Both bundles ship their own LLVM libc++ under the same file name and
     # Windows binds loaded DLLs by name process-wide, so rename ours (plus
     # every import reference to it) to coexist with the core bundle's copy.
@@ -81,7 +87,11 @@ else
     done || true
 fi
 
-export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
+if [ "$OS" = "windows" ]; then
+    export BUNDLE_ROOT="$DIST/libvips-42.dll"
+else
+    export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
+fi
 bash "$(dirname "$0")/bundle-runtime-deps.sh" "vips-$PLATFORM"
 
 echo ""
