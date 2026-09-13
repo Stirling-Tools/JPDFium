@@ -42,6 +42,11 @@ public final class VipsNatives {
         if (configured) {
             return;
         }
+        // Core first: both bundles ship their own libc++.dll under the same
+        // file name and Windows binds DLLs by name process-wide, so whichever
+        // loads first wins for everyone. Core's toolchain is newer; loading it
+        // first lets the vips chain bind against it instead of breaking pdfium.
+        NativeLoader.ensureLoaded();
         String platform = NativeLoader.detectPlatform();
         String base = "/natives/vips-" + platform + "/";
         List<String> libs = readIndex(base + "native-libs.txt");
