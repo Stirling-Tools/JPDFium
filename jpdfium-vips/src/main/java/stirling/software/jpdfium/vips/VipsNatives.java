@@ -4,13 +4,22 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 /**
@@ -64,6 +73,7 @@ public final class VipsNatives {
             }
             if (!extracted.isEmpty()
                     && System.getProperty("os.name", "").toLowerCase().contains("win")) {
+                addWindowsDllDirectory(dir);
                 preloadWindows(extracted);
             }
             if (vips != null) {
@@ -106,6 +116,33 @@ public final class VipsNatives {
     }
 
     /**
+     * Makes the Windows loader resolve bundled dependencies from the extract
+     * directory. LoadLibrary otherwise searches only the app dir, System32 and
+     * PATH, so sibling DLLs next to an explicitly loaded library are not
+     * found (Linux/macOS solve the same problem with $ORIGIN/@loader_path).
+     */
+    private static void addWindowsDllDirectory(Path dir) {
+        Linker linker = Linker.nativeLinker();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment addr = SymbolLookup.libraryLookup("kernel32", arena)
+                    .find("SetDllDirectoryW")
+                    .orElseThrow(() -> new UnsatisfiedLinkError("SetDllDirectoryW not found"));
+            MethodHandle handle = linker.downcallHandle(
+                    addr, FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
+            MemorySegment path = arena.allocateFrom(
+                    dir.toAbsolutePath().toString(), StandardCharsets.UTF_16LE);
+            int ok = (int) handle.invokeExact(path);
+            if (ok == 0) {
+                throw new UnsatisfiedLinkError("SetDllDirectoryW failed for " + dir);
+            }
+        } catch (UnsatisfiedLinkError e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new UnsatisfiedLinkError("Could not set DLL directory " + dir + ": " + t);
+        }
+    }
+
+    /**
      * Windows resolves a DLL's dependencies without looking in that DLL's own
      * directory (Linux/macOS bundles carry an $ORIGIN/@loader_path rpath
      * instead), so load every bundled library up front in dependency order.
@@ -113,6 +150,7 @@ public final class VipsNatives {
      */
     private static void preloadWindows(List<Path> libs) {
         List<Path> remaining = new ArrayList<>(libs);
+        Map<Path, String> firstError = new LinkedHashMap<>();
         boolean progress = true;
         while (!remaining.isEmpty() && progress) {
             progress = false;
@@ -123,13 +161,14 @@ public final class VipsNatives {
                     System.load(lib.toAbsolutePath().toString());
                     it.remove();
                     progress = true;
-                } catch (UnsatisfiedLinkError _) {
-                    // Dependency not resident yet; retry in a later pass.
+                } catch (UnsatisfiedLinkError e) {
+                    firstError.putIfAbsent(lib, String.valueOf(e.getMessage()));
                 }
             }
         }
         if (!remaining.isEmpty()) {
-            throw new UnsatisfiedLinkError("Could not preload bundled libs: " + remaining);
+            throw new UnsatisfiedLinkError(
+                    "Could not preload bundled libs: " + remaining + " first errors: " + firstError);
         }
     }
 
