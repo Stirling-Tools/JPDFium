@@ -37,21 +37,6 @@ resolve_latest_tag() {
         | sed -E 's/.*"([^"]+)"$/\1/' || true
 }
 
-jpeg_has_icc_profile() {
-    # True when the libjpeg-turbo header on this machine already declares
-    # jpeg_write_icc_profile (3.2+). Mirrors the search paths cmake itself
-    # uses: Homebrew prefix first, then the compiler defaults.
-    local inc
-    for inc in "$(brew --prefix jpeg-turbo 2>/dev/null)/include/jpeglib.h" \
-               /usr/local/include/jpeglib.h /usr/include/jpeglib.h \
-               /opt/homebrew/include/jpeglib.h; do
-        if [ -f "$inc" ] && grep -q "jpeg_write_icc_profile" "$inc"; then
-            return 0
-        fi
-    done
-    return 1
-}
-
 resolve_versions() {
     if [ -z "$VIPS_TAG" ]; then
         VIPS_TAG="$(resolve_latest_tag libvips/libvips)"
@@ -145,24 +130,17 @@ build_libheif() {
     tar -xzf "$work/heif.tar.gz" -C "$work"
     local src="$work/libheif-${LIBHEIF_TAG#v}"
 
-    local extra_cflags=""
-    # libjpeg-turbo >= 3.2 ships jpeg_write_icc_profile as public API but
-    # libheif 1.23.4's own feature test misses it on some setups and keeps
-    # its own static copy, which then collides. Probe the header libheif
-    # will actually use and answer the question correctly ourselves.
-    # (The two Homebrew prefixes ship different turbo generations, so this
-    # cannot be decided per-OS.)
-    if jpeg_has_icc_profile; then
-        extra_cflags="-DHAVE_JPEG_WRITE_ICC_PROFILE=1"
-    fi
+    # JPEG-in-HEIF needs libjpeg-turbo whose 3.2 headers clash with
+    # libheif 1.23.4's own copy of jpeg_write_icc_profile, and nothing
+    # we ship reads JPEG through libheif (plain JPEG goes via libvips
+    # straight to turbo), so keep that codec out entirely.
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_INSTALL_LIBDIR=lib \
-        -DCMAKE_C_FLAGS="$extra_cflags" \
-        -DCMAKE_CXX_FLAGS="$extra_cflags" \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
+        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \
         -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
         -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
         -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_X264=OFF \
