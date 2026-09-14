@@ -9,7 +9,7 @@ import java.lang.foreign.MemorySegment;
 import java.util.List;
 
 /**
- * Decode image bytes (PNG, JPEG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, ...) to the
+ * Decode image bytes (PNG, JPEG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, JPEG2000, ...) to the
  * 8-byte {@code [width LE][height LE]} + RGBA pixel layout the JPDFium bridge's
  * {@code format=3} embed path expects. libvips auto-detects the format from the
  * buffer header, so one entry point handles every loader libvips was built with.

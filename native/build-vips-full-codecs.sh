@@ -207,7 +207,7 @@ build_vips() {
         -Ddeprecated=false -Dexamples=false \
         -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
         -Dcplusplus=false \
-        -Dheif=enabled -Djpeg-xl=enabled \
+        -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
         -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \
         -Dzlib=enabled \

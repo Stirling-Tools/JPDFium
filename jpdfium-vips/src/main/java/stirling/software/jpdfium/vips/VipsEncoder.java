@@ -69,6 +69,7 @@ public final class VipsEncoder {
             case PNG -> image.pngsaveBuffer(options);
             case JPEG -> image.jpegsaveBuffer(options);
             case TIFF -> image.tiffsaveBuffer(options);
+            case JPEG2000 -> image.jp2ksaveBuffer(options);
         };
     }
 
@@ -81,6 +82,7 @@ public final class VipsEncoder {
             case PNG -> image.pngsave(path, options);
             case JPEG -> image.jpegsave(path, options);
             case TIFF -> image.tiffsave(path, options);
+            case JPEG2000 -> image.jp2ksave(path, options);
         }
     }
 
@@ -92,6 +94,7 @@ public final class VipsEncoder {
             case PNG -> buildPngOptions(opts);
             case JPEG -> buildJpegOptions(opts);
             case TIFF -> buildTiffOptions(opts);
+            case JPEG2000 -> buildJpeg2000Options(opts);
         };
     }
 
@@ -146,5 +149,9 @@ public final class VipsEncoder {
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         return list.toArray(VipsOption[]::new);
+    }
+
+    private static VipsOption[] buildJpeg2000Options(VipsEncodeOptions opts) {
+        return new VipsOption[]{VipsOption.Int("Q", opts.quality())};
     }
 }
