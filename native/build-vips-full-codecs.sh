@@ -130,10 +130,19 @@ build_libheif() {
     tar -xzf "$work/heif.tar.gz" -C "$work"
     local src="$work/libheif-${LIBHEIF_TAG#v}"
 
+    local extra_cflags=""
+    if [ "$OS" = darwin ]; then
+        # libjpeg-turbo >= 3.2 ships jpeg_write_icc_profile as public API but
+        # libheif 1.23.4's feature test misses it and keeps its own static
+        # copy, which then collides. Tell it the symbol is provided.
+        extra_cflags="-DHAVE_JPEG_WRITE_ICC_PROFILE=1"
+    fi
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_C_FLAGS="$extra_cflags" \
+        -DCMAKE_CXX_FLAGS="$extra_cflags" \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
         -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
