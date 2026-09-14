@@ -74,3 +74,12 @@ This distribution bundles binary forms of the following open-source projects:
 18. Kvazaar (H.265/HEVC encoder, used for HEIC encoding on Linux/macOS)
     - Copyright (c) 2021 Tampere University, ITU/ISO/IEC, project contributors
     - License: BSD 3-Clause License (see KVAZAAR-BSD-3.txt)
+
+19. OpenJPEG (JPEG 2000 codec, used for JPEG2000-in-HEIF)
+    - Copyright (c) 2002-2014 Universite catholique de Louvain (UCL),
+      Professor Benoit Macq and contributors
+    - License: BSD 2-Clause License (see OPENJPEG-BSD-2.txt)
+
+20. OpenJPH (High-Throughput JPEG 2000 codec, used for HTJ2K-in-HEIF encoding)
+    - Copyright (c) 2019 Aous Naman
+    - License: BSD 2-Clause License (see OPENJPH-BSD-2.txt)
