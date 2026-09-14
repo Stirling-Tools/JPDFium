@@ -37,6 +37,21 @@ resolve_latest_tag() {
         | sed -E 's/.*"([^"]+)"$/\1/' || true
 }
 
+jpeg_has_icc_profile() {
+    # True when the libjpeg-turbo header on this machine already declares
+    # jpeg_write_icc_profile (3.2+). Mirrors the search paths cmake itself
+    # uses: Homebrew prefix first, then the compiler defaults.
+    local inc
+    for inc in "$(brew --prefix jpeg-turbo 2>/dev/null)/include/jpeglib.h" \
+               /usr/local/include/jpeglib.h /usr/include/jpeglib.h \
+               /opt/homebrew/include/jpeglib.h; do
+        if [ -f "$inc" ] && grep -q "jpeg_write_icc_profile" "$inc"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 resolve_versions() {
     if [ -z "$VIPS_TAG" ]; then
         VIPS_TAG="$(resolve_latest_tag libvips/libvips)"
@@ -131,10 +146,13 @@ build_libheif() {
     local src="$work/libheif-${LIBHEIF_TAG#v}"
 
     local extra_cflags=""
-    if [ "$OS" = darwin ]; then
-        # libjpeg-turbo >= 3.2 ships jpeg_write_icc_profile as public API but
-        # libheif 1.23.4's feature test misses it and keeps its own static
-        # copy, which then collides. Tell it the symbol is provided.
+    # libjpeg-turbo >= 3.2 ships jpeg_write_icc_profile as public API but
+    # libheif 1.23.4's own feature test misses it on some setups and keeps
+    # its own static copy, which then collides. Probe the header libheif
+    # will actually use and answer the question correctly ourselves.
+    # (The two Homebrew prefixes ship different turbo generations, so this
+    # cannot be decided per-OS.)
+    if jpeg_has_icc_profile; then
         extra_cflags="-DHAVE_JPEG_WRITE_ICC_PROFILE=1"
     fi
     cmake -S "$src" -B "$work/build" \
