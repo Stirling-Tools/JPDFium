@@ -155,6 +155,16 @@ build_libheif() {
         -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
         || { echo "build-vips-full-codecs.sh: libheif cmake configure failed" >&2; exit 1; }
 
+    if [ "$OS" = darwin ]; then
+        echo "--- libheif JPEG wiring (diagnostic) ---"
+        grep -iE "^JPEG_(LIBRARY|INCLUDE_DIR)" "$work/build/CMakeCache.txt" || echo "(no JPEG cache entries)"
+        if grep -rl "encoder_jpeg" "$work/build/heifio/CMakeFiles/heifio.dir/build.make" 2>/dev/null; then
+            echo "heifio WILL compile encoder_jpeg"
+        else
+            echo "heifio SKIPS encoder_jpeg"
+        fi
+    fi
+
     local nproc
     nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
     cmake --build "$work/build" --parallel "$nproc" \
