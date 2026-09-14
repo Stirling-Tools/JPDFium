@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build libvips (+ libheif with static codecs) from source against whatever
-# codec libraries (libjxl, libaom, libx265, libde265, libwebp, libpng, libjpeg,
-# libtiff) the package manager provides.
+# codec libraries (libjxl, libaom, libde265, kvazaar, libwebp, libpng, libjpeg,
+# libtiff) the package manager provides. x265 is intentionally excluded (GPL).
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
@@ -27,7 +27,11 @@ esac
 
 resolve_latest_tag() {
     local repo="$1"
+    # Authenticated API calls get 1000 req/hour instead of 60 for shared
+    # runner IPs; GITHUB_TOKEN is always present in Actions, absent locally.
+    # shellcheck disable=SC2086
     curl -fsSL --retry 3 --retry-delay 3 \
+        ${GITHUB_TOKEN:+-H} ${GITHUB_TOKEN:+"Authorization: Bearer $GITHUB_TOKEN"} \
         "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
         | grep -oE '"tag_name": *"[^"]+"' | head -1 \
         | sed -E 's/.*"([^"]+)"$/\1/' || true
@@ -36,7 +40,7 @@ resolve_latest_tag() {
 resolve_versions() {
     if [ -z "$VIPS_TAG" ]; then
         VIPS_TAG="$(resolve_latest_tag libvips/libvips)"
-        VIPS_TAG="${VIPS_TAG:-v8.18.5}"
+        VIPS_TAG="${VIPS_TAG:-v8.18.6}"
         echo "==> build-vips-full-codecs.sh: libvips resolved to latest: $VIPS_TAG"
     else
         case "$VIPS_TAG" in
@@ -47,7 +51,7 @@ resolve_versions() {
     fi
     if [ -z "$LIBHEIF_TAG" ]; then
         LIBHEIF_TAG="$(resolve_latest_tag strukturag/libheif)"
-        LIBHEIF_TAG="${LIBHEIF_TAG:-v1.19.5}"
+        LIBHEIF_TAG="${LIBHEIF_TAG:-v1.23.4}"
         echo "==> build-vips-full-codecs.sh: libheif resolved to latest: $LIBHEIF_TAG"
     else
         case "$LIBHEIF_TAG" in
