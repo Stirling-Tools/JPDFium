@@ -111,12 +111,7 @@ build_libheif() {
 
     # x265 is GPL-2.0-only and must not be bundled, so libheif is built
     # without HEVC encoding everywhere. de265 (LGPL) stays for decoding.
-    local heif_prefix="$PREFIX"
     if [ "$OS" = darwin ]; then
-        # Keep our build out of the Homebrew prefix so it can never shadow
-        # (or be shadowed by) a bottled libheif.
-        heif_prefix="$HOME/vips-extra"
-        mkdir -p "$heif_prefix"
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -133,13 +128,13 @@ build_libheif() {
 
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX="$heif_prefix" \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_INSTALL_LIBDIR=lib \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
         -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
         -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
-        -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_KVAZAAR=OFF \
+        -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_X264=OFF \
         -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
         || { echo "build-vips-full-codecs.sh: libheif cmake configure failed" >&2; exit 1; }
 
@@ -154,9 +149,8 @@ build_libheif() {
     else
         cmake --install "$work/build"
     fi
-    echo "==> build-vips-full-codecs.sh: libheif installed to $heif_prefix/lib:"
-    ls -la "$heif_prefix"/lib/libheif.* 2>/dev/null || true
-    export VIPS_EXTRA_PKG_CONFIG="$heif_prefix/lib/pkgconfig"
+    echo "==> build-vips-full-codecs.sh: libheif installed to $PREFIX/lib:"
+    ls -la "$PREFIX"/lib/libheif.* 2>/dev/null || true
 }
 
 build_vips() {
@@ -168,7 +162,7 @@ build_vips() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
-        export PKG_CONFIG_PATH="${VIPS_EXTRA_PKG_CONFIG:-$bp/lib/pkgconfig}:$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
