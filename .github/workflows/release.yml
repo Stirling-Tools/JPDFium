@@ -554,7 +554,11 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          # darwin-x64 intentionally skipped (2026-09-14): the arch-wrapped
+          # source build stages an arm64 libsharpyuv into the x64 bundle and
+          # the smoke then cannot dlopen it. The Rosetta/bootstrap/smoke
+          # steps below are kept so the leg can return by re-adding one line
+          # here (plus the validate matrix below) once that is fixed.
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
     runs-on: ${{ matrix.runner }}
@@ -852,7 +856,7 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          # darwin-x64 skipped like the vips matrix above (no artifact published).
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
     runs-on: ${{ matrix.runner }}

@@ -84,6 +84,18 @@ tasks.named("processResources") {
     dependsOn(writeNativeManifest)
 }
 
+// A platform leg can be intentionally skipped (see the release workflow
+// matrix NOTE). Publishing its natives jar anyway would resolve for
+// consumers while containing no binaries, so skip those publications with
+// a loud warning instead of failing the whole release.
+tasks.matching { it.name.startsWith("publish") && it.name.endsWith("Repository") }.configureEach {
+    onlyIf("natives bundle present, skipped otherwise (see release.yml matrix NOTE)") {
+        val ok = stagedPlatformDir.get().asFile.listFiles()?.isNotEmpty() == true
+        if (!ok) logger.warn("Skipping ${it.name}: no staged natives for $platform")
+        ok
+    }
+}
+
 tasks.named("sourcesJar") {
     dependsOn(writeNativeManifest)
 }
