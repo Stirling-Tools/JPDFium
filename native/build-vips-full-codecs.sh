@@ -72,12 +72,14 @@ install_deps() {
             libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
             libjxl-dev libaom-dev libde265-dev \
-            libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev
+            libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
+            libopenjp2-7-dev libopenjph-dev
     else
         brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif little-cms2 \
             jpeg-xl aom libde265 kvazaar \
-            webp libpng jpeg-turbo libtiff
+            webp libpng jpeg-turbo libtiff \
+            openjpeg openjph
     fi
 }
 
@@ -130,18 +132,33 @@ build_libheif() {
     tar -xzf "$work/heif.tar.gz" -C "$work"
     local src="$work/libheif-${LIBHEIF_TAG#v}"
 
-    # JPEG-in-HEIF needs libjpeg-turbo whose 3.2 headers clash with
-    # libheif 1.23.4's own copy of jpeg_write_icc_profile, and nothing
-    # we ship reads JPEG through libheif (plain JPEG goes via libvips
-    # straight to turbo), so keep that codec out entirely.
+    # Pin the exact turbo cmake must use, and probe that same header for
+    # jpeg_write_icc_profile (turbo 3.2+): libheif 1.23.4's own feature test
+    # misfires on some setups and then its static copy of that function
+    # collides with turbo's. Probing the pinned header keeps both answers
+    # consistent by construction.
+    local jpeg_root="/usr"
+    if [ "$OS" = darwin ]; then
+        jpeg_root="$(brew --prefix jpeg-turbo 2>/dev/null || echo /usr)"
+    fi
+    local jpeg_cflags=""
+    if [ -f "$jpeg_root/include/jpeglib.h" ] \
+        && grep -q "jpeg_write_icc_profile" "$jpeg_root/include/jpeglib.h"; then
+        jpeg_cflags="-DHAVE_JPEG_WRITE_ICC_PROFILE=1"
+    fi
     cmake -S "$src" -B "$work/build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX="$PREFIX" \
         -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_C_FLAGS="$jpeg_cflags" \
+        -DCMAKE_CXX_FLAGS="$jpeg_cflags" \
         -DBUILD_SHARED_LIBS=ON \
         -DENABLE_PLUGIN_LOADING=OFF \
-        -DCMAKE_DISABLE_FIND_PACKAGE_JPEG=TRUE \
+        -DJPEG_ROOT="$jpeg_root" \
         -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
+        -DWITH_JPEG_DECODER=ON -DWITH_JPEG_ENCODER=ON \
+        -DWITH_OpenJPEG_DECODER=ON -DWITH_OpenJPEG_ENCODER=ON \
+        -DWITH_OPENJPH_ENCODER=ON \
         -DWITH_AOM_DECODER=ON -DWITH_AOM_ENCODER=ON \
         -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SVT=OFF -DWITH_X264=OFF \
         -DWITH_EXAMPLES=OFF -DWITH_TESTING=OFF \
@@ -190,7 +207,7 @@ build_vips() {
         -Ddeprecated=false -Dexamples=false \
         -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
         -Dcplusplus=false \
-        -Dheif=enabled -Djpeg-xl=enabled \
+        -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
         -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \
         -Dzlib=enabled \

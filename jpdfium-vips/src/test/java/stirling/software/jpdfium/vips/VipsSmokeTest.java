@@ -172,6 +172,9 @@ class VipsSmokeTest {
                     || (u8(data, 0) == 'M' && u8(data, 1) == 'M' && u8(data, 2) == 0 && u8(data, 3) == 42);
             case JXL -> (u8(data, 0) == 0xFF && u8(data, 1) == 0x0A)
                     || (u8(data, 4) == 'J' && u8(data, 5) == 'X' && u8(data, 6) == 'L' && u8(data, 7) == ' ');
+            case JPEG2000 -> (u8(data, 0) == 0x00 && u8(data, 1) == 0x00 && u8(data, 2) == 0x00 && u8(data, 3) == 0x0C
+                    && u8(data, 4) == 'j' && u8(data, 5) == 'P' && u8(data, 6) == ' ' && u8(data, 7) == ' ')
+                    || (u8(data, 0) == 0xFF && u8(data, 1) == 0x4F && u8(data, 2) == 0xFF && u8(data, 3) == 0x51);
             case HEIC, HEIF, AVIF -> u8(data, 4) == 'f' && u8(data, 5) == 't'
                     && u8(data, 6) == 'y' && u8(data, 7) == 'p';
         };

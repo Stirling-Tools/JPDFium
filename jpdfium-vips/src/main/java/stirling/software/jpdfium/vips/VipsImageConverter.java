@@ -21,7 +21,7 @@ import java.util.List;
  * (a {@code MemorySegment} owned by PDFium) and handed to vips via
  * {@link VImage#newFromMemory} - that single native-to-vips copy is the only
  * allocation in the render -> encode path. Encoding supports every format libvips
- * ships a saver for (PNG, JPEG, WEBP, HEIC, HEIF, AVIF, JXL, TIFF), and decoding
+ * ships a saver for (PNG, JPEG, WEBP, HEIC, HEIF, AVIF, JXL, TIFF, JPEG2000), and decoding
  * flows {@code image bytes -> VipsDecoder -> the bridge's raw-RGBA (format=3)
  * embed}. No {@code BufferedImage}, no {@code ImageIO}, no AWT raster.
  *
@@ -97,7 +97,7 @@ public final class VipsImageConverter {
     }
 
     /**
-     * Decode image files (PNG/JPEG/HEIC/HEIF/AVIF/JXL/WEBP/TIFF) into PDF pages.
+     * Decode image files (PNG/JPEG/HEIC/HEIF/AVIF/JXL/WEBP/TIFF/JPEG2000) into PDF pages.
      * The decode is vips-backed ({@link VipsDecoder}); the embed uses the
      * bridge's zero-allocation raw-RGBA path ({@code format=3}).
      */
@@ -116,6 +116,7 @@ public final class VipsImageConverter {
             case AVIF -> "avif";
             case JXL -> "jxl";
             case TIFF -> "tiff";
+            case JPEG2000 -> "jp2";
         };
         return stem + "-p" + index + "." + ext;
     }
