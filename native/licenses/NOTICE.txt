@@ -79,7 +79,3 @@ This distribution bundles binary forms of the following open-source projects:
     - Copyright (c) 2002-2014 Universite catholique de Louvain (UCL),
       Professor Benoit Macq and contributors
     - License: BSD 2-Clause License (see OPENJPEG-BSD-2.txt)
-
-20. OpenJPH (High-Throughput JPEG 2000 codec, used for HTJ2K-in-HEIF encoding)
-    - Copyright (c) 2019 Aous Naman
-    - License: BSD 2-Clause License (see OPENJPH-BSD-2.txt)
