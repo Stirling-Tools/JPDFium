@@ -668,6 +668,19 @@ jobs:
       - name: Stage libvips + codec chain
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
+      - name: Assert x86_64 binaries (darwin-x64)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          bad=0
+          for f in native/dist/vips-darwin-x64/*.dylib native/dist/darwin-x64/*.dylib; do
+            [ -e "$f" ] || continue
+            if ! lipo -archs "$f" 2>/dev/null | grep -qw "x86_64"; then
+              echo "NOT x86_64: $f ($(lipo -archs "$f" 2>/dev/null || file -b "$f"))"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ] || { echo "ERROR: non-x86_64 binaries staged for darwin-x64" >&2; exit 1; }
+
       - name: Diagnose windows vips bundle
         if: matrix.platform == 'windows-x64'
         shell: bash
