@@ -644,10 +644,13 @@ jobs:
         if: matrix.platform == 'windows-x64'
         run: |
           set -e
-          url=$(curl -fsSL https://api.github.com/repos/libvips/build-win64-mxe/releases/latest \
-                | grep -oE 'https://[^"]*vips-dev-x64-all-[0-9.]+\.zip|https://[^"]*vips-dev-x64-web-[0-9.]+\.zip' | head -n1 || true)
-          [ -z "$url" ] && { echo "ERROR: No prebuilt libvips Windows zip found" >&2; exit 1; }
-          curl -fsSL "$url" -o /tmp/vips.zip
+          # Pinned on purpose: querying releases/latest hits the anonymous
+          # GitHub API rate limit on shared runners (HTTP 403) and fails the
+          # leg. Bump deliberately, like the PDFium pin.
+          url="https://github.com/libvips/build-win64-mxe/releases/download/v8.18.6/vips-dev-x64-all-8.18.6.zip"
+          sha="e36b34f9c955e66fa47ec7c02b756026fad5560c5db6ff7884123be04792f89c"
+          curl -fsSL --retry 3 --retry-delay 10 "$url" -o /tmp/vips.zip
+          echo "$sha  /tmp/vips.zip" | sha256sum -c -
           mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
           VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)
           if [ -n "$VIPS_DIR" ]; then
