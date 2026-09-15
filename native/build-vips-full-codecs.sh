@@ -73,7 +73,8 @@ install_deps() {
             libexif-dev liblcms2-dev \
             libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
-            libopenjp2-7-dev
+            libopenjp2-7-dev \
+            zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
     else
         brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif little-cms2 \
@@ -107,6 +108,41 @@ build_kvazaar() {
     $SUDO ldconfig 2>/dev/null || true
     echo "==> build-vips-full-codecs.sh: kvazaar installed to $PREFIX/lib:"
     ls -la "$PREFIX"/lib/libkvazaar.* 2>/dev/null || true
+}
+
+build_libtiff() {
+    # libjbig (GPL-2.0) must not be bundled: the distro libtiff links it, so
+    # build our own without JBIG support. JBIG-compressed TIFFs then fail
+    # with a clean error instead of shipping GPL code. Other platforms do
+    # not bundle jbig (brew mxe builds omit it), so this is Linux-only.
+    [ "$OS" = linux ] || return 0
+    local tag="${TIFF_TAG:-v4.7.2}"
+    echo "==> build-vips-full-codecs.sh: building libtiff ${tag} (no jbig)"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://download.osgeo.org/libtiff/tiff-${tag#v}.tar.gz" \
+        -o "$work/tiff.tar.gz"
+    tar -xzf "$work/tiff.tar.gz" -C "$work"
+    local src="$work/tiff-${tag#v}"
+
+    cmake -S "$src" -B "$work/build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+        -DCMAKE_DISABLE_FIND_PACKAGE_JBIG=TRUE \
+        -Dtiff-tools=OFF -Dtiff-tests=OFF -Dtiff-contrib=OFF -Dtiff-docs=OFF \
+        || { echo "build-vips-full-codecs.sh: libtiff cmake configure failed" >&2; exit 1; }
+
+    local nproc
+    nproc="$(nproc 2>/dev/null || echo 4)"
+    cmake --build "$work/build" --parallel "$nproc" \
+        || { echo "build-vips-full-codecs.sh: libtiff build failed" >&2; exit 1; }
+    $SUDO cmake --install "$work/build"
+    $SUDO ldconfig 2>/dev/null || true
+    echo "==> build-vips-full-codecs.sh: libtiff installed to $PREFIX/lib:"
+    ls -la "$PREFIX"/lib/libtiff.* 2>/dev/null || true
 }
 
 build_libheif() {
@@ -232,6 +268,7 @@ build_vips() {
 resolve_versions
 install_deps
 build_kvazaar
+build_libtiff
 build_libheif
 build_vips
 echo "build-vips-full-codecs.sh: done (libvips ${VIPS_TAG})"
