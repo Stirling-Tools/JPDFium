@@ -67,6 +67,9 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
+    # libpoppler is GPL-2.0 and nothing staged links it (only its own
+    # wrapper and the unstaged vips-poppler plugin do), so leave it out.
+    rm -f "$DIST"/libpoppler*.dll
     # The JXL codec ships as a loadable module, not linked into libvips.
     if [ -f "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" ]; then
         cp -v "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" "$DIST"/
