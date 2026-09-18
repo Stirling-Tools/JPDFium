@@ -116,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         # The musl legs build + smoke inside an Alpine container which ships its
         # own musl JDK - a glibc host JDK is neither needed nor usable there.
         if: matrix.libc != 'musl'
@@ -501,13 +501,13 @@ jobs:
         if: matrix.platform == 'darwin-x64'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
 
-      - uses: graalvm/setup-graalvm@5298d94fb55a4f185c602eeac5de1b553882abe2 # v1.6.4
+      - uses: graalvm/setup-graalvm@0426e2e191540e8514dff98dc52a5f5146a2a276 # v1.6.6
         with:
           java-version: '25'
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
 
       - name: Download staged natives for ${{ matrix.platform }}
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
@@ -567,11 +567,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
 
       - name: Download core natives for ${{ matrix.platform }}
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
@@ -740,13 +740,13 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+        uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
 
       - name: Install jextract
         # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java
@@ -866,7 +866,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
