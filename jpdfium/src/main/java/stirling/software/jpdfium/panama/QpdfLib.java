@@ -3,7 +3,9 @@ package stirling.software.jpdfium.panama;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -52,6 +54,22 @@ public final class QpdfLib {
 
     public static boolean isDecryptSupported() {
         return JpdfiumH.jpdfium_qpdf_decrypt$address() != null;
+    }
+
+    private static final MethodHandle MERGE_FILES_HANDLE = Symbols.downcallOptional(
+            "jpdfium_qpdf_merge_files",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
+
+    private static final MethodHandle EXTRACT_PAGES_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_qpdf_extract_pages_file",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
+
+    public static boolean isMergeFilesSupported() {
+        return MERGE_FILES_HANDLE != null;
+    }
+
+    public static boolean isExtractFileSupported() {
+        return EXTRACT_PAGES_FILE_HANDLE != null;
     }
 
     /**
@@ -201,12 +219,75 @@ public final class QpdfLib {
     }
 
     /**
-     * Extract specific pages (by zero-based index) into a new document.
+     * Merge multiple PDF files losslessly, reading inputs from disk and
+     * writing the result straight to disk. No document bytes cross the
+     * FFI boundary, so this stays flat in Java heap regardless of size.
      *
-     * @param input       input PDF bytes
-     * @param pageIndices zero-based page indices to extract
-     * @return extracted PDF bytes, or {@code null} on failure
+     * @param inputs  input PDF file paths
+     * @param output  destination PDF file path
+     * @return true on success, false if unsupported or failed
      */
+    public static boolean mergeFiles(java.util.List<java.nio.file.Path> inputs,
+                                     java.nio.file.Path output) {
+        if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty() || output == null) {
+            return false;
+        }
+        NativeGuard.acquire();
+        try {
+            int count = inputs.size();
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment pathsArraySeg = arena.allocate(ADDRESS, count);
+                for (int i = 0; i < count; i++) {
+                    java.nio.file.Path p = inputs.get(i);
+                    if (p == null) {
+                        pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
+                    } else {
+                        MemorySegment s = arena.allocateFrom(p.toAbsolutePath().toString());
+                        pathsArraySeg.setAtIndex(ADDRESS, i, s);
+                    }
+                }
+                MemorySegment outSeg = arena.allocateFrom(output.toAbsolutePath().toString());
+                int rc = (int) MERGE_FILES_HANDLE.invokeExact(pathsArraySeg, count, outSeg);
+                return rc == 0;
+            }
+        } catch (Throwable t) {
+            throw new JPDFiumException("qpdf merge files failed", t);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /**
+     * Extract specific pages (by zero-based index) from a file on disk,
+     * writing the result straight to disk without heap copies.
+     *
+     * @param input       input PDF file path
+     * @param pageIndices zero-based page indices to extract
+     * @param output      destination PDF file path
+     * @return true on success, false if unsupported or failed
+     */
+    public static boolean extractPagesToFile(java.nio.file.Path input, int[] pageIndices,
+                                             java.nio.file.Path output) {
+        if (EXTRACT_PAGES_FILE_HANDLE == null || input == null || output == null
+                || pageIndices == null || pageIndices.length == 0) {
+            return false;
+        }
+        NativeGuard.acquire();
+        try {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment inSeg = arena.allocateFrom(input.toAbsolutePath().toString());
+                MemorySegment indicesSeg = arena.allocateFrom(JAVA_INT, pageIndices);
+                MemorySegment outSeg = arena.allocateFrom(output.toAbsolutePath().toString());
+                int rc = (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
+                        inSeg, indicesSeg, pageIndices.length, outSeg);
+                return rc == 0;
+            }
+        } catch (Throwable t) {
+            throw new JPDFiumException("qpdf extract pages to file failed", t);
+        } finally {
+            NativeGuard.release();
+        }
+    }
     public static byte[] extractPages(byte[] input, int[] pageIndices) {
         if (!isSupported() || input == null || input.length == 0 || pageIndices == null || pageIndices.length == 0) {
             return null;

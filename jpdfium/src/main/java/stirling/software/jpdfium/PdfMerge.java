@@ -12,6 +12,7 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageImporter;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
  * Merge multiple PDF documents into one.
@@ -192,6 +193,45 @@ public final class PdfMerge {
             for (PdfDocument openedDoc : openedDocs) {
                 try { openedDoc.close(); } catch (RuntimeException _) {}
             }
+        }
+    }
+
+    /**
+     * Merge PDF files from paths straight into an output file.
+     *
+     * <p>Unlike {@link #mergeFiles(List)}, no document bytes ever live on the
+     * Java heap: inputs are read from disk and the result is written to disk
+     * by native code. Peak heap stays flat regardless of input size, which is
+     * what makes multi-gigabyte merges feasible.
+     *
+     * <p>No bookmarks are merged by this method. Read source bookmarks first
+     * (via short-lived {@link PdfDocument#open(Path)} handles, which only
+     * parse the catalog) and apply the combined tree afterwards with
+     * {@code PdfBookmarkEditor}.
+     *
+     * <p>Falls back to {@link #mergeFiles(List)} plus save when the
+     * file-backed native path is unavailable.
+     *
+     * @param paths  file paths to merge in order
+     * @param output destination PDF file path
+     * @throws IOException on I/O error or merge failure
+     */
+    public static void mergeFilesToFile(List<Path> paths, Path output) throws IOException {
+        if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        if (paths.size() == 1) {
+            Files.copy(paths.getFirst(), output, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            return;
+        }
+
+        if (QpdfLib.isMergeFilesSupported()) {
+            if (QpdfLib.mergeFiles(paths, output) && Files.size(output) > 0) {
+                return;
+            }
+        }
+
+        try (PdfDocument merged = mergeFiles(paths)) {
+            merged.save(output);
         }
     }
 

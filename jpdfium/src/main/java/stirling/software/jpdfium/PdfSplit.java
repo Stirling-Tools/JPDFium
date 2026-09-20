@@ -170,6 +170,43 @@ public final class PdfSplit {
         return detachedDoc;
     }
 
+    /**
+     * Extract a contiguous range of pages straight from an input file to an
+     * output file.
+     *
+     * <p>File-backed like {@code PdfMerge.mergeFilesToFile}: no document
+     * bytes on the Java heap. Falls back to open/extract/save when the
+     * file-backed native path is unavailable.
+     *
+     * @param input    input PDF file path
+     * @param fromPage first page index (inclusive, zero-based)
+     * @param toPage   last page index (inclusive, zero-based)
+     * @param output   destination PDF file path
+     * @throws IOException on I/O error or extraction failure
+     */
+    public static void extractPageRangeToFile(java.nio.file.Path input, int fromPage, int toPage,
+                                              java.nio.file.Path output) throws java.io.IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        int count = toPage - fromPage + 1;
+        if (fromPage < 0 || count <= 0) {
+            throw new IllegalArgumentException("Invalid range [%d..%d]".formatted(fromPage, toPage));
+        }
+        int[] pageIndices = new int[count];
+        for (int i = 0; i < count; i++) {
+            pageIndices[i] = fromPage + i;
+        }
+        if (QpdfLib.isExtractFileSupported()
+                && QpdfLib.extractPagesToFile(input, pageIndices, output)
+                && java.nio.file.Files.size(output) > 0) {
+            return;
+        }
+        try (PdfDocument doc = PdfDocument.open(input);
+             PdfDocument part = extractPageRange(doc, fromPage, toPage)) {
+            part.save(output);
+        }
+    }
+
     private static List<Bookmark> filterBookmarksForRange(List<Bookmark> bookmarks, int fromPage, int toPage) {
         List<Bookmark> result = new ArrayList<>();
         for (Bookmark bookmark : bookmarks) {
