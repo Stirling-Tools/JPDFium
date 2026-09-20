@@ -1,17 +1,15 @@
 # JPDFium
 
-High-performance Java 25 FFM bindings for PDFium (EmbedPDF fork).
+Java 25 FFM bindings for PDFium (EmbedPDF fork).
 
-- Pure FFM (`java.lang.foreign`), zero JNI
-- Linux x64/arm64, macOS x64/arm64, Windows x64
-- MIT licensed (PDFium is Apache 2.0)
+- Linux x64/arm64, macOS x64/arm64, Windows x64/arm64 (+ Linux musl builds)
+- MIT licensed; bundled natives carry their own licenses (see NOTICE)
 
 Requires the JVM flag `--enable-native-access=ALL-UNNAMED`.
 
 ## Quick Start
 
 ```java
-// Render + redact
 try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
     try (var page = doc.page(0)) {
         ImageIO.write(page.renderAt(150).toBufferedImage(), "PNG", new File("page0.png"));
@@ -20,43 +18,9 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
     }
     doc.save(Path.of("output.pdf"));
 }
-
-// Structured text extraction
-try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
-    for (PageText pt : PdfTextExtractor.extractAll(doc))
-        System.out.printf("Page %d: %d words%n%s%n", pt.pageIndex(), pt.wordCount(), pt.plainText());
-}
-
-// High-level redaction
-RedactResult result = PdfRedactor.redact(Path.of("input.pdf"), RedactOptions.builder()
-    .addWord("Confidential")
-    .addWord("\\d{3}-\\d{2}-\\d{4}")
-    .useRegex(true)
-    .padding(2.0f)
-    .convertToImage(true)          // most secure: no selectable text survives
-    .build());
-try (var doc = result.document()) { doc.save(Path.of("output.pdf")); }
 ```
 
-Runnable examples for every feature live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S92_RustCompress`). Full API reference is in the Javadoc.
-
-## Core API
-
-```java
-PdfDocument.open(Path)                    // also open(byte[]), open(Path, String password)
-doc.pageCount(); doc.page(i); doc.save(Path); doc.saveBytes()
-doc.metadata(); doc.permissions(); doc.bookmarks(); doc.signatures(); doc.attachments()
-doc.addAttachment(String, byte[]); doc.deleteAttachment(int)
-
-page.size(); page.renderAt(dpi)           // -> RenderResult.toBufferedImage()
-page.redactRegion(Rect, int); page.redactPattern(String, int)
-page.redactWordsEx(String[], int, ...)    // Object Fission: true text removal
-page.flatten(); page.annotations(); page.links(); page.structureTree()
-
-PdfTextExtractor.extractPage(doc, i)      // -> PageText (lines -> words -> chars)
-PdfTextExtractor.extractAll(doc)
-PdfTextSearcher.search(doc, query)        // -> List<SearchMatch>
-```
+More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S95_RedactPipelinePerf`). Full API reference is in the Javadoc.
 
 ## Project Structure
 
@@ -72,6 +36,7 @@ jpdfium/                Java API (stirling.software.jpdfium): core API, panama/ 
                         fonts/, model/, util/, plus runnable samples under src/test
 jpdfium-natives-<platform>/  native JARs: linux/darwin/windows × x64/arm64
                         (+ linux-musl-{x64,arm64} for Alpine / musl runtimes)
+jpdfium-vips/         optional libvips image conversions (HEIC, AVIF, JXL, WebP, PNG, JPEG)
 jpdfium-spring/         Spring Boot auto-configuration
 jpdfium-bom/            Maven BOM for dependency management
 ```
@@ -85,18 +50,6 @@ jpdfium-bom/            Maven BOM for dependency management
 - CMake 3.20+
 - Gradle 9.7 (via wrapper)
 - jextract 25 (optional, to regenerate FFM bindings)
-
-Native libraries for the PII pipeline (all MIT/Apache-2.0-compatible):
-
-| Library | License | Purpose |
-|---------|---------|---------|
-| PCRE2 | BSD-3 | JIT regex engine |
-| FreeType | FTL/MIT | Font parsing, classification, widths |
-| HarfBuzz | MIT | Shaping, glyph-safe redaction |
-| ICU4C | Unicode | Normalization, BiDi, segmentation |
-| qpdf | Apache-2.0 | Structure manipulation, repair |
-| pugixml | MIT | XMP metadata parsing |
-| libunibreak | zlib | Grapheme cluster boundaries |
 
 Fedora / RHEL:
 ```bash
@@ -120,7 +73,7 @@ Missing libraries are auto-detected via pkg-config and silently skipped at runti
 ./gradlew test                # unit tests
 ./gradlew :jpdfium:integrationTest
 ./gradlew runAllSamples
-./gradlew runSample -Psample=01   # run a specific sample (01..92)
+./gradlew runSample -Psample=01   # run a specific sample (01..95)
 ./gradlew :jpdfium:generateBindings  # regenerate FFM bindings from jpdfium.h
 ```
 
@@ -139,8 +92,8 @@ For Java-only development, `./gradlew buildStubBridge` provides a pass-through s
 
 ## Thread Safety
 
-- A `PdfDocument` and all handles derived from it must stay on one thread.
-- Independent `PdfDocument` instances on separate threads are safe.
+- Use a `PdfDocument` (and its pages) from one thread at a time.
+- Native calls are serialized internally, so separate documents on separate threads are fine.
 - `FPDF_InitLibrary` / `FPDF_DestroyLibrary` run once globally.
 
 ## Testing
@@ -151,8 +104,8 @@ For Java-only development, `./gradlew buildStubBridge` provides a pass-through s
 ./gradlew :jpdfium:integrationTest --tests "stirling.software.jpdfium.redact.ObjectFissionCoordinateTest"
 ```
 
-HTML reports are written to `samples-output/`. See `TESTING.md` for details.
+HTML reports are written to `samples-output/`.
 
 ## License
 
-MIT. PDFium is Apache 2.0. Other included binaries may be licensed otherwise.
+MIT. PDFium, and bundled natives carry their own licenses, see NOTICE and `native/licenses/`.
