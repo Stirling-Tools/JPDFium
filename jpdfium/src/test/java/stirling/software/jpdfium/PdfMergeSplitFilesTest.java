@@ -56,8 +56,7 @@ class PdfMergeSplitFilesTest {
     }
 
     @Test
-    void extractPageRangeToFileMatchesBytesPath(@TempDir Path tmp) throws Exception {
-        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+    void extractPageRangeToFileMatchesBytesPath(@TempDir Path tmp) throws Exception {        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
 
         Path in = tmp.resolve("in.pdf");
@@ -76,6 +75,62 @@ class PdfMergeSplitFilesTest {
         for (int i = 0; i < 4; i++) {
             assertEquals(PdfVerifier.pageText(bytesPath, i, "bytes path"),
                     PdfVerifier.pageText(fileBytes, i, "file path"),
+                    "page " + i + " text differs between split paths");
+        }
+    }
+
+    @Test
+    void mergeOpenFileBackedDocsMatchesBytesPath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        byte[] bytesPath;
+        Path backing;
+        try (PdfDocument doc1 = PdfDocument.open(a);
+             PdfDocument doc2 = PdfDocument.open(b);
+             PdfDocument merged = PdfMerge.merge(List.of(doc1, doc2))) {
+            assertEquals(5, merged.pageCount());
+            // Temp-backed result cleans itself up on close.
+            assertTrue(merged.sourcePath().isPresent(), "merged doc tracks its backing file");
+            backing = merged.sourcePath().get();
+            bytesPath = merged.saveBytes();
+        }
+        assertTrue(java.nio.file.Files.notExists(backing), "backing temp file deleted on close");
+
+        assertEquals(5, PdfVerifier.pageCount(bytesPath, "merged open docs"));
+        for (int i = 0; i < 5; i++) {
+            PdfVerifier.assertNonEmptyText(bytesPath, i, "merged open docs page " + i);
+        }
+    }
+
+    @Test
+    void extractRangeFromFileBackedDocMatchesBytesPath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path in = tmp.resolve("in.pdf");
+        Files.write(in, SyntheticPdfFactory.createDiverse(6));
+
+        byte[] filePath;
+        try (PdfDocument doc = PdfDocument.open(in);
+             PdfDocument part = PdfSplit.extractPageRange(doc, 1, 4)) {
+            assertEquals(4, part.pageCount());
+            filePath = part.saveBytes();
+        }
+        byte[] bytesPath;
+        try (PdfDocument doc = PdfDocument.open(Files.readAllBytes(in));
+             PdfDocument part = PdfSplit.extractPageRange(doc, 1, 4)) {
+            bytesPath = part.saveBytes();
+        }
+        assertEquals(4, PdfVerifier.pageCount(filePath, "file-backed extract"));
+        for (int i = 0; i < 4; i++) {
+            assertEquals(PdfVerifier.pageText(bytesPath, i, "bytes path"),
+                    PdfVerifier.pageText(filePath, i, "file path"),
                     "page " + i + " text differs between split paths");
         }
     }

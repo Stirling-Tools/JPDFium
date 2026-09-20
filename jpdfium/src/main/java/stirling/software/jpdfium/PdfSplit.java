@@ -78,6 +78,12 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
 
+        java.util.Optional<java.nio.file.Path> sourcePath = doc.sourcePath();
+        if (sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
+            PdfDocument fast = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
+            if (fast != null) return fast;
+        }
+
         if (QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
@@ -131,12 +137,19 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
 
+        int count = toPage - fromPage + 1;
+        int[] pageIndices = new int[count];
+        for (int i = 0; i < count; i++) {
+            pageIndices[i] = fromPage + i;
+        }
+
+        java.util.Optional<java.nio.file.Path> sourcePath = doc.sourcePath();
+        if (sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
+            PdfDocument fast = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
+            if (fast != null) return fast;
+        }
+
         if (QpdfLib.isExtractSupported()) {
-            int count = toPage - fromPage + 1;
-            int[] pageIndices = new int[count];
-            for (int i = 0; i < count; i++) {
-                pageIndices[i] = fromPage + i;
-            }
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
                 if (!remappedBookmarks.isEmpty()) {
@@ -204,6 +217,45 @@ public final class PdfSplit {
         try (PdfDocument doc = PdfDocument.open(input);
              PdfDocument part = extractPageRange(doc, fromPage, toPage)) {
             part.save(output);
+        }
+    }
+
+    /**
+     * File-backed extract shared by the open-document paths: extract to a
+     * temp file, apply bookmarks through the file variant, verify, and hand
+     * back a temp-owned document. Null when anything fails (caller falls back).
+     */
+    private static PdfDocument extractToTemp(java.nio.file.Path input, int[] pageIndices,
+                                             List<Bookmark> remappedBookmarks) {
+        java.nio.file.Path tmp = null;
+        try {
+            tmp = java.nio.file.Files.createTempFile("jpdfium-split", ".pdf");
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, tmp)) return null;
+            java.nio.file.Path result = tmp;
+            if (!remappedBookmarks.isEmpty()) {
+                java.nio.file.Path tmpBookmarks =
+                        java.nio.file.Files.createTempFile("jpdfium-split-bm", ".pdf");
+                try (PdfDocument part = PdfDocument.open(tmp)) {
+                    PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
+                }
+                java.nio.file.Files.deleteIfExists(tmp);
+                tmp = tmpBookmarks;
+                result = tmpBookmarks;
+            }
+            try (PdfDocument verify = PdfDocument.open(result)) {
+                if (verify.pageCount() != pageIndices.length) return null;
+            }
+            PdfDocument owned = PdfDocument.openTemp(result);
+            tmp = null;
+            return owned;
+        } catch (Exception _) {
+            return null;
+        } finally {
+            if (tmp != null) {
+                try {
+                    java.nio.file.Files.deleteIfExists(tmp);
+                } catch (java.io.IOException _) {}
+            }
         }
     }
 

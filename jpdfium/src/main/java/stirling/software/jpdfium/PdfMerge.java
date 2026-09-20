@@ -58,6 +58,52 @@ public final class PdfMerge {
             pageOffset += sourceDoc.pageCount();
         }
 
+        if (QpdfLib.isMergeFilesSupported()) {
+            List<Path> filePaths = new ArrayList<>(documents.size());
+            boolean allFileBacked = true;
+            for (PdfDocument sourceDoc : documents) {
+                java.util.Optional<Path> sp = sourceDoc.sourcePath();
+                if (sp.isEmpty()) {
+                    allFileBacked = false;
+                    break;
+                }
+                filePaths.add(sp.get());
+            }
+            if (allFileBacked) {
+                Path tmp = null;
+                try {
+                    tmp = Files.createTempFile("jpdfium-merge", ".pdf");
+                    if (QpdfLib.mergeFiles(filePaths, tmp)) {
+                        Path result = tmp;
+                        if (!mergedBookmarks.isEmpty()) {
+                            Path tmpBookmarks = Files.createTempFile("jpdfium-merge-bm", ".pdf");
+                            try (PdfDocument merged = PdfDocument.open(tmp)) {
+                                PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks);
+                            }
+                            Files.deleteIfExists(tmp);
+                            tmp = tmpBookmarks;
+                            result = tmpBookmarks;
+                        }
+                        try (PdfDocument verify = PdfDocument.open(result)) {
+                            if (verify.pageCount() == pageOffset) {
+                                PdfDocument owned = PdfDocument.openTemp(result);
+                                tmp = null;
+                                return owned;
+                            }
+                        }
+                    }
+                } catch (IOException _) {
+                    // Fall through to the paths below
+                } finally {
+                    if (tmp != null) {
+                        try {
+                            Files.deleteIfExists(tmp);
+                        } catch (IOException _) {}
+                    }
+                }
+            }
+        }
+
         if (PdfMerger.isSupported()) {
             byte[] mergedBytes = PdfMerger.mergeDocuments(documents.toArray(new PdfDocument[0]));
             if (mergedBytes != null) {
@@ -113,6 +159,44 @@ public final class PdfMerge {
         if (paths.size() == 1) {
             try (PdfDocument singleDoc = PdfDocument.open(paths.getFirst())) {
                 return reopenViaBytes(singleDoc);
+            }
+        }
+
+        if (QpdfLib.isMergeFilesSupported()) {
+            try {
+                int expectedPages = 0;
+                boolean allOpenable = true;
+                for (Path p : paths) {
+                    try (PdfDocument doc = PdfDocument.open(p)) {
+                        expectedPages += doc.pageCount();
+                    } catch (Exception _) {
+                        allOpenable = false;
+                        break;
+                    }
+                }
+                if (allOpenable && expectedPages > 0) {
+                    Path tmp = Files.createTempFile("jpdfium-merge", ".pdf");
+                    boolean done = false;
+                    try {
+                        if (QpdfLib.mergeFiles(paths, tmp)) {
+                            try (PdfDocument verify = PdfDocument.open(tmp)) {
+                                if (verify.pageCount() == expectedPages) {
+                                    PdfDocument owned = PdfDocument.openTemp(tmp);
+                                    done = true;
+                                    return owned;
+                                }
+                            }
+                        }
+                    } finally {
+                        if (!done) {
+                            try {
+                                Files.deleteIfExists(tmp);
+                            } catch (IOException _) {}
+                        }
+                    }
+                }
+            } catch (IOException _) {
+                // Fall through to the paths below
             }
         }
 
