@@ -32,6 +32,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -704,8 +705,8 @@ public final class PdfDocument implements AutoCloseable {
      * File this document was opened from, if opened from a path.
      * File-backed operations read current file content when present.
      */
-    public java.util.Optional<Path> sourcePath() {
-        return java.util.Optional.ofNullable(sourcePath);
+    public Optional<Path> sourcePath() {
+        return Optional.ofNullable(sourcePath);
     }
 
     @Override
@@ -716,7 +717,7 @@ public final class PdfDocument implements AutoCloseable {
         JpdfiumLib.docClose(handle);
         if (ownedTemp && sourcePath != null) {
             try {
-                java.nio.file.Files.deleteIfExists(sourcePath);
+                Files.deleteIfExists(sourcePath);
             } catch (Exception _) {
                 sourcePath.toFile().deleteOnExit();
             }

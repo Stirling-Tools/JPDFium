@@ -1,9 +1,13 @@
 package stirling.software.jpdfium;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -78,10 +82,10 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
 
-        java.util.Optional<java.nio.file.Path> sourcePath = doc.sourcePath();
+        Optional<Path> sourcePath = doc.sourcePath();
         if (sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
-            PdfDocument fast = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
-            if (fast != null) return fast;
+            PdfDocument fileDoc = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
+            if (fileDoc != null) return fileDoc;
         }
 
         if (QpdfLib.isExtractSupported()) {
@@ -143,10 +147,10 @@ public final class PdfSplit {
             pageIndices[i] = fromPage + i;
         }
 
-        java.util.Optional<java.nio.file.Path> sourcePath = doc.sourcePath();
+        Optional<Path> sourcePath = doc.sourcePath();
         if (sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
-            PdfDocument fast = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
-            if (fast != null) return fast;
+            PdfDocument fileDoc = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks);
+            if (fileDoc != null) return fileDoc;
         }
 
         if (QpdfLib.isExtractSupported()) {
@@ -197,8 +201,8 @@ public final class PdfSplit {
      * @param output   destination PDF file path
      * @throws IOException on I/O error or extraction failure
      */
-    public static void extractPageRangeToFile(java.nio.file.Path input, int fromPage, int toPage,
-                                              java.nio.file.Path output) throws java.io.IOException {
+    public static void extractPageRangeToFile(Path input, int fromPage, int toPage,
+                                              Path output) throws IOException {
         if (input == null) throw new IllegalArgumentException("input must not be null");
         if (output == null) throw new IllegalArgumentException("output must not be null");
         int count = toPage - fromPage + 1;
@@ -211,7 +215,7 @@ public final class PdfSplit {
         }
         if (QpdfLib.isExtractFileSupported()
                 && QpdfLib.extractPagesToFile(input, pageIndices, output)
-                && java.nio.file.Files.size(output) > 0) {
+                && Files.size(output) > 0) {
             return;
         }
         try (PdfDocument doc = PdfDocument.open(input);
@@ -225,20 +229,20 @@ public final class PdfSplit {
      * temp file, apply bookmarks through the file variant, verify, and hand
      * back a temp-owned document. Null when anything fails (caller falls back).
      */
-    private static PdfDocument extractToTemp(java.nio.file.Path input, int[] pageIndices,
+    private static PdfDocument extractToTemp(Path input, int[] pageIndices,
                                              List<Bookmark> remappedBookmarks) {
-        java.nio.file.Path tmp = null;
+        Path tmp = null;
         try {
-            tmp = java.nio.file.Files.createTempFile("jpdfium-split", ".pdf");
+            tmp = Files.createTempFile("jpdfium-split", ".pdf");
             if (!QpdfLib.extractPagesToFile(input, pageIndices, tmp)) return null;
-            java.nio.file.Path result = tmp;
+            Path result = tmp;
             if (!remappedBookmarks.isEmpty()) {
-                java.nio.file.Path tmpBookmarks =
-                        java.nio.file.Files.createTempFile("jpdfium-split-bm", ".pdf");
+                Path tmpBookmarks =
+                        Files.createTempFile("jpdfium-split-bm", ".pdf");
                 try (PdfDocument part = PdfDocument.open(tmp)) {
                     PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
                 }
-                java.nio.file.Files.deleteIfExists(tmp);
+                Files.deleteIfExists(tmp);
                 tmp = tmpBookmarks;
                 result = tmpBookmarks;
             }
@@ -253,8 +257,8 @@ public final class PdfSplit {
         } finally {
             if (tmp != null) {
                 try {
-                    java.nio.file.Files.deleteIfExists(tmp);
-                } catch (java.io.IOException _) {}
+                    Files.deleteIfExists(tmp);
+                } catch (IOException _) {}
             }
         }
     }

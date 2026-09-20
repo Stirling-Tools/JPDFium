@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -62,7 +64,7 @@ public final class PdfMerge {
             List<Path> filePaths = new ArrayList<>(documents.size());
             boolean allFileBacked = true;
             for (PdfDocument sourceDoc : documents) {
-                java.util.Optional<Path> sp = sourceDoc.sourcePath();
+                Optional<Path> sp = sourceDoc.sourcePath();
                 if (sp.isEmpty()) {
                     allFileBacked = false;
                     break;
@@ -304,7 +306,7 @@ public final class PdfMerge {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (output == null) throw new IllegalArgumentException("output must not be null");
         if (paths.size() == 1) {
-            Files.copy(paths.getFirst(), output, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
             return;
         }
 

@@ -9,6 +9,7 @@ import stirling.software.jpdfium.panama.QpdfLib;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -100,7 +101,7 @@ class PdfMergeSplitFilesTest {
             backing = merged.sourcePath().get();
             bytesPath = merged.saveBytes();
         }
-        assertTrue(java.nio.file.Files.notExists(backing), "backing temp file deleted on close");
+            assertTrue(Files.notExists(backing), "backing temp file deleted on close");
 
         assertEquals(5, PdfVerifier.pageCount(bytesPath, "merged open docs"));
         for (int i = 0; i < 5; i++) {
@@ -145,7 +146,7 @@ class PdfMergeSplitFilesTest {
         Path src = tmp.resolve("src.pdf");
         Files.write(src, SyntheticPdfFactory.createDiverse(5));
         long srcSize = Files.size(src);
-        List<Path> inputs = java.util.Collections.nCopies(8, src);
+        List<Path> inputs = Collections.nCopies(8, src);
 
         ThreadMXBean tmx = (ThreadMXBean) ManagementFactory.getThreadMXBean();
         long tid = Thread.currentThread().threadId();
