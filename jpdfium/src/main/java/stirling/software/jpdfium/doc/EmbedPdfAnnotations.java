@@ -325,6 +325,30 @@ public final class EmbedPdfAnnotations {
 
 
     /**
+     * Set FreeText appearance from a registered font id.
+     *
+     * @param page   raw FPDF_PAGE
+     * @param index  annotation index
+     * @param fontId id from font registration
+     * @param size   font size in points
+     */
+    public static void setFreeTextFont(MemorySegment page, int index, int fontId, float size,
+                                       int r, int g, int b) {
+        if (EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont == null) {
+            throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont not in this native build");
+        }
+        MemorySegment annot = openAnnot(page, index);
+        try {
+            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont.invokeExact(
+                    annot, fontId, size, r, g, b);
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont failed");
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        finally { closeAnnot(annot); }
+    }
+
+    /**
      * Set text alignment on a FreeText annotation.
      *
      * @param alignment 0=left, 1=center, 2=right

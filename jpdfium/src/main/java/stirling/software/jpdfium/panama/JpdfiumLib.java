@@ -88,6 +88,12 @@ public final class JpdfiumLib {
 
     private JpdfiumLib() {}
 
+    /**
+     * Runs library init on first call. Document-less APIs (font registry)
+     * need this: without it their process-global state is unusable.
+     */
+    public static void ensureInitialized() {}
+
     static void check(int rc, String ctx) {
         if (rc == OK) return;
         throw switch (rc) {
