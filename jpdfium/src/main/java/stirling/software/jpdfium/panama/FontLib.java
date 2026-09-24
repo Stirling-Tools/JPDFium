@@ -40,12 +40,12 @@ public final class FontLib {
      * glyph for codepoints[i]. Drives rewrite-vs-regenerate decisions.
      */
     public static boolean[] coversText(byte[] fontData, int[] codepoints) {
+        if (fontData == null || fontData.length == 0) throw new IllegalArgumentException("fontData must not be empty");
+        if (codepoints == null || codepoints.length == 0) throw new IllegalArgumentException("codepoints must not be empty");
         if (jpdfium_font_covers_text == null) {
             throw new JPDFiumException(
                     "jpdfium_font_covers_text not in this native build");
         }
-        if (fontData == null || fontData.length == 0) throw new IllegalArgumentException("fontData must not be empty");
-        if (codepoints == null || codepoints.length == 0) throw new IllegalArgumentException("codepoints must not be empty");
         NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {
