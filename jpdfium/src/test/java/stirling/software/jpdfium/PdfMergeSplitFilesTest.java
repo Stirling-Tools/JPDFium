@@ -3,6 +3,8 @@ package stirling.software.jpdfium;
 import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -13,6 +15,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -134,6 +137,55 @@ class PdfMergeSplitFilesTest {
                     PdfVerifier.pageText(filePath, i, "file path"),
                     "page " + i + " text differs between split paths");
         }
+    }
+
+    @Test
+    void memoryModeMergesWithoutFilePath(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        StorageOptions memory = StorageOptions.builder().memory().build();
+        try (PdfDocument merged = PdfMerge.mergeFiles(List.of(a, b), memory)) {
+            assertEquals(5, merged.pageCount());
+            assertTrue(merged.sourcePath().isEmpty(), "memory merge tracks no backing file");
+        }
+        Path out = tmp.resolve("out.pdf");
+        PdfSplit.extractPageRangeToFile(a, 0, 1, out, memory);
+        assertEquals(2, PdfVerifier.pageCount(Files.readAllBytes(out), "memory split"));
+    }
+
+    @Test
+    void fileModeRejectsBytesOnlyDocs(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        byte[] pdf = SyntheticPdfFactory.createDiverse(2);
+        StorageOptions file = StorageOptions.builder().file().build();
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            assertThrows(JPDFiumException.class, () -> PdfSplit.extractPageRange(doc, 0, 1, file));
+            assertThrows(JPDFiumException.class,
+                    () -> PdfMerge.merge(List.of(doc, PdfDocument.open(pdf)), file));
+        }
+    }
+
+    @Test
+    void fileModeMergesFileBackedDocs(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        Path customTmp = tmp.resolve("custom-tmp");
+        StorageOptions file = StorageOptions.builder().file().tempDir(customTmp).build();
+        try (PdfDocument doc1 = PdfDocument.open(a);
+             PdfDocument doc2 = PdfDocument.open(b);
+             PdfDocument merged = PdfMerge.merge(List.of(doc1, doc2), file)) {
+            assertEquals(5, merged.pageCount());
+        }
+        assertTrue(Files.isDirectory(customTmp), "custom temp dir is used");
     }
 
     @Test

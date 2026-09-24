@@ -14,6 +14,8 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageImporter;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -47,6 +49,14 @@ public final class PdfMerge {
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument merge(List<PdfDocument> documents) {
+        return merge(documents, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge multiple open PDF documents with explicit storage control.
+     * FILE mode fails loudly when any input is not file-backed.
+     */
+    public static PdfDocument merge(List<PdfDocument> documents, StorageOptions options) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
 
@@ -60,7 +70,7 @@ public final class PdfMerge {
             pageOffset += sourceDoc.pageCount();
         }
 
-        if (QpdfLib.isMergeFilesSupported()) {
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
             List<Path> filePaths = new ArrayList<>(documents.size());
             boolean allFileBacked = true;
             for (PdfDocument sourceDoc : documents) {
@@ -71,14 +81,17 @@ public final class PdfMerge {
                 }
                 filePaths.add(sp.get());
             }
+            if (!allFileBacked && options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("FILE storage needs every input opened from a path");
+            }
             if (allFileBacked) {
                 Path tmp = null;
                 try {
-                    tmp = Files.createTempFile("jpdfium-merge", ".pdf");
+                    tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     if (QpdfLib.mergeFiles(filePaths, tmp)) {
                         Path result = tmp;
                         if (!mergedBookmarks.isEmpty()) {
-                            Path tmpBookmarks = Files.createTempFile("jpdfium-merge-bm", ".pdf");
+                            Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
                             try (PdfDocument merged = PdfDocument.open(tmp)) {
                                 PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks);
                             }
@@ -157,6 +170,14 @@ public final class PdfMerge {
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument mergeFiles(List<Path> paths) {
+        return mergeFiles(paths, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge PDF files with explicit storage control.
+     * FILE mode fails loudly when natives lack file-backed merge.
+     */
+    public static PdfDocument mergeFiles(List<Path> paths, StorageOptions options) {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (paths.size() == 1) {
             try (PdfDocument singleDoc = PdfDocument.open(paths.getFirst())) {
@@ -164,7 +185,7 @@ public final class PdfMerge {
             }
         }
 
-        if (QpdfLib.isMergeFilesSupported()) {
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
             try {
                 int expectedPages = 0;
                 boolean allOpenable = true;
@@ -177,7 +198,7 @@ public final class PdfMerge {
                     }
                 }
                 if (allOpenable && expectedPages > 0) {
-                    Path tmp = Files.createTempFile("jpdfium-merge", ".pdf");
+                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     boolean done = false;
                     try {
                         if (QpdfLib.mergeFiles(paths, tmp)) {
@@ -188,6 +209,9 @@ public final class PdfMerge {
                                     return owned;
                                 }
                             }
+                        }
+                        if (options.mode() == StorageOptions.Mode.FILE) {
+                            throw new JPDFiumException("file-backed merge failed");
                         }
                     } finally {
                         if (!done) {
@@ -303,6 +327,15 @@ public final class PdfMerge {
      * @throws IOException on I/O error or merge failure
      */
     public static void mergeFilesToFile(List<Path> paths, Path output) throws IOException {
+        mergeFilesToFile(paths, output, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge files straight to an output file with explicit storage control.
+     * Existing output is truncated. Falls back to merge plus save unless
+     * FILE mode forces the native path.
+     */
+    public static void mergeFilesToFile(List<Path> paths, Path output, StorageOptions options) throws IOException {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (output == null) throw new IllegalArgumentException("output must not be null");
         if (paths.size() == 1) {
@@ -310,13 +343,16 @@ public final class PdfMerge {
             return;
         }
 
-        if (QpdfLib.isMergeFilesSupported()) {
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
             if (QpdfLib.mergeFiles(paths, output) && Files.size(output) > 0) {
                 return;
             }
+            if (options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("file-backed merge failed");
+            }
         }
 
-        try (PdfDocument merged = mergeFiles(paths)) {
+        try (PdfDocument merged = mergeFiles(paths, options)) {
             merged.save(output);
         }
     }
