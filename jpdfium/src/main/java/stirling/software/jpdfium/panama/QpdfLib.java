@@ -229,8 +229,8 @@ public final class QpdfLib {
      * @param output  destination PDF file path
      * @return true on success, false if unsupported or failed
      */
-    public static boolean mergeFiles(java.util.List<java.nio.file.Path> inputs,
-                                     java.nio.file.Path output) {
+    public static boolean mergeFiles(List<Path> inputs,
+                                     Path output) {
         if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty() || output == null) {
             return false;
         }
@@ -240,7 +240,7 @@ public final class QpdfLib {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment pathsArraySeg = arena.allocate(ADDRESS, count);
                 for (int i = 0; i < count; i++) {
-                    java.nio.file.Path p = inputs.get(i);
+                    Path p = inputs.get(i);
                     if (p == null) {
                         pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
                     } else {
@@ -268,8 +268,8 @@ public final class QpdfLib {
      * @param output      destination PDF file path
      * @return true on success, false if unsupported or failed
      */
-    public static boolean extractPagesToFile(java.nio.file.Path input, int[] pageIndices,
-                                             java.nio.file.Path output) {
+    public static boolean extractPagesToFile(Path input, int[] pageIndices,
+                                             Path output) {
         if (EXTRACT_PAGES_FILE_HANDLE == null || input == null || output == null
                 || pageIndices == null || pageIndices.length == 0) {
             return false;
