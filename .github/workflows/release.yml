@@ -609,7 +609,12 @@ jobs:
         run: |
           # python@3.14 is pulled in as a dependency below, but its `brew link`
           # step fails on stale /usr/local/bin/python* symlinks from the runner
-          # image, aborting the whole install. Link it up front instead.
+          # image, aborting the whole install. Drop the stale links, then link
+          # up front instead.
+          for f in /usr/local/bin/idle3* /usr/local/bin/pip3* /usr/local/bin/pydoc3* /usr/local/bin/python3*; do
+            [ -L "$f" ] || continue
+            case "$(readlink "$f")" in /Library/Frameworks/*) rm -f "$f";; esac
+          done
           arch -x86_64 /usr/local/bin/brew install python@3.14 || true
           arch -x86_64 /usr/local/bin/brew link --overwrite python@3.14 || true
 
