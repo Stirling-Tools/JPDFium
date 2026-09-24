@@ -448,6 +448,46 @@ int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len, const int32_t
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const char* utf8_text,
+                           float font_size, char** json) {
+    if (!font_data || font_len <= 0 || !utf8_text || font_size <= 0 || !json)
+        return JPDFIUM_ERR_INVALID;
+    hb_blob_t* blob = hb_blob_create((const char*)font_data, (unsigned int)font_len,
+                                     HB_MEMORY_MODE_READONLY, nullptr, nullptr);
+    hb_face_t* face = hb_face_create(blob, 0);
+    hb_blob_destroy(blob);
+    hb_font_t* font = hb_font_create(face);
+    hb_face_destroy(face);
+    // Advances come out in 26.6 fractional points at this scale.
+    hb_font_set_scale(font, (int)(font_size * 64), (int)(font_size * 64));
+
+    hb_buffer_t* buf = hb_buffer_create();
+    hb_buffer_add_utf8(buf, utf8_text, -1, 0, -1);
+    // Script/direction/language default from content; same as plain hb-shape.
+    hb_buffer_guess_segment_properties(buf);
+    hb_shape(font, buf, nullptr, 0);
+
+    unsigned int count = 0;
+    hb_glyph_info_t* infos = hb_buffer_get_glyph_infos(buf, &count);
+    hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
+
+    std::string out = "[";
+    char entry[128];
+    for (unsigned int i = 0; i < count; ++i) {
+        if (i) out += ",";
+        snprintf(entry, sizeof(entry),
+                 "{\"g\":%u,\"ax\":%d,\"ay\":%d,\"dx\":%d,\"dy\":%d,\"cluster\":%u}",
+                 infos[i].codepoint, pos[i].x_advance, pos[i].y_advance, pos[i].x_offset,
+                 pos[i].y_offset, infos[i].cluster);
+        out += entry;
+    }
+    out += "]";
+    hb_buffer_destroy(buf);
+    hb_font_destroy(font);
+    *json = strdup(out.c_str());
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_font_fix_tounicode(int64_t doc, int32_t page_index, int32_t* fonts_fixed) {
     // Real implementation would:
     // 1. Iterate page objects with FPDFPage_CountObjects / FPDFPage_GetObject
@@ -570,6 +610,10 @@ int32_t jpdfium_font_classify(const uint8_t*, int64_t, char** json) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 int32_t jpdfium_font_covers_text(const uint8_t*, int64_t, const int32_t*, int32_t, uint8_t*) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_text_shape(const uint8_t*, int64_t, const char*, float, char** json) {
+    if (json) *json = nullptr;
     return JPDFIUM_ERR_NOT_FOUND;
 }
 int32_t jpdfium_font_fix_tounicode(int64_t, int32_t, int32_t* f) {

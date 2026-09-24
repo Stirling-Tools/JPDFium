@@ -150,6 +150,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_font_get_data", "jpdfium_font_classify",
     "jpdfium_font_fix_tounicode", "jpdfium_font_repair_widths",
     "jpdfium_font_normalize_page", "jpdfium_font_subset", "jpdfium_font_covers_text",
+    "jpdfium_text_shape",
     // Glyph-Level Redaction
     "jpdfium_redact_glyph_aware",
     // XMP Metadata Redaction

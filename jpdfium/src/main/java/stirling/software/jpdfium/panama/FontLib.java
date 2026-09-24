@@ -7,10 +7,17 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.ShapedGlyph;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -32,6 +39,10 @@ public final class FontLib {
     private static final MethodHandle jpdfium_font_covers_text =
             Symbols.downcallOptional("jpdfium_font_covers_text",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS));
+
+    private static final MethodHandle jpdfium_text_shape =
+            Symbols.downcallOptional("jpdfium_text_shape",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_FLOAT, ADDRESS));
 
     private FontLib() {}
 
@@ -70,8 +81,55 @@ public final class FontLib {
         }
     }
 
-    public static byte[] getData(long page, int fontIndex) {
+    /**
+     * Shape text with a font program. Returns one entry per glyph with
+     * advances and offsets in points at the requested size.
+     */
+    public static List<ShapedGlyph> shapeText(
+            byte[] fontData, String text, float fontSize) {
+        if (jpdfium_text_shape == null) {
+            throw new JPDFiumException("jpdfium_text_shape not in this native build");
+        }
+        if (fontData == null || fontData.length == 0) throw new IllegalArgumentException("fontData must not be empty");
+        if (text == null || text.isEmpty()) throw new IllegalArgumentException("text must not be empty");
+        if (fontSize <= 0) throw new IllegalArgumentException("fontSize must be positive");
         NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment ptrSeg = a.allocate(ADDRESS);
+                JpdfiumLib.check((int) jpdfium_text_shape.invokeExact(
+                        a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
+                        a.allocateFrom(text), fontSize, ptrSeg), "textShape");
+                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                String json;
+                try {
+                    json = FfmHelper.readNativeString(strPtr);
+                } finally {
+                    JpdfiumH.jpdfium_free_string(strPtr);
+                }
+                List<Map<String, String>> rows = NativeJsonParser.parseArray(json);
+                List<ShapedGlyph> out = new ArrayList<>(rows.size());
+                for (Map<String, String> row : rows) {
+                    out.add(new ShapedGlyph(
+                            Integer.parseInt(row.get("g")),
+                            Integer.parseInt(row.get("ax")) / 64f,
+                            Integer.parseInt(row.get("ay")) / 64f,
+                            Integer.parseInt(row.get("dx")) / 64f,
+                            Integer.parseInt(row.get("dy")) / 64f,
+                            Integer.parseInt(row.get("cluster"))));
+                }
+                return out;
+            }
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static byte[] getData(long page, int fontIndex) {        NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);

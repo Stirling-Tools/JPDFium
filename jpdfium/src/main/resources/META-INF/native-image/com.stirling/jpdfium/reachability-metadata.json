@@ -228,6 +228,16 @@
           "void*",
           "jlong",
           "void*",
+          "jfloat",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "void*",
           "jint",
           "void*"
         ]
