@@ -429,6 +429,28 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len, const int32_t* codepoints,
+                                 int32_t count, uint8_t* out_covered) {
+    if (!data || len <= 0 || !codepoints || count <= 0 || !out_covered)
+        return JPDFIUM_ERR_INVALID;
+    ensure_freetype_init();
+
+    FT_Face face;
+    if (FT_New_Memory_Face(ft_lib, data, (FT_Long)len, 0, &face))
+        return JPDFIUM_ERR_INVALID;
+    // Map codepoints, not glyph ids: without this a symbol charmap misreports.
+    if (face->num_charmaps > 0)
+        FT_Select_Charmap(face, FT_ENCODING_UNICODE);
+
+    for (int32_t i = 0; i < count; ++i) {
+        uint32_t cp = (uint32_t)codepoints[i];
+        // Index 0 is the .notdef placeholder, never a real glyph.
+        out_covered[i] = (cp <= 0x10FFFF && FT_Get_Char_Index(face, cp) != 0) ? 1 : 0;
+    }
+    FT_Done_Face(face);
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_font_fix_tounicode(int64_t doc, int32_t page_index, int32_t* fonts_fixed) {
     // Real implementation would:
     // 1. Iterate page objects with FPDFPage_CountObjects / FPDFPage_GetObject
@@ -548,6 +570,9 @@ int32_t jpdfium_font_get_data(int64_t, int32_t, uint8_t** data, int64_t* len) {
 }
 int32_t jpdfium_font_classify(const uint8_t*, int64_t, char** json) {
     if (json) *json = strdup("{\"type\":\"unknown\",\"error\":\"FreeType not available\"}");
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_font_covers_text(const uint8_t*, int64_t, const int32_t*, int32_t, uint8_t*) {
     return JPDFIUM_ERR_NOT_FOUND;
 }
 int32_t jpdfium_font_fix_tounicode(int64_t, int32_t, int32_t* f) {

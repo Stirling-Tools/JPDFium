@@ -7,6 +7,8 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
+
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
@@ -27,7 +29,46 @@ public final class FontLib {
                 : null;
     }
 
+    private static final MethodHandle jpdfium_font_covers_text =
+            Symbols.downcallOptional("jpdfium_font_covers_text",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS));
+
     private FontLib() {}
+
+    /**
+     * Per-codepoint coverage: result[i] is true when the font program has a
+     * glyph for codepoints[i]. Drives rewrite-vs-regenerate decisions.
+     */
+    public static boolean[] coversText(byte[] fontData, int[] codepoints) {
+        if (jpdfium_font_covers_text == null) {
+            throw new JPDFiumException(
+                    "jpdfium_font_covers_text not in this native build");
+        }
+        if (fontData == null || fontData.length == 0) throw new IllegalArgumentException("fontData must not be empty");
+        if (codepoints == null || codepoints.length == 0) throw new IllegalArgumentException("codepoints must not be empty");
+        NativeGuard.acquire();
+        try {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment out = a.allocate(JAVA_BYTE, codepoints.length);
+                JpdfiumLib.check((int) jpdfium_font_covers_text.invokeExact(
+                        a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
+                        a.allocateFrom(JAVA_INT, codepoints), codepoints.length, out),
+                        "fontCoversText");
+                boolean[] covered = new boolean[codepoints.length];
+                MemorySegment bytes = out.reinterpret(codepoints.length);
+                for (int i = 0; i < covered.length; i++) {
+                    covered[i] = bytes.get(JAVA_BYTE, i) != 0;
+                }
+                return covered;
+            }
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        } finally {
+            NativeGuard.release();
+        }
+    }
 
     public static byte[] getData(long page, int fontIndex) {
         NativeGuard.acquire();

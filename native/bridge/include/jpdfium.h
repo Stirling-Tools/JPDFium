@@ -260,6 +260,13 @@ JPDFIUM_EXPORT int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, u
 //                "units_per_em":2048,"has_kerning":true,"is_subset":true}
 JPDFIUM_EXPORT int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json);
 
+// Per-codepoint glyph coverage using the font's charmap.
+// out_covered[i] is 1 when the font has a glyph for codepoints[i], else 0.
+// Used to decide rewrite-vs-regenerate before editing text with a font.
+JPDFIUM_EXPORT int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len,
+                                                const int32_t* codepoints, int32_t count,
+                                                uint8_t* out_covered);
+
 // Fix /ToUnicode CMap for all fonts on a page using the font's internal cmap table.
 // This is the most critical step for reliable auto-redact: wrong ToUnicode -> wrong text
 // extraction -> patterns miss -> redact silently fails.
