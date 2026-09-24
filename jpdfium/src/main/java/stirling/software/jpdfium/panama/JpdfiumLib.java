@@ -555,10 +555,13 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Ghostscript-style hard crop: physically remove every page object (text, image,
-     * path, shading, form) lying entirely outside the crop rectangle. Text straddling
-     * the boundary is split at character level; straddling non-text objects are kept
-     * and clipped by the page CropBox. No paint rectangles are emitted.
+     * Hard crop: physically remove everything outside the crop rectangle.
+     * Straddling text is split per character, straddling images are
+     * pixel-erased outside (soft masks preserved, nested images promoted),
+     * fully outside objects are removed. A post-pass audit returns
+     * {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
+     * audit cannot run.
      *
      * @param page bridge page handle
      * @param x    crop rect left (PDF points)

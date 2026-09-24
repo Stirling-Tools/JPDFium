@@ -8,7 +8,6 @@ import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
-import java.lang.foreign.MemorySegment;
 import java.util.List;
 
 /**
@@ -77,15 +76,21 @@ public final class PdfPageGeometry {
     }
 
     /**
-     * Hard crop: set the page MediaBox/CropBox to {@code rect}
-     * AND physically remove every page object (text, image, path, shading, form)
-     * that lies entirely outside it.
+     * Hard crop: set all five page boxes to {@code rect} and physically remove
+     * everything outside it.
      *
-     * <p>Text objects straddling the crop boundary are split at character level
-     * so only the glyphs inside the crop area survive (pinned to their original
-     * coordinates). Non-text objects straddling the boundary are preserved and
-     * clipped visually by the CropBox, mirroring crop-and-clip
-     * behaviour without ever dropping the visible part of a picture.
+     * <p>Text is split at character level (a glyph survives when its origin is
+     * inside the crop); straddling images keep their visible part and are
+     * pixel-erased outside, including images nested in Form XObjects (soft
+     * masks preserved); fully outside paths, shadings and forms are removed.
+     * Outside annotations are removed, straddling annotations are clipped.
+     * Metadata, structure and signatures are untouched.
+     *
+     * <p>A post-pass audit fails loudly with
+     * {@link stirling.software.jpdfium.exception.RedactIncompleteException} or
+     * {@link stirling.software.jpdfium.exception.RedactUnverifiableException}
+     * when content survives or the audit cannot run. Incremental save is
+     * refused afterwards; a full save is required.
      *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
@@ -189,25 +194,12 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
                     rect.x(), rect.y(), rect.width(), rect.height());
-            pruneAnnotationsOutsideCrop(page.rawHandle(), rect);
+            PdfAnnotations.clipToRect(page.rawHandle(), rect);
             PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
             PdfPageBoxes.setCropBox(page.rawHandle(), rect);
             PdfPageBoxes.setTrimBox(page.rawHandle(), rect);
             PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
             PdfPageBoxes.setArtBox(page.rawHandle(), rect);
-        }
-    }
-
-    private static void pruneAnnotationsOutsideCrop(MemorySegment rawPage, Rect cropRect) {
-        int annotationCount = PdfAnnotations.count(rawPage);
-        for (int i = annotationCount - 1; i >= 0; i--) {
-            var annotationOptional = PdfAnnotations.get(rawPage, i);
-            if (annotationOptional.isPresent()) {
-                Rect annotationRect = annotationOptional.get().rect();
-                if (!cropRect.intersects(annotationRect)) {
-                    PdfAnnotations.remove(rawPage, i);
-                }
-            }
         }
     }
 

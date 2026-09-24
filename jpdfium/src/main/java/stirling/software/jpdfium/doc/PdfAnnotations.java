@@ -191,6 +191,65 @@ public final class PdfAnnotations {
         } catch (Throwable t) { throw new JPDFiumException("FPDFPage_RemoveAnnot failed", t); }
     }
 
+    /**
+     * Crop-scope the page's annotations to {@code crop}: annotations outside
+     * the rectangle are removed, straddling ones have their {@code /Rect}
+     * clipped to the intersection, fully-inside ones are untouched.
+     *
+     * <p>One confined arena for the whole pass, no per-annotation records.
+     *
+     * @param page raw FPDF_PAGE segment
+     * @param crop crop rectangle in unrotated page coordinates
+     * @return number of annotations removed
+     */
+    public static int clipToRect(MemorySegment page, Rect crop) {
+        int n = count(page);
+        if (n <= 0) return 0;
+        int removed = 0;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
+            for (int i = n - 1; i >= 0; i--) {
+                MemorySegment annot;
+                try {
+                    annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(page, i);
+                } catch (Throwable t) { throw new JPDFiumException(t); }
+                if (annot.equals(MemorySegment.NULL)) continue;
+                try {
+                    int ok;
+                    try {
+                        ok = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
+                    } catch (Throwable t) { throw new JPDFiumException(t); }
+                    if (ok == 0) continue;
+                    float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
+                    float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
+                    float right = rectSeg.get(ValueLayout.JAVA_FLOAT, 8);
+                    float bottom = rectSeg.get(ValueLayout.JAVA_FLOAT, 12);
+                    float cx0 = Math.max(left, crop.x());
+                    float cy0 = Math.max(bottom, crop.y());
+                    float cx1 = Math.min(right, crop.x() + crop.width());
+                    float cy1 = Math.min(top, crop.y() + crop.height());
+                    if (cx1 <= cx0 || cy1 <= cy0) {
+                        try {
+                            int _ = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(page, i);
+                        } catch (Throwable t) { throw new JPDFiumException(t); }
+                        removed++;
+                    } else if (cx0 != left || cy0 != bottom || cx1 != right || cy1 != top) {
+                        rectSeg.set(ValueLayout.JAVA_FLOAT, 0, cx0);
+                        rectSeg.set(ValueLayout.JAVA_FLOAT, 4, cy1);
+                        rectSeg.set(ValueLayout.JAVA_FLOAT, 8, cx1);
+                        rectSeg.set(ValueLayout.JAVA_FLOAT, 12, cy0);
+                        try {
+                            int _ = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
+                        } catch (Throwable t) { throw new JPDFiumException(t); }
+                    }
+                } finally {
+                    closeAnnot(annot);
+                }
+            }
+        }
+        return removed;
+    }
+
     private static Annotation readAnnotation(MemorySegment annot, int index) {
         int subtypeCode;
         try {

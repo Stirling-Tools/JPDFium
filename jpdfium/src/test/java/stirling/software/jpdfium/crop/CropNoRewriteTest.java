@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 /**
@@ -74,13 +75,15 @@ class CropNoRewriteTest {
         assertArrayEquals(p2Before, p2After, "page 2 content stream changed");
 
         // Sanity: the cropped page's content stream really did change (page 1 loses
-        // its text is a rewrite, but page 1 itself must differ from before).
+        // its text). When the page's ONLY content is the removed word the
+        // regenerated stream may legitimately be empty - assert the word is gone
+        // instead of asserting a non-zero length.
         byte[] p1Before = contentStream(input, 1);
         byte[] p1After = contentStream(output, 1);
         assertNotEquals(0, p1Before.length);
-        assertNotEquals(0, p1After.length);
-        // Page 1's stream is regenerated, so a byte difference is expected - but the
-        // word content must change (PAGE1_ONLY is removed).
+        assertFalse(new String(p1Before, StandardCharsets.UTF_8).isEmpty());
+        assertFalse(new String(p1After, StandardCharsets.UTF_8).contains("PAGE1_ONLY"),
+                "removed word must not survive in the regenerated stream");
         assertNotEquals(new String(p1Before, StandardCharsets.UTF_8),
                 new String(p1After, StandardCharsets.UTF_8));
     }

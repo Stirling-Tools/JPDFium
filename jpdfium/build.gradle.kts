@@ -96,6 +96,7 @@ dependencies {
     runtimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
+    jmhImplementation(libs.pdfbox)
     jmhAnnotationProcessor(libs.jmh.annproc)
 }
 

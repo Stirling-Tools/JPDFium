@@ -5,6 +5,11 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationText;
+import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
@@ -138,6 +143,284 @@ public final class CropTestPdfGenerator {
         try (PDDocument doc = new PDDocument()) {
             doc.addPage(new PDPage(LETTER));
             return save(doc);
+        }
+    }
+
+    // deterministic two-tone / masked image fixtures
+
+    /** 100x100: bitmap row 0 (page top) red, bottom half blue. */
+    public static final int TWO_TONE_W = 100;
+    public static final int TWO_TONE_H = 100;
+    public static final int TOP_HALF_RGB = 0xFF0000;
+    public static final int BOTTOM_HALF_RGB = 0x0000FF;
+
+    /** One page with a single two-tone image at (100,100)-(300,300). */
+    public static byte[] twoToneImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "tt");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 100, 100, 200, 200);
+            }
+            return save(doc);
+        }
+    }
+
+    /** One page with a two-tone image at (280,400)-(320,500): straddles x=306. */
+    public static byte[] straddlingImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "tt");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 280, 400, 40, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /** One page with a two-tone image at (100,300)-(200,400): mostly outside a left-half crop. */
+    public static byte[] mostlyOutsideImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "tt");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 100, 300, 100, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /** Circle image at (100,100)-(300,300) with a soft mask, for /SMask checks. */
+    public static byte[] maskedImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, circlePng(), "masked");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 100, 100, 200, 200);
+            }
+            return save(doc);
+        }
+    }
+
+    /** One page whose only object is the two-tone image, placed TWICE (shared XObject). */
+    public static byte[] sharedImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "shared");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 100, 600, 50, 50);  // fully inside a left-half crop
+                cs.drawImage(img, 400, 600, 50, 50);  // fully outside
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * One page with a Form XObject (BBox = full page) whose only child is the
+     * two-tone image at form-local (100,100)-(300,300).
+     */
+    public static byte[] formNestedImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "nested");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write("q 200 0 0 200 100 100 cm /ImF Do Q"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
+    /** Two-tone image rotated 90 degrees, spanning x [120,320], y [100,300]. */
+    public static byte[] rotatedImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "rot");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.saveGraphicsState();
+                cs.transform(new org.apache.pdfbox.util.Matrix(0, 200, -200, 0, 320, 100));
+                cs.drawImage(img, 0, 0, 1, 1);
+                cs.restoreGraphicsState();
+            }
+            return save(doc);
+        }
+    }
+
+    /** Full-page image on a page whose CropBox is already the left half. */
+    public static byte[] fullPageImageWithExistingCropBoxPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            page.setCropBox(new PDRectangle(0, 0, 306, 792));
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "scan");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 0, 0, 612, 792);
+            }
+            return save(doc);
+        }
+    }
+
+    /** Two-tone image inside two transformed forms: page rect (50,50)-(250,250). */
+    public static byte[] nestedTransformedFormImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "nested2");
+            PDFormXObject inner = new PDFormXObject(doc);
+            inner.setBBox(new PDRectangle(0, 0, 100, 100));
+            inner.setResources(new PDResources());
+            inner.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = inner.getContentStream().createOutputStream()) {
+                os.write("q 100 0 0 100 0 0 cm /ImF Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+
+            PDFormXObject outer = new PDFormXObject(doc);
+            outer.setBBox(new PDRectangle(0, 0, 400, 400));
+            outer.setResources(new PDResources());
+            outer.getResources().put(COSName.getPDFName("FmInner"), inner);
+            try (var os = outer.getContentStream().createOutputStream()) {
+                os.write("q 2 0 0 2 0 0 cm /FmInner Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(outer, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {                cs.saveGraphicsState();
+                cs.transform(new org.apache.pdfbox.util.Matrix(1, 0, 0, 1, 50, 50));
+                cs.drawForm(outer);
+                cs.restoreGraphicsState();
+            }
+            return save(doc);
+        }
+    }
+
+    /** Links at (100,600), (400,600), (280,500) plus a note at (400,700). */
+    public static byte[] annotationsPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "ANCHOR", 100, 700);
+            }
+            addLink(page, 100, 600, 100, 20, "https://inside.example/");
+            addLink(page, 400, 600, 100, 20, "https://outside.example/");
+            addLink(page, 280, 500, 60, 20, "https://straddle.example/");
+
+            PDAnnotationText note = new PDAnnotationText();
+            note.setRectangle(new PDRectangle(400, 700, 20, 20));
+            note.setContents("SECRET_NOTE");
+            page.getAnnotations().add(note);
+            return save(doc);
+        }
+    }
+
+    /** Signature field with its widget at (400,600,150,50). */
+    public static byte[] signatureWidgetPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "SIGNED HERE", 100, 700);
+            }
+            PDAcroForm acroForm = new PDAcroForm(doc);
+            doc.getDocumentCatalog().setAcroForm(acroForm);
+            PDSignatureField field = new PDSignatureField(acroForm);
+            field.setPartialName("Signature1");
+            var widget = field.getWidgets().get(0);
+            widget.setRectangle(new PDRectangle(400, 600, 150, 50));
+            widget.setPage(page);
+            page.getAnnotations().add(widget);
+            acroForm.getFields().add(field);
+            return save(doc);
+        }
+    }
+
+    private static void addLink(PDPage page, float x, float y, float w, float h, String uri)
+            throws IOException {
+        PDAnnotationLink link = new PDAnnotationLink();
+        link.setRectangle(new PDRectangle(x, y, w, h));
+        PDActionURI action = new PDActionURI();
+        action.setURI(uri);
+        link.setAction(action);
+        page.getAnnotations().add(link);
+    }
+
+    /** One page with a red rect fully outside a left-half crop and a green rect inside. */
+    public static byte[] paintedRectsPdf() throws IOException {        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setNonStrokingColor(Color.RED);
+                cs.addRect(400, 600, 100, 50);
+                cs.fill();
+                cs.setNonStrokingColor(Color.GREEN);
+                cs.addRect(100, 600, 100, 50);
+                cs.fill();
+            }
+            return save(doc);
+        }
+    }
+
+    /** One text page carrying /Info metadata and an XMP packet. */
+    public static byte[] metadataPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "KEEP_META", 100, 700);
+                placeWord(cs, "DROP_META", 400, 700);
+            }
+            doc.getDocumentInformation().setTitle("JPDFium Crop Metadata Title");
+            doc.getDocumentInformation().setAuthor("JPDFium Test Author");
+            return save(doc);
+        }
+    }
+
+    private static byte[] twoTonePng() throws IOException {
+        BufferedImage img = new BufferedImage(TWO_TONE_W, TWO_TONE_H, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < TWO_TONE_H; y++) {
+            int rgb = y < TWO_TONE_H / 2 ? TOP_HALF_RGB : BOTTOM_HALF_RGB;
+            for (int x = 0; x < TWO_TONE_W; x++) {
+                img.setRGB(x, y, rgb);
+            }
+        }
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            ImageIO.write(img, "png", baos);
+            return baos.toByteArray();
+        }
+    }
+
+    /** 100x100 ARGB: opaque green circle (rows/cols 25..74), transparent elsewhere. */
+    private static byte[] circlePng() throws IOException {
+        BufferedImage img = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 100; y++) {
+            for (int x = 0; x < 100; x++) {
+                boolean inside = (x >= 25 && x < 75 && y >= 25 && y < 75);
+                img.setRGB(x, y, inside ? 0xFF00FF00 : 0x00000000);
+            }
+        }
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+            ImageIO.write(img, "png", baos);
+            return baos.toByteArray();
         }
     }
 
