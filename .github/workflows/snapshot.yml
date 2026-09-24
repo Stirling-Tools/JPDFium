@@ -230,6 +230,16 @@ jobs:
           # /usr/local/share/man pre-exists root-owned on macos-14 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
+          # The runner image leaves /usr/local/bin/python* symlinks pointing at
+          # /Library/Frameworks; python@3.14 (pulled in below) refuses to link
+          # over them and aborts the whole install. Drop the stale links, then
+          # pre-install and force-link python so later brews never trip on it.
+          for f in /usr/local/bin/idle3* /usr/local/bin/pip3* /usr/local/bin/pydoc3* /usr/local/bin/python3*; do
+            [ -L "$f" ] || continue
+            case "$(readlink "$f")" in /Library/Frameworks/*) rm -f "$f";; esac
+          done
+          arch -x86_64 /usr/local/bin/brew install python@3.14 || true
+          arch -x86_64 /usr/local/bin/brew link --overwrite python@3.14 || true
           arch -x86_64 /usr/local/bin/brew install \
             pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
           # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
