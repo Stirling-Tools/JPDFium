@@ -14,15 +14,19 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /**
@@ -45,27 +49,53 @@ final class NativeCache {
     private static final int KEY_LENGTH = 32;
     private static final String VERIFIED_MARKER = ".verified";
     private static final String STAGING_PREFIX = ".staging-";
+    private static final String READER_LOCK = ".reader";
+    private static final String FALLBACK_LOCK = ".lock";
+    private static final Set<PosixFilePermission> OWNER_DIR_PERMS =
+            PosixFilePermissions.fromString("rwx------");
+    private static final Set<PosixFilePermission> OWNER_FILE_PERMS =
+            PosixFilePermissions.fromString("rw-------");
+
+    // Locks must outlive the load: PDFium resolves symbols lazily, so the
+    // entry must stay on disk for the whole JVM lifetime.
+    private static final List<AutoCloseable> RETAINED = new ArrayList<>();
+    private static final Set<Path> RETAINED_ENTRIES = ConcurrentHashMap.newKeySet();
 
     private NativeCache() {}
+
+    /** A resource does not match its published checksum: never load it. */
+    static final class IntegrityException extends IOException {
+        private static final long serialVersionUID = 1L;
+
+        IntegrityException(String message) {
+            super(message);
+        }
+    }
 
     /** Opens a classpath resource by file name, or returns null when absent. */
     interface Resources {
         InputStream open(String name) throws IOException;
     }
 
-    /** Extracted dir for System.load, or null when the cache cannot be used. */
+    /**
+     * Extracted dir for System.load, or null when the cache cannot be used.
+     * Integrity failures propagate: a corrupt artifact must not load unverified.
+     */
     static Path prepare(String platform, List<String> names, Map<String, String> hashes,
-                        Resources resources) {
+                        Resources resources) throws IOException {
         if (names.isEmpty()) return null;
         for (String name : names) {
             if (!hashes.containsKey(name)) return null;
         }
+        Path root = resolveCacheRoot();
+        if (root == null) return null;
         try {
-            Path platformDir = resolveCacheRoot().resolve(platform);
+            Path platformDir = root.resolve(platform);
             Files.createDirectories(platformDir);
-            restrictToOwner(platformDir, true);
-            boolean verifyFull = "full".equalsIgnoreCase(System.getProperty(VERIFY_PROPERTY));
-            return prepareIn(platformDir, names, hashes, cacheKey(hashes), resources, verifyFull);
+            requireOwnerOnly(platformDir, true);
+            return prepareIn(platformDir, names, hashes, cacheKey(hashes), resources, verifyFull());
+        } catch (IntegrityException e) {
+            throw e;
         } catch (IOException | RuntimeException _) {
             // Cache is an optimization: failures must not stop the native load.
             return null;
@@ -74,26 +104,37 @@ final class NativeCache {
 
     static Path prepareIn(Path platformDir, List<String> names, Map<String, String> hashes,
                           String key, Resources resources, boolean verifyFull) throws IOException {
+        requireOwnerOnly(platformDir, true);
         Path finalDir = platformDir.resolve(key);
-        if (isValidEntry(finalDir, names, hashes, key, verifyFull)) return finalDir;
+        if (isValidEntry(finalDir, names, hashes, key, verifyFull)) {
+            retainReaderLock(finalDir);
+            return finalDir;
+        }
 
-        Path lockFile = platformDir.resolve(".lock-" + key);
-        try (FileChannel channel = FileChannel.open(lockFile,
+        Path keyLock = platformDir.resolve(".lock-" + key);
+        try (FileChannel channel = FileChannel.open(keyLock,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock _ = channel.lock()) {
-            if (isValidEntry(finalDir, names, hashes, key, verifyFull)) return finalDir;
-            // A corrupt entry is recoverable only when no process has it mapped.
+            if (isValidEntry(finalDir, names, hashes, key, verifyFull)) {
+                retainReaderLock(finalDir);
+                return finalDir;
+            }
+            if (!tryExclusive(finalDir.resolve(READER_LOCK))) {
+                throw new IOException("cache entry is being loaded by another JVM");
+            }
             deleteRecursively(finalDir);
             Path staging = Files.createTempDirectory(platformDir, STAGING_PREFIX);
             try {
+                requireOwnerOnly(staging, true);
                 for (String name : names) {
                     Path target = staging.resolve(name);
                     String actual = copyAndHash(resources, name, target);
                     if (!actual.equalsIgnoreCase(hashes.get(name))) {
-                        throw new IOException("checksum mismatch for " + name);
+                        throw new IntegrityException("checksum mismatch for " + name);
                     }
-                    restrictToOwner(target, false);
+                    requireOwnerOnly(target, false);
                 }
+                createOwnerOnlyFile(staging.resolve(VERIFIED_MARKER));
                 Files.writeString(staging.resolve(VERIFIED_MARKER), key);
                 publish(staging, finalDir);
             } finally {
@@ -103,8 +144,17 @@ final class NativeCache {
         if (!isValidEntry(finalDir, names, hashes, key, verifyFull)) {
             throw new IOException("cache entry invalid after publish");
         }
+        retainReaderLock(finalDir);
         removeObsoleteEntries(platformDir, key, OBSOLETE_MIN_AGE_MILLIS);
         return finalDir;
+    }
+
+    /** Verifies while copying; a mismatch is fatal, never silently loaded. */
+    static void copyVerified(InputStream in, Path target, String expected) throws IOException {
+        String actual = copyAndHash(in, target);
+        if (!actual.equalsIgnoreCase(expected)) {
+            throw new IntegrityException("checksum mismatch for " + target.getFileName());
+        }
     }
 
     private static void publish(Path staging, Path finalDir) throws IOException {
@@ -136,6 +186,11 @@ final class NativeCache {
         }
     }
 
+    /** Full hashes by default; {@code -Djpdfium.native.verify=marker} opts out. */
+    static boolean verifyFull() {
+        return !"marker".equalsIgnoreCase(System.getProperty(VERIFY_PROPERTY));
+    }
+
     static String cacheKey(Map<String, String> hashes) {
         StringBuilder builder = new StringBuilder();
         for (Map.Entry<String, String> entry : new TreeMap<>(hashes).entrySet()) {
@@ -158,8 +213,9 @@ final class NativeCache {
         return result;
     }
 
+    /** Null when no user-private cache location exists; temp extraction is used instead. */
     static Path resolveCacheRoot(String override, String osName, String userHome,
-                                 String localAppData, String xdgCacheHome, Path tmpDir) {
+                                 String localAppData, String xdgCacheHome) {
         if (override != null && !override.isBlank()) return Path.of(override);
         String os = osName == null ? "" : osName.toLowerCase();
         if (os.contains("win")) {
@@ -181,7 +237,7 @@ final class NativeCache {
                 return Path.of(userHome, ".cache", "jpdfium", "native");
             }
         }
-        return tmpDir.resolve("jpdfium-cache");
+        return null;
     }
 
     static Path resolveCacheRoot() {
@@ -190,11 +246,10 @@ final class NativeCache {
                 System.getProperty("os.name"),
                 System.getProperty("user.home"),
                 System.getenv("LOCALAPPDATA"),
-                System.getenv("XDG_CACHE_HOME"),
-                Path.of(System.getProperty("java.io.tmpdir")));
+                System.getenv("XDG_CACHE_HOME"));
     }
 
-    /** Removes old content hashes for this platform, best-effort. */
+    /** Removes old content hashes, skipping entries another JVM still has open. */
     static void removeObsoleteEntries(Path platformDir, String currentKey, long minAgeMillis) {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(platformDir)) {
             for (Path entry : entries) {
@@ -203,6 +258,7 @@ final class NativeCache {
                         || name.startsWith(".")) {
                     continue;
                 }
+                if (!tryExclusive(entry.resolve(READER_LOCK))) continue;
                 if (isOlderThan(entry, minAgeMillis)) deleteRecursively(entry);
             }
         } catch (IOException _) {
@@ -211,13 +267,36 @@ final class NativeCache {
     }
 
     /**
-     * Deletes per-JVM extraction dirs left by older versions or fallback runs.
-     * Age-gated: a younger dir may belong to a JVM that is still starting.
+     * Creates the per-JVM fallback dir and holds its lock, so a sweep can tell
+     * a running JVM's dir from a leaked one.
+     */
+    static Path createFallbackDir() throws IOException {
+        Path dir = Files.createTempDirectory("jpdfium-");
+        try {
+            Path lockFile = dir.resolve(FALLBACK_LOCK);
+            createOwnerOnlyFile(lockFile);
+            FileChannel channel =
+                    FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            FileLock lock = channel.lock();
+            RETAINED.add(channel);
+            RETAINED.add(lock);
+            dir.toFile().deleteOnExit();
+            return dir;
+        } catch (IOException | RuntimeException e) {
+            deleteRecursively(dir);
+            throw e;
+        }
+    }
+
+    /**
+     * Deletes per-JVM extraction dirs left by older versions or crashed runs.
+     * Age-gated, and locked dirs belong to a running JVM.
      */
     static void sweepTempDirs(Path tmpDir, long minAgeMillis, Path exclude) {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(tmpDir, "jpdfium-*")) {
             for (Path entry : entries) {
                 if (!Files.isDirectory(entry) || entry.equals(exclude)) continue;
+                if (!tryExclusive(entry.resolve(FALLBACK_LOCK))) continue;
                 if (isOlderThan(entry, minAgeMillis)) deleteRecursively(entry);
             }
         } catch (IOException | RuntimeException _) {
@@ -254,20 +333,95 @@ final class NativeCache {
 
     private static String copyAndHash(Resources resources, String name, Path target)
             throws IOException {
-        MessageDigest digest = sha256();
         try (InputStream in = resources.open(name)) {
             if (in == null) throw new IOException("missing resource " + name);
-            try (var out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW,
-                    StandardOpenOption.WRITE)) {
-                byte[] buffer = new byte[8192];
-                int read;
-                while ((read = in.read(buffer)) >= 0) {
-                    digest.update(buffer, 0, read);
-                    out.write(buffer, 0, read);
-                }
+            return copyAndHash(in, target);
+        }
+    }
+
+    private static String copyAndHash(InputStream in, Path target) throws IOException {
+        MessageDigest digest = sha256();
+        try (var out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) >= 0) {
+                digest.update(buffer, 0, read);
+                out.write(buffer, 0, read);
             }
         }
         return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void retainReaderLock(Path dir) throws IOException {
+        Path key = dir.toAbsolutePath().normalize();
+        if (!RETAINED_ENTRIES.add(key)) return;
+        try {
+            Path lockFile = dir.resolve(READER_LOCK);
+            createOwnerOnlyFile(lockFile);
+            FileChannel channel =
+                    FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
+            try {
+                FileLock lock = channel.lock(0L, Long.MAX_VALUE, true);
+                RETAINED.add(channel);
+                RETAINED.add(lock);
+            } catch (IOException | RuntimeException e) {
+                channel.close();
+                throw e;
+            }
+        } catch (IOException | RuntimeException e) {
+            RETAINED_ENTRIES.remove(key);
+            throw new IOException("cannot lock cache entry", e);
+        }
+    }
+
+    /** True when the lock is free; a held shared lock means a live reader. */
+    private static boolean tryExclusive(Path lockFile) {
+        if (!Files.exists(lockFile)) return true;
+        try (FileChannel channel =
+                     FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
+             FileLock lock = channel.tryLock()) {
+            return lock != null;
+        } catch (IOException | RuntimeException _) {
+            return false;
+        }
+    }
+
+    private static void createOwnerOnlyFile(Path file) throws IOException {
+        try {
+            Files.createFile(file, PosixFilePermissions.asFileAttribute(OWNER_FILE_PERMS));
+        } catch (FileAlreadyExistsException _) {
+            // Another JVM created it first.
+        } catch (UnsupportedOperationException _) {
+            try {
+                Files.createFile(file);
+            } catch (FileAlreadyExistsException _) {
+                // Another JVM created it first.
+            }
+        }
+    }
+
+    /** Fail-closed: a cache path readable or writable by others is not used. */
+    private static void requireOwnerOnly(Path path, boolean directory) throws IOException {
+        try {
+            Files.setPosixFilePermissions(path, directory ? OWNER_DIR_PERMS : OWNER_FILE_PERMS);
+        } catch (UnsupportedOperationException _) {
+            // Windows ACLs under LOCALAPPDATA are already user-scoped.
+        }
+        if (!isPrivate(path)) throw new IOException("cache path is not private: " + path);
+    }
+
+    static boolean isPrivate(Path path) {
+        try {
+            Set<PosixFilePermission> perms = Files.getPosixFilePermissions(path);
+            return perms.stream()
+                    .noneMatch(p -> p.name().startsWith("GROUP_") || p.name().startsWith("OTHERS_"));
+        } catch (UnsupportedOperationException _) {
+            // Windows: LOCALAPPDATA ACLs are user-scoped and hashes are checked.
+            return true;
+        } catch (IOException _) {
+            return false;
+        }
     }
 
     private static String sha256Hex(byte[] bytes) {
@@ -288,15 +442,6 @@ final class NativeCache {
             return System.currentTimeMillis() - time.toMillis() > ageMillis;
         } catch (IOException _) {
             return false;
-        }
-    }
-
-    private static void restrictToOwner(Path path, boolean directory) {
-        try {
-            Files.setPosixFilePermissions(path,
-                    PosixFilePermissions.fromString(directory ? "rwx------" : "rw-------"));
-        } catch (UnsupportedOperationException | IOException _) {
-            // Windows ACLs under LOCALAPPDATA are already user-scoped.
         }
     }
 }

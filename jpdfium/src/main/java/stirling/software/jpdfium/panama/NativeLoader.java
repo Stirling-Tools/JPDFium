@@ -60,13 +60,20 @@ public final class NativeLoader {
         try {
             List<String> libs = readLibraryIndex(indexResource);
             Map<String, String> checksums = readChecksumIndex(resourceBase + "native-libs.sha256");
+            if (!checksums.isEmpty()) {
+                for (String lib : libs) {
+                    if (!checksums.containsKey(lib)) {
+                        throw new NativeLoadException(
+                                "incomplete native checksum manifest for " + platform);
+                    }
+                }
+            }
             if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.SWEEP_PROPERTY))) {
                 NativeCache.sweepTempDirs(Path.of(System.getProperty("java.io.tmpdir")),
-                        NativeCache.SWEEP_MIN_AGE_MILLIS, null);
+                        NativeCache.SWEEP_MIN_AGE_MILLIS, NativeCache.resolveCacheRoot());
             }
 
-            // The verified per-user cache avoids the Windows per-JVM temp leak;
-            // any cache miss or failure falls back to a temp extraction.
+            // The verified per-user cache avoids the Windows per-JVM temp leak.
             Path tmpDir = null;
             if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.CACHE_ENABLED_PROPERTY))
                     && !libs.isEmpty() && !checksums.isEmpty()) {
@@ -74,18 +81,17 @@ public final class NativeLoader {
                         name -> NativeLoader.class.getResourceAsStream(resourceBase + name));
             }
             if (tmpDir == null) {
-                tmpDir = Files.createTempDirectory("jpdfium-");
-                tmpDir.toFile().deleteOnExit();
+                tmpDir = NativeCache.createFallbackDir();
 
                 // Extract all libraries from the manifest to tmpDir so the dynamic
                 // linker can resolve NEEDED dependencies via RUNPATH=$ORIGIN
                 for (String lib : libs) {
-                    extractToDir(resourceBase + lib, tmpDir);
+                    extractToDir(resourceBase + lib, tmpDir, checksums.get(lib));
                 }
 
                 // If no manifest was found, fall back to extracting just libpdfium
                 if (libs.isEmpty()) {
-                    extractToDir(resourceBase + pdfiumName, tmpDir);
+                    extractToDir(resourceBase + pdfiumName, tmpDir, null);
                 }
             }
 
@@ -157,11 +163,16 @@ public final class NativeLoader {
         }
     }
 
-    private static void extractToDir(String resource, Path dir) throws IOException {
+    private static void extractToDir(String resource, Path dir, String expectedHash)
+            throws IOException {
         try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
             if (is == null) return;
             Path target = dir.resolve(resource.substring(resource.lastIndexOf('/') + 1));
-            Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);
+            if (expectedHash == null) {
+                Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);
+            } else {
+                NativeCache.copyVerified(is, target, expectedHash);
+            }
             target.toFile().deleteOnExit();
         }
     }

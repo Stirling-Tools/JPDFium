@@ -3,14 +3,18 @@ package stirling.software.jpdfium.panama;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -86,19 +90,37 @@ class NativeCacheTest {
 
     @Test
     void resolveCacheRootUsesPlatformDefaults() {
-        Path tmp = Path.of("/tmp/x");
         assertEquals(Path.of("/custom"), NativeCache.resolveCacheRoot(
-                "/custom", "Windows 11", "C:/Users/u", "C:/Users/u/AppData/Local", null, tmp));
+                "/custom", "Windows 11", "C:/Users/u", "C:/Users/u/AppData/Local", null));
         assertEquals(Path.of("C:/Users/u/AppData/Local/jpdfium/native"), NativeCache.resolveCacheRoot(
-                null, "Windows 11", "C:/Users/u", "C:/Users/u/AppData/Local", null, tmp));
+                null, "Windows 11", "C:/Users/u", "C:/Users/u/AppData/Local", null));
         assertEquals(Path.of("/Users/u/Library/Caches/jpdfium/native"), NativeCache.resolveCacheRoot(
-                null, "Mac OS X", "/Users/u", null, null, tmp));
+                null, "Mac OS X", "/Users/u", null, null));
         assertEquals(Path.of("/xdg/jpdfium/native"), NativeCache.resolveCacheRoot(
-                null, "Linux", "/home/u", null, "/xdg", tmp));
+                null, "Linux", "/home/u", null, "/xdg"));
         assertEquals(Path.of("/home/u/.cache/jpdfium/native"), NativeCache.resolveCacheRoot(
-                null, "Linux", "/home/u", null, null, tmp));
-        assertEquals(tmp.resolve("jpdfium-cache"), NativeCache.resolveCacheRoot(
-                null, "Linux", "", null, null, tmp));
+                null, "Linux", "/home/u", null, null));
+        assertNull(NativeCache.resolveCacheRoot(null, "Linux", "", null, null),
+                "no user cache means temp extraction, never a shared temp cache");
+    }
+
+    @Test
+    void verifyDefaultsToFull() {
+        String original = System.getProperty(NativeCache.VERIFY_PROPERTY);
+        try {
+            System.clearProperty(NativeCache.VERIFY_PROPERTY);
+            assertTrue(NativeCache.verifyFull(), "cache hits are verified unless explicitly opted out");
+            System.setProperty(NativeCache.VERIFY_PROPERTY, "marker");
+            assertFalse(NativeCache.verifyFull());
+            System.setProperty(NativeCache.VERIFY_PROPERTY, "full");
+            assertTrue(NativeCache.verifyFull());
+        } finally {
+            if (original == null) {
+                System.clearProperty(NativeCache.VERIFY_PROPERTY);
+            } else {
+                System.setProperty(NativeCache.VERIFY_PROPERTY, original);
+            }
+        }
     }
 
     @Test
@@ -113,7 +135,7 @@ class NativeCacheTest {
             return resources(files).open(name);
         };
 
-        Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes, key, counting, false);
+        Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes, key, counting, true);
         assertNotNull(entry);
         assertEquals(2, opens.get(), "every listed file is read once");
         assertEquals("pdfium-bytes", Files.readString(entry.resolve("libpdfium.dylib")));
@@ -122,7 +144,7 @@ class NativeCacheTest {
         NativeCache.Resources mustNotRead = name -> {
             throw new IOException("cache hit must not read resources again");
         };
-        assertEquals(entry, NativeCache.prepareIn(platformDir, NAMES, hashes, key, mustNotRead, false));
+        assertEquals(entry, NativeCache.prepareIn(platformDir, NAMES, hashes, key, mustNotRead, true));
     }
 
     @Test
@@ -133,8 +155,8 @@ class NativeCacheTest {
         wrong.put("libpdfium.dylib", sha256("different".getBytes(StandardCharsets.UTF_8)));
         String key = NativeCache.cacheKey(wrong);
 
-        assertThrows(IOException.class, () -> NativeCache.prepareIn(
-                platformDir, NAMES, wrong, key, resources(files), false));
+        assertThrows(NativeCache.IntegrityException.class, () -> NativeCache.prepareIn(
+                platformDir, NAMES, wrong, key, resources(files), true));
         assertFalse(Files.exists(platformDir.resolve(key)), "failed extraction must not publish");
     }
 
@@ -148,10 +170,26 @@ class NativeCacheTest {
         Files.writeString(entry.resolve(".verified"), "bogus");
         Files.writeString(entry.resolve("libpdfium.dylib"), "corrupt");
 
-        Path prepared = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), false);
+        Path prepared = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), true);
         assertEquals(entry, prepared);
         assertTrue(NativeCache.isValidEntry(entry, NAMES, hashes, key, true));
         assertEquals("pdfium-bytes", Files.readString(entry.resolve("libpdfium.dylib")));
+    }
+
+    @Test
+    void tamperedEntryIsReExtracted(@TempDir Path tmp) throws Exception {
+        Path platformDir = Files.createDirectories(tmp.resolve("p"));
+        Map<String, byte[]> files = files();
+        Map<String, String> hashes = hashes(files);
+        String key = NativeCache.cacheKey(hashes);
+        Path entry = Files.createDirectories(platformDir.resolve(key));
+        Files.writeString(entry.resolve(".verified"), key);
+        Files.writeString(entry.resolve("libpdfium.dylib"), "tampered");
+        Files.writeString(entry.resolve("libjpdfium.dylib"), "bridge-bytes");
+
+        Path prepared = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), true);
+
+        assertEquals("pdfium-bytes", Files.readString(prepared.resolve("libpdfium.dylib")));
     }
 
     @Test
@@ -160,12 +198,27 @@ class NativeCacheTest {
         Map<String, byte[]> files = files();
         Map<String, String> hashes = hashes(files);
         String key = NativeCache.cacheKey(hashes);
-        Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), false);
+        Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), true);
 
         assertTrue(NativeCache.isValidEntry(entry, NAMES, hashes, key, true));
         Files.writeString(entry.resolve("libpdfium.dylib"), "tampered");
         assertFalse(NativeCache.isValidEntry(entry, NAMES, hashes, key, true));
         assertTrue(NativeCache.isValidEntry(entry, NAMES, hashes, key, false));
+    }
+
+    @Test
+    void readerLockPreventsObsoleteCleanup(@TempDir Path tmp) throws Exception {
+        Path platformDir = Files.createDirectories(tmp.resolve("p"));
+        Map<String, byte[]> files = files();
+        Map<String, String> hashes = hashes(files);
+        String key = NativeCache.cacheKey(hashes);
+        Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes, key, resources(files), true);
+        Files.setLastModifiedTime(entry, FileTime.fromMillis(
+                System.currentTimeMillis() - 8L * 24L * 60L * 60L * 1000L));
+
+        NativeCache.removeObsoleteEntries(platformDir, "other-key", NativeCache.OBSOLETE_MIN_AGE_MILLIS);
+
+        assertTrue(Files.exists(entry), "an entry held open by a live JVM must not be removed");
     }
 
     @Test
@@ -180,6 +233,25 @@ class NativeCacheTest {
 
         assertFalse(Files.exists(stale), "stale extraction dir must be swept");
         assertTrue(Files.exists(fresh), "a starting JVM may still own its fresh dir");
+    }
+
+    @Test
+    void sweepSkipsLockedFallbackDir(@TempDir Path tmp) throws Exception {
+        Path live = Files.createDirectories(tmp.resolve("jpdfium-live"));
+        Path lockFile = Files.writeString(live.resolve(".lock"), "");
+        Path stale = Files.createDirectories(tmp.resolve("jpdfium-stale"));
+        long old = System.currentTimeMillis() - 2L * 60L * 60L * 1000L;
+        Files.setLastModifiedTime(live, FileTime.fromMillis(old));
+        Files.setLastModifiedTime(stale, FileTime.fromMillis(old));
+
+        try (FileChannel channel = FileChannel.open(lockFile,
+                StandardOpenOption.READ, StandardOpenOption.WRITE);
+             FileLock _ = channel.lock()) {
+            NativeCache.sweepTempDirs(tmp, NativeCache.SWEEP_MIN_AGE_MILLIS, null);
+        }
+
+        assertTrue(Files.exists(live), "a running JVM's fallback dir must survive the sweep");
+        assertFalse(Files.exists(stale), "an unlocked stale dir must be swept");
     }
 
     @Test
@@ -202,7 +274,7 @@ class NativeCacheTest {
         Map<String, byte[]> files = files();
         Map<String, String> hashes = hashes(files);
         Path entry = NativeCache.prepareIn(platformDir, NAMES, hashes,
-                NativeCache.cacheKey(hashes), resources(files), false);
+                NativeCache.cacheKey(hashes), resources(files), true);
         try {
             Set<PosixFilePermission> dirPerms = Files.getPosixFilePermissions(entry);
             assertEquals(PosixFilePermissions.fromString("rwx------"), dirPerms);
@@ -212,5 +284,26 @@ class NativeCacheTest {
         } catch (UnsupportedOperationException _) {
             // Windows uses LOCALAPPDATA ACLs instead of POSIX permissions.
         }
+    }
+
+    @Test
+    void isPrivateRejectsGroupOrOthersAccess(@TempDir Path tmp) throws Exception {
+        Path dir = Files.createDirectories(tmp.resolve("shared"));
+        try {
+            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwxrwxrwx"));
+            assertFalse(NativeCache.isPrivate(dir));
+            Files.setPosixFilePermissions(dir, PosixFilePermissions.fromString("rwx------"));
+            assertTrue(NativeCache.isPrivate(dir));
+        } catch (UnsupportedOperationException _) {
+            // Windows has no POSIX permissions.
+        }
+    }
+
+    @Test
+    void copyVerifiedRejectsMismatch(@TempDir Path tmp) {
+        Path target = tmp.resolve("lib.dll");
+        assertThrows(NativeCache.IntegrityException.class, () -> NativeCache.copyVerified(
+                new ByteArrayInputStream("tampered".getBytes(StandardCharsets.UTF_8)),
+                target, sha256("expected".getBytes(StandardCharsets.UTF_8))));
     }
 }

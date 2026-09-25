@@ -30,8 +30,9 @@ Natives are extracted once per content revision into a per-user cache, then reus
 across concurrent JVMs; when the cache is not writable (containers, read-only home) the loader falls back to
 `java.io.tmpdir`. Stale per-JVM temp dirs and obsolete cache entries are swept best-effort.
 
-`-Djpdfium.native.cacheDir=<dir>` overrides the root, `-Djpdfium.native.cache=false` forces temp extraction,
-`-Djpdfium.native.verify=full` re-hashes every load, `-Djpdfium.native.sweep=false` disables the sweep.
+Every load re-checks the SHA-256 of each cached file; `-Djpdfium.native.verify=marker` skips that check for
+speed. `-Djpdfium.native.cacheDir=<dir>` overrides the root, `-Djpdfium.native.cache=false` forces temp
+extraction, and `-Djpdfium.native.sweep=false` disables the stale-dir sweep.
 
 ## Project Structure
 
