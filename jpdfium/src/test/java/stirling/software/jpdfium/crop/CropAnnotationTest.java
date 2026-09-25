@@ -2,6 +2,7 @@ package stirling.software.jpdfium.crop;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
 import org.junit.jupiter.api.Test;
@@ -81,6 +82,20 @@ class CropAnnotationTest {
     }
 
     @Test
+    void straddlingAppearanceAnnotationKeepsRectAndRendersUndistorted() throws Exception {
+        byte[] input = CropTestPdfGenerator.squareAnnotWithAppearancePdf();
+        var inputRect = squareRect(input);
+        byte[] output = crop(input, LEFT_HALF);
+        var outputRect = squareRect(output);
+        assertNotNull(outputRect, "straddling square must survive");
+        assertEquals(inputRect.getLowerLeftX(), outputRect.getLowerLeftX(), 0.01f,
+                "appearance-bearing annotation must not be rescaled");
+        assertEquals(inputRect.getWidth(), outputRect.getWidth(), 0.01f,
+                "appearance-bearing annotation must not be rescaled");
+        assertInsideMatchesClipOnlyCrop(input, output, LEFT_HALF);
+    }
+
+    @Test
     void signatureWidgetOutsideCropIsRemovedAndDocumentStaysValid() throws Exception {
         Path out = produce(CropTestPdfGenerator.signatureWidgetPdf(), LEFT_HALF);
         try (PDDocument doc = Loader.loadPDF(out.toFile())) {
@@ -126,6 +141,61 @@ class CropAnnotationTest {
             doc.save(out);
         }
         return out;
+    }
+
+    private static org.apache.pdfbox.pdmodel.common.PDRectangle squareRect(byte[] pdf)
+            throws IOException {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (PDAnnotation a : doc.getPage(0).getAnnotations()) {
+                if (a instanceof org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquare) {
+                    return a.getRectangle();
+                }
+            }
+            return null;
+        }
+    }
+
+    /** Pixels inside the crop must match a clip-only crop (no appearance rescale). */
+    private static void assertInsideMatchesClipOnlyCrop(byte[] input, byte[] output, Rect crop)
+            throws Exception {
+        byte[] reference;
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            PDPage page = doc.getPage(0);
+            var box = new org.apache.pdfbox.pdmodel.common.PDRectangle(
+                    crop.x(), crop.y(), crop.width(), crop.height());
+            page.setMediaBox(box);
+            page.setCropBox(box);
+            try (var baos = new java.io.ByteArrayOutputStream()) {
+                doc.save(baos);
+                reference = baos.toByteArray();
+            }
+        }
+        var ref = render(reference);
+        var act = render(output);
+        assertEquals(ref.getWidth(), act.getWidth());
+        assertEquals(ref.getHeight(), act.getHeight());
+        int border = 6;
+        long diff = 0;
+        long count = 0;
+        for (int y = border; y < ref.getHeight() - border; y++) {
+            for (int x = border; x < ref.getWidth() - border; x++) {
+                int a = ref.getRGB(x, y);
+                int b = act.getRGB(x, y);
+                diff += Math.abs(((a >> 16) & 0xFF) - ((b >> 16) & 0xFF))
+                        + Math.abs(((a >> 8) & 0xFF) - ((b >> 8) & 0xFF))
+                        + Math.abs((a & 0xFF) - (b & 0xFF));
+                count++;
+            }
+        }
+        double mean = (double) diff / Math.max(1, count);
+        assertTrue(mean < 3.0, "annotation crop changed visible pixels (mean diff " + mean + ")");
+    }
+
+    private static java.awt.image.BufferedImage render(byte[] pdf) {
+        try (PdfDocument doc = PdfDocument.open(pdf);
+             stirling.software.jpdfium.PdfPage page = doc.page(0)) {
+            return page.renderAt(96).toBufferedImage();
+        }
     }
 
     private static void assertRect(PDAnnotation annot, float x, float y, float w, float h,

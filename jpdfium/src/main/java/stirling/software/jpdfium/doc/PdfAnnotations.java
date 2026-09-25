@@ -193,8 +193,11 @@ public final class PdfAnnotations {
 
     /**
      * Crop-scope the page's annotations to {@code crop}: annotations outside
-     * the rectangle are removed, straddling ones have their {@code /Rect}
-     * clipped to the intersection, fully-inside ones are untouched.
+     * the rectangle are removed, fully-inside ones are untouched. Straddling
+     * annotations without an appearance stream (links, popups) have their
+     * {@code /Rect} clipped; ones with an appearance keep {@code /Rect} so the
+     * viewer is not forced to rescale the appearance form (the page boxes clip
+     * them visually).
      *
      * <p>One confined arena for the whole pass, no per-annotation records.
      *
@@ -208,6 +211,7 @@ public final class PdfAnnotations {
         int removed = 0;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
+            MemorySegment apKey = arena.allocateFrom("AP");
             for (int i = n - 1; i >= 0; i--) {
                 MemorySegment annot;
                 try {
@@ -215,11 +219,11 @@ public final class PdfAnnotations {
                 } catch (Throwable t) { throw new JPDFiumException(t); }
                 if (annot.equals(MemorySegment.NULL)) continue;
                 try {
-                    int ok;
+                    int rectOk;
                     try {
-                        ok = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
+                        rectOk = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
                     } catch (Throwable t) { throw new JPDFiumException(t); }
-                    if (ok == 0) continue;
+                    if (rectOk == 0) continue;
                     float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
                     float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
                     float right = rectSeg.get(ValueLayout.JAVA_FLOAT, 8);
@@ -229,18 +233,23 @@ public final class PdfAnnotations {
                     float cx1 = Math.min(right, crop.x() + crop.width());
                     float cy1 = Math.min(top, crop.y() + crop.height());
                     if (cx1 <= cx0 || cy1 <= cy0) {
+                        int removedOk;
                         try {
-                            int _ = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(page, i);
+                            removedOk = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(page, i);
                         } catch (Throwable t) { throw new JPDFiumException(t); }
+                        if (removedOk == 0) throw new JPDFiumException("FPDFPage_RemoveAnnot failed");
                         removed++;
-                    } else if (cx0 != left || cy0 != bottom || cx1 != right || cy1 != top) {
+                    } else if ((cx0 != left || cy0 != bottom || cx1 != right || cy1 != top)
+                            && !hasAppearance(annot, apKey)) {
                         rectSeg.set(ValueLayout.JAVA_FLOAT, 0, cx0);
                         rectSeg.set(ValueLayout.JAVA_FLOAT, 4, cy1);
                         rectSeg.set(ValueLayout.JAVA_FLOAT, 8, cx1);
                         rectSeg.set(ValueLayout.JAVA_FLOAT, 12, cy0);
+                        int rectSetOk;
                         try {
-                            int _ = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
+                            rectSetOk = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
                         } catch (Throwable t) { throw new JPDFiumException(t); }
+                        if (rectSetOk == 0) throw new JPDFiumException("FPDFAnnot_SetRect failed");
                     }
                 } finally {
                     closeAnnot(annot);
@@ -248,6 +257,13 @@ public final class PdfAnnotations {
             }
         }
         return removed;
+    }
+
+    private static boolean hasAppearance(MemorySegment annot, MemorySegment apKey) {
+        if (AnnotationBindings.FPDFAnnot_HasKey == null) return false;
+        try {
+            return (int) AnnotationBindings.FPDFAnnot_HasKey.invokeExact(annot, apKey) != 0;
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     private static Annotation readAnnotation(MemorySegment annot, int index) {

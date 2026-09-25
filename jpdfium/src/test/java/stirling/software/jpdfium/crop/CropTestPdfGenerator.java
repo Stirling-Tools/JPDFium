@@ -396,6 +396,24 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /** Square annotation at (280,400,60,60) with a generated appearance stream. */
+    public static byte[] squareAnnotWithAppearancePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "ANCHOR", 100, 700);
+            }
+            PDAnnotationSquare square = new PDAnnotationSquare();
+            square.setRectangle(new PDRectangle(280, 400, 60, 60));
+            square.setColor(new PDColor(new float[] {1, 0, 0}, PDDeviceRGB.INSTANCE));
+            page.getAnnotations().add(square);
+            square.constructAppearances();
+            return save(doc);
+        }
+    }
+
     /** Signature field with its widget at (400,600,150,50). */
     public static byte[] signatureWidgetPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {
