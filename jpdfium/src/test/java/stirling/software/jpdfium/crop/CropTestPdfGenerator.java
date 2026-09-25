@@ -6,7 +6,10 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.interactive.action.PDActionURI;
+import org.apache.pdfbox.pdmodel.graphics.color.PDColor;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquare;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationText;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
@@ -271,6 +274,68 @@ public final class CropTestPdfGenerator {
             PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "scan");
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.drawImage(img, 0, 0, 612, 792);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * Form with the image painted FIRST and an opaque magenta rect after it.
+     * Promotion must place the image before the form so the rect stays on top.
+     */
+    public static byte[] formImageThenOverlayPdf() throws IOException {
+        return formImageWithOverlayPdf(true);
+    }
+
+    /** Form with an opaque magenta rect painted FIRST and the image after it. */
+    public static byte[] formOverlayThenImagePdf() throws IOException {
+        return formImageWithOverlayPdf(false);
+    }
+
+    /** Form with a rect, the image, then another rect: promotion is ambiguous. */
+    public static byte[] formSandwichedImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "sand");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write(("q 1 0 1 rg 150 150 100 100 re f Q "
+                          + "q 200 0 0 200 100 100 cm /ImF Do Q "
+                          + "q 0 1 0 rg 200 200 60 40 re f Q")
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
+    private static byte[] formImageWithOverlayPdf(boolean imageFirst) throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "ov");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            String imageOp = "q 200 0 0 200 100 100 cm /ImF Do Q ";
+            String rectOp = "q 1 0 1 rg 150 200 100 50 re f Q ";
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write((imageFirst ? imageOp + rectOp : rectOp + imageOp)
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
             }
             return save(doc);
         }

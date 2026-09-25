@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -185,6 +186,28 @@ class CropImageContentTest {
         BufferedImage page = render(output);
         assertEquals(0xFF0000, pixelAt(page, output, 150, 220) & 0xFFFFFF,
                 "nested image visible half must render at its transformed position");
+    }
+
+    @Test
+    void formImageFirstIsPromotedBelowTheFormOverlay() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.formImageThenOverlayPdf(), KEEP_TOP);
+        BufferedImage page = render(output);
+        assertEquals(0xFF00FF, pixelAt(page, output, 200, 220) & 0xFFFFFF,
+                "later form content must stay above the promoted image");
+    }
+
+    @Test
+    void formImageLastIsPromotedAboveEarlierFormContent() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.formOverlayThenImagePdf(), KEEP_TOP);
+        BufferedImage page = render(output);
+        assertEquals(0xFF0000, pixelAt(page, output, 200, 220) & 0xFFFFFF,
+                "the image painted last must stay above earlier form content");
+    }
+
+    @Test
+    void sandwichedFormImageFailsLoudlyInsteadOfHidingSiblings() throws Exception {
+        assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
+                () -> crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP));
     }
 
     // fast paths
