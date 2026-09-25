@@ -335,7 +335,15 @@ bundle_windows() {
 # Cross legs have shipped a wrong-arch dependency before (darwin-x64 staged an
 # arm64 libsharpyuv), so every staged binary must match the target arch.
 assert_bundle_arch() {
-    local unix_arch="$1" win_arch="$2" failed=0 f archs machine
+    local unix_arch win_arch failed=0 f archs machine
+    case "$PLATFORM" in
+        *-arm64) unix_arch=arm64; win_arch=ARM64 ;;
+        *-x64)   unix_arch=x86_64; win_arch=x64 ;;
+        *) echo "FAIL: cannot derive arch from platform $PLATFORM" >&2; exit 1 ;;
+    esac
+    case "$PLATFORM" in
+        linux-*|vips-linux-*) [ "$unix_arch" = arm64 ] && unix_arch=aarch64 ;;
+    esac
     case "$PLATFORM" in
         darwin-*|vips-darwin-*)
             for f in "$DIST_DIR"/*.dylib; do
@@ -382,7 +390,7 @@ assert_bundle_arch() {
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
-        assert_bundle_arch x86_64 ""
+        assert_bundle_arch
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -395,7 +403,7 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
-        assert_bundle_arch arm64 ""
+        assert_bundle_arch
         if command -v strip >/dev/null 2>&1; then
             # -x drops local symbols too (the static harfbuzz contributes
             # thousands); exports and the dynamic symbol table stay.
@@ -410,7 +418,7 @@ case "$PLATFORM" in
         ;;
     windows-*|vips-windows-*)
         bundle_windows
-        assert_bundle_arch "" x64
+        assert_bundle_arch
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
         if command -v llvm-strip >/dev/null 2>&1; then
@@ -425,6 +433,12 @@ case "$PLATFORM" in
         exit 1
         ;;
 esac
+
+# Stripping must not remove exports the JNI loader binds to.
+SYMBOL_CHECK="$(dirname "${BASH_SOURCE[0]}")/../.github/scripts/check-native-symbols.sh"
+if [ -f "$SYMBOL_CHECK" ]; then
+    bash "$SYMBOL_CHECK" "$PLATFORM" "$DIST_DIR"
+fi
 
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR" "$PLATFORM"
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"

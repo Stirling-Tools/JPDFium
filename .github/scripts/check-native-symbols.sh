@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PLATFORM="${1:-linux-x64}"
-DIST="native/dist/${PLATFORM}"
+DIST="${2:-native/dist/${PLATFORM}}"
 if [ ! -d "$DIST" ]; then
   echo "No dist dir for $PLATFORM at $DIST — skipping symbol check (maybe cross-build)."
   exit 0
