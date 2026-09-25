@@ -1954,7 +1954,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 break;
             }
         }
-        if (!anyOverlap) continue;
+        // Forms are not bound-tested in crop mode: descend regardless.
+        if (!anyOverlap && !(cropRect && type == FPDF_PAGEOBJ_FORM)) continue;
 
         if (type == FPDF_PAGEOBJ_IMAGE) {
             // Redaction: fully contained or >70% covered images are removed.
@@ -3397,6 +3398,44 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
     }
 }
 
+// Crop fast-path test: every content-bearing leaf must lie inside the crop.
+// Form objects are never bound-tested (FPDFPageObj_GetBounds is unreliable
+// for them); their children are checked recursively instead.
+static bool pageContentInsideCrop(FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage, float l, float b,
+                                  float r, float t, int depth) {
+    if (!obj || depth > kMaxFormNesting) return false;
+    if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_FORM) {
+        int children = FPDFFormObj_CountObjects(obj);
+        if (children <= 0) return false;  // empty or unparsed: cannot verify
+        FS_MATRIX own;
+        if (!FPDFPageObj_GetMatrix(obj, &own)) return false;
+        FS_MATRIX childToPage = concatMatrix(own, toPage);
+        for (int i = 0; i < children; i++) {
+            if (!pageContentInsideCrop(FPDFFormObj_GetObject(obj, i), childToPage, l, b, r, t,
+                                       depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    float cl, cb, cr, ct;
+    if (!FPDFPageObj_GetBounds(obj, &cl, &cb, &cr, &ct)) return false;
+    const float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
+    float tl = std::numeric_limits<float>::max();
+    float tb = std::numeric_limits<float>::max();
+    float tr = std::numeric_limits<float>::lowest();
+    float tt = std::numeric_limits<float>::lowest();
+    for (const auto& c : corners) {
+        float tx = toPage.a * c[0] + toPage.c * c[1] + toPage.e;
+        float ty = toPage.b * c[0] + toPage.d * c[1] + toPage.f;
+        tl = std::min(tl, tx);
+        tb = std::min(tb, ty);
+        tr = std::max(tr, tx);
+        tt = std::max(tt, ty);
+    }
+    return isFullyContained(tl, tb, tr, tt, l, b, r, t);
+}
+
 // After the fission pass nothing may remain fully outside the crop: checks
 // every non-generated char origin and every content-bearing object (clip
 // paths exempt). A false result is a loud REDACT_INCOMPLETE at the call site.
@@ -3498,9 +3537,7 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
-            float ol, ob, or_, ot;
-            if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot) ||
-                !isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT)) {
+            if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
                 allInside = false;
                 break;
             }
