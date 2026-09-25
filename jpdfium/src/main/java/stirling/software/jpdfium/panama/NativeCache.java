@@ -9,6 +9,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -21,6 +22,7 @@ import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
+import java.nio.file.attribute.UserPrincipalLookupService;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Collections;
@@ -506,12 +508,22 @@ final class NativeCache {
 
     /** Fail closed: write or delete for any principal other than the owner or system. */
     static boolean isPrivateAcl(AclFileAttributeView view) {
+        return isPrivateAcl(
+                view,
+                lookupPrincipal("NT AUTHORITY\\SYSTEM", false),
+                lookupPrincipal("BUILTIN\\Administrators", true));
+    }
+
+    static boolean isPrivateAcl(AclFileAttributeView view, UserPrincipal system,
+                                UserPrincipal administrators) {
         try {
             UserPrincipal owner = view.getOwner();
             for (AclEntry entry : view.getAcl()) {
                 if (entry.type() != AclEntryType.ALLOW) continue;
                 if (Collections.disjoint(entry.permissions(), ACL_WRITE_PERMISSIONS)) continue;
-                if (!isTrustedPrincipal(entry.principal(), owner)) return false;
+                if (!isTrustedPrincipal(entry.principal(), owner, system, administrators)) {
+                    return false;
+                }
             }
             return true;
         } catch (IOException | RuntimeException _) {
@@ -519,15 +531,29 @@ final class NativeCache {
         }
     }
 
-    private static boolean isTrustedPrincipal(UserPrincipal principal, UserPrincipal owner) {
-        String name = principal.getName();
-        if (owner != null && name.equalsIgnoreCase(owner.getName())) return true;
-        String upper = name.toUpperCase(Locale.ROOT);
-        return upper.equals("SYSTEM")
-                || upper.endsWith("\\SYSTEM")
-                || upper.endsWith("\\ADMINISTRATORS")
-                || upper.endsWith("\\OWNER RIGHTS")
-                || upper.endsWith("\\CREATOR OWNER");
+    private static UserPrincipal lookupPrincipal(String name, boolean group) {
+        try {
+            UserPrincipalLookupService lookup =
+                    FileSystems.getDefault().getUserPrincipalLookupService();
+            return group
+                    ? lookup.lookupPrincipalByGroupName(name)
+                    : lookup.lookupPrincipalByName(name);
+        } catch (IOException | RuntimeException _) {
+            // Unresolvable well-known principal: fail closed.
+            return null;
+        }
+    }
+
+    private static boolean isTrustedPrincipal(UserPrincipal principal, UserPrincipal owner,
+                                              UserPrincipal system, UserPrincipal administrators) {
+        if (principal.equals(owner)) return true;
+        if (system != null && principal.equals(system)) return true;
+        if (administrators != null && principal.equals(administrators)) return true;
+        // S-1-3-0 and S-1-3-4 have no account name to resolve; compare exactly.
+        String name = principal.getName().toUpperCase(Locale.ROOT);
+        int slash = name.lastIndexOf('\\');
+        String leaf = slash >= 0 ? name.substring(slash + 1) : name;
+        return leaf.equals("CREATOR OWNER") || leaf.equals("OWNER RIGHTS");
     }
 
     private static String sha256Hex(byte[] bytes) {

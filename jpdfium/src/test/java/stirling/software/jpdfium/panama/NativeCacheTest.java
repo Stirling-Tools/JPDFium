@@ -358,15 +358,23 @@ class NativeCacheTest {
     @Test
     void aclRejectsBroadWritePrincipals() {
         UserPrincipal owner = new NamePrincipal("MACHINE\\user");
+        UserPrincipal system = new NamePrincipal("NT AUTHORITY\\SYSTEM");
+        UserPrincipal admins = new NamePrincipal("BUILTIN\\Administrators");
+
         assertFalse(NativeCache.isPrivateAcl(new FakeAclView(owner,
-                List.of(aclEntry("Everyone", AclEntryPermission.WRITE_DATA)))));
+                List.of(aclEntry("Everyone", AclEntryPermission.WRITE_DATA))), system, admins));
         assertFalse(NativeCache.isPrivateAcl(new FakeAclView(owner,
-                List.of(aclEntry("BUILTIN\\Users", AclEntryPermission.DELETE_CHILD)))));
+                List.of(aclEntry("BUILTIN\\Users", AclEntryPermission.DELETE_CHILD))), system, admins));
+        // A name suffix must not impersonate the resolved Administrators group.
+        assertFalse(NativeCache.isPrivateAcl(new FakeAclView(owner,
+                List.of(aclEntry("CONTOSO\\Administrators", AclEntryPermission.WRITE_DATA))),
+                system, admins));
         assertTrue(NativeCache.isPrivateAcl(new FakeAclView(owner,
                 List.of(aclEntry("MACHINE\\user", AclEntryPermission.WRITE_DATA),
                         aclEntry("NT AUTHORITY\\SYSTEM", AclEntryPermission.WRITE_DATA),
                         aclEntry("BUILTIN\\Administrators", AclEntryPermission.DELETE),
-                        aclEntry("Everyone", AclEntryPermission.READ_DATA)))));
+                        aclEntry("CREATOR OWNER", AclEntryPermission.WRITE_DATA),
+                        aclEntry("Everyone", AclEntryPermission.READ_DATA))), system, admins));
     }
 
     private static final class NamePrincipal implements UserPrincipal {
@@ -384,6 +392,16 @@ class NativeCacheTest {
         @Override
         public boolean implies(Subject subject) {
             return false;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof NamePrincipal principal && name.equals(principal.name);
+        }
+
+        @Override
+        public int hashCode() {
+            return name.hashCode();
         }
     }
 
