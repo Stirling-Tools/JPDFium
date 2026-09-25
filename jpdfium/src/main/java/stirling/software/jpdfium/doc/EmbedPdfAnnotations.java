@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.NativeGuard;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -337,15 +338,18 @@ public final class EmbedPdfAnnotations {
         if (EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont == null) {
             throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont not in this native build");
         }
-        MemorySegment annot = openAnnot(page, index);
+        NativeGuard.acquire();
         try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont.invokeExact(
-                    annot, fontId, size, r, g, b);
-            if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont failed");
-        } catch (JPDFiumException e) {
-            throw e;
-        } catch (Throwable t) { throw new JPDFiumException(t); }
-        finally { closeAnnot(annot); }
+            MemorySegment annot = openAnnot(page, index);
+            try {
+                int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont.invokeExact(
+                        annot, fontId, size, r, g, b);
+                if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont failed");
+            } catch (JPDFiumException e) {
+                throw e;
+            } catch (Throwable t) { throw new JPDFiumException(t); }
+            finally { closeAnnot(annot); }
+        } finally { NativeGuard.release(); }
     }
 
     /**
