@@ -203,8 +203,7 @@ jobs:
             pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
-      # Homebrew stopped publishing x86_64 bottles for macOS 14, so every
-      # formula builds from source under Rosetta (~2.5 h). Reuse the tree.
+      # Keep the x86_64 kegs across runs; a cold runner reinstalls them.
       - name: Cache x86_64 Homebrew deps (macOS)
         if: matrix.platform == 'darwin-x64'
         uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
@@ -254,29 +253,20 @@ jobs:
           # /usr/local/share/man pre-exists root-owned on macos-14 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
-          # The runner image leaves /usr/local/bin/python* symlinks pointing at
-          # /Library/Frameworks; python@3.14 (pulled in below) refuses to link
-          # over them and aborts the whole install. Drop the stale links, then
-          # pre-install and force-link python so later brews never trip on it.
-          for f in /usr/local/bin/idle3* /usr/local/bin/pip3* /usr/local/bin/pydoc3* /usr/local/bin/python3*; do
-            [ -L "$f" ] || continue
-            case "$(readlink "$f")" in /Library/Frameworks/*) rm -f "$f";; esac
-          done
-          # A restored cache already holds every keg; only fetch what is missing.
+          # Build tools only generate files; native bottles are fine.
+          brew install cmake meson ninja
+          # qpdf and harfbuzz are rebuilt from source below, so brew only
+          # needs the bridge deps plus qpdf's zlib/libjpeg inputs.
           if arch -x86_64 /usr/local/bin/brew list --versions \
-              python@3.14 pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config qpdf \
+              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo \
               >/dev/null 2>&1; then
             echo "x86_64 Homebrew deps restored from cache"
           else
-            arch -x86_64 /usr/local/bin/brew install python@3.14 || true
-            arch -x86_64 /usr/local/bin/brew link --overwrite python@3.14 || true
             arch -x86_64 /usr/local/bin/brew install \
-              pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
-            # Homebrew falls back to source when no bottle exists.
-            arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
+              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo
           fi
           {
-            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
