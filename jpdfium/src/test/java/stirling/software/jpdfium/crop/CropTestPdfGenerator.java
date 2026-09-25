@@ -465,6 +465,43 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /**
+     * Like {@link #twoLevelFormSiblingsPdf()} but with the inner form sandwiched
+     * between two outer-form rects that paint inside the crop (page rect
+     * (210,50)-(260,80) before and (240,60)-(290,90) after). The nested image
+     * cannot be promoted without changing the visible paint order.
+     */
+    public static byte[] twoLevelSandwichedFormImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "deep");
+            PDFormXObject inner = new PDFormXObject(doc);
+            inner.setBBox(new PDRectangle(0, 0, 100, 100));
+            inner.setResources(new PDResources());
+            inner.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = inner.getContentStream().createOutputStream()) {
+                os.write("q 100 0 0 100 0 0 cm /ImF Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+            PDFormXObject outer = new PDFormXObject(doc);
+            outer.setBBox(new PDRectangle(0, 0, 612, 792));
+            outer.setResources(new PDResources());
+            outer.getResources().put(COSName.getPDFName("FmInner"), inner);
+            try (var os = outer.getContentStream().createOutputStream()) {
+                os.write(("q 0 0 1 rg 210 50 50 30 re f Q "
+                          + "q 1 0 0 1 200 0 cm /FmInner Do Q "
+                          + "q 0 1 0 rg 240 60 50 30 re f Q")
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(outer, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(outer);
+            }
+            return save(doc);
+        }
+    }
+
     /** Form-nested text "SECRETKEEP" at (100,700), single text object. */
     public static byte[] formNestedSingleWordPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {

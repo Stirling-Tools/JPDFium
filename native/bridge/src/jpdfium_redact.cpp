@@ -1741,17 +1741,25 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
     // Paint position of a nested object within its form chain. |leaving|
     // candidates (promoted out of their form) and fully outside siblings are
-    // skipped: neither paints. At each level the sibling bounds live in the
-    // PARENT form's space, so the transform is the parent form's own matrix
-    // composed with its parent chain (not the child's toPage, which would
-    // double-apply the parent matrix).
+    // skipped: neither paints. Sibling bounds live in the PARENT form's
+    // children space. A nested parent's ObjRef.toPage already maps that space
+    // to the page; a page-level parent has identity toPage, so its own matrix
+    // is the map. Using the child's toPage would apply the parent matrix twice.
     auto classifyPaintPosition = [&](const ObjRef& start, bool& hasEarlier, bool& hasLater) {
         hasEarlier = false;
         hasLater = false;
         int ordinal = start.ordinal;
         FPDF_PAGEOBJECT parent = start.parentForm;
-        FS_MATRIX levelToPage = start.toPage;
         while (parent) {
+            auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
+            if (pit == objPtrToIndex.end()) break;
+            const ObjRef& pref = allObjs[pit->second];
+            FS_MATRIX levelToPage;
+            if (pref.parentForm) {
+                levelToPage = pref.toPage;
+            } else if (!FPDFPageObj_GetMatrix(parent, &levelToPage)) {
+                break;
+            }
             int siblings = FPDFFormObj_CountObjects(parent);
             for (int si = 0; si < siblings; si++) {
                 if (si == ordinal) continue;
@@ -1768,12 +1776,6 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     hasLater = true;
                 }
             }
-            auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
-            if (pit == objPtrToIndex.end()) break;
-            const ObjRef& pref = allObjs[pit->second];
-            FS_MATRIX parentMatrix;
-            if (!FPDFPageObj_GetMatrix(parent, &parentMatrix)) break;
-            levelToPage = concatMatrix(parentMatrix, pref.toPage);
             ordinal = pref.ordinal;
             parent = pref.parentForm;
         }

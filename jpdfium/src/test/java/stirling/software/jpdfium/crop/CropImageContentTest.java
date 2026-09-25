@@ -217,6 +217,16 @@ class CropImageContentTest {
     }
 
     @Test
+    void twoLevelSandwichedImageFailsTheCrop() throws Exception {
+        // The inner form's siblings live in the outer form's space; they paint
+        // inside the crop both before and after the image. Promotion would
+        // reorder them, so the crop must fail instead of guessing.
+        assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
+                () -> crop(CropTestPdfGenerator.twoLevelSandwichedFormImagePdf(),
+                        new Rect(200, 50, 100, 50)));
+    }
+
+    @Test
     void sandwichedFormImageFailsLoudlyInsteadOfHidingSiblings() throws Exception {
         assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
                 () -> crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP));
