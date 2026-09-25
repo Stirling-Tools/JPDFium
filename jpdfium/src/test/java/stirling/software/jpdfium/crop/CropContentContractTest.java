@@ -122,7 +122,11 @@ class CropContentContractTest {
             int col = Math.round(275 - mb.x());
             int row = Math.round(mb.y() + mb.height() - 705);
             int rgb = img.getRGB(col, row) & 0xFFFFFF;
-            assertTrue(rgb == 0xFFFF00 || Math.abs(((rgb >> 16) & 0xFF) - 255) < 12,
+            int red = (rgb >> 16) & 0xFF;
+            int green = (rgb >> 8) & 0xFF;
+            int blue = rgb & 0xFF;
+            // White would also have a 255 red channel: check all three.
+            assertTrue(Math.abs(red - 255) < 12 && Math.abs(green - 255) < 12 && blue < 12,
                     "straddling painted path lost its visible part, pixel="
                             + Integer.toHexString(rgb));
         }
