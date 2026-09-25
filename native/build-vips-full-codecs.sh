@@ -2,6 +2,14 @@
 # Build libvips (+ libheif with static codecs) from source against whatever
 # codec libraries (libjxl, libaom, libde265, kvazaar, libwebp, libpng, libjpeg,
 # libtiff) the package manager provides. x265 is intentionally excluded (GPL).
+#
+# The pinned PDFium prebuild (native/pdfium) is wired in via a generated
+# pdfium.pc so libvips' pdfload renders PDFs with the same BSD-licensed
+# renderer as the core bridge instead of GPL poppler. The permissive loaders
+# (librsvg, OpenEXR, libraw, libspng, highway) are enabled to match the
+# upstream Windows "all" bundle; ImageMagick is enabled where a clean IM7 is
+# available (brew/macOS), never the apt IM6 (it links GPL liblqr). cfitsio is
+# skipped: the distro build drags in the whole curl/gnutls/krb5/ldap closure.
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
@@ -24,6 +32,8 @@ case "$(uname -s)" in
         exit 1
         ;;
 esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 resolve_latest_tag() {
     local repo="$1"
@@ -74,13 +84,16 @@ install_deps() {
             libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
             libopenjp2-7-dev \
+            librsvg2-dev libopenexr-dev libraw-dev \
+            libspng-dev libhwy-dev \
             zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
     else
         brew install meson ninja pkg-config cmake \
             glib expat fftw orc libexif little-cms2 \
             jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff \
-            openjpeg
+            openjpeg \
+            librsvg openexr libraw libspng highway imagemagick
     fi
 }
 
@@ -253,6 +266,40 @@ build_vips() {
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
     fi
 
+    # Wire the pinned PDFium prebuild (fetch-prebuilt-pdfium.sh extracts it
+    # into native/pdfium) into libvips' pdfload. libvips only checks
+    # pdfium >= 4200, so the placeholder version just has to clear that gate.
+    local pdfium_flag="-Dpdfium=disabled"
+    if [ -f "$SCRIPT_DIR/pdfium/include/fpdfview.h" ]; then
+        local pdfium_pc="$work/pdfium-pc"
+        mkdir -p "$pdfium_pc"
+        cat > "$pdfium_pc/pdfium.pc" <<EOF
+prefix=$SCRIPT_DIR/pdfium
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: pdfium
+Description: pdfium
+Version: 9999
+Requires:
+Libs: -L\${libdir} -lpdfium
+Cflags: -I\${includedir}
+EOF
+        export PKG_CONFIG_PATH="$pdfium_pc:${PKG_CONFIG_PATH:-}"
+        pdfium_flag="-Dpdfium=enabled"
+        echo "==> build-vips-full-codecs.sh: libvips will load PDFs with PDFium ($SCRIPT_DIR/pdfium)"
+    else
+        echo "==> build-vips-full-codecs.sh: no PDFium tree; libvips built without PDF loading" >&2
+    fi
+
+    # magick: only where ImageMagick 7 is available (brew/macOS). The apt
+    # libmagickcore is IM6, which links GPL-3 liblqr - not shippable here.
+    local magick_flag="-Dmagick=disabled"
+    if [ "$OS" = darwin ]; then
+        magick_flag="-Dmagick=enabled"
+    fi
+
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/libvips/libvips/archive/refs/tags/${VIPS_TAG}.tar.gz" \
         -o "$work/vips.tar.gz"
@@ -261,11 +308,14 @@ build_vips() {
 
     meson setup "$work/build" "$src" \
         --prefix="$PREFIX" --libdir=lib \
-        --buildtype=release \
+        --buildtype=release -Db_lto=true \
         -Dauto_features=disabled \
         -Ddeprecated=false -Dexamples=false \
         -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
         -Dcplusplus=false \
+        "$pdfium_flag" "$magick_flag" \
+        -Drsvg=enabled -Dopenexr=enabled -Draw=enabled \
+        -Dspng=enabled -Dhighway=enabled \
         -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
         -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \

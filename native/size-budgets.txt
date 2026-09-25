@@ -24,9 +24,11 @@ windows-x64    34000000
 # trimmed aarch64 ICU so arm64 can match x64's ~23 MB bundle.
 windows-arm64  150000000
 
-vips-linux-x64   100000000
-vips-linux-arm64 100000000
-vips-darwin-x64  50000000
-vips-darwin-arm64 50000000
+# vips bundles grew with the PDFium pdfload link plus the librsvg/OpenEXR/
+# libraw/spng/highway loaders (ImageMagick too on macOS/Windows).
+vips-linux-x64   140000000
+vips-linux-arm64 140000000
+vips-darwin-x64  80000000
+vips-darwin-arm64 80000000
 vips-windows-x64 100000000
 vips-windows-arm64 100000000

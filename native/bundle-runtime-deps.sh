@@ -66,7 +66,10 @@ bundle_macos() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib found to bundle"; return 0; }
 
-    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
+    # native/pdfium/lib is where the vips build links the component PDFium
+    # prebuild; its own @rpath deps (icuuc, harfbuzz-ng, ...) live there too.
+    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib
+                      "$(dirname "${BASH_SOURCE[0]}")/pdfium/lib")
     local rpath_globs=(/opt/homebrew/opt/*/lib /usr/local/opt/*/lib)
 
     _resolve_rpath_dep() {

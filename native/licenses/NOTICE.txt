@@ -79,3 +79,43 @@ This distribution bundles binary forms of the following open-source projects:
     - Copyright (c) 2002-2014 Universite catholique de Louvain (UCL),
       Professor Benoit Macq and contributors
     - License: BSD 2-Clause License (see OPENJPEG-BSD-2.txt)
+
+20. ImageMagick / MagickCore (loader/saver for formats without a native
+    loader; enabled on macOS/Windows where ImageMagick 7 is available)
+    - Copyright (c) 1999-2024 ImageMagick Studio LLC
+    - License: ImageMagick License (see IMAGEMAGICK.txt)
+
+21. librsvg (SVG loader)
+    - Copyright (c) 2000-2024 librsvg contributors
+    - License: GNU Lesser General Public License v2.1 or later
+      (see LIBRSVG-LGPL-2.1.txt)
+
+22. Pango / Cairo (text and vector backends used by librsvg)
+    - Copyright (c) 1999-2024 the Pango and Cairo authors
+    - License: GNU Lesser General Public License v2.1 or later
+      (see LIBRSVG-LGPL-2.1.txt)
+
+23. fontconfig (font discovery for the text/vector backends)
+    - Copyright (c) 2000-2024 Keith Packard and fontconfig contributors
+    - License: fontconfig License, MIT-style (see FONTCONFIG.txt)
+
+24. OpenEXR (EXR loader)
+    - Copyright (c) 2006-2024 Contributors to the OpenEXR Project
+    - License: BSD 3-Clause License (see OPENEXR-BSD-3.txt)
+
+25. libraw (RAW camera loader)
+    - Copyright (c) 2008-2024 LibRaw LLC
+    - License: GNU Lesser General Public License v2.1 or CDDL 1.0
+      (see LIBRAW-LGPL-2.1.txt)
+
+26. libspng (PNG loader)
+    - Copyright (c) 2018-2024 Randy <randy408@protonmail.com>
+    - License: BSD 2-Clause License (see LIBSPNG-BSD-2.txt)
+
+27. Google Highway (SIMD kernels used by libvips)
+    - Copyright (c) 2021 Google LLC
+    - License: Apache License 2.0 (see HIGHWAY-APACHE-2.0.txt)
+
+28. libnsgif (GIF loader, vendored by libvips)
+    - Copyright (c) 2004-2024 NetSurf contributors
+    - License: MIT License (see LIBNSGIF-MIT.txt)

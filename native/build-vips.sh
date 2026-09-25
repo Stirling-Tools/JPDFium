@@ -11,7 +11,9 @@ case "$PLATFORM" in
     linux-*)
         OS=linux
         LIBVIPS_NAME="libvips.so.42"
-        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+        # native/pdfium/lib holds the component PDFium the vips build links;
+        # ldd needs it on the search path to stage libpdfium + its deps.
+        export LD_LIBRARY_PATH="/usr/local/lib:$(dirname "$0")/pdfium/lib:${LD_LIBRARY_PATH:-}"
         ;;
     darwin-*)
         OS=darwin

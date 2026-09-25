@@ -3,7 +3,10 @@ package stirling.software.jpdfium.vips;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import app.photofox.vipsffm.VImage;
+import app.photofox.vipsffm.VipsOption;
 import java.io.InputStream;
+import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -75,6 +78,24 @@ class VipsSmokeTest {
         try (InputStream in = getClass().getResourceAsStream("/pdfs/general/basic-text.pdf")) {
             assertNotNull(in, "Smoke test fixture basic-text.pdf must be present on test classpath");
             Files.copy(in, pdf, StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        // libvips itself must load PDFs through PDFium on the source-built
+        // platforms (Linux/macOS). The Windows bundle is the upstream prebuilt
+        // and ships no PDF loader; VipsImageConverter covers that path.
+        if (!state.platform().startsWith("windows")) {
+            try (Arena arena = Arena.ofConfined()) {
+                VImage pdfImage = VImage.pdfload(
+                        arena,
+                        pdf.toString(),
+                        VipsOption.Int("page", 0),
+                        VipsOption.Double("dpi", (double) RENDER_DPI));
+                assertTrue(pdfImage.getWidth() > 0 && pdfImage.getHeight() > 0,
+                        "pdfload must render page 0 through PDFium, got "
+                                + pdfImage.getWidth() + "x" + pdfImage.getHeight());
+                System.out.println("PDFium pdfload dimensions: "
+                        + pdfImage.getWidth() + "x" + pdfImage.getHeight());
+            }
         }
 
         int expectedW;

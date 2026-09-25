@@ -623,6 +623,15 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
+      - name: Fetch prebuilt PDFium (vips pdfload)
+        # Source-built vips links PDFium so vips can load PDFs itself; the
+        # Windows leg consumes the upstream zip and keeps the Java path.
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+
       - name: x86_64 brew bootstrap (darwin-x64)
         if: matrix.platform == 'darwin-x64'
         env:
