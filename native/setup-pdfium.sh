@@ -29,6 +29,15 @@ EMBEDPDF_BRANCH="embedpdf/main"
 if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     export VPYTHON_BYPASS="manually managed python not supported by chrome operations"
     echo "  musl/Alpine: VPYTHON_BYPASS set - gclient will use the system python3"
+    # gsutil's own check rejects Python 3.14+; relax it when the interpreter
+    # could not be pinned to a supported version.
+    depot_dir="$(dirname "$(command -v gclient 2>/dev/null || echo .)")"
+    for g in "$depot_dir/third_party/gsutil/gsutil" "$depot_dir/gsutil.py"; do
+        [ -f "$g" ] || continue
+        grep -q "gsutil requires Python version" "$g" 2>/dev/null || continue
+        sed -i 's/(3, 14)/(3, 99)/g; s/(3,14)/(3,99)/g' "$g" 2>/dev/null || true
+        echo "  musl/Alpine: relaxed the gsutil Python bound in $g"
+    done
 fi
 
 # ---------- argument handling ----------
