@@ -84,6 +84,10 @@ public final class FontLib {
     /**
      * Shape text with a font program. Returns one entry per glyph with
      * advances and offsets in points at the requested size.
+     *
+     * <p>Shapes one run: HarfBuzz guesses a single direction and script for the
+     * whole string, so mixed-direction or mixed-script text must be split by
+     * the caller and shaped run by run.
      */
     public static List<ShapedGlyph> shapeText(
             byte[] fontData, String text, float fontSize) {

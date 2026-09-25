@@ -474,6 +474,7 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, utf8_text, -1, 0, -1);
     // Script/direction/language default from content; same as plain hb-shape.
+    // One buffer is one run: mixed direction/script must be split by the caller.
     hb_buffer_guess_segment_properties(buf);
     hb_shape(font, buf, nullptr, 0);
 
