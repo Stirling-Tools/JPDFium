@@ -61,6 +61,9 @@ public final class AnnotationBindings {
     public static final MethodHandle FPDFAnnot_GetRect = downcall("FPDFAnnot_GetRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
+    public static final MethodHandle FPDFAnnot_HasKey = downcall("FPDFAnnot_HasKey",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+
     public static final MethodHandle FPDFAnnot_SetRect = downcall("FPDFAnnot_SetRect",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 

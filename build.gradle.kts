@@ -170,7 +170,10 @@ tasks.register<JavaExec>("runSample") {
         "89" to "S89_StructureEditor",
         "90" to "S90_Layers",
         "91" to "S91_AnnotationExchange",
-        "92" to "S92_RustCompress"
+        "92" to "S92_RustCompress",
+        "93" to "S93_CropRemoveContent",
+        "94" to "S94_CropPerf",
+        "95" to "S95_RedactPipelinePerf"
     )
 
     val sampleClass = "stirling.software.jpdfium.samples." +
