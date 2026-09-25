@@ -178,7 +178,7 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetVerticalAlignment = downcallOptional("EPDFAnnot_GetVerticalAlignment",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Set FreeText appearance from a registered font id. Optional: new API. */
+    /** Set FreeText appearance from a registered font id. Optional: absent from some builds. */
     public static final MethodHandle EPDFAnnot_SetDefaultAppearanceRegisteredFont = downcallOptional("EPDFAnnot_SetDefaultAppearanceRegisteredFont",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_FLOAT, JAVA_INT, JAVA_INT, JAVA_INT));
 
