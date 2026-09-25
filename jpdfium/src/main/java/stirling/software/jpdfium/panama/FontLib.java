@@ -92,7 +92,9 @@ public final class FontLib {
         }
         if (fontData == null || fontData.length == 0) throw new IllegalArgumentException("fontData must not be empty");
         if (text == null || text.isEmpty()) throw new IllegalArgumentException("text must not be empty");
-        if (fontSize <= 0) throw new IllegalArgumentException("fontSize must be positive");
+        if (!Float.isFinite(fontSize) || fontSize <= 0 || fontSize > Integer.MAX_VALUE / 64.0) {
+            throw new IllegalArgumentException("fontSize must be finite and fit a 26.6 fixed-point scale");
+        }
         NativeGuard.acquire();
         try {
             try (Arena a = Arena.ofConfined()) {

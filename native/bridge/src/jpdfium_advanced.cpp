@@ -2,6 +2,8 @@
 
 #include <fpdf_save.h>
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -450,7 +452,9 @@ int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len, const int32_t
 
 int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const char* utf8_text,
                            float font_size, char** json) {
-    if (!font_data || font_len <= 0 || !utf8_text || font_size <= 0 || !json)
+    // 26.6 scale: reject sizes whose scaled value overflows the int cast.
+    if (!font_data || font_len <= 0 || !utf8_text || !json || !std::isfinite(font_size) ||
+        font_size <= 0 || font_size * 64.0 > (double)INT32_MAX)
         return JPDFIUM_ERR_INVALID;
     hb_blob_t* blob = hb_blob_create((const char*)font_data, (unsigned int)font_len,
                                      HB_MEMORY_MODE_READONLY, nullptr, nullptr);

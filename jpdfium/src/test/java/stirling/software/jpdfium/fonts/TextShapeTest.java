@@ -85,6 +85,12 @@ class TextShapeTest {
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(new byte[0], "x", 12f));
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(bytes, "", 12f));
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(bytes, "x", 0f));
+        // 26.6 scale: non-finite and int-overflowing sizes must not reach the cast.
+        assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(bytes, "x", Float.NaN));
+        assertThrows(IllegalArgumentException.class,
+                () -> FontLib.shapeText(bytes, "x", Float.POSITIVE_INFINITY));
+        assertThrows(IllegalArgumentException.class,
+                () -> FontLib.shapeText(bytes, "x", Integer.MAX_VALUE));
         // Garbage bytes: an empty HarfBuzz face must be rejected, not shaped
         // into a list of .notdef glyphs.
         assertThrows(stirling.software.jpdfium.exception.JPDFiumException.class,
