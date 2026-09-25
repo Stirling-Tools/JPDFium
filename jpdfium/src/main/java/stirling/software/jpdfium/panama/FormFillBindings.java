@@ -32,25 +32,25 @@ public final class FormFillBindings {
      * EmbedPDF form-model read/write helpers used to clear fields that lost all
      * their widgets (for example when a crop removes an outside widget).
      */
-    public static final MethodHandle EPDFForm_LoadModel = downcall("EPDFForm_LoadModel",
+    public static final MethodHandle EPDFForm_LoadModel = downcallOptional("EPDFForm_LoadModel",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 
-    public static final MethodHandle EPDFForm_CloseModel = downcall("EPDFForm_CloseModel",
+    public static final MethodHandle EPDFForm_CloseModel = downcallOptional("EPDFForm_CloseModel",
             FunctionDescriptor.ofVoid(ADDRESS));
 
-    public static final MethodHandle EPDFForm_CountFields = downcall("EPDFForm_CountFields",
+    public static final MethodHandle EPDFForm_CountFields = downcallOptional("EPDFForm_CountFields",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle EPDFForm_CountFieldWidgets =
-            downcall("EPDFForm_CountFieldWidgets", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            downcallOptional("EPDFForm_CountFieldWidgets", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     public static final MethodHandle EPDFForm_GetFieldWidgetObjNum = downcall(
             "EPDFForm_GetFieldWidgetObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
     public static final MethodHandle EPDFForm_GetFieldObjNum =
-            downcall("EPDFForm_GetFieldObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            downcallOptional("EPDFForm_GetFieldObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    public static final MethodHandle EPDFForm_ResetField = downcall("EPDFForm_ResetField",
+    public static final MethodHandle EPDFForm_ResetField = downcallOptional("EPDFForm_ResetField",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
@@ -59,6 +59,10 @@ public final class FormFillBindings {
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
         return Symbols.downcallCritical(name, desc);
+    }
+
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
     }
 
     /**

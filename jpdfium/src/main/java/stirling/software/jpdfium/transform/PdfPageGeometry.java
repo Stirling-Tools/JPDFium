@@ -202,8 +202,14 @@ public final class PdfPageGeometry {
      * values so removing an outside widget does not leave the value recoverable.
      */
     private static void clearUnplacedFormFields(MemorySegment rawDoc, int[] removedObjectNumbers) {
-        if (FormFillBindings.EPDFForm_LoadModel == null || rawDoc == null
-                || rawDoc.equals(MemorySegment.NULL)) {
+        if (FormFillBindings.EPDFForm_LoadModel == null
+                || FormFillBindings.EPDFForm_CloseModel == null
+                || FormFillBindings.EPDFForm_CountFields == null
+                || FormFillBindings.EPDFForm_CountFieldWidgets == null
+                || FormFillBindings.EPDFForm_GetFieldWidgetObjNum == null
+                || FormFillBindings.EPDFForm_GetFieldObjNum == null
+                || FormFillBindings.EPDFForm_ResetField == null
+                || rawDoc == null || rawDoc.equals(MemorySegment.NULL)) {
             return;
         }
         MemorySegment model;
