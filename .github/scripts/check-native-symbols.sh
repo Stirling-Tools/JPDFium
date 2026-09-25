@@ -3,7 +3,7 @@ set -euo pipefail
 PLATFORM="${1:-linux-x64}"
 DIST="${2:-native/dist/${PLATFORM}}"
 if [ ! -d "$DIST" ]; then
-  echo "No dist dir for $PLATFORM at $DIST — skipping symbol check (maybe cross-build)."
+  echo "No dist dir for $PLATFORM at $DIST - skipping symbol check (maybe cross-build)."
   exit 0
 fi
 
@@ -30,15 +30,20 @@ EXPECTED=(
 MISSING=0
 if [[ "$LIB" == *.dll ]]; then
   # Windows: use dumpbin if available, else skip
-  if command -v dumpbin >/dev/null 2>&1; then
+  DUMPBIN_BIN=$(command -v dumpbin 2>/dev/null || true)
+  if [ -z "$DUMPBIN_BIN" ]; then
+    DUMPBIN_BIN=$(find "/c/Program Files/Microsoft Visual Studio" \
+      -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+  fi
+  if [ -n "$DUMPBIN_BIN" ]; then
     for sym in "${EXPECTED[@]}"; do
-      if ! dumpbin /EXPORTS "$LIB" 2>/dev/null | grep -q "$sym"; then
+      if ! "$DUMPBIN_BIN" //EXPORTS "$LIB" 2>/dev/null | grep -q "$sym"; then
         echo "MISSING export: $sym"
         MISSING=1
       fi
     done
   else
-    echo "dumpbin not found — skipping Windows symbol check"
+    echo "dumpbin not found - skipping Windows symbol check"
   fi
 else
   for sym in "${EXPECTED[@]}"; do
