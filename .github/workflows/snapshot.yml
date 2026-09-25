@@ -137,9 +137,9 @@ jobs:
           # arm64 runner.
           - { platform: linux-musl-x64,   runner: ubuntu-latest,    libc: musl }
           - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, libc: musl }
-          # darwin-x64 cross-compiles from macos-14 (arm64 host) with an
-          # x86_64 Homebrew installed at /usr/local under Rosetta.
-          - { platform: darwin-x64,   runner: macos-14         }
+          # darwin-x64 runs natively on an Intel runner: Homebrew lives at
+          # /usr/local and no Rosetta translation is involved.
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
           - { platform: windows-arm64, runner: windows-11-arm  }
@@ -219,11 +219,11 @@ jobs:
             /usr/local/Frameworks
             /usr/local/var/homebrew
             ~/Library/Caches/Homebrew/downloads
-          key: brew-x64-sonoma-v1
+          key: brew-x64-macos15-v1
           restore-keys: |
-            brew-x64-sonoma-
+            brew-x64-macos15-
 
-      - name: Install build deps (macOS, x86_64 cross-compile)
+      - name: Install build deps (macOS, x86_64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -524,9 +524,9 @@ jobs:
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /
-      # release the dylib is signed, so run its x86_64 smoke under Rosetta with
-      # an x86_64 JDK (skipped on PRs where macOS rejects the unsigned dylib).
-      - name: Functional smoke test - darwin-x64 (Rosetta)
+      # release the dylib is signed, so run its x86_64 smoke with an x86_64
+      # JDK (skipped on PRs where macOS rejects the unsigned dylib).
+      - name: Functional smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64' && github.event_name != 'pull_request'
         shell: bash
         run: |

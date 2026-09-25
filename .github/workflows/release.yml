@@ -100,10 +100,10 @@ jobs:
             runner: ubuntu-24.04-arm
             shell: bash
             libc: musl
-          # darwin-x64 cross-compiles from macos-14 (arm64) under Rosetta
-          # with a second Homebrew installed at /usr/local for x86_64 deps.
+          # darwin-x64 runs natively on an Intel runner: Homebrew lives at
+          # /usr/local and no Rosetta translation is involved.
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15-intel
             shell: bash
           - platform: darwin-arm64
             runner: macos-14
@@ -181,11 +181,11 @@ jobs:
             /usr/local/Frameworks
             /usr/local/var/homebrew
             ~/Library/Caches/Homebrew/downloads
-          key: brew-x64-sonoma-v1
+          key: brew-x64-macos15-v1
           restore-keys: |
-            brew-x64-sonoma-
+            brew-x64-macos15-
 
-      - name: Install build deps (macOS, x86_64 cross-compile)
+      - name: Install build deps (macOS, x86_64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -429,7 +429,7 @@ jobs:
       # (never green) until both pass on every platform.
       - name: Install jextract (for smoke build)
         # jextract only ships glibc (linux-x64/aarch64, macos, windows-x64)
-        # builds. musl + windows-arm64 + the darwin-x64 Rosetta leg use the
+        # builds. musl + windows-arm64 + the darwin-x64 Intel leg use the
         # committed FFM bindings instead (generateBindings is skipped when
         # jextract is absent).
         if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && matrix.libc != 'musl'
@@ -454,10 +454,10 @@ jobs:
         if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64'
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
-      # x86_64 smoke under Rosetta with an x86_64 JDK so it gets the same
+      # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
+      # smoke with an x86_64 JDK so it gets the same
       # INIT + open-a-PDF gate as every other release platform.
-      - name: Functional smoke test - darwin-x64 (Rosetta)
+      - name: Functional smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64'
         shell: bash
         run: |
@@ -523,7 +523,7 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
     runs-on: ${{ matrix.runner }}
@@ -590,9 +590,9 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          # darwin-x64 cross-compiles from macos-14 under Rosetta. The keg-only
-          # deps are resolved from /usr/local and the bundler asserts x86_64.
-          - { platform: darwin-x64,   runner: macos-14         }
+          # darwin-x64 runs on an Intel runner: the keg-only deps resolve
+          # from /usr/local and the bundler asserts x86_64.
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
           - { platform: windows-arm64, runner: windows-11-arm  }
@@ -614,7 +614,7 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
-      - name: Rosetta brew bootstrap (darwin-x64)
+      - name: x86_64 brew bootstrap (darwin-x64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -753,10 +753,10 @@ jobs:
         run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
         timeout-minutes: 60
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
-      # x86_64 vips smoke under Rosetta with an x86_64 JDK so platform
-      # detection resolves darwin-x64 (same gate as the core Rosetta smoke).
-      - name: Vips smoke test - darwin-x64 (Rosetta)
+      # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
+      # vips smoke with an x86_64 JDK so platform detection resolves
+      # darwin-x64 (same gate as the core Intel smoke).
+      - name: Vips smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64'
         shell: bash
         run: |
@@ -904,7 +904,7 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
           - { platform: windows-arm64, runner: windows-11-arm  }
@@ -950,7 +950,7 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
           - { platform: windows-arm64, runner: windows-11-arm  }
