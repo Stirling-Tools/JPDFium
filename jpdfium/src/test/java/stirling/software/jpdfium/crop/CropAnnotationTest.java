@@ -122,6 +122,33 @@ class CropAnnotationTest {
     }
 
     @Test
+    void repeatedFieldIsClearedAfterAllItsWidgetsAreCropped() throws Exception {
+        // One field, one valued widget per page: the removal set must span the
+        // whole crop operation or the second pass sees the first widget as
+        // "still placed" and keeps the value.
+        byte[] output;
+        try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.twoPageRepeatedFieldPdf())) {
+            PdfPageGeometry.cropAndRemoveContent(doc, 0, doc.pageCount() - 1, LEFT_HALF);
+            output = doc.saveBytes();
+        }
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            var form = doc.getDocumentCatalog().getAcroForm();
+            assertNotNull(form, "AcroForm must survive the crop");
+            var field = form.getField("shared");
+            if (field != null) {
+                assertEquals("", field.getValueAsString(),
+                        "repeated field must be cleared once all widgets are cropped");
+            }
+            for (var page : doc.getPages()) {
+                for (PDAnnotation a : page.getAnnotations()) {
+                    assertFalse("Widget".equals(a.getSubtype()),
+                            "outside widgets must be removed");
+                }
+            }
+        }
+    }
+
+    @Test
     void signatureWidgetOutsideCropIsRemovedAndDocumentStaysValid() throws Exception {
         Path out = produce(CropTestPdfGenerator.signatureWidgetPdf(), LEFT_HALF);
         try (PDDocument doc = Loader.loadPDF(out.toFile())) {

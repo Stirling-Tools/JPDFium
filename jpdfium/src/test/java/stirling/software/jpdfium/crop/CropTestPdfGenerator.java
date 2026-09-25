@@ -341,6 +341,87 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /**
+     * One form field named "shared" with a valued widget on each of two pages,
+     * both at (400,600,150,20): cropping both pages in one call must clear the
+     * value only when the accumulated removals cover every widget.
+     */
+    public static byte[] twoPageRepeatedFieldPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage p0 = new PDPage(LETTER);
+            PDPage p1 = new PDPage(LETTER);
+            doc.addPage(p0);
+            doc.addPage(p1);
+            for (PDPage p : new PDPage[] {p0, p1}) {
+                try (PDPageContentStream cs = new PDPageContentStream(doc, p)) {
+                    cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                    placeWord(cs, "FORM ANCHOR", 100, 700);
+                }
+            }
+            PDAcroForm acroForm = new PDAcroForm(doc);
+            PDResources formResources = new PDResources();
+            formResources.put(COSName.getPDFName("Helv"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            acroForm.setDefaultResources(formResources);
+            acroForm.setDefaultAppearance("/Helv 12 Tf 0 g");
+            doc.getDocumentCatalog().setAcroForm(acroForm);
+
+            org.apache.pdfbox.pdmodel.interactive.form.PDTextField field =
+                    new org.apache.pdfbox.pdmodel.interactive.form.PDTextField(acroForm);
+            field.setPartialName("shared");
+            var w0 = field.getWidgets().get(0);
+            w0.setRectangle(new PDRectangle(400, 600, 150, 20));
+            w0.setPage(p0);
+            p0.getAnnotations().add(w0);
+            acroForm.getFields().add(field);
+
+            var w1 = new org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget();
+            w1.setParent(field);
+            w1.setRectangle(new PDRectangle(400, 600, 150, 20));
+            w1.setPage(p1);
+            p1.getAnnotations().add(w1);
+            field.getWidgets().add(w1);
+            field.setValue("SHARED_VALUE");
+            return save(doc);
+        }
+    }
+
+    /**
+     * Outer form containing an outside rect, a nested form with the two-tone
+     * image (page rect (200,0)-(300,100)), then another outside rect. The
+     * sibling bounds live in the outer form's space, not the inner one's.
+     */
+    public static byte[] twoLevelFormSiblingsPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "deep");
+            PDFormXObject inner = new PDFormXObject(doc);
+            inner.setBBox(new PDRectangle(0, 0, 100, 100));
+            inner.setResources(new PDResources());
+            inner.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = inner.getContentStream().createOutputStream()) {
+                os.write("q 100 0 0 100 0 0 cm /ImF Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+            PDFormXObject outer = new PDFormXObject(doc);
+            outer.setBBox(new PDRectangle(0, 0, 612, 792));
+            outer.setResources(new PDResources());
+            outer.getResources().put(COSName.getPDFName("FmInner"), inner);
+            try (var os = outer.getContentStream().createOutputStream()) {
+                os.write(("q 0 0 1 rg 0 50 10 10 re f Q "
+                          + "q 1 0 0 1 200 0 cm /FmInner Do Q "
+                          + "q 0 1 0 rg 0 60 10 10 re f Q")
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(outer, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(outer);
+            }
+            return save(doc);
+        }
+    }
+
     /** Form-nested text "SECRETKEEP" at (100,700), single text object. */
     public static byte[] formNestedSingleWordPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {
@@ -468,12 +549,13 @@ public final class CropTestPdfGenerator {
         org.apache.pdfbox.pdmodel.interactive.form.PDTextField field =
                 new org.apache.pdfbox.pdmodel.interactive.form.PDTextField(acroForm);
         field.setPartialName(name);
-        field.setValue(value);
         var widget = field.getWidgets().get(0);
         widget.setRectangle(new PDRectangle(x, y, 150, 20));
         widget.setPage(page);
         page.getAnnotations().add(widget);
         acroForm.getFields().add(field);
+        // After the widget rectangle: setValue generates the visible appearance.
+        field.setValue(value);
     }
 
     /** Signature field with its widget at (400,600,150,50). */

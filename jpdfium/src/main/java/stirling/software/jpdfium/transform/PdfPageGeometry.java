@@ -12,7 +12,9 @@ import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Page geometry operations: crop, rotate, resize, and box manipulation.
@@ -87,9 +89,9 @@ public final class PdfPageGeometry {
      * inside the crop); straddling images keep their visible part and are
      * pixel-erased outside, including images nested in Form XObjects (soft
      * masks preserved); fully outside paths, shadings and forms are removed.
-     * Page-level text with a single survivor run is edited in place; text
-     * inside forms is recreated on the page because PDFium regenerates a form
-     * stream only when a child is removed from it. Outside annotations are
+     * Text with a single survivor run is edited in place; a form child is
+     * first promoted to the page because PDFium regenerates a form stream
+     * only when a child is removed from it. Outside annotations are
      * removed, straddling ones are clipped. Metadata, structure and signatures
      * are untouched.
      *
@@ -107,7 +109,9 @@ public final class PdfPageGeometry {
      */
     public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
         requireValidCrop(rect);
-        cropSingle(doc, pageIndex, rect);
+        Set<Integer> removedWidgets = new HashSet<>();
+        cropSingle(doc, pageIndex, rect, removedWidgets);
+        clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
     /**
@@ -129,9 +133,11 @@ public final class PdfPageGeometry {
                     "invalid page range [" + fromPage + ".." + toPage + "] for document with "
                             + pageCount + " pages");
         }
+        Set<Integer> removedWidgets = new HashSet<>();
         for (int i = fromPage; i <= toPage; i++) {
-            cropSingle(doc, i, rect);
+            cropSingle(doc, i, rect, removedWidgets);
         }
+        clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
     /**
@@ -160,9 +166,11 @@ public final class PdfPageGeometry {
                         "page index " + index + " outside [0, " + (pageCount - 1) + "]");
             }
         }
+        Set<Integer> removedWidgets = new HashSet<>();
         for (int index : pageIndices) {
-            cropSingle(doc, index, rect);
+            cropSingle(doc, index, rect, removedWidgets);
         }
+        clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
     /**
@@ -188,12 +196,14 @@ public final class PdfPageGeometry {
             }
         }
         int pages = Math.min(rects.size(), doc.pageCount());
+        Set<Integer> removedWidgets = new HashSet<>();
         for (int i = 0; i < pages; i++) {
             Rect targetRect = rects.get(i);
             if (targetRect != null) {
-                cropSingle(doc, i, targetRect);
+                cropSingle(doc, i, targetRect, removedWidgets);
             }
         }
+        clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
     /**
@@ -201,7 +211,8 @@ public final class PdfPageGeometry {
      * representation, but its value still lives in /AcroForm. Clear those
      * values so removing an outside widget does not leave the value recoverable.
      */
-    private static void clearUnplacedFormFields(MemorySegment rawDoc, int[] removedObjectNumbers) {
+    private static void clearUnplacedFormFields(MemorySegment rawDoc, Set<Integer> removedWidgets) {
+        if (removedWidgets.isEmpty()) return;
         if (FormFillBindings.EPDFForm_LoadModel == null
                 || FormFillBindings.EPDFForm_CloseModel == null
                 || FormFillBindings.EPDFForm_CountFields == null
@@ -235,7 +246,8 @@ public final class PdfPageGeometry {
                 } catch (Throwable t) {
                     throw new JPDFiumException(t);
                 }
-                boolean placed = false;
+                // Fields with no widgets were not affected by the crop.
+                boolean placed = widgets <= 0;
                 for (int w = 0; w < widgets; w++) {
                     int widgetObjNum;
                     try {
@@ -244,7 +256,7 @@ public final class PdfPageGeometry {
                     } catch (Throwable t) {
                         throw new JPDFiumException(t);
                     }
-                    if (widgetObjNum <= 0 || !contains(removedObjectNumbers, widgetObjNum)) {
+                    if (widgetObjNum <= 0 || !removedWidgets.contains(widgetObjNum)) {
                         placed = true;  // a widget survives, or its identity is unknown
                         break;
                     }
@@ -276,21 +288,14 @@ public final class PdfPageGeometry {
         }
     }
 
-    private static boolean contains(int[] values, int value) {
-        for (int v : values) {
-            if (v == value) return true;
-        }
-        return false;
-    }
-
     /** The shared single-page hard-crop implementation. */
-    private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect) {
+    private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect,
+                                   Set<Integer> removedWidgets) {
         try (PdfPage page = doc.page(pageIndex)) {
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
                     rect.x(), rect.y(), rect.width(), rect.height());
-            int[] removedAnnotations = PdfAnnotations.clipToRect(page.rawHandle(), rect);
-            if (removedAnnotations.length > 0) {
-                clearUnplacedFormFields(doc.rawHandle(), removedAnnotations);
+            for (int objectNumber : PdfAnnotations.clipToRect(page.rawHandle(), rect)) {
+                removedWidgets.add(objectNumber);
             }
             PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
             PdfPageBoxes.setCropBox(page.rawHandle(), rect);
