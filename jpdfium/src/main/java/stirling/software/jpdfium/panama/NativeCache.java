@@ -58,8 +58,7 @@ final class NativeCache {
 
     // Locks must outlive the load: PDFium resolves symbols lazily, so the
     // entry must stay on disk for the whole JVM lifetime.
-    private static final List<AutoCloseable> RETAINED = new ArrayList<>();
-    private static final Set<Path> RETAINED_ENTRIES = ConcurrentHashMap.newKeySet();
+    private static final Map<Path, FileLock> RETAINED = new ConcurrentHashMap<>();
 
     private NativeCache() {}
 
@@ -277,9 +276,7 @@ final class NativeCache {
             createOwnerOnlyFile(lockFile);
             FileChannel channel =
                     FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
-            FileLock lock = channel.lock();
-            RETAINED.add(channel);
-            RETAINED.add(lock);
+            RETAINED.put(lockFile.toAbsolutePath().normalize(), channel.lock());
             dir.toFile().deleteOnExit();
             return dir;
         } catch (IOException | RuntimeException e) {
@@ -355,22 +352,16 @@ final class NativeCache {
 
     private static void retainReaderLock(Path dir) throws IOException {
         Path key = dir.toAbsolutePath().normalize();
-        if (!RETAINED_ENTRIES.add(key)) return;
+        FileLock existing = RETAINED.get(key);
+        if (existing != null && existing.isValid()) return;
+        Path lockFile = dir.resolve(READER_LOCK);
+        createOwnerOnlyFile(lockFile);
+        FileChannel channel =
+                FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
         try {
-            Path lockFile = dir.resolve(READER_LOCK);
-            createOwnerOnlyFile(lockFile);
-            FileChannel channel =
-                    FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
-            try {
-                FileLock lock = channel.lock(0L, Long.MAX_VALUE, true);
-                RETAINED.add(channel);
-                RETAINED.add(lock);
-            } catch (IOException | RuntimeException e) {
-                channel.close();
-                throw e;
-            }
+            RETAINED.put(key, channel.lock(0L, Long.MAX_VALUE, true));
         } catch (IOException | RuntimeException e) {
-            RETAINED_ENTRIES.remove(key);
+            channel.close();
             throw new IOException("cannot lock cache entry", e);
         }
     }
