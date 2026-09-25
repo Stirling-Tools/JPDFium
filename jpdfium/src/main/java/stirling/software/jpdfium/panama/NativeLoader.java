@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public final class NativeLoader {
 
@@ -57,19 +58,35 @@ public final class NativeLoader {
             throw new NativeNotFoundException(platform);
 
         try {
-            Path tmpDir = Files.createTempDirectory("jpdfium-");
-            tmpDir.toFile().deleteOnExit();
-
-            // Extract all libraries from the manifest to tmpDir so the dynamic
-            // linker can resolve NEEDED dependencies via RUNPATH=$ORIGIN
             List<String> libs = readLibraryIndex(indexResource);
-            for (String lib : libs) {
-                extractToDir(resourceBase + lib, tmpDir);
+            Map<String, String> checksums = readChecksumIndex(resourceBase + "native-libs.sha256");
+            if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.SWEEP_PROPERTY))) {
+                NativeCache.sweepTempDirs(Path.of(System.getProperty("java.io.tmpdir")),
+                        NativeCache.SWEEP_MIN_AGE_MILLIS, null);
             }
 
-            // If no manifest was found, fall back to extracting just libpdfium
-            if (libs.isEmpty()) {
-                extractToDir(resourceBase + pdfiumName, tmpDir);
+            // The verified per-user cache avoids the Windows per-JVM temp leak;
+            // any cache miss or failure falls back to a temp extraction.
+            Path tmpDir = null;
+            if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.CACHE_ENABLED_PROPERTY))
+                    && !libs.isEmpty() && !checksums.isEmpty()) {
+                tmpDir = NativeCache.prepare(platform, libs, checksums,
+                        name -> NativeLoader.class.getResourceAsStream(resourceBase + name));
+            }
+            if (tmpDir == null) {
+                tmpDir = Files.createTempDirectory("jpdfium-");
+                tmpDir.toFile().deleteOnExit();
+
+                // Extract all libraries from the manifest to tmpDir so the dynamic
+                // linker can resolve NEEDED dependencies via RUNPATH=$ORIGIN
+                for (String lib : libs) {
+                    extractToDir(resourceBase + lib, tmpDir);
+                }
+
+                // If no manifest was found, fall back to extracting just libpdfium
+                if (libs.isEmpty()) {
+                    extractToDir(resourceBase + pdfiumName, tmpDir);
+                }
             }
 
             // On Linux/macOS, RUNPATH=$ORIGIN in pdfium.so/.dylib makes the
@@ -127,6 +144,17 @@ public final class NativeLoader {
             // Missing index is not fatal; fall through with empty list
         }
         return result;
+    }
+
+    private static Map<String, String> readChecksumIndex(String resource) {
+        try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
+            if (is == null) return Map.of();
+            return NativeCache.parseChecksums(
+                    new String(is.readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException _) {
+            // Older natives jars ship no checksums; they use temp extraction.
+            return Map.of();
+        }
     }
 
     private static void extractToDir(String resource, Path dir) throws IOException {
