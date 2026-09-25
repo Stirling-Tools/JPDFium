@@ -84,5 +84,9 @@ class TextShapeTest {
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(new byte[0], "x", 12f));
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(bytes, "", 12f));
         assertThrows(IllegalArgumentException.class, () -> FontLib.shapeText(bytes, "x", 0f));
+        // Garbage bytes: an empty HarfBuzz face must be rejected, not shaped
+        // into a list of .notdef glyphs.
+        assertThrows(stirling.software.jpdfium.exception.JPDFiumException.class,
+                () -> FontLib.shapeText(new byte[] {1, 2, 3, 4, 5, 6, 7, 8}, "x", 12f));
     }
 }

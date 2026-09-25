@@ -456,6 +456,12 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
                                      HB_MEMORY_MODE_READONLY, nullptr, nullptr);
     hb_face_t* face = hb_face_create(blob, 0);
     hb_blob_destroy(blob);
+    // hb_face_create never fails: corrupt bytes yield an empty face whose
+    // every codepoint maps to glyph 0. Reject those, as font_covers_text does.
+    if (hb_face_get_glyph_count(face) == 0) {
+        hb_face_destroy(face);
+        return JPDFIUM_ERR_INVALID;
+    }
     hb_font_t* font = hb_font_create(face);
     hb_face_destroy(face);
     // Advances come out in 26.6 fractional points at this scale.
