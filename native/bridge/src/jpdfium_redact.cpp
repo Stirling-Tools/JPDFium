@@ -1735,6 +1735,46 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         return true;
     };
 
+    // Paint position of a nested object within its form chain. |leaving|
+    // candidates (promoted out of their form) and fully outside siblings are
+    // skipped: neither paints. At each level the sibling bounds live in the
+    // PARENT form's space, so the transform is the parent form's own matrix
+    // composed with its parent chain (not the child's toPage, which would
+    // double-apply the parent matrix).
+    auto classifyPaintPosition = [&](const ObjRef& start, bool& hasEarlier, bool& hasLater) {
+        hasEarlier = false;
+        hasLater = false;
+        int ordinal = start.ordinal;
+        FPDF_PAGEOBJECT parent = start.parentForm;
+        FS_MATRIX levelToPage = start.toPage;
+        while (parent) {
+            int siblings = FPDFFormObj_CountObjects(parent);
+            for (int si = 0; si < siblings; si++) {
+                if (si == ordinal) continue;
+                FPDF_PAGEOBJECT sib = FPDFFormObj_GetObject(parent, si);
+                if (!sib || promotionCandidates.count(sib)) continue;
+                float l, b, r, t;
+                if (transformedBounds(sib, levelToPage, l, b, r, t) &&
+                    fullyOutsideCrop(l, b, r, t)) {
+                    continue;  // destroyed, never paints
+                }
+                if (si < ordinal) {
+                    hasEarlier = true;
+                } else {
+                    hasLater = true;
+                }
+            }
+            auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
+            if (pit == objPtrToIndex.end()) break;
+            const ObjRef& pref = allObjs[pit->second];
+            FS_MATRIX parentMatrix;
+            if (!FPDFPageObj_GetMatrix(parent, &parentMatrix)) break;
+            levelToPage = concatMatrix(parentMatrix, pref.toPage);
+            ordinal = pref.ordinal;
+            parent = pref.parentForm;
+        }
+    };
+
     // Recursive form XObject marking: collects child objects covered by
     // redaction rects, accounting for the cumulative transform from
     // form-local to page space. Removal is DEFERRED into objsToDestroy so
@@ -1830,32 +1870,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     // A page-level object sits before or after the WHOLE top
                     // form. The pre-pass already rejected sandwiched images,
                     // so only the "paints later" side decides placement.
+                    bool hasEarlier = false;
                     bool hasLater = false;
-                    {
-                        int ordinal = ref.ordinal;
-                        FPDF_PAGEOBJECT parent = ref.parentForm;
-                        FS_MATRIX levelToPage = ref.toPage;
-                        while (parent) {
-                            int siblings = FPDFFormObj_CountObjects(parent);
-                            for (int si = 0; si < siblings; si++) {
-                                if (si == ordinal) continue;
-                                FPDF_PAGEOBJECT sib = FPDFFormObj_GetObject(parent, si);
-                                if (!sib || promotionCandidates.count(sib)) continue;
-                                float sl, sb, sr, st;
-                                if (transformedBounds(sib, levelToPage, sl, sb, sr, st) &&
-                                    fullyOutsideCrop(sl, sb, sr, st)) {
-                                    continue;  // destroyed, never paints
-                                }
-                                if (si > ordinal) hasLater = true;
-                            }
-                            auto ppit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
-                            if (ppit == objPtrToIndex.end()) break;
-                            const ObjRef& pref = allObjs[ppit->second];
-                            ordinal = pref.ordinal;
-                            levelToPage = pref.toPage;
-                            parent = pref.parentForm;
-                        }
-                    }
+                    classifyPaintPosition(ref, hasEarlier, hasLater);
                     // Detach before promoting, or the form still renders the child.
                     if (!FPDFFormObj_RemoveObject(formObj, child)) {
                         objsToDestroy.insert(child);
@@ -1902,35 +1919,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         for (FPDF_PAGEOBJECT cand : promotionCandidates) {
             auto cit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(cand));
             if (cit == objPtrToIndex.end()) continue;
-            int ordinal = allObjs[cit->second].ordinal;
-            FPDF_PAGEOBJECT parent = allObjs[cit->second].parentForm;
-            FS_MATRIX levelToPage = allObjs[cit->second].toPage;
             bool hasEarlier = false;
             bool hasLater = false;
-            while (parent) {
-                int siblings = FPDFFormObj_CountObjects(parent);
-                for (int si = 0; si < siblings; si++) {
-                    if (si == ordinal) continue;
-                    FPDF_PAGEOBJECT sib = FPDFFormObj_GetObject(parent, si);
-                    if (!sib || promotionCandidates.count(sib)) continue;
-                    float l, b, r, t;
-                    if (transformedBounds(sib, levelToPage, l, b, r, t) &&
-                        fullyOutsideCrop(l, b, r, t)) {
-                        continue;  // destroyed, never paints
-                    }
-                    if (si < ordinal) {
-                        hasEarlier = true;
-                    } else {
-                        hasLater = true;
-                    }
-                }
-                auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
-                if (pit == objPtrToIndex.end()) break;
-                const ObjRef& pref = allObjs[pit->second];
-                ordinal = pref.ordinal;
-                levelToPage = pref.toPage;
-                parent = pref.parentForm;
-            }
+            classifyPaintPosition(allObjs[cit->second], hasEarlier, hasLater);
             if (hasEarlier && hasLater) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
     }
@@ -2440,23 +2431,47 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         fissionAttempted.insert(plan.originalObj);
         bool originalDropped = false;
 
-        // One surviving run on a page-level object is edited in place: a new
-        // object would land in a stream appended after all existing content.
-        // Form children are excluded: a form stream only regenerates when a
-        // child is removed (CPDF_PageObjectHolder::RemovePageObject is the
-        // only dirty-stream hook), so an in-place edit would never reach the
-        // saved file - the removed text would stay extractable.
-        if (plan.fragments.size() == 1 && !plan.parentForm) {
+        // One surviving run edits the original object in place. New objects
+        // land in a stream appended after all existing content, so they would
+        // paint above later page content. A form child is first detached from
+        // its form (which marks the form stream dirty; that is the only
+        // dirty-stream hook) and promoted to the page: the existing object
+        // then serializes at its page list position, keeping paint order.
+        if (plan.fragments.size() == 1) {
             const TextFragment& frag = plan.fragments[0];
-            FS_MATRIX matrix = frag.matrix;
-            const FS_MATRIX* invChainPtr = nullptr;
             bool canEdit = true;
+            bool promotedFromForm = false;
+            if (plan.parentForm) {
+                auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(plan.originalObj));
+                if (pit == objPtrToIndex.end()) {
+                    canEdit = false;
+                } else {
+                    const ObjRef& ref = allObjs[pit->second];
+                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
+                        canEdit = false;  // freed with the destroyed top form
+                    } else if (!FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
+                        canEdit = false;
+                    } else {
+                        detachedFromForms.insert(plan.parentForm);
+                        promotedFromForm = true;
+                    }
+                }
+            }
             if (canEdit) {
                 bool mutated = false;
-                if (emitFragment(plan.originalObj, frag, plan, matrix,
-                                 /*verifyWithTextPage=*/false, invChainPtr, &mutated)) {
+                if (emitFragment(plan.originalObj, frag, plan, frag.matrix,
+                                 /*verifyWithTextPage=*/false, nullptr, &mutated)) {
                     inPlaceEdited = true;
-                    continue;  // edited in place: nothing to insert, nothing to destroy
+                    if (promotedFromForm) {
+                        auto pit =
+                            objPtrToIndex.find(reinterpret_cast<uintptr_t>(plan.originalObj));
+                        if (pit != objPtrToIndex.end()) {
+                            const ObjRef& ref = allObjs[pit->second];
+                            insertions.push_back(
+                                {plan.originalObj, ref.topFormPageIndex + 1, ref.ordinal, -1});
+                        }
+                    }
+                    continue;  // edited in place: nothing to destroy
                 }
                 // A mutated object cannot be trusted; never rebuild it from
                 // decoded Unicode (that drops TJ adjustments). Drop it instead.
@@ -2554,7 +2569,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         }
     }
 
-    if (cropReplacementFailed) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+    const int32_t pendingError = cropReplacementFailed ? JPDFIUM_ERR_REDACT_INCOMPLETE : JPDFIUM_OK;
 
     // 8. Fallback: remove text objects that are >70% inside a match bbox but
     //    were NOT caught by the char-to-object mapping (e.g. chars with
@@ -2753,7 +2768,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         core) {
         core->contentRedacted = true;
     }
-    return JPDFIUM_OK;
+    return pendingError;
 }
 
 // PCRE2 matching layer (replaces std::wregex entirely).

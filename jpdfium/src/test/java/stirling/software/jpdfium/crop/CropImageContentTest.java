@@ -205,6 +205,18 @@ class CropImageContentTest {
     }
 
     @Test
+    void twoLevelFormSiblingsDoNotBlockPromotion() throws Exception {
+        // Siblings of the image's parent form live in the OUTER form's space.
+        // Re-applying the inner form matrix would move them into the crop and
+        // falsely reject the promotion.
+        byte[] output = crop(CropTestPdfGenerator.twoLevelFormSiblingsPdf(),
+                new Rect(200, 50, 100, 50));
+        BufferedImage page = render(output);
+        assertEquals(0xFF0000, pixelAt(page, output, 250, 60) & 0xFFFFFF,
+                "visible part of the deeply nested image was lost");
+    }
+
+    @Test
     void sandwichedFormImageFailsLoudlyInsteadOfHidingSiblings() throws Exception {
         assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
                 () -> crop(CropTestPdfGenerator.formSandwichedImagePdf(), KEEP_TOP));
