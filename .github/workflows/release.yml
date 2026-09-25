@@ -160,10 +160,34 @@ jobs:
             pkg-config
           echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
+      # Homebrew stopped publishing x86_64 bottles for macOS 14, so every
+      # formula builds from source under Rosetta (~2.5 h). Reuse the tree.
+      - name: Cache x86_64 Homebrew deps (macOS)
+        if: matrix.platform == 'darwin-x64'
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: |
+            /usr/local/Cellar
+            /usr/local/opt
+            /usr/local/bin
+            /usr/local/lib
+            /usr/local/include
+            /usr/local/share
+            /usr/local/etc
+            /usr/local/Frameworks
+            /usr/local/var/homebrew
+            ~/Library/Caches/Homebrew/downloads
+          key: brew-x64-sonoma-v1
+          restore-keys: |
+            brew-x64-sonoma-
+
       - name: Install build deps (macOS, x86_64 cross-compile)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
           sudo softwareupdate --install-rosetta --agree-to-license || true
           if [ ! -x /usr/local/bin/brew ]; then
@@ -187,10 +211,17 @@ jobs:
           # /usr/local/share/man pre-exists root-owned on macos-14 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
-          arch -x86_64 /usr/local/bin/brew install \
-            pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
-          # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
-          arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
+          # A restored cache already holds every keg; only fetch what is missing.
+          if arch -x86_64 /usr/local/bin/brew list --versions \
+              pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config qpdf \
+              >/dev/null 2>&1; then
+            echo "x86_64 Homebrew deps restored from cache"
+          else
+            arch -x86_64 /usr/local/bin/brew install \
+              pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
+            # Homebrew falls back to source when no bottle exists.
+            arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
+          fi
           {
             echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
