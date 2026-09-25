@@ -420,12 +420,26 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t input
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens,
                                           int32_t count, uint8_t** output, int64_t* outputLen);
 
+// QPDF File-Backed Document Merging
+// Same as jpdfium_qpdf_merge but reads inputs from disk and writes the result
+// straight to out_path. No document bytes cross the FFI boundary, so merging
+// multi-gigabyte inputs needs only native-side memory. Returns 0 on success.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count,
+                                                const char* out_path);
+
 // QPDF In-Process Page Extraction
 // Losslessly extracts the specified zero-based pages into a new document.
 // Returns extracted PDF bytes via *output. Caller frees with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen);
+
+// QPDF File-Backed Page Extraction
+// Same as jpdfium_qpdf_extract_pages but reads from in_path and writes
+// straight to out_path. Returns 0 on success.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
+                                                       const int32_t* pageIndices,
+                                                       int32_t pageCount, const char* out_path);
 
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004

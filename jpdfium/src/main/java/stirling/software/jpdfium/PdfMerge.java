@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -12,6 +13,9 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageImporter;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
  * Merge multiple PDF documents into one.
@@ -44,6 +48,15 @@ public final class PdfMerge {
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument merge(List<PdfDocument> documents) {
+        return merge(documents, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge multiple open PDF documents with explicit storage control.
+     * FILE mode fails loudly when the native file-backed merge is unavailable
+     * or fails; live documents are materialized to temp files first.
+     */
+    public static PdfDocument merge(List<PdfDocument> documents, StorageOptions options) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
         if (documents.size() == 1) return reopenViaBytes(documents.getFirst());
 
@@ -55,6 +68,53 @@ public final class PdfMerge {
                 mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
             }
             pageOffset += sourceDoc.pageCount();
+        }
+
+        if (options.mode() != StorageOptions.Mode.MEMORY) {
+            if (QpdfLib.isMergeFilesSupported()) {
+                List<Path> cleanup = new ArrayList<>();
+                try {
+                    // A document opened from a path may have been edited in
+                    // memory since; never merge the file behind its back.
+                    // Serialize each live document to a temp (native save, no
+                    // Java heap) and merge those.
+                    List<Path> filePaths = new ArrayList<>(documents.size());
+                    for (PdfDocument sourceDoc : documents) {
+                        Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                        cleanup.add(materialized);
+                        sourceDoc.save(materialized);
+                        filePaths.add(materialized);
+                    }
+                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                    cleanup.add(tmp);
+                    if (QpdfLib.mergeFiles(filePaths, tmp)) {
+                        Path result = tmp;
+                        if (!mergedBookmarks.isEmpty()) {
+                            Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
+                            cleanup.add(tmpBookmarks);
+                            try (PdfDocument merged = PdfDocument.open(tmp)) {
+                                PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks);
+                            }
+                            result = tmpBookmarks;
+                        }
+                        try (PdfDocument verify = PdfDocument.open(result)) {
+                            if (verify.pageCount() == pageOffset) {
+                                cleanup.remove(result);
+                                return PdfDocument.openTemp(result);
+                            }
+                        }
+                    }
+                } catch (Exception _) {
+                    // Fall through to the in-memory paths below
+                } finally {
+                    for (Path leftover : cleanup) {
+                        deleteQuietly(leftover);
+                    }
+                }
+            }
+            if (options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("file-backed merge failed");
+            }
         }
 
         if (PdfMerger.isSupported()) {
@@ -108,11 +168,57 @@ public final class PdfMerge {
      * @throws IllegalArgumentException if the list is empty
      */
     public static PdfDocument mergeFiles(List<Path> paths) {
+        return mergeFiles(paths, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge PDF files with explicit storage control.
+     * FILE mode fails loudly when the native file-backed merge is unavailable
+     * or fails.
+     */
+    public static PdfDocument mergeFiles(List<Path> paths, StorageOptions options) {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (paths.size() == 1) {
             try (PdfDocument singleDoc = PdfDocument.open(paths.getFirst())) {
                 return reopenViaBytes(singleDoc);
             }
+        }
+
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
+            try {
+                int expectedPages = 0;
+                boolean allOpenable = true;
+                for (Path p : paths) {
+                    try (PdfDocument doc = PdfDocument.open(p)) {
+                        expectedPages += doc.pageCount();
+                    } catch (Exception _) {
+                        allOpenable = false;
+                        break;
+                    }
+                }
+                if (allOpenable && expectedPages > 0) {
+                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                    boolean done = false;
+                    try {
+                        if (QpdfLib.mergeFiles(paths, tmp)) {
+                            try (PdfDocument verify = PdfDocument.open(tmp)) {
+                                if (verify.pageCount() == expectedPages) {
+                                    PdfDocument owned = PdfDocument.openTemp(tmp);
+                                    done = true;
+                                    return owned;
+                                }
+                            }
+                        }
+                    } finally {
+                        if (!done) deleteQuietly(tmp);
+                    }
+                }
+            } catch (IOException _) {
+                // Fall through to the paths below
+            }
+        }
+        if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed merge unavailable or failed");
         }
 
         if (PdfMerger.isSupported()) {
@@ -192,6 +298,89 @@ public final class PdfMerge {
             for (PdfDocument openedDoc : openedDocs) {
                 try { openedDoc.close(); } catch (RuntimeException _) {}
             }
+        }
+    }
+
+    /**
+     * Merge PDF files from paths straight into an output file.
+     *
+     * <p>Unlike {@link #mergeFiles(List)}, no document bytes ever live on the
+     * Java heap: inputs are read from disk and the result is written to disk
+     * by native code. Peak heap stays flat regardless of input size, which is
+     * what makes multi-gigabyte merges feasible.
+     *
+     * <p>No bookmarks are merged by this method. Read source bookmarks first
+     * (via short-lived {@link PdfDocument#open(Path)} handles, which only
+     * parse the catalog) and apply the combined tree afterwards with
+     * {@code PdfBookmarkEditor}.
+     *
+     * <p>Falls back to {@link #mergeFiles(List)} plus save when the
+     * file-backed native path is unavailable.
+     *
+     * @param paths  file paths to merge in order
+     * @param output destination PDF file path
+     * @throws IOException on I/O error or merge failure
+     */
+    public static void mergeFilesToFile(List<Path> paths, Path output) throws IOException {
+        mergeFilesToFile(paths, output, StorageOptions.defaults());
+    }
+
+    /**
+     * Merge files straight to an output file with explicit storage control.
+     * Existing output is replaced only after the merge succeeds. FILE mode
+     * fails loudly when the native file-backed merge is unavailable or fails.
+     */
+    public static void mergeFilesToFile(List<Path> paths, Path output, StorageOptions options) throws IOException {
+        if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        if (paths.size() == 1) {
+            Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
+            return;
+        }
+
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()
+                && stageNativeMerge(paths, output, options)) {
+            return;
+        }
+        if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed merge unavailable or failed");
+        }
+
+        try (PdfDocument merged = mergeFiles(paths, options)) {
+            merged.save(output);
+        }
+    }
+
+    /**
+     * Native-merge into a staging file and replace {@code output} only on
+     * success: qpdf must never truncate an input it is still reading when the
+     * output aliases one of the inputs. Returns false when the native path is
+     * unavailable or fails; the caller then falls back or fails in FILE mode.
+     */
+    private static boolean stageNativeMerge(List<Path> paths, Path output, StorageOptions options)
+            throws IOException {
+        Path staged;
+        try {
+            staged = options.createStagingFile(output);
+        } catch (IOException _) {
+            return false;
+        }
+        try {
+            if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
+            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            staged = null;
+            return true;
+        } finally {
+            deleteQuietly(staged);
+        }
+    }
+
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
+    private static void deleteQuietly(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException _) {}
         }
     }
 

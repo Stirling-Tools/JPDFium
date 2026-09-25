@@ -1,6 +1,10 @@
 package stirling.software.jpdfium;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -11,6 +15,8 @@ import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -67,6 +73,15 @@ public final class PdfSplit {
      * @return new document containing only the specified pages
      */
     public static PdfDocument extractPages(PdfDocument doc, Set<Integer> indices) {
+        return extractPages(doc, indices, StorageOptions.defaults());
+    }
+
+    /**
+     * Extract specific pages with explicit storage control.
+     * FILE mode fails loudly when the native file-backed extract is
+     * unavailable or fails; live documents are materialized to temp files.
+     */
+    public static PdfDocument extractPages(PdfDocument doc, Set<Integer> indices, StorageOptions options) {
         if (indices.isEmpty()) {
             throw new IllegalArgumentException("At least one page index is required");
         }
@@ -77,6 +92,27 @@ public final class PdfSplit {
 
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
+
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
+            Path materialized = null;
+            try {
+                // The source file behind an open document may be stale after
+                // in-memory edits; serialize the live document first.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                doc.save(materialized);
+                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (fileDoc != null) return fileDoc;
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
+            } finally {
+                deleteQuietly(materialized);
+            }
+            if (options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("file-backed extract failed");
+            }
+        } else if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed extract unavailable");
+        }
 
         if (QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
@@ -122,6 +158,15 @@ public final class PdfSplit {
      * @return new document containing pages [fromPage..toPage]
      */
     public static PdfDocument extractPageRange(PdfDocument doc, int fromPage, int toPage) {
+        return extractPageRange(doc, fromPage, toPage, StorageOptions.defaults());
+    }
+
+    /**
+     * Extract a contiguous range with explicit storage control.
+     * FILE mode fails loudly when the native file-backed extract is
+     * unavailable or fails; live documents are materialized to temp files.
+     */
+    public static PdfDocument extractPageRange(PdfDocument doc, int fromPage, int toPage, StorageOptions options) {
         if (fromPage < 0 || toPage < fromPage || toPage >= doc.pageCount()) {
             throw new IllegalArgumentException(
                     "Invalid range [%d..%d] for document with %d pages"
@@ -131,12 +176,34 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForRange(sourceBookmarks, fromPage, toPage);
 
-        if (QpdfLib.isExtractSupported()) {
-            int count = toPage - fromPage + 1;
-            int[] pageIndices = new int[count];
-            for (int i = 0; i < count; i++) {
-                pageIndices[i] = fromPage + i;
+        int count = toPage - fromPage + 1;
+        int[] pageIndices = new int[count];
+        for (int i = 0; i < count; i++) {
+            pageIndices[i] = fromPage + i;
+        }
+
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
+            Path materialized = null;
+            try {
+                // The source file behind an open document may be stale after
+                // in-memory edits; serialize the live document first.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                doc.save(materialized);
+                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (fileDoc != null) return fileDoc;
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
+            } finally {
+                deleteQuietly(materialized);
             }
+            if (options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("file-backed extract failed");
+            }
+        } else if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed extract unavailable");
+        }
+
+        if (QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
                 if (!remappedBookmarks.isEmpty()) {
@@ -168,6 +235,142 @@ public final class PdfSplit {
             return PdfDocument.open(bytesWithBookmarks);
         }
         return detachedDoc;
+    }
+
+    /**
+     * Extract a contiguous range of pages straight from an input file to an
+     * output file.
+     *
+     * <p>File-backed like {@code PdfMerge.mergeFilesToFile}: no document
+     * bytes on the Java heap. Falls back to open/extract/save when the
+     * file-backed native path is unavailable.
+     *
+     * @param input    input PDF file path
+     * @param fromPage first page index (inclusive, zero-based)
+     * @param toPage   last page index (inclusive, zero-based)
+     * @param output   destination PDF file path
+     * @throws IOException on I/O error or extraction failure
+     */
+    public static void extractPageRangeToFile(Path input, int fromPage, int toPage,
+                                              Path output) throws IOException {
+        extractPageRangeToFile(input, fromPage, toPage, output, StorageOptions.defaults());
+    }
+
+    /**
+     * Extract a range straight to a file with explicit storage control.
+     * Existing output is replaced only after extraction succeeds. FILE mode
+     * fails loudly when the native file-backed extract is unavailable or fails.
+     */
+    public static void extractPageRangeToFile(Path input, int fromPage, int toPage,
+                                              Path output, StorageOptions options) throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        if (fromPage < 0 || toPage < fromPage) {
+            throw new IllegalArgumentException("Invalid range [%d..%d]".formatted(fromPage, toPage));
+        }
+        int totalPages;
+        try (PdfDocument probe = PdfDocument.open(input)) {
+            totalPages = probe.pageCount();
+        }
+        if (fromPage >= totalPages || toPage >= totalPages) {
+            throw new IllegalArgumentException(
+                    "Invalid range [%d..%d] for document with %d pages"
+                            .formatted(fromPage, toPage, totalPages));
+        }
+        int count = toPage - fromPage + 1;
+        int[] pageIndices = new int[count];
+        for (int i = 0; i < count; i++) {
+            pageIndices[i] = fromPage + i;
+        }
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()
+                && stageNativeExtract(input, pageIndices, count, output, options)) {
+            return;
+        }
+        if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed extract unavailable or failed");
+        }
+        try (PdfDocument doc = PdfDocument.open(input);
+             PdfDocument part = extractPageRange(doc, fromPage, toPage, options)) {
+            part.save(output);
+        }
+    }
+
+    /**
+     * Native-extract into a staging file and replace {@code output} only on
+     * success: qpdf must never truncate the input it is still reading when the
+     * output aliases the input. Returns false when the native path is
+     * unavailable or fails; the caller then falls back or fails in FILE mode.
+     */
+    private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
+                                              Path output, StorageOptions options) throws IOException {
+        Path staged;
+        try {
+            staged = options.createStagingFile(output);
+        } catch (IOException _) {
+            return false;
+        }
+        try {
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+                return false;
+            }
+            // The native extractor skips out-of-range indices; verify the
+            // staged file really has every requested page.
+            try (PdfDocument written = PdfDocument.open(staged)) {
+                if (written.pageCount() != expectedPages) {
+                    throw new IOException("file-backed extract wrote the wrong page count for "
+                            + expectedPages + " requested pages");
+                }
+            }
+            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            staged = null;
+            return true;
+        } finally {
+            deleteQuietly(staged);
+        }
+    }
+
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
+    private static void deleteQuietly(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException _) {}
+        }
+    }
+
+    /**
+     * File-backed extract shared by the open-document paths: extract to a
+     * temp file, apply bookmarks through the file variant, verify, and hand
+     * back a temp-owned document. Null when anything fails (caller falls back).
+     */
+    private static PdfDocument extractToTemp(Path input, int[] pageIndices,
+                                             List<Bookmark> remappedBookmarks, StorageOptions options) {
+        List<Path> cleanup = new ArrayList<>();
+        try {
+            Path tmp = options.createTempFile("jpdfium-split", ".pdf");
+            cleanup.add(tmp);
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, tmp)) return null;
+            Path result = tmp;
+            if (!remappedBookmarks.isEmpty()) {
+                Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
+                cleanup.add(tmpBookmarks);
+                try (PdfDocument part = PdfDocument.open(tmp)) {
+                    PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
+                }
+                result = tmpBookmarks;
+            }
+            try (PdfDocument verify = PdfDocument.open(result)) {
+                if (verify.pageCount() != pageIndices.length) return null;
+            }
+            cleanup.remove(result);
+            return PdfDocument.openTemp(result);
+        } catch (Exception _) {
+            return null;
+        } finally {
+            for (Path leftover : cleanup) {
+                deleteQuietly(leftover);
+            }
+        }
     }
 
     private static List<Bookmark> filterBookmarksForRange(List<Bookmark> bookmarks, int fromPage, int toPage) {
