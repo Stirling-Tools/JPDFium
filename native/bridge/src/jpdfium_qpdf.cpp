@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_QPDF
@@ -25,6 +30,20 @@
 #include <qpdf/QPDFWriter.hh>
 
 namespace {
+
+// Create the output with owner-only permissions on POSIX (CodeQL
+// cpp/world-writable-file-creation); Windows has no mode argument here.
+static FILE* createOutputFile(const char* path) {
+#ifdef _WIN32
+    return std::fopen(path, "wb");
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return nullptr;
+    FILE* file = ::fdopen(fd, "wb");
+    if (!file) ::close(fd);
+    return file;
+#endif
+}
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -278,7 +297,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             }
         }
 
-        FILE* out = std::fopen(out_path, "wb");
+        FILE* out = createOutputFile(out_path);
         if (!out) {
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
@@ -317,7 +336,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
             }
         }
 
-        FILE* out = std::fopen(out_path, "wb");
+        FILE* out = createOutputFile(out_path);
         if (!out) {
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
