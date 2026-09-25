@@ -15,16 +15,24 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.MessageDigest;
+import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.security.auth.Subject;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -305,5 +313,118 @@ class NativeCacheTest {
         assertThrows(NativeCache.IntegrityException.class, () -> NativeCache.copyVerified(
                 new ByteArrayInputStream("tampered".getBytes(StandardCharsets.UTF_8)),
                 target, sha256("expected".getBytes(StandardCharsets.UTF_8))));
+    }
+
+    @Test
+    void isSafeNameRejectsTraversal() {
+        assertTrue(NativeCache.isSafeName("libpdfium.dylib"));
+        assertFalse(NativeCache.isSafeName(""));
+        assertFalse(NativeCache.isSafeName("."));
+        assertFalse(NativeCache.isSafeName(".."));
+        assertFalse(NativeCache.isSafeName("../evil"));
+        assertFalse(NativeCache.isSafeName("a/b"));
+        assertFalse(NativeCache.isSafeName("a\\b"));
+        assertFalse(NativeCache.isSafeName("/abs"));
+    }
+
+    @Test
+    void prepareRejectsUnsafeName(@TempDir Path tmp) throws Exception {
+        Path platformDir = Files.createDirectories(tmp.resolve("p"));
+        Map<String, String> hashes = new LinkedHashMap<>(hashes(files()));
+        hashes.put("../evil", sha256("x".getBytes(StandardCharsets.UTF_8)));
+        List<String> unsafe = List.of("../evil");
+
+        assertThrows(NativeCache.IntegrityException.class, () -> NativeCache.prepareIn(
+                platformDir, unsafe, hashes, NativeCache.cacheKey(hashes), resources(files()), true));
+    }
+
+    @Test
+    void staleStagingIsReclaimed(@TempDir Path tmp) throws Exception {
+        Path platformDir = Files.createDirectories(tmp.resolve("p"));
+        Path stale = Files.createDirectories(platformDir.resolve(".staging-old"));
+        Files.setLastModifiedTime(stale,
+                FileTime.fromMillis(System.currentTimeMillis() - 2L * 60L * 60L * 1000L));
+        Path fresh = Files.createDirectories(platformDir.resolve(".staging-fresh"));
+        Map<String, byte[]> files = files();
+        Map<String, String> hashes = hashes(files);
+
+        NativeCache.prepareIn(platformDir, NAMES, hashes,
+                NativeCache.cacheKey(hashes), resources(files), true);
+
+        assertFalse(Files.exists(stale), "leftover staging dirs must be reclaimed");
+        assertTrue(Files.exists(fresh), "an in-flight staging dir must be kept");
+    }
+
+    @Test
+    void aclRejectsBroadWritePrincipals() {
+        UserPrincipal owner = new NamePrincipal("MACHINE\\user");
+        assertFalse(NativeCache.isPrivateAcl(new FakeAclView(owner,
+                List.of(aclEntry("Everyone", AclEntryPermission.WRITE_DATA)))));
+        assertFalse(NativeCache.isPrivateAcl(new FakeAclView(owner,
+                List.of(aclEntry("BUILTIN\\Users", AclEntryPermission.DELETE_CHILD)))));
+        assertTrue(NativeCache.isPrivateAcl(new FakeAclView(owner,
+                List.of(aclEntry("MACHINE\\user", AclEntryPermission.WRITE_DATA),
+                        aclEntry("NT AUTHORITY\\SYSTEM", AclEntryPermission.WRITE_DATA),
+                        aclEntry("BUILTIN\\Administrators", AclEntryPermission.DELETE),
+                        aclEntry("Everyone", AclEntryPermission.READ_DATA)))));
+    }
+
+    private static final class NamePrincipal implements UserPrincipal {
+        private final String name;
+
+        NamePrincipal(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String getName() {
+            return name;
+        }
+
+        @Override
+        public boolean implies(Subject subject) {
+            return false;
+        }
+    }
+
+    private static final class FakeAclView implements AclFileAttributeView {
+        private final UserPrincipal owner;
+        private final List<AclEntry> acl;
+
+        FakeAclView(UserPrincipal owner, List<AclEntry> acl) {
+            this.owner = owner;
+            this.acl = acl;
+        }
+
+        @Override
+        public String name() {
+            return "acl";
+        }
+
+        @Override
+        public List<AclEntry> getAcl() {
+            return acl;
+        }
+
+        @Override
+        public void setAcl(List<AclEntry> acl) {
+        }
+
+        @Override
+        public UserPrincipal getOwner() {
+            return owner;
+        }
+
+        @Override
+        public void setOwner(UserPrincipal owner) {
+        }
+    }
+
+    private static AclEntry aclEntry(String principal, AclEntryPermission permission) {
+        return AclEntry.newBuilder()
+                .setType(AclEntryType.ALLOW)
+                .setPrincipal(new NamePrincipal(principal))
+                .setPermissions(EnumSet.of(permission))
+                .build();
     }
 }

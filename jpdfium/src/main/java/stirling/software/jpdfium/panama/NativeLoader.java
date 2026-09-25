@@ -59,6 +59,11 @@ public final class NativeLoader {
 
         try {
             List<String> libs = readLibraryIndex(indexResource);
+            for (String lib : libs) {
+                if (!NativeCache.isSafeName(lib)) {
+                    throw new NativeLoadException("unsafe native entry: " + lib);
+                }
+            }
             Map<String, String> checksums = readChecksumIndex(resourceBase + "native-libs.sha256");
             if (!checksums.isEmpty()) {
                 for (String lib : libs) {
@@ -132,7 +137,7 @@ public final class NativeLoader {
         }
     }
 
-    private static List<String> readLibraryIndex(String resource) {
+    private static List<String> readLibraryIndex(String resource) throws IOException {
         List<String> result = new ArrayList<>();
         try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
             if (is == null) return result;
@@ -146,20 +151,19 @@ public final class NativeLoader {
                     }
                 }
             }
-        } catch (IOException _) {
-            // Missing index is not fatal; fall through with empty list
         }
         return result;
     }
 
-    private static Map<String, String> readChecksumIndex(String resource) {
+    private static Map<String, String> readChecksumIndex(String resource) throws IOException {
         try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
-            if (is == null) return Map.of();
-            return NativeCache.parseChecksums(
-                    new String(is.readAllBytes(), StandardCharsets.UTF_8));
-        } catch (IOException _) {
-            // Older natives jars ship no checksums; they use temp extraction.
-            return Map.of();
+            if (is == null) return Map.of();  // older natives jars ship no checksums
+            String text = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, String> parsed = NativeCache.parseChecksums(text);
+            if (parsed.isEmpty() && !text.isBlank()) {
+                throw new NativeLoadException("unreadable native checksum manifest");
+            }
+            return parsed;
         }
     }
 

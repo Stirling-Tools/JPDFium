@@ -13,16 +13,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -49,12 +56,22 @@ final class NativeCache {
     private static final int KEY_LENGTH = 32;
     private static final String VERIFIED_MARKER = ".verified";
     private static final String STAGING_PREFIX = ".staging-";
-    private static final String READER_LOCK = ".reader";
+    private static final String READER_PREFIX = ".reader-";
     private static final String FALLBACK_LOCK = ".lock";
     private static final Set<PosixFilePermission> OWNER_DIR_PERMS =
             PosixFilePermissions.fromString("rwx------");
     private static final Set<PosixFilePermission> OWNER_FILE_PERMS =
             PosixFilePermissions.fromString("rw-------");
+    private static final Set<AclEntryPermission> ACL_WRITE_PERMISSIONS =
+            EnumSet.of(
+                    AclEntryPermission.WRITE_DATA,
+                    AclEntryPermission.APPEND_DATA,
+                    AclEntryPermission.WRITE_ATTRIBUTES,
+                    AclEntryPermission.WRITE_NAMED_ATTRS,
+                    AclEntryPermission.WRITE_ACL,
+                    AclEntryPermission.WRITE_OWNER,
+                    AclEntryPermission.DELETE,
+                    AclEntryPermission.DELETE_CHILD);
 
     // Locks must outlive the load: PDFium resolves symbols lazily, so the
     // entry must stay on disk for the whole JVM lifetime.
@@ -84,6 +101,7 @@ final class NativeCache {
                         Resources resources) throws IOException {
         if (names.isEmpty()) return null;
         for (String name : names) {
+            if (!isSafeName(name)) throw new IntegrityException("unsafe native entry: " + name);
             if (!hashes.containsKey(name)) return null;
         }
         Path root = resolveCacheRoot();
@@ -103,25 +121,33 @@ final class NativeCache {
 
     static Path prepareIn(Path platformDir, List<String> names, Map<String, String> hashes,
                           String key, Resources resources, boolean verifyFull) throws IOException {
+        for (String name : names) {
+            if (!isSafeName(name)) throw new IntegrityException("unsafe native entry: " + name);
+        }
         requireOwnerOnly(platformDir, true);
+        reclaimStaleStaging(platformDir, SWEEP_MIN_AGE_MILLIS);
         Path finalDir = platformDir.resolve(key);
-        if (isValidEntry(finalDir, names, hashes, key, verifyFull)) {
-            retainReaderLock(finalDir);
+
+        // Validate under a shared reader lock so cleanup cannot delete the
+        // entry between the check and the caller's System.load.
+        FileLock reader = acquireReaderLock(platformDir, key, false);
+        if (reader != null && isValidEntry(finalDir, names, hashes, key, verifyFull)) {
             return finalDir;
         }
+        releaseReaderLock(platformDir, key, reader);
 
         Path keyLock = platformDir.resolve(".lock-" + key);
         try (FileChannel channel = FileChannel.open(keyLock,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock _ = channel.lock()) {
-            if (isValidEntry(finalDir, names, hashes, key, verifyFull)) {
-                retainReaderLock(finalDir);
+            reader = acquireReaderLock(platformDir, key, false);
+            if (reader != null && isValidEntry(finalDir, names, hashes, key, verifyFull)) {
                 return finalDir;
             }
-            if (!tryExclusive(finalDir.resolve(READER_LOCK))) {
+            releaseReaderLock(platformDir, key, reader);
+            if (!deleteEntryIfUnused(platformDir, key, finalDir)) {
                 throw new IOException("cache entry is being loaded by another JVM");
             }
-            deleteRecursively(finalDir);
             Path staging = Files.createTempDirectory(platformDir, STAGING_PREFIX);
             try {
                 requireOwnerOnly(staging, true);
@@ -143,7 +169,7 @@ final class NativeCache {
         if (!isValidEntry(finalDir, names, hashes, key, verifyFull)) {
             throw new IOException("cache entry invalid after publish");
         }
-        retainReaderLock(finalDir);
+        acquireReaderLock(platformDir, key, false);
         removeObsoleteEntries(platformDir, key, OBSOLETE_MIN_AGE_MILLIS);
         return finalDir;
     }
@@ -188,6 +214,13 @@ final class NativeCache {
     /** Full hashes by default; {@code -Djpdfium.native.verify=marker} opts out. */
     static boolean verifyFull() {
         return !"marker".equalsIgnoreCase(System.getProperty(VERIFY_PROPERTY));
+    }
+
+    /** A manifest name must be one file name, never a path. */
+    static boolean isSafeName(String name) {
+        if (name.isEmpty() || name.equals(".") || name.equals("..")) return false;
+        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) return false;
+        return Path.of(name).getNameCount() == 1;
     }
 
     static String cacheKey(Map<String, String> hashes) {
@@ -248,7 +281,7 @@ final class NativeCache {
                 System.getenv("XDG_CACHE_HOME"));
     }
 
-    /** Removes old content hashes, skipping entries another JVM still has open. */
+    /** Removes old content hashes, never one another JVM still has open. */
     static void removeObsoleteEntries(Path platformDir, String currentKey, long minAgeMillis) {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(platformDir)) {
             for (Path entry : entries) {
@@ -257,11 +290,27 @@ final class NativeCache {
                         || name.startsWith(".")) {
                     continue;
                 }
-                if (!tryExclusive(entry.resolve(READER_LOCK))) continue;
-                if (isOlderThan(entry, minAgeMillis)) deleteRecursively(entry);
+                if (!isOlderThan(entry, minAgeMillis)) continue;
+                if (deleteEntryIfUnused(platformDir, name, entry)) {
+                    Files.deleteIfExists(platformDir.resolve(READER_PREFIX + name));
+                }
             }
         } catch (IOException _) {
             // Cleanup must never break loading.
+        }
+    }
+
+    /** Leftover staging dirs are not published entries but still hold disk. */
+    static void reclaimStaleStaging(Path platformDir, long minAgeMillis) {
+        try (DirectoryStream<Path> entries =
+                Files.newDirectoryStream(platformDir, STAGING_PREFIX + "*")) {
+            for (Path entry : entries) {
+                if (Files.isDirectory(entry) && isOlderThan(entry, minAgeMillis)) {
+                    deleteRecursively(entry);
+                }
+            }
+        } catch (IOException _) {
+            // Best-effort; a later start retries.
         }
     }
 
@@ -350,23 +399,61 @@ final class NativeCache {
         return HexFormat.of().formatHex(digest.digest());
     }
 
-    private static void retainReaderLock(Path dir) throws IOException {
-        Path key = dir.toAbsolutePath().normalize();
-        FileLock existing = RETAINED.get(key);
-        if (existing != null && existing.isValid()) return;
-        Path lockFile = dir.resolve(READER_LOCK);
+    /**
+     * Shared for readers, exclusive for cleanup, keyed outside the entry so a
+     * held lock never blocks deleting the entry dir on Windows.
+     */
+    private static FileLock acquireReaderLock(Path platformDir, String key, boolean exclusive)
+            throws IOException {
+        Path lockFile = platformDir.resolve(READER_PREFIX + key);
+        Path mapKey = lockFile.toAbsolutePath().normalize();
+        FileLock existing = RETAINED.get(mapKey);
+        if (!exclusive && existing != null && existing.isValid()) return existing;
         createOwnerOnlyFile(lockFile);
         FileChannel channel =
                 FileChannel.open(lockFile, StandardOpenOption.READ, StandardOpenOption.WRITE);
         try {
-            RETAINED.put(key, channel.lock(0L, Long.MAX_VALUE, true));
+            FileLock lock = exclusive ? channel.tryLock() : channel.lock(0L, Long.MAX_VALUE, true);
+            if (lock == null) {
+                channel.close();
+                return null;
+            }
+            RETAINED.put(mapKey, lock);
+            return lock;
         } catch (IOException | RuntimeException e) {
             channel.close();
-            throw new IOException("cannot lock cache entry", e);
+            throw e;
         }
     }
 
-    /** True when the lock is free; a held shared lock means a live reader. */
+    private static void releaseReaderLock(Path platformDir, String key, FileLock lock) {
+        if (lock == null) return;
+        Path mapKey = platformDir.resolve(READER_PREFIX + key).toAbsolutePath().normalize();
+        RETAINED.remove(mapKey, lock);
+        try {
+            lock.channel().close();
+        } catch (IOException _) {
+        }
+    }
+
+    private static boolean deleteEntryIfUnused(Path platformDir, String key, Path dir) {
+        if (!Files.isDirectory(dir)) return true;
+        FileLock exclusive;
+        try {
+            exclusive = acquireReaderLock(platformDir, key, true);
+        } catch (IOException | RuntimeException _) {
+            return false;
+        }
+        if (exclusive == null) return false;
+        try {
+            deleteRecursively(dir);
+            return true;
+        } finally {
+            releaseReaderLock(platformDir, key, exclusive);
+        }
+    }
+
+    /** True when the lock is free; a held lock means a live reader. */
     private static boolean tryExclusive(Path lockFile) {
         if (!Files.exists(lockFile)) return true;
         try (FileChannel channel =
@@ -397,7 +484,7 @@ final class NativeCache {
         try {
             Files.setPosixFilePermissions(path, directory ? OWNER_DIR_PERMS : OWNER_FILE_PERMS);
         } catch (UnsupportedOperationException _) {
-            // Windows ACLs under LOCALAPPDATA are already user-scoped.
+            // Non-POSIX: isPrivate checks the ACL instead.
         }
         if (!isPrivate(path)) throw new IOException("cache path is not private: " + path);
     }
@@ -408,11 +495,39 @@ final class NativeCache {
             return perms.stream()
                     .noneMatch(p -> p.name().startsWith("GROUP_") || p.name().startsWith("OTHERS_"));
         } catch (UnsupportedOperationException _) {
-            // Windows: LOCALAPPDATA ACLs are user-scoped and hashes are checked.
-            return true;
+            AclFileAttributeView acl =
+                    Files.getFileAttributeView(path, AclFileAttributeView.class);
+            return acl != null && isPrivateAcl(acl);
         } catch (IOException _) {
+            // Unreadable permissions are not provably private.
             return false;
         }
+    }
+
+    /** Fail closed: write or delete for any principal other than the owner or system. */
+    static boolean isPrivateAcl(AclFileAttributeView view) {
+        try {
+            UserPrincipal owner = view.getOwner();
+            for (AclEntry entry : view.getAcl()) {
+                if (entry.type() != AclEntryType.ALLOW) continue;
+                if (Collections.disjoint(entry.permissions(), ACL_WRITE_PERMISSIONS)) continue;
+                if (!isTrustedPrincipal(entry.principal(), owner)) return false;
+            }
+            return true;
+        } catch (IOException | RuntimeException _) {
+            return false;
+        }
+    }
+
+    private static boolean isTrustedPrincipal(UserPrincipal principal, UserPrincipal owner) {
+        String name = principal.getName();
+        if (owner != null && name.equalsIgnoreCase(owner.getName())) return true;
+        String upper = name.toUpperCase(Locale.ROOT);
+        return upper.equals("SYSTEM")
+                || upper.endsWith("\\SYSTEM")
+                || upper.endsWith("\\ADMINISTRATORS")
+                || upper.endsWith("\\OWNER RIGHTS")
+                || upper.endsWith("\\CREATOR OWNER");
     }
 
     private static String sha256Hex(byte[] bytes) {
