@@ -7,7 +7,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -92,15 +91,29 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
 
-        Optional<Path> sourcePath = doc.sourcePath();
-        if (options.mode() != StorageOptions.Mode.MEMORY && sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
-            PdfDocument fileDoc = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks, options);
-            if (fileDoc != null) return fileDoc;
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
+            Path materialized = null;
+            try {
+                // The source file behind an open document may be stale after
+                // in-memory edits; serialize the live document first.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                doc.save(materialized);
+                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (fileDoc != null) return fileDoc;
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
+            } finally {
+                if (materialized != null) {
+                    try {
+                        Files.deleteIfExists(materialized);
+                    } catch (IOException _) {}
+                }
+            }
             if (options.mode() == StorageOptions.Mode.FILE) {
                 throw new JPDFiumException("file-backed extract failed");
             }
         } else if (options.mode() == StorageOptions.Mode.FILE) {
-            throw new JPDFiumException("FILE storage needs the source opened from a path");
+            throw new JPDFiumException("file-backed extract unavailable");
         }
 
         if (QpdfLib.isExtractSupported()) {
@@ -170,15 +183,29 @@ public final class PdfSplit {
             pageIndices[i] = fromPage + i;
         }
 
-        Optional<Path> sourcePath = doc.sourcePath();
-        if (options.mode() != StorageOptions.Mode.MEMORY && sourcePath.isPresent() && QpdfLib.isExtractFileSupported()) {
-            PdfDocument fileDoc = extractToTemp(sourcePath.get(), pageIndices, remappedBookmarks, options);
-            if (fileDoc != null) return fileDoc;
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
+            Path materialized = null;
+            try {
+                // The source file behind an open document may be stale after
+                // in-memory edits; serialize the live document first.
+                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                doc.save(materialized);
+                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (fileDoc != null) return fileDoc;
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
+            } finally {
+                if (materialized != null) {
+                    try {
+                        Files.deleteIfExists(materialized);
+                    } catch (IOException _) {}
+                }
+            }
             if (options.mode() == StorageOptions.Mode.FILE) {
                 throw new JPDFiumException("file-backed extract failed");
             }
         } else if (options.mode() == StorageOptions.Mode.FILE) {
-            throw new JPDFiumException("FILE storage needs the source opened from a path");
+            throw new JPDFiumException("file-backed extract unavailable");
         }
 
         if (QpdfLib.isExtractSupported()) {
@@ -242,10 +269,19 @@ public final class PdfSplit {
                                               Path output, StorageOptions options) throws IOException {
         if (input == null) throw new IllegalArgumentException("input must not be null");
         if (output == null) throw new IllegalArgumentException("output must not be null");
-        int count = toPage - fromPage + 1;
-        if (fromPage < 0 || count <= 0) {
+        if (fromPage < 0 || toPage < fromPage) {
             throw new IllegalArgumentException("Invalid range [%d..%d]".formatted(fromPage, toPage));
         }
+        int totalPages;
+        try (PdfDocument probe = PdfDocument.open(input)) {
+            totalPages = probe.pageCount();
+        }
+        if (fromPage >= totalPages || toPage >= totalPages) {
+            throw new IllegalArgumentException(
+                    "Invalid range [%d..%d] for document with %d pages"
+                            .formatted(fromPage, toPage, totalPages));
+        }
+        int count = toPage - fromPage + 1;
         int[] pageIndices = new int[count];
         for (int i = 0; i < count; i++) {
             pageIndices[i] = fromPage + i;
@@ -253,7 +289,13 @@ public final class PdfSplit {
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()
                 && QpdfLib.extractPagesToFile(input, pageIndices, output)
                 && Files.size(output) > 0) {
-            return;
+            // The native extractor skips out-of-range indices; verify the
+            // written file really has every requested page.
+            try (PdfDocument written = PdfDocument.open(output)) {
+                if (written.pageCount() == count) return;
+            }
+            throw new IOException("file-backed extract wrote "
+                    + "the wrong page count for range [" + fromPage + ".." + toPage + "]");
         }
         if (options.mode() == StorageOptions.Mode.FILE) {
             throw new JPDFiumException("file-backed extract failed");
@@ -271,32 +313,31 @@ public final class PdfSplit {
      */
     private static PdfDocument extractToTemp(Path input, int[] pageIndices,
                                              List<Bookmark> remappedBookmarks, StorageOptions options) {
-        Path tmp = null;
+        List<Path> cleanup = new ArrayList<>();
         try {
-            tmp = options.createTempFile("jpdfium-split", ".pdf");
+            Path tmp = options.createTempFile("jpdfium-split", ".pdf");
+            cleanup.add(tmp);
             if (!QpdfLib.extractPagesToFile(input, pageIndices, tmp)) return null;
             Path result = tmp;
             if (!remappedBookmarks.isEmpty()) {
                 Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
+                cleanup.add(tmpBookmarks);
                 try (PdfDocument part = PdfDocument.open(tmp)) {
                     PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
                 }
-                Files.deleteIfExists(tmp);
-                tmp = tmpBookmarks;
                 result = tmpBookmarks;
             }
             try (PdfDocument verify = PdfDocument.open(result)) {
                 if (verify.pageCount() != pageIndices.length) return null;
             }
-            PdfDocument owned = PdfDocument.openTemp(result);
-            tmp = null;
-            return owned;
+            cleanup.remove(result);
+            return PdfDocument.openTemp(result);
         } catch (Exception _) {
             return null;
         } finally {
-            if (tmp != null) {
+            for (Path leftover : cleanup) {
                 try {
-                    Files.deleteIfExists(tmp);
+                    Files.deleteIfExists(leftover);
                 } catch (IOException _) {}
             }
         }
