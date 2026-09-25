@@ -108,9 +108,7 @@ public final class PdfMerge {
                     // Fall through to the in-memory paths below
                 } finally {
                     for (Path leftover : cleanup) {
-                        try {
-                            Files.deleteIfExists(leftover);
-                        } catch (IOException _) {}
+                        deleteQuietly(leftover);
                     }
                 }
             }
@@ -212,11 +210,7 @@ public final class PdfMerge {
                             }
                         }
                     } finally {
-                        if (!done) {
-                            try {
-                                Files.deleteIfExists(tmp);
-                            } catch (IOException _) {}
-                        }
+                        if (!done) deleteQuietly(tmp);
                     }
                 }
             } catch (IOException _) {
@@ -377,11 +371,16 @@ public final class PdfMerge {
             staged = null;
             return true;
         } finally {
-            if (staged != null) {
-                try {
-                    Files.deleteIfExists(staged);
-                } catch (IOException _) {}
-            }
+            deleteQuietly(staged);
+        }
+    }
+
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
+    private static void deleteQuietly(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException _) {}
         }
     }
 

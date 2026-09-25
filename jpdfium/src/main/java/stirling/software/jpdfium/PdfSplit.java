@@ -105,11 +105,7 @@ public final class PdfSplit {
             } catch (Exception _) {
                 // Fall through to the in-memory paths below
             } finally {
-                if (materialized != null) {
-                    try {
-                        Files.deleteIfExists(materialized);
-                    } catch (IOException _) {}
-                }
+                deleteQuietly(materialized);
             }
             if (options.mode() == StorageOptions.Mode.FILE) {
                 throw new JPDFiumException("file-backed extract failed");
@@ -198,11 +194,7 @@ public final class PdfSplit {
             } catch (Exception _) {
                 // Fall through to the in-memory paths below
             } finally {
-                if (materialized != null) {
-                    try {
-                        Files.deleteIfExists(materialized);
-                    } catch (IOException _) {}
-                }
+                deleteQuietly(materialized);
             }
             if (options.mode() == StorageOptions.Mode.FILE) {
                 throw new JPDFiumException("file-backed extract failed");
@@ -333,11 +325,16 @@ public final class PdfSplit {
             staged = null;
             return true;
         } finally {
-            if (staged != null) {
-                try {
-                    Files.deleteIfExists(staged);
-                } catch (IOException _) {}
-            }
+            deleteQuietly(staged);
+        }
+    }
+
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
+    private static void deleteQuietly(Path path) {
+        if (path != null) {
+            try {
+                Files.deleteIfExists(path);
+            } catch (IOException _) {}
         }
     }
 
@@ -371,9 +368,7 @@ public final class PdfSplit {
             return null;
         } finally {
             for (Path leftover : cleanup) {
-                try {
-                    Files.deleteIfExists(leftover);
-                } catch (IOException _) {}
+                deleteQuietly(leftover);
             }
         }
     }
