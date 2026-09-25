@@ -215,6 +215,27 @@ if(JPDFIUM_USE_PDFIUM)
                                -Wno-ignored-qualifiers)
     endif()
 
+    # Size/perf: only JPDFIUM_EXPORT symbols leave the bridge, and the linker
+    # may drop bridge and static-dependency code the JVM never calls. PDFium's
+    # FPDF_* exports keep default visibility so the FFM bindings resolve them.
+    if(MSVC)
+        target_compile_options(jpdfium PRIVATE /Gy /Gw)
+        target_link_options(jpdfium PRIVATE /OPT:REF /OPT:ICF)
+    else()
+        target_compile_options(jpdfium PRIVATE -fvisibility=hidden
+                               -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(jpdfium PRIVATE "-Wl,-dead_strip" "-Wl,-x")
+        else()
+            target_link_options(jpdfium PRIVATE "-Wl,--gc-sections")
+        endif()
+    endif()
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _jpdfium_ipo_ok OUTPUT _jpdfium_ipo_msg)
+    if(_jpdfium_ipo_ok AND CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT _jpdfium_san_flags)
+        set_property(TARGET jpdfium PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif()
+
     if(PDFIUM_LINK_MODE STREQUAL "static")
         # Whole-archive: pull every symbol from libpdfium.a (FPDF/EPDF exports
         # plus the bundled deps' code paths used transitively) into the final

@@ -332,9 +332,57 @@ bundle_windows() {
     fi
 }
 
+# Cross legs have shipped a wrong-arch dependency before (darwin-x64 staged an
+# arm64 libsharpyuv), so every staged binary must match the target arch.
+assert_bundle_arch() {
+    local unix_arch="$1" win_arch="$2" failed=0 f archs machine
+    case "$PLATFORM" in
+        darwin-*|vips-darwin-*)
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -e "$f" ] || continue
+                archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
+                case " $archs " in
+                    *" $unix_arch "*) ;;
+                    *) echo "FAIL: $(basename "$f") has arch [$archs], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        linux-*|vips-linux-*)
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -e "$f" ] || continue
+                machine=$(readelf -h "$f" 2>/dev/null | awk -F: '/Machine:/{print $2}' | xargs)
+                case "$unix_arch:$machine" in
+                    x86_64:"Advanced Micro Devices X86-64") ;;
+                    aarch64:"AArch64") ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        windows-*|vips-windows-*)
+            local db=""
+            if command -v dumpbin >/dev/null 2>&1; then
+                db=dumpbin
+            else
+                db=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+            fi
+            [ -n "$db" ] || return 0
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                machine=$("$db" //headers "$f" 2>/dev/null | grep -m1 "machine (" | sed -E 's/.*machine \(([^)]*)\).*/\1/')
+                case "$win_arch:$machine" in
+                    x64:x64|ARM64:ARM64) ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $win_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+    esac
+    [ "$failed" -eq 0 ] || exit 1
+}
+
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
+        assert_bundle_arch x86_64 ""
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -347,20 +395,30 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
+        assert_bundle_arch arm64 ""
         if command -v strip >/dev/null 2>&1; then
-            strip -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
+            # -x drops local symbols too (the static harfbuzz contributes
+            # thousands); exports and the dynamic symbol table stay.
+            strip -x "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
             for f in "$DIST_DIR"/*.dylib; do
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
-                strip -S "$f" 2>/dev/null || true
+                strip -x "$f" 2>/dev/null || true
             done
         fi
         sign_macos
         ;;
     windows-*|vips-windows-*)
         bundle_windows
+        assert_bundle_arch "" x64
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
+        if command -v llvm-strip >/dev/null 2>&1; then
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                llvm-strip --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2
