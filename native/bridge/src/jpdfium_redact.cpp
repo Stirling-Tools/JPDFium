@@ -2483,7 +2483,10 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 }
                 // A mutated object cannot be trusted; never rebuild it from
                 // decoded Unicode (that drops TJ adjustments). Drop it instead.
-                if (mutated) {
+                // A detached object is already off the page and out of its
+                // form, so it must be dropped even when the edit changed
+                // nothing: leaving it orphaned would silently lose the text.
+                if (mutated || promotedFromForm) {
                     objsToDestroy.insert(plan.originalObj);
                     originalDropped = true;
                 }
