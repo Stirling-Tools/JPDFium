@@ -22,6 +22,17 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
 
 More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S95_RedactPipelinePerf`). Full API reference is in the Javadoc.
 
+## Native Loading
+
+Natives are extracted once per content revision into a per-user cache, then reused by every JVM:
+`%LOCALAPPDATA%\jpdfium\native` (Windows), `~/Library/Caches/jpdfium/native` (macOS),
+`$XDG_CACHE_HOME/jpdfium/native` (Linux). Extraction is SHA-256 verified, published atomically, and safe
+across concurrent JVMs; when the cache is not writable (containers, read-only home) the loader falls back to
+`java.io.tmpdir`. Stale per-JVM temp dirs and obsolete cache entries are swept best-effort.
+
+`-Djpdfium.native.cacheDir=<dir>` overrides the root, `-Djpdfium.native.cache=false` forces temp extraction,
+`-Djpdfium.native.verify=full` re-hashes every load, `-Djpdfium.native.sweep=false` disables the sweep.
+
 ## Project Structure
 
 ```
