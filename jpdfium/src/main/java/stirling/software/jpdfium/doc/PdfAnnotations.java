@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 
@@ -203,12 +204,12 @@ public final class PdfAnnotations {
      *
      * @param page raw FPDF_PAGE segment
      * @param crop crop rectangle in unrotated page coordinates
-     * @return number of annotations removed
+     * @return object numbers of the removed annotations (0 entries skipped)
      */
-    public static int clipToRect(MemorySegment page, Rect crop) {
+    public static int[] clipToRect(MemorySegment page, Rect crop) {
         int n = count(page);
-        if (n <= 0) return 0;
-        int removed = 0;
+        if (n <= 0) return new int[0];
+        List<Integer> removed = new ArrayList<>();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
             MemorySegment apKey = arena.allocateFrom("AP");
@@ -233,12 +234,19 @@ public final class PdfAnnotations {
                     float cx1 = Math.min(right, crop.x() + crop.width());
                     float cy1 = Math.min(top, crop.y() + crop.height());
                     if (cx1 <= cx0 || cy1 <= cy0) {
+                        int objectNumber = 0;
+                        if (EmbedPdfAnnotationBindings.EPDFAnnot_GetObjectNumber != null) {
+                            try {
+                                objectNumber = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetObjectNumber
+                                        .invokeExact(annot);
+                            } catch (Throwable t) { throw new JPDFiumException(t); }
+                        }
                         int removedOk;
                         try {
                             removedOk = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(page, i);
                         } catch (Throwable t) { throw new JPDFiumException(t); }
                         if (removedOk == 0) throw new JPDFiumException("FPDFPage_RemoveAnnot failed");
-                        removed++;
+                        if (objectNumber > 0) removed.add(objectNumber);
                     } else if ((cx0 != left || cy0 != bottom || cx1 != right || cy1 != top)
                             && !hasAppearance(annot, apKey)) {
                         rectSeg.set(ValueLayout.JAVA_FLOAT, 0, cx0);
@@ -256,7 +264,9 @@ public final class PdfAnnotations {
                 }
             }
         }
-        return removed;
+        int[] out = new int[removed.size()];
+        for (int i = 0; i < out.length; i++) out[i] = removed.get(i);
+        return out;
     }
 
     private static boolean hasAppearance(MemorySegment annot, MemorySegment apKey) {

@@ -96,6 +96,32 @@ class CropAnnotationTest {
     }
 
     @Test
+    void outsideWidgetValueIsClearedFromTheForm() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.valuedFormFieldsPdf(), LEFT_HALF);
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            var form = doc.getDocumentCatalog().getAcroForm();
+            assertNotNull(form, "AcroForm must survive the crop");
+            var inside = form.getField("inside");
+            assertNotNull(inside, "inside field must survive");
+            assertEquals("INSIDE_VALUE", inside.getValueAsString(),
+                    "inside field value must survive");
+            var outside = form.getField("outside");
+            if (outside != null) {
+                assertEquals("", outside.getValueAsString(),
+                        "unplaced outside field value must be cleared");
+            }
+            int widgets = 0;
+            for (PDAnnotation a : doc.getPage(0).getAnnotations()) {
+                if (!"Widget".equals(a.getSubtype())) continue;
+                widgets++;
+                assertTrue(a.getRectangle().getLowerLeftX() < LEFT_HALF.width(),
+                        "outside widget must be removed");
+            }
+            assertEquals(1, widgets, "only the inside widget may remain");
+        }
+    }
+
+    @Test
     void signatureWidgetOutsideCropIsRemovedAndDocumentStaysValid() throws Exception {
         Path out = produce(CropTestPdfGenerator.signatureWidgetPdf(), LEFT_HALF);
         try (PDDocument doc = Loader.loadPDF(out.toFile())) {

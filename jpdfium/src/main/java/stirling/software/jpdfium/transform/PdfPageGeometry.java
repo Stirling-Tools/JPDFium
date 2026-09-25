@@ -4,10 +4,14 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfPageEditor;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.lang.foreign.MemorySegment;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -83,8 +87,11 @@ public final class PdfPageGeometry {
      * inside the crop); straddling images keep their visible part and are
      * pixel-erased outside, including images nested in Form XObjects (soft
      * masks preserved); fully outside paths, shadings and forms are removed.
-     * Outside annotations are removed, straddling annotations are clipped.
-     * Metadata, structure and signatures are untouched.
+     * Page-level text with a single survivor run is edited in place; text
+     * inside forms is recreated on the page because PDFium regenerates a form
+     * stream only when a child is removed from it. Outside annotations are
+     * removed, straddling ones are clipped. Metadata, structure and signatures
+     * are untouched.
      *
      * <p>A post-pass audit fails loudly with
      * {@link stirling.software.jpdfium.exception.RedactIncompleteException} or
@@ -189,12 +196,96 @@ public final class PdfPageGeometry {
         }
     }
 
+    /**
+     * A form field whose widgets were all removed by the crop has no visible
+     * representation, but its value still lives in /AcroForm. Clear those
+     * values so removing an outside widget does not leave the value recoverable.
+     */
+    private static void clearUnplacedFormFields(MemorySegment rawDoc, int[] removedObjectNumbers) {
+        if (FormFillBindings.EPDFForm_LoadModel == null || rawDoc == null
+                || rawDoc.equals(MemorySegment.NULL)) {
+            return;
+        }
+        MemorySegment model;
+        try {
+            model = (MemorySegment) FormFillBindings.EPDFForm_LoadModel.invokeExact(rawDoc);
+        } catch (Throwable t) {
+            throw new JPDFiumException("EPDFForm_LoadModel failed", t);
+        }
+        if (model.equals(MemorySegment.NULL)) return;
+
+        List<Integer> unplaced = new ArrayList<>();
+        try {
+            int fields;
+            try {
+                fields = (int) FormFillBindings.EPDFForm_CountFields.invokeExact(model);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            for (int i = 0; i < fields; i++) {
+                int widgets;
+                try {
+                    widgets = (int) FormFillBindings.EPDFForm_CountFieldWidgets.invokeExact(model, i);
+                } catch (Throwable t) {
+                    throw new JPDFiumException(t);
+                }
+                boolean placed = false;
+                for (int w = 0; w < widgets; w++) {
+                    int widgetObjNum;
+                    try {
+                        widgetObjNum = (int) FormFillBindings.EPDFForm_GetFieldWidgetObjNum
+                                .invokeExact(model, i, w);
+                    } catch (Throwable t) {
+                        throw new JPDFiumException(t);
+                    }
+                    if (widgetObjNum <= 0 || !contains(removedObjectNumbers, widgetObjNum)) {
+                        placed = true;  // a widget survives, or its identity is unknown
+                        break;
+                    }
+                }
+                if (placed) continue;
+                try {
+                    unplaced.add((int) FormFillBindings.EPDFForm_GetFieldObjNum.invokeExact(model, i));
+                } catch (Throwable t) {
+                    throw new JPDFiumException(t);
+                }
+            }
+        } finally {
+            try {
+                FormFillBindings.EPDFForm_CloseModel.invokeExact(model);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+        }
+        // A write invalidates the model, so reset only after it is closed.
+        for (int objNum : unplaced) {
+            int reset;
+            try {
+                reset = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
+                        MemorySegment.NULL, 0L, MemorySegment.NULL);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            if (reset == 0) continue;  // push buttons and signatures have no value
+        }
+    }
+
+    private static boolean contains(int[] values, int value) {
+        for (int v : values) {
+            if (v == value) return true;
+        }
+        return false;
+    }
+
     /** The shared single-page hard-crop implementation. */
     private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect) {
         try (PdfPage page = doc.page(pageIndex)) {
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
                     rect.x(), rect.y(), rect.width(), rect.height());
-            PdfAnnotations.clipToRect(page.rawHandle(), rect);
+            int[] removedAnnotations = PdfAnnotations.clipToRect(page.rawHandle(), rect);
+            if (removedAnnotations.length > 0) {
+                clearUnplacedFormFields(doc.rawHandle(), removedAnnotations);
+            }
             PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
             PdfPageBoxes.setCropBox(page.rawHandle(), rect);
             PdfPageBoxes.setTrimBox(page.rawHandle(), rect);

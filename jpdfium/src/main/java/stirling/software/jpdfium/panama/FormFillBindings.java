@@ -6,6 +6,7 @@ import java.lang.invoke.MethodHandle;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_DOUBLE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * FFM bindings for PDFium interactive form filling ({@code fpdf_formfill.h}).
@@ -26,6 +27,31 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 public final class FormFillBindings {
 
     private FormFillBindings() {}
+
+    /**
+     * EmbedPDF form-model read/write helpers used to clear fields that lost all
+     * their widgets (for example when a crop removes an outside widget).
+     */
+    public static final MethodHandle EPDFForm_LoadModel = downcall("EPDFForm_LoadModel",
+            FunctionDescriptor.of(ADDRESS, ADDRESS));
+
+    public static final MethodHandle EPDFForm_CloseModel = downcall("EPDFForm_CloseModel",
+            FunctionDescriptor.ofVoid(ADDRESS));
+
+    public static final MethodHandle EPDFForm_CountFields = downcall("EPDFForm_CountFields",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    public static final MethodHandle EPDFForm_CountFieldWidgets =
+            downcall("EPDFForm_CountFieldWidgets", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    public static final MethodHandle EPDFForm_GetFieldWidgetObjNum = downcall(
+            "EPDFForm_GetFieldWidgetObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
+
+    public static final MethodHandle EPDFForm_GetFieldObjNum =
+            downcall("EPDFForm_GetFieldObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    public static final MethodHandle EPDFForm_ResetField = downcall("EPDFForm_ResetField",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
         return Symbols.downcall(name, desc);
