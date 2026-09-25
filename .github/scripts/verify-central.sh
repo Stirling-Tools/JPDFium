@@ -13,7 +13,8 @@ GROUP_PATH="com/stirling"
 case "$MODE" in
   staging)
     REPO_URL="https://central.sonatype.com/api/v1/publisher/deployments/download"
-    PORTAL_TOKEN="Bearer $(printf '%s:%s' "${CENTRAL_PORTAL_USERNAME:?}" "${CENTRAL_PORTAL_PASSWORD:?}" | base64)"
+    # base64 wraps at 76 columns; a wrapped token breaks the header.
+    PORTAL_TOKEN="Bearer $(printf '%s:%s' "${CENTRAL_PORTAL_USERNAME:?}" "${CENTRAL_PORTAL_PASSWORD:?}" | base64 | tr -d '\n')"
     ;;
   released)
     REPO_URL="https://repo1.maven.org/maven2"
