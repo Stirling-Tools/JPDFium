@@ -42,7 +42,8 @@ class TextShapeTest {
         assumeTrue(ttf != null, "no system TTF found");
         byte[] bytes = Files.readAllBytes(ttf.toPath());
 
-        String text = "Hello World 123";
+        // No kerning pairs: HarfBuzz kerns, PDFBox getStringWidth does not.
+        String text = "Hello 123";
         float size = 12f;
         List<ShapedGlyph> glyphs = FontLib.shapeText(bytes, text, size);
         assertTrue(glyphs.size() >= text.length(), "one glyph per char at minimum");
