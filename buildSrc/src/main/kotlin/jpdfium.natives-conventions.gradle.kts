@@ -61,6 +61,9 @@ val writeNativeManifest = tasks.register("writeNativeManifest") {
     dependsOn(stageNatives)
     val manifest = stagedPlatformDir.map { it.file("native-libs.txt") }
     val checksums = stagedPlatformDir.map { it.file("native-libs.sha256") }
+    // Without the dist input Gradle can keep a stale manifest after a rebuild.
+    inputs.files(distDir).withPropertyName("dist").optional()
+    inputs.property("platform", platform)
     outputs.files(manifest, checksums)
     doLast {
         val dir = stagedPlatformDir.get().asFile
