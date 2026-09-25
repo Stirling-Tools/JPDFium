@@ -59,22 +59,18 @@ public final class PdfDocument implements AutoCloseable {
     private final long handle;
     private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
-    /**
-     * File this document was opened from, if any. Best-effort hint for
-     * file-backed operations (merge/split read current file content).
-     * A temp file owned by this document is deleted on close.
-     */
-    private final Path sourcePath;
+    /** Temp file owned by this document, deleted on close; null otherwise. */
+    private final Path ownedTempPath;
     private final boolean ownedTemp;
 
     PdfDocument(long handle) {
         this(handle, null, false);
     }
 
-    PdfDocument(long handle, Path sourcePath, boolean ownedTemp) {
+    PdfDocument(long handle, Path ownedTempPath, boolean ownedTemp) {
         this.handle = handle;
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
-        this.sourcePath = sourcePath;
+        this.ownedTempPath = ownedTempPath;
         this.ownedTemp = ownedTemp;
     }
 
@@ -90,7 +86,7 @@ public final class PdfDocument implements AutoCloseable {
     public static PdfDocument open(Path path) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         Path abs = path.toAbsolutePath();
-        return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs, false);
+        return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), null, false);
     }
 
     public static PdfDocument open(byte[] data) {
@@ -165,7 +161,7 @@ public final class PdfDocument implements AutoCloseable {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         Path abs = path.toAbsolutePath();
-        return new PdfDocument(JpdfiumLib.docOpenProtected(abs.toString(), password), abs, false);
+        return new PdfDocument(JpdfiumLib.docOpenProtected(abs.toString(), password), null, false);
     }
 
     public static PdfDocument fromImages(List<BufferedImage> images) {
@@ -701,25 +697,17 @@ public final class PdfDocument implements AutoCloseable {
         return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs, true);
     }
 
-    /**
-     * File this document was opened from, if opened from a path.
-     * File-backed operations read current file content when present.
-     */
-    public Optional<Path> sourcePath() {
-        return Optional.ofNullable(sourcePath);
-    }
-
     @Override
     public void close() {
         // compareAndSet, not check-then-set: a lost race here frees the same
         // native document twice and corrupts the heap.
         if (!closed.compareAndSet(false, true)) return;
         JpdfiumLib.docClose(handle);
-        if (ownedTemp && sourcePath != null) {
+        if (ownedTemp && ownedTempPath != null) {
             try {
-                Files.deleteIfExists(sourcePath);
+                Files.deleteIfExists(ownedTempPath);
             } catch (Exception _) {
-                sourcePath.toFile().deleteOnExit();
+                ownedTempPath.toFile().deleteOnExit();
             }
         }
     }

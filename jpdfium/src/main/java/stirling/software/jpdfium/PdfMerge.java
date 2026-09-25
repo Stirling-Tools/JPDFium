@@ -5,7 +5,6 @@ import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.util.Optional;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -70,52 +69,52 @@ public final class PdfMerge {
             pageOffset += sourceDoc.pageCount();
         }
 
-        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
-            List<Path> filePaths = new ArrayList<>(documents.size());
-            boolean allFileBacked = true;
-            for (PdfDocument sourceDoc : documents) {
-                Optional<Path> sp = sourceDoc.sourcePath();
-                if (sp.isEmpty()) {
-                    allFileBacked = false;
-                    break;
-                }
-                filePaths.add(sp.get());
-            }
-            if (!allFileBacked && options.mode() == StorageOptions.Mode.FILE) {
-                throw new JPDFiumException("FILE storage needs every input opened from a path");
-            }
-            if (allFileBacked) {
-                Path tmp = null;
+        if (options.mode() != StorageOptions.Mode.MEMORY) {
+            if (QpdfLib.isMergeFilesSupported()) {
+                List<Path> cleanup = new ArrayList<>();
                 try {
-                    tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                    // A document opened from a path may have been edited in
+                    // memory since; never merge the file behind its back.
+                    // Serialize each live document to a temp (native save, no
+                    // Java heap) and merge those.
+                    List<Path> filePaths = new ArrayList<>(documents.size());
+                    for (PdfDocument sourceDoc : documents) {
+                        Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                        cleanup.add(materialized);
+                        sourceDoc.save(materialized);
+                        filePaths.add(materialized);
+                    }
+                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                    cleanup.add(tmp);
                     if (QpdfLib.mergeFiles(filePaths, tmp)) {
                         Path result = tmp;
                         if (!mergedBookmarks.isEmpty()) {
                             Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
+                            cleanup.add(tmpBookmarks);
                             try (PdfDocument merged = PdfDocument.open(tmp)) {
                                 PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks);
                             }
-                            Files.deleteIfExists(tmp);
-                            tmp = tmpBookmarks;
                             result = tmpBookmarks;
                         }
                         try (PdfDocument verify = PdfDocument.open(result)) {
                             if (verify.pageCount() == pageOffset) {
-                                PdfDocument owned = PdfDocument.openTemp(result);
-                                tmp = null;
-                                return owned;
+                                cleanup.remove(result);
+                                return PdfDocument.openTemp(result);
                             }
                         }
                     }
-                } catch (IOException _) {
-                    // Fall through to the paths below
+                } catch (Exception _) {
+                    // Fall through to the in-memory paths below
                 } finally {
-                    if (tmp != null) {
+                    for (Path leftover : cleanup) {
                         try {
-                            Files.deleteIfExists(tmp);
+                            Files.deleteIfExists(leftover);
                         } catch (IOException _) {}
                     }
                 }
+            }
+            if (options.mode() == StorageOptions.Mode.FILE) {
+                throw new JPDFiumException("file-backed merge failed");
             }
         }
 

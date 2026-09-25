@@ -3,8 +3,8 @@ package stirling.software.jpdfium;
 import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -93,18 +93,18 @@ class PdfMergeSplitFilesTest {
         Files.write(a, SyntheticPdfFactory.createDiverse(2));
         Files.write(b, SyntheticPdfFactory.createDiverse(3));
 
+        Path mergeTmp = tmp.resolve("merge-tmp");
         byte[] bytesPath;
-        Path backing;
         try (PdfDocument doc1 = PdfDocument.open(a);
              PdfDocument doc2 = PdfDocument.open(b);
-             PdfDocument merged = PdfMerge.merge(List.of(doc1, doc2))) {
+             PdfDocument merged = PdfMerge.merge(List.of(doc1, doc2),
+                     StorageOptions.builder().tempDir(mergeTmp).build())) {
             assertEquals(5, merged.pageCount());
-            // Temp-backed result cleans itself up on close.
-            assertTrue(merged.sourcePath().isPresent(), "merged doc tracks its backing file");
-            backing = merged.sourcePath().get();
             bytesPath = merged.saveBytes();
         }
-            assertTrue(Files.notExists(backing), "backing temp file deleted on close");
+        try (var leftovers = Files.list(mergeTmp)) {
+            assertEquals(0, leftovers.count(), "merge temp files must be cleaned up");
+        }
 
         assertEquals(5, PdfVerifier.pageCount(bytesPath, "merged open docs"));
         for (int i = 0; i < 5; i++) {
@@ -150,7 +150,6 @@ class PdfMergeSplitFilesTest {
         StorageOptions memory = StorageOptions.builder().memory().build();
         try (PdfDocument merged = PdfMerge.mergeFiles(List.of(a, b), memory)) {
             assertEquals(5, merged.pageCount());
-            assertTrue(merged.sourcePath().isEmpty(), "memory merge tracks no backing file");
         }
         Path out = tmp.resolve("out.pdf");
         PdfSplit.extractPageRangeToFile(a, 0, 1, out, memory);
@@ -158,15 +157,66 @@ class PdfMergeSplitFilesTest {
     }
 
     @Test
-    void fileModeRejectsBytesOnlyDocs(@TempDir Path tmp) throws Exception {
+    void fileModeWorksForBytesOpenedDocs(@TempDir Path tmp) throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported() && QpdfLib.isExtractFileSupported(),
+                "needs file-backed qpdf symbols");
         byte[] pdf = SyntheticPdfFactory.createDiverse(2);
-        StorageOptions file = StorageOptions.builder().file().build();
-        try (PdfDocument doc = PdfDocument.open(pdf)) {
-            assertThrows(JPDFiumException.class, () -> PdfSplit.extractPageRange(doc, 0, 1, file));
-            assertThrows(JPDFiumException.class,
-                    () -> PdfMerge.merge(List.of(doc, PdfDocument.open(pdf)), file));
+        StorageOptions file = StorageOptions.builder().file().tempDir(tmp.resolve("t")).build();
+        try (PdfDocument doc = PdfDocument.open(pdf);
+             PdfDocument part = PdfSplit.extractPageRange(doc, 0, 1, file)) {
+            assertEquals(2, part.pageCount());
         }
+        try (PdfDocument doc = PdfDocument.open(pdf);
+             PdfDocument other = PdfDocument.open(pdf);
+             PdfDocument merged = PdfMerge.merge(List.of(doc, other), file)) {
+            assertEquals(4, merged.pageCount());
+        }
+    }
+
+    @Test
+    void fileBackedOpsReflectInMemoryEdits(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported() && QpdfLib.isExtractFileSupported(),
+                "needs file-backed qpdf symbols");
+        Path in = tmp.resolve("in.pdf");
+        byte[] source = SyntheticPdfFactory.createDiverse(3);
+        Files.write(in, source);
+        String expectedPage1 = PdfVerifier.pageText(source, 1, "source page 1");
+        StorageOptions file = StorageOptions.builder().file().tempDir(tmp.resolve("t")).build();
+
+        // Page 0 deleted in memory: the extract must not read the stale file.
+        try (PdfDocument doc = PdfDocument.open(in)) {
+            PdfPageEditor.deletePage(doc.rawHandle(), 0);
+            try (PdfDocument part = PdfSplit.extractPageRange(doc, 0, 0, file)) {
+                assertEquals(1, part.pageCount());
+                assertEquals(expectedPage1,
+                        PdfVerifier.pageText(part.saveBytes(), 0, "edited extract"));
+            }
+        }
+
+        try (PdfDocument doc = PdfDocument.open(in);
+             PdfDocument other = PdfDocument.open(SyntheticPdfFactory.createDiverse(1))) {
+            PdfPageEditor.deletePage(doc.rawHandle(), 0);
+            try (PdfDocument merged = PdfMerge.merge(List.of(doc, other), file)) {
+                assertEquals(3, merged.pageCount());
+                assertEquals(expectedPage1,
+                        PdfVerifier.pageText(merged.saveBytes(), 0, "edited merge"));
+            }
+        }
+    }
+
+    @Test
+    void extractRangeToFileRejectsOutOfRangePages(@TempDir Path tmp) throws Exception {
+        Path in = tmp.resolve("in.pdf");
+        Files.write(in, SyntheticPdfFactory.createDiverse(6));
+        Path out = tmp.resolve("part.pdf");
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSplit.extractPageRangeToFile(in, 1, 100, out));
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSplit.extractPageRangeToFile(in, 7, 8, out));
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSplit.extractPageRangeToFile(in, 4, 2, out));
     }
 
     @Test
