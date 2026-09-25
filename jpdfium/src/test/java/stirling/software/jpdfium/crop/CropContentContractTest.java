@@ -16,6 +16,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -124,6 +125,26 @@ class CropContentContractTest {
             assertTrue(rgb == 0xFFFF00 || Math.abs(((rgb >> 16) & 0xFF) - 255) < 12,
                     "straddling painted path lost its visible part, pixel="
                             + Integer.toHexString(rgb));
+        }
+    }
+
+    @Test
+    void pixelOnlyEraseRefusesIncrementalSave() throws Exception {
+        // A straddling image is only pixel-erased (nothing destroyed), which
+        // still rewrites content: an incremental save would keep the original
+        // image stream recoverable.
+        try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.twoToneImagePdf())) {
+            PdfPageGeometry.cropAndRemoveContent(doc, 0, KEEP_TOP);
+            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+                    doc::saveBytesIncremental);
+        }
+    }
+
+    @Test
+    void fullPageFastPathStillAllowsIncrementalSave() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.twoToneImagePdf())) {
+            PdfPageGeometry.cropAndRemoveContent(doc, 0, new Rect(0, 0, 612, 792));
+            assertTrue(doc.saveBytesIncremental().length > 0);
         }
     }
 

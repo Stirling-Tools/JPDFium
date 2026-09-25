@@ -550,7 +550,8 @@ static std::u32string survivingFingerprint(const std::u32string& normalizedText,
 // Returns false when the caller must remove the whole image.
 static bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
                              const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects,
-                             uint32_t argb) {
+                             uint32_t argb, bool* pixelsChanged = nullptr) {
+    if (pixelsChanged) *pixelsChanged = false;
     if (rects.empty()) return true;
     unsigned int srcW = 0, srcH = 0;
     if (!FPDFImageObj_GetImagePixelSize(imageObj, &srcW, &srcH) || srcW == 0 || srcH == 0) {
@@ -690,6 +691,7 @@ static bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT 
     bool ok = true;
     if (changed) {
         ok = FPDFImageObj_SetBitmap(nullptr, 0, imageObj, bmp) != 0;
+        if (ok && pixelsChanged) *pixelsChanged = true;
     }
     FPDFBitmap_Destroy(bmp);
     return ok;
@@ -1708,6 +1710,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     std::set<FPDF_PAGEOBJECT> detachedFromForms;
     // Nested images the crop will promote (decided by the pre-pass below).
     std::unordered_set<FPDF_PAGEOBJECT> promotionCandidates;
+    // True when a bitmap was rewritten: incremental save must be refused even
+    // when no object was destroyed or edited.
+    bool pixelsErased = false;
 
     // Bounds of |obj| (parent space) transformed into page space.
     auto transformedBounds = [](FPDF_PAGEOBJECT obj, const FS_MATRIX& m, float& l, float& b,
@@ -1811,7 +1816,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     }
                     if (eraseRectsBuffer.empty()) continue;  // fully inside: leave it
                     if (!eraseImagePixels(doc, page, child, childToPage,
-                                          std::span<const FS_RECTF>(eraseRectsBuffer), argb)) {
+                                          std::span<const FS_RECTF>(eraseRectsBuffer), argb,
+                                          &pixelsErased)) {
                         objsToDestroy.insert(child);
                         continue;
                     }
@@ -1982,7 +1988,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     erased = false;
                 } else {
                     erased = eraseImagePixels(doc, page, obj, imgMatrix,
-                                              std::span<const FS_RECTF>(eraseRectsBuffer), argb);
+                                              std::span<const FS_RECTF>(eraseRectsBuffer), argb,
+                                              &pixelsErased);
                 }
                 if (!erased) {
                     // Doctrine: pixel-true erase or full removal, never cover-and-keep.
@@ -2741,7 +2748,8 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Any content REMOVAL means an incremental save would keep the original,
     // un-redacted revision recoverable in the file body - record that so the
     // save APIs can refuse.
-    if ((!objsToDestroy.empty() || !reParentForms.empty() || inPlaceEdited) && core) {
+    if ((!objsToDestroy.empty() || !reParentForms.empty() || inPlaceEdited || pixelsErased) &&
+        core) {
         core->contentRedacted = true;
     }
     return JPDFIUM_OK;
