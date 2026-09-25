@@ -19,6 +19,22 @@ if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; the
     exit 1
 fi
 
+# The ICU data carrier must be the trimmed one; a regression to the loose keep
+# list (~4 MB) or the full data (~31 MB) would balloon every core jar.
+case "$PLATFORM" in
+    vips-*) ;;
+    *)
+        for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
+            [ -e "$f" ] || continue
+            icu_bytes=$(wc -c < "$f")
+            if [ "$icu_bytes" -gt 1572864 ]; then
+                echo "FAIL: $(basename "$f") is $((icu_bytes / 1024)) KB - ICU data was not trimmed" >&2
+                exit 1
+            fi
+        done
+        ;;
+esac
+
 BUDGET=$(grep -v '^#' "$BUDGETS" | grep -v '^$' | awk -v p="$PLATFORM" '$1==p{print $2; exit}' || true)
 if [ -z "${BUDGET:-}" ]; then
     if [ "${SIZE_GATE_STRICT:-}" = "1" ]; then
