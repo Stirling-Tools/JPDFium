@@ -5,14 +5,15 @@
 #
 # JPDFium's ICU usage (verified by grep over native/bridge/src/):
 #   - u_strFromUTF8                  (UTF-8 <-> UTF-16; needs cnvalias)
-#   - icu::Normalizer / unorm_*      (NFC / NFKC; needs nfc, nfkc, nfkc_cf)
-#   - icu::BreakIterator             (sentence/word/line boundaries; needs brkitr/*)
-#   - ubidi_*                        (BiDi text; needs ubidi data)
+#   - icu::Normalizer / unorm_*      (NFC normalization)
+#   - icu::BreakIterator             (SENTENCE boundaries only; sent.brk)
+#   - ubidi_*                        (BiDi text)
 #   - basic uchar properties         (always needed)
 #
 # We DON'T need: full locale data, region data, currency data, transliterations,
-# collations (sorting), RBNF (spell-out numbers), units, or non-essential
-# converters. That's ~25 MB of the 30 MB default data file.
+# collations, RBNF, units, non-essential converters, or the word/line break
+# dictionaries (cjdict ~2 MB + khmer/lao/burmese/thai ~1 MB). The kept set is
+# ~0.42 MB of the 31 MB default data file.
 #
 # Usage: build-minimal-icu.sh        # Linux only; macOS embeds data; Windows TBD
 
@@ -120,33 +121,18 @@ EOF
 echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_VER}_dat symbol"
 
 # Items to KEEP - patterns matching item names in the .dat.
-# What the JPDFium bridge actually uses (verified by grep over
-# native/bridge/src/):
-#   u_strFromUTF8           → cnvalias.icu (converter alias table)
-#   icu::Normalizer NFC     → nfc.nrm  (NFC normalization data - bridge
-#                                       only uses UNORM_NFC at
-#                                       jpdfium_advanced.cpp:828)
-#   icu::BreakIterator      → brkitr/* (sentence/word/line/char boundaries)
-#   ubidi_*                 → ubidi.icu + ucase.icu + uchar.icu (BiDi
-#                                       + case folding + character props)
-#   icu::Locale::getDefault → root.res + en.res (default locale fallback)
-#
-# Deliberately NOT included (verified unused by bridge AND not loaded
-# eagerly by libicuuc on init - ICU data loading is lazy):
-#   unames.icu      ~300 KB - u_charName / u_charFromName, bridge doesn't
-#   uemoji.icu      ~200 KB - UCHAR_EMOJI property, bridge doesn't
-#   nfkc.nrm         ~50 KB - NFKC normalization, bridge uses only NFC
-#   nfkc_cf.nrm      ~50 KB - NFKC casefold, same
-#   en_US.res        ~50 KB - bridge has no US-specific locale need;
-#                             root + en cover the default chain
+# The bridge only opens a sentence BreakIterator (jpdfium_advanced.cpp:862),
+# so keep the sentence rules plus the shared data the runtime loads eagerly
+# (pool.res, cnvalias, ulayout, root/en locale fallback). Word/line rules and
+# their dictionaries are unused: cjdict ~2 MB, khmer/lao/burmese/thai ~1 MB.
+# Verified on ICU 74 and ICU 78: the tightened .dat (0.42-0.45 MB) passes
+# sentence breaking (en/hu/ja), NFC, u_strFromUTF8 and ubidi.
 KEEP=(
     '^cnvalias\.icu$'
-    '^uchar\.icu$'
-    '^ubidi\.icu$'
     '^ulayout\.icu$'
-    '^ucase\.icu$'
-    '^nfc\.nrm$'
-    '^brkitr/'
+    '^brkitr/.*\.res$'
+    '^brkitr/sent\.brk$'
+    '^brkitr/sent_el\.brk$'
     '^root\.res$'
     '^en\.res$'
 )

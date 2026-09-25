@@ -15,9 +15,8 @@
 #   3. icupkg -x '*' → loose items (ICU 74 icupkg reads ICU 78 .dat fine;
 #      .dat archive format has been stable since ICU 4.x and items inside
 #      keep their original ICU 78 byte content untouched)
-#   4. Build keep-list (same patterns as the Linux trim - cnvalias, uchar,
-#      ubidi, unames, ulayout, ucase, uemoji, nfc/nfkc/nfkc_cf, brkitr/,
-#      root.res + en.res + en_US.res + pool.res)
+#   4. Build keep-list (same patterns as the Linux trim - cnvalias, ulayout,
+#      pool.res, root/en fallback + the sentence-only brkitr rules)
 #   5. pkgdata -m archive packages the kept items into a fresh .dat
 #   6. mingw-w64 objcopy + gcc -shared wraps the trimmed .dat into a new
 #      icudt78.dll exporting icudt78_dat
@@ -106,13 +105,12 @@ TOTAL=$(wc -l < "$WORK/all.lst")
 echo "Total items in source : $TOTAL"
 
 # Step 4: Build keep list - same patterns as the Linux trim. See
-# build-minimal-icu.sh for the full rationale; bridge doesn't use
-# unames/uemoji/nfkc/nfkc_cf/en_US so they're dropped.
+# build-minimal-icu.sh for the full rationale; the bridge only opens sentence
+# iterators, so the word/line rules and dictionaries are dropped.
 KEEP=(
-    '^cnvalias\.icu$' '^uchar\.icu$' '^ubidi\.icu$'
-    '^ulayout\.icu$' '^ucase\.icu$'
-    '^nfc\.nrm$'
-    '^brkitr/' '^root\.res$' '^en\.res$'
+    '^cnvalias\.icu$' '^ulayout\.icu$'
+    '^brkitr/.*\.res$' '^brkitr/sent\.brk$' '^brkitr/sent_el\.brk$'
+    '^root\.res$' '^en\.res$'
 )
 
 : > "$WORK/keep.lst"
