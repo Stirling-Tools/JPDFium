@@ -137,10 +137,33 @@ jobs:
             echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig"
           } >> "$GITHUB_ENV"
 
+      # Keep the x86_64 kegs across runs; a cold runner reinstalls them.
+      - name: Cache x86_64 Homebrew deps (macOS)
+        if: matrix.platform == 'darwin-x64'
+        uses: actions/cache@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
+        with:
+          path: |
+            /usr/local/Cellar
+            /usr/local/opt
+            /usr/local/bin
+            /usr/local/lib
+            /usr/local/include
+            /usr/local/share
+            /usr/local/etc
+            /usr/local/Frameworks
+            /usr/local/var/homebrew
+            ~/Library/Caches/Homebrew/downloads
+          key: brew-x64-sonoma-v1
+          restore-keys: |
+            brew-x64-sonoma-
+
       - name: Install build deps (macOS, x86_64 cross-compile)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
           # macos-14 is arm64. To cross-compile darwin-x64 we need x86_64
           # builds of every pkg-config dep the bridge links against. The
@@ -171,26 +194,24 @@ jobs:
           # /usr/local/share/man pre-exists root-owned on macos-14 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
-          # The runner image leaves /usr/local/bin/python* symlinks pointing at
-          # /Library/Frameworks; python@3.14 (pulled in below) refuses to link
-          # over them and aborts the whole install. Drop the stale links, then
-          # pre-install and force-link python so later brews never trip on it.
-          for f in /usr/local/bin/idle3* /usr/local/bin/pip3* /usr/local/bin/pydoc3* /usr/local/bin/python3*; do
-            [ -L "$f" ] || continue
-            case "$(readlink "$f")" in /Library/Frameworks/*) rm -f "$f";; esac
-          done
-          arch -x86_64 /usr/local/bin/brew install python@3.14 || true
-          arch -x86_64 /usr/local/bin/brew link --overwrite python@3.14 || true
-          arch -x86_64 /usr/local/bin/brew install \
-            pcre2 freetype harfbuzz icu4c pugixml libunibreak pkg-config
-          # If x86_64 bottle is unavailable for qpdf on macOS, install from source or build with fallback
-          arch -x86_64 /usr/local/bin/brew install qpdf || arch -x86_64 /usr/local/bin/brew install --build-from-source qpdf
+          # Build tools only generate files; native bottles are fine.
+          brew install cmake meson ninja
+          # qpdf and harfbuzz are rebuilt from source below, so brew only
+          # needs the bridge deps plus qpdf's zlib/libjpeg inputs.
+          if arch -x86_64 /usr/local/bin/brew list --versions \
+              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo \
+              >/dev/null 2>&1; then
+            echo "x86_64 Homebrew deps restored from cache"
+          else
+            arch -x86_64 /usr/local/bin/brew install \
+              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo
+          fi
           # Use the host (arm64) cmake/ninja - they emit x64 builds when
           # CMAKE_OSX_ARCHITECTURES=x86_64 is set. Pkg-config from x86_64
           # brew points at x86_64 deps.
           which arch >/dev/null
           {
-            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"

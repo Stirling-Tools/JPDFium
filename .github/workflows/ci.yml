@@ -122,6 +122,7 @@ jobs:
           mkdir -p /tmp/m
           javac -d /tmp/m \
             jpdfium/src/main/java/stirling/software/jpdfium/panama/NativeLoader.java \
+            jpdfium/src/main/java/stirling/software/jpdfium/panama/NativeCache.java \
             jpdfium/src/main/java/stirling/software/jpdfium/panama/Architecture.java \
             jpdfium/src/main/java/stirling/software/jpdfium/exception/*.java
           OUT=$(echo 'System.out.println(stirling.software.jpdfium.panama.NativeLoader.detectPlatform());' \
