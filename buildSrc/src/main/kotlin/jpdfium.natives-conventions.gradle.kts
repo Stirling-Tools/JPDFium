@@ -1,4 +1,5 @@
 // Resource-only JAR - ships the platform-specific native library.
+import java.security.MessageDigest
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 plugins {
@@ -55,20 +56,36 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
 }
 
 val writeNativeManifest = tasks.register("writeNativeManifest") {
-    description = "Write native-libs.txt listing every file in the staged natives directory"
+    description = "Write native-libs.txt and native-libs.sha256 for the staged natives"
     group = "build"
     dependsOn(stageNatives)
     val manifest = stagedPlatformDir.map { it.file("native-libs.txt") }
-    outputs.file(manifest)
+    val checksums = stagedPlatformDir.map { it.file("native-libs.sha256") }
+    outputs.files(manifest, checksums)
     doLast {
         val dir = stagedPlatformDir.get().asFile
         if (!dir.isDirectory) return@doLast
+        // The checksum file drives the content-addressed runtime cache, so it
+        // must cover exactly the files the manifest lists.
         val entries = dir.listFiles()
-            ?.filter { it.isFile && it.name != "native-libs.txt" }
-            ?.map { it.name }
-            ?.sorted()
+            ?.filter { it.isFile && it.name != "native-libs.txt" && it.name != "native-libs.sha256" }
+            ?.sortedBy { it.name }
             ?: emptyList()
-        manifest.get().asFile.writeText(entries.joinToString("\n") + if (entries.isEmpty()) "" else "\n")
+        manifest.get().asFile.writeText(entries.joinToString("\n") { it.name } + if (entries.isEmpty()) "" else "\n")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        val lines = entries.joinToString("\n") { file ->
+            file.inputStream().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            "$hash  ${file.name}"
+        }
+        checksums.get().asFile.writeText(if (lines.isEmpty()) "" else lines + "\n")
     }
 }
 
