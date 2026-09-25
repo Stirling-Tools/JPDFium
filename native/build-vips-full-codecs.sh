@@ -156,7 +156,18 @@ build_libheif() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        # Keg-only deps (libsharpyuv, zlib, ...) keep their .pc files out of
+        # lib/pkgconfig. Without them pkg-config resolves the host copy, which
+        # staged an arm64 libsharpyuv into the darwin-x64 bundle.
+        local opt_pc
+        for opt_pc in "$bp"/opt/*/lib/pkgconfig; do
+            [ -d "$opt_pc" ] || continue
+            PKG_CONFIG_PATH="$opt_pc:${PKG_CONFIG_PATH:-}"
+        done
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            export PKG_CONFIG="$bp/bin/pkg-config"
+        fi
     else
         $SUDO apt-get remove -y libheif* 2>/dev/null || true
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -225,7 +236,18 @@ build_vips() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        # Keg-only deps (libsharpyuv, zlib, ...) keep their .pc files out of
+        # lib/pkgconfig. Without them pkg-config resolves the host copy, which
+        # staged an arm64 libsharpyuv into the darwin-x64 bundle.
+        local opt_pc
+        for opt_pc in "$bp"/opt/*/lib/pkgconfig; do
+            [ -d "$opt_pc" ] || continue
+            PKG_CONFIG_PATH="$opt_pc:${PKG_CONFIG_PATH:-}"
+        done
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            export PKG_CONFIG="$bp/bin/pkg-config"
+        fi
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
