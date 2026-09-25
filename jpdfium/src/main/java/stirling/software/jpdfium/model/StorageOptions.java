@@ -11,11 +11,11 @@ public final class StorageOptions {
 
     /** Memory and file trade-offs for merge/split intermediates. */
     public enum Mode {
-        /** File-backed when all inputs come from files, else memory. */
+        /** File-backed when the native file path is available, else memory. */
         AUTO,
         /** Always keep intermediates on the Java heap. */
         MEMORY,
-        /** Always use temp files; fail when inputs are not file-backed. */
+        /** File-backed intermediates; fail when the native path is unavailable or fails. */
         FILE
     }
 
@@ -43,6 +43,19 @@ public final class StorageOptions {
             return Files.createTempFile(tempDir, prefix, suffix);
         }
         return Files.createTempFile(prefix, suffix);
+    }
+
+    /**
+     * Staging file for content that will replace {@code target}: created in the
+     * target's directory when possible so the final move is a rename, not a
+     * cross-device copy. Created mode 0600 on POSIX.
+     */
+    public Path createStagingFile(Path target) throws IOException {
+        Path parent = target.toAbsolutePath().getParent();
+        if (parent != null && Files.isDirectory(parent)) {
+            return Files.createTempFile(parent, ".jpdfium-stage", ".pdf");
+        }
+        return createTempFile("jpdfium-stage", ".pdf");
     }
 
     public static final class Builder {

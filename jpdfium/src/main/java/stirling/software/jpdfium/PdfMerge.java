@@ -53,7 +53,8 @@ public final class PdfMerge {
 
     /**
      * Merge multiple open PDF documents with explicit storage control.
-     * FILE mode fails loudly when any input is not file-backed.
+     * FILE mode fails loudly when the native file-backed merge is unavailable
+     * or fails; live documents are materialized to temp files first.
      */
     public static PdfDocument merge(List<PdfDocument> documents, StorageOptions options) {
         if (documents.isEmpty()) throw new IllegalArgumentException("At least one document is required");
@@ -174,7 +175,8 @@ public final class PdfMerge {
 
     /**
      * Merge PDF files with explicit storage control.
-     * FILE mode fails loudly when natives lack file-backed merge.
+     * FILE mode fails loudly when the native file-backed merge is unavailable
+     * or fails.
      */
     public static PdfDocument mergeFiles(List<Path> paths, StorageOptions options) {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
@@ -209,9 +211,6 @@ public final class PdfMerge {
                                 }
                             }
                         }
-                        if (options.mode() == StorageOptions.Mode.FILE) {
-                            throw new JPDFiumException("file-backed merge failed");
-                        }
                     } finally {
                         if (!done) {
                             try {
@@ -223,6 +222,9 @@ public final class PdfMerge {
             } catch (IOException _) {
                 // Fall through to the paths below
             }
+        }
+        if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed merge unavailable or failed");
         }
 
         if (PdfMerger.isSupported()) {
@@ -331,8 +333,8 @@ public final class PdfMerge {
 
     /**
      * Merge files straight to an output file with explicit storage control.
-     * Existing output is truncated. Falls back to merge plus save unless
-     * FILE mode forces the native path.
+     * Existing output is replaced only after the merge succeeds. FILE mode
+     * fails loudly when the native file-backed merge is unavailable or fails.
      */
     public static void mergeFilesToFile(List<Path> paths, Path output, StorageOptions options) throws IOException {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
@@ -342,17 +344,44 @@ public final class PdfMerge {
             return;
         }
 
-        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
-            if (QpdfLib.mergeFiles(paths, output) && Files.size(output) > 0) {
-                return;
-            }
-            if (options.mode() == StorageOptions.Mode.FILE) {
-                throw new JPDFiumException("file-backed merge failed");
-            }
+        if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()
+                && stageNativeMerge(paths, output, options)) {
+            return;
+        }
+        if (options.mode() == StorageOptions.Mode.FILE) {
+            throw new JPDFiumException("file-backed merge unavailable or failed");
         }
 
         try (PdfDocument merged = mergeFiles(paths, options)) {
             merged.save(output);
+        }
+    }
+
+    /**
+     * Native-merge into a staging file and replace {@code output} only on
+     * success: qpdf must never truncate an input it is still reading when the
+     * output aliases one of the inputs. Returns false when the native path is
+     * unavailable or fails; the caller then falls back or fails in FILE mode.
+     */
+    private static boolean stageNativeMerge(List<Path> paths, Path output, StorageOptions options)
+            throws IOException {
+        Path staged;
+        try {
+            staged = options.createStagingFile(output);
+        } catch (IOException _) {
+            return false;
+        }
+        try {
+            if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
+            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            staged = null;
+            return true;
+        } finally {
+            if (staged != null) {
+                try {
+                    Files.deleteIfExists(staged);
+                } catch (IOException _) {}
+            }
         }
     }
 

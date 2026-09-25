@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -77,7 +78,8 @@ public final class PdfSplit {
 
     /**
      * Extract specific pages with explicit storage control.
-     * FILE mode fails loudly when the source was not opened from a path.
+     * FILE mode fails loudly when the native file-backed extract is
+     * unavailable or fails; live documents are materialized to temp files.
      */
     public static PdfDocument extractPages(PdfDocument doc, Set<Integer> indices, StorageOptions options) {
         if (indices.isEmpty()) {
@@ -165,7 +167,8 @@ public final class PdfSplit {
 
     /**
      * Extract a contiguous range with explicit storage control.
-     * FILE mode fails loudly when the source was not opened from a path.
+     * FILE mode fails loudly when the native file-backed extract is
+     * unavailable or fails; live documents are materialized to temp files.
      */
     public static PdfDocument extractPageRange(PdfDocument doc, int fromPage, int toPage, StorageOptions options) {
         if (fromPage < 0 || toPage < fromPage || toPage >= doc.pageCount()) {
@@ -263,7 +266,8 @@ public final class PdfSplit {
 
     /**
      * Extract a range straight to a file with explicit storage control.
-     * Existing output is truncated. FILE mode forces the native path.
+     * Existing output is replaced only after extraction succeeds. FILE mode
+     * fails loudly when the native file-backed extract is unavailable or fails.
      */
     public static void extractPageRangeToFile(Path input, int fromPage, int toPage,
                                               Path output, StorageOptions options) throws IOException {
@@ -287,22 +291,53 @@ public final class PdfSplit {
             pageIndices[i] = fromPage + i;
         }
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()
-                && QpdfLib.extractPagesToFile(input, pageIndices, output)
-                && Files.size(output) > 0) {
-            // The native extractor skips out-of-range indices; verify the
-            // written file really has every requested page.
-            try (PdfDocument written = PdfDocument.open(output)) {
-                if (written.pageCount() == count) return;
-            }
-            throw new IOException("file-backed extract wrote "
-                    + "the wrong page count for range [" + fromPage + ".." + toPage + "]");
+                && stageNativeExtract(input, pageIndices, count, output, options)) {
+            return;
         }
         if (options.mode() == StorageOptions.Mode.FILE) {
-            throw new JPDFiumException("file-backed extract failed");
+            throw new JPDFiumException("file-backed extract unavailable or failed");
         }
         try (PdfDocument doc = PdfDocument.open(input);
              PdfDocument part = extractPageRange(doc, fromPage, toPage, options)) {
             part.save(output);
+        }
+    }
+
+    /**
+     * Native-extract into a staging file and replace {@code output} only on
+     * success: qpdf must never truncate the input it is still reading when the
+     * output aliases the input. Returns false when the native path is
+     * unavailable or fails; the caller then falls back or fails in FILE mode.
+     */
+    private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
+                                              Path output, StorageOptions options) throws IOException {
+        Path staged;
+        try {
+            staged = options.createStagingFile(output);
+        } catch (IOException _) {
+            return false;
+        }
+        try {
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+                return false;
+            }
+            // The native extractor skips out-of-range indices; verify the
+            // staged file really has every requested page.
+            try (PdfDocument written = PdfDocument.open(staged)) {
+                if (written.pageCount() != expectedPages) {
+                    throw new IOException("file-backed extract wrote the wrong page count for "
+                            + expectedPages + " requested pages");
+                }
+            }
+            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            staged = null;
+            return true;
+        } finally {
+            if (staged != null) {
+                try {
+                    Files.deleteIfExists(staged);
+                } catch (IOException _) {}
+            }
         }
     }
 

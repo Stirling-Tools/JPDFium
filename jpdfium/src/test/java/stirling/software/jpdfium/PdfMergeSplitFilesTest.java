@@ -3,12 +3,14 @@ package stirling.software.jpdfium;
 import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.lang.management.ManagementFactory;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -236,6 +238,92 @@ class PdfMergeSplitFilesTest {
             assertEquals(5, merged.pageCount());
         }
         assertTrue(Files.isDirectory(customTmp), "custom temp dir is used");
+    }
+
+    @Test
+    void mergeFilesToFileCanReplaceAnInputSafely(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        // Large streams keep qpdf reading input 0 lazily while it writes, so a
+        // direct write to the aliased output would truncate data mid-read.
+        Files.write(a, largePdf(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+
+        // output aliases input 0: qpdf must not truncate a file it is reading.
+        PdfMerge.mergeFilesToFile(List.of(a, b), a);
+
+        byte[] merged = Files.readAllBytes(a);
+        assertEquals(5, PdfVerifier.pageCount(merged, "in-place merge"));
+        assertTrue(merged.length > 1_000_000,
+                "merged output lost the large image stream (size " + merged.length + ")");
+        assertEquals(3, PdfVerifier.pageCount(Files.readAllBytes(b), "input b must be untouched"));
+    }
+
+    @Test
+    void extractPageRangeToFileCanReplaceTheInputSafely(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+        Path in = tmp.resolve("in.pdf");
+        Files.write(in, largePdf(4));
+
+        // output aliases the input: extraction must stage before replacing.
+        PdfSplit.extractPageRangeToFile(in, 1, 3, in);
+
+        byte[] part = Files.readAllBytes(in);
+        assertEquals(3, PdfVerifier.pageCount(part, "in-place extract"));
+        assertTrue(part.length > 1_000_000,
+                "extracted output lost the large image stream (size " + part.length + ")");
+    }
+
+    /** Multi-megabyte input: qpdf must re-read its streams lazily while writing. */
+    private static byte[] largePdf(int pages) throws Exception {
+        java.awt.image.BufferedImage img =
+                new java.awt.image.BufferedImage(1600, 1600, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.util.Random rnd = new java.util.Random(42);
+        for (int y = 0; y < 1600; y++) {
+            for (int x = 0; x < 1600; x++) {
+                img.setRGB(x, y, rnd.nextInt(0xFFFFFF));
+            }
+        }
+        java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", png);
+        try (org.apache.pdfbox.pdmodel.PDDocument doc =
+                new org.apache.pdfbox.pdmodel.PDDocument()) {
+            org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject image =
+                    org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject
+                            .createFromByteArray(doc, png.toByteArray(), "big");
+            for (int i = 0; i < pages; i++) {
+                org.apache.pdfbox.pdmodel.PDPage page =
+                        new org.apache.pdfbox.pdmodel.PDPage(
+                                org.apache.pdfbox.pdmodel.common.PDRectangle.LETTER);
+                doc.addPage(page);
+                try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
+                        new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page)) {
+                    cs.drawImage(image, 0, 0, 612, 792);
+                }
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    @Test
+    void fileModeFailsLoudlyWhenNativeMergeCannotRun(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        Path a = tmp.resolve("a.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Path bad = tmp.resolve("bad.pdf");
+        Files.write(bad, "not a pdf".getBytes(StandardCharsets.US_ASCII));
+
+        StorageOptions file = StorageOptions.builder().file().build();
+        JPDFiumException ex = assertThrows(JPDFiumException.class,
+                () -> PdfMerge.mergeFiles(List.of(a, bad), file));
+        assertTrue(ex.getMessage().contains("file-backed"),
+                "FILE mode must fail loudly instead of falling back to the heap: "
+                        + ex.getMessage());
     }
 
     @Test
