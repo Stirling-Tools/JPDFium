@@ -341,6 +341,29 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /** Form-nested text "SECRETKEEP" at (100,700), single text object. */
+    public static byte[] formNestedSingleWordPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            form.getResources().put(COSName.getPDFName("F1"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write("q BT /F1 14 Tf 100 700 Td (SECRETKEEP) Tj ET Q"
+                        .getBytes(StandardCharsets.US_ASCII));
+            }
+            if (page.getResources() == null) page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
     /** Two-tone image inside two transformed forms: page rect (50,50)-(250,250). */
     public static byte[] nestedTransformedFormImagePdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {
@@ -412,6 +435,45 @@ public final class CropTestPdfGenerator {
             square.constructAppearances();
             return save(doc);
         }
+    }
+
+    /**
+     * Two valued text fields: "inside" at (100,600,150,20) and "outside" at
+     * (400,600,150,20), for form-value leak checks after a left-half crop.
+     */
+    public static byte[] valuedFormFieldsPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "FORM ANCHOR", 100, 700);
+            }
+            PDAcroForm acroForm = new PDAcroForm(doc);
+            PDResources formResources = new PDResources();
+            formResources.put(COSName.getPDFName("Helv"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            acroForm.setDefaultResources(formResources);
+            acroForm.setDefaultAppearance("/Helv 12 Tf 0 g");
+            doc.getDocumentCatalog().setAcroForm(acroForm);
+            addTextField(doc, page, acroForm, "inside", "INSIDE_VALUE", 100, 600);
+            addTextField(doc, page, acroForm, "outside", "OUTSIDE_VALUE", 400, 600);
+            return save(doc);
+        }
+    }
+
+    private static void addTextField(PDDocument doc, PDPage page, PDAcroForm acroForm,
+                                     String name, String value, float x, float y)
+            throws IOException {
+        org.apache.pdfbox.pdmodel.interactive.form.PDTextField field =
+                new org.apache.pdfbox.pdmodel.interactive.form.PDTextField(acroForm);
+        field.setPartialName(name);
+        field.setValue(value);
+        var widget = field.getWidgets().get(0);
+        widget.setRectangle(new PDRectangle(x, y, 150, 20));
+        widget.setPage(page);
+        page.getAnnotations().add(widget);
+        acroForm.getFields().add(field);
     }
 
     /** Signature field with its widget at (400,600,150,50). */
