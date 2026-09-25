@@ -14,6 +14,8 @@ import stirling.software.jpdfium.panama.EmbedPdfFontBindings;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -101,19 +103,49 @@ class EmbedPdfFontsTest {
         byte[] bytes = Files.readAllBytes(ttf.toPath());
 
         byte[] pdf = SyntheticPdfFactory.singlePageWithText("hello");
+        byte[] out;
+        String family;
         try (PdfDocument doc = PdfDocument.open(pdf);
              PdfPage page = doc.page(0)) {
             int id = EmbedPdfFonts.registerMemFont(null, 0, -1, bytes);
             try {
+                assertTrue(id != 0, "registration must return a font id");
+                family = EmbedPdfFonts.familyName(id).orElse("");
                 int index = PdfAnnotations.create(
                         page.rawHandle(), AnnotationType.FREETEXT, new Rect(50, 500, 200, 40));
+                PdfAnnotations.setContents(page.rawHandle(), index, "hello");
                 EmbedPdfAnnotations.setFreeTextFont(page.rawHandle(), index, id, 12f, 0, 0, 0);
                 EmbedPdfAnnotations.generateAppearance(page.rawHandle(), index);
                 assertTrue(EmbedPdfAnnotations.hasAppearanceStream(page.rawHandle(), index, 0),
                         "FreeText must have an appearance after registered-font DA");
+                out = doc.saveBytes();
             } finally {
                 EmbedPdfFonts.clearRegisteredFonts();
             }
+        }
+
+        // The appearance must actually use the registered family, not just exist.
+        String familyKey = family.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        try (org.apache.pdfbox.pdmodel.PDDocument pd = org.apache.pdfbox.Loader.loadPDF(out)) {
+            var ap = pd.getPage(0).getAnnotations().get(0).getNormalAppearanceStream();
+            assertNotNull(ap, "FreeText must save an /AP /N stream");
+            assertNotNull(ap.getResources(), "appearance must carry resources");
+            java.util.List<String> names = new java.util.ArrayList<>();
+            for (var name : ap.getResources().getFontNames()) {
+                names.add(ap.getResources().getFont(name).getName());
+            }
+            assertFalse(names.isEmpty(), "appearance must reference a font");
+            boolean matched = names.stream()
+                    .map(n -> n.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", ""))
+                    .anyMatch(n -> !familyKey.isEmpty()
+                            && (n.contains(familyKey) || familyKey.contains(n)));
+            assertTrue(matched,
+                    "appearance font must be the registered family '" + family + "', got " + names);
+            String content = new String(ap.getContentStream().toByteArray(),
+                    java.nio.charset.StandardCharsets.ISO_8859_1);
+            assertTrue(content.contains("Tf"), "appearance must select a font: " + content);
+            assertTrue(content.contains("Tj") || content.contains("TJ"),
+                    "appearance must draw text: " + content);
         }
     }
 }
