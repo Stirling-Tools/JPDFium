@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.crop;
 
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -24,6 +25,7 @@ import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -176,6 +178,47 @@ public final class CropTestPdfGenerator {
             PDPage page = new PDPage(LETTER);
             doc.addPage(page);
             PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "tt");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(img, 280, 400, 40, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * Two straddling images: an opaque black one added first (its outside part is
+     * already the erase colour, so erasing it is a pixel no-op) and a two-tone one
+     * added second (its outside part is really rewritten).
+     */
+    public static byte[] blackAndTwoToneStraddlingImagesPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject black = PDImageXObject.createFromByteArray(doc, solidPng(0, 0, 0), "black");
+            PDImageXObject twoTone = PDImageXObject.createFromByteArray(doc, twoTonePng(), "tt");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(black, 280, 400, 40, 100);
+                cs.drawImage(twoTone, 280, 200, 40, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * One page with an image XObject at (280,400)-(320,500) whose dictionary has
+     * no /Width//Height: it straddles x=306 but cannot be pixel-erased.
+     */
+    public static byte[] dimensionlessStraddlingImagePdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDImageXObject img = new PDImageXObject(doc);
+            COSStream stream = img.getCOSObject();
+            stream.setItem(COSName.COLORSPACE, COSName.DEVICERGB);
+            stream.setInt(COSName.BITS_PER_COMPONENT, 8);
+            try (OutputStream os = stream.createOutputStream()) {
+                os.write(new byte[] {1, 2, 3});
+            }
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.drawImage(img, 280, 400, 40, 100);
             }

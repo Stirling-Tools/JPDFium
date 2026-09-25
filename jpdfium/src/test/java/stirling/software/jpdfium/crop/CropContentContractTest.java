@@ -145,6 +145,31 @@ class CropContentContractTest {
     }
 
     @Test
+    void laterNoOpImageEraseDoesNotClearTheRewriteFlag() throws Exception {
+        // Two straddling images: the two-tone one is really pixel-erased, the
+        // black one's erase is a no-op (already the erase colour). The no-op
+        // must not clear the shared flag, or an incremental save would expose
+        // the original bitmap bytes outside the crop.
+        try (PdfDocument doc =
+                PdfDocument.open(CropTestPdfGenerator.blackAndTwoToneStraddlingImagesPdf())) {
+            PdfPageGeometry.cropAndRemoveContent(doc, 0, LEFT_HALF);
+            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+                    doc::saveBytesIncremental);
+        }
+    }
+
+    @Test
+    void unerasableStraddlingImageFailsTheCrop() throws Exception {
+        // An image that cannot be pixel-erased must not be silently destroyed:
+        // that would drop its visible part, so the crop must report failure.
+        try (PdfDocument doc =
+                PdfDocument.open(CropTestPdfGenerator.dimensionlessStraddlingImagePdf())) {
+            assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
+                    () -> PdfPageGeometry.cropAndRemoveContent(doc, 0, LEFT_HALF));
+        }
+    }
+
+    @Test
     void fullPageFastPathStillAllowsIncrementalSave() throws Exception {
         try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.twoToneImagePdf())) {
             PdfPageGeometry.cropAndRemoveContent(doc, 0, new Rect(0, 0, 612, 792));

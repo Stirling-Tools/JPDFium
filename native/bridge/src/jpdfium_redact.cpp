@@ -551,7 +551,8 @@ static std::u32string survivingFingerprint(const std::u32string& normalizedText,
 static bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
                              const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects,
                              uint32_t argb, bool* pixelsChanged = nullptr) {
-    if (pixelsChanged) *pixelsChanged = false;
+    // |pixelsChanged| accumulates: it may be shared across images, so a call
+    // that changes nothing must not clear an earlier call's true.
     if (rects.empty()) return true;
     unsigned int srcW = 0, srcH = 0;
     if (!FPDFImageObj_GetImagePixelSize(imageObj, &srcW, &srcH) || srcW == 0 || srcH == 0) {
@@ -1713,6 +1714,9 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // True when a bitmap was rewritten: incremental save must be refused even
     // when no object was destroyed or edited.
     bool pixelsErased = false;
+    // Crop mode: visible content was dropped because it could not be handled
+    // safely (failed replacement or un-erasable straddling image).
+    bool cropReplacementFailed = false;
 
     // Bounds of |obj| (parent space) transformed into page space.
     auto transformedBounds = [](FPDF_PAGEOBJECT obj, const FS_MATRIX& m, float& l, float& b,
@@ -1843,6 +1847,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     FS_MATRIX childMatrix;
                     if (!FPDFPageObj_GetMatrix(child, &childMatrix)) {
                         objsToDestroy.insert(child);
+                        cropReplacementFailed = true;
                         continue;
                     }
                     FS_MATRIX childToPage = concatMatrix(childMatrix, parentToPage);
@@ -1859,6 +1864,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                                           std::span<const FS_RECTF>(eraseRectsBuffer), argb,
                                           &pixelsErased)) {
                         objsToDestroy.insert(child);
+                        cropReplacementFailed = true;
                         continue;
                     }
                     auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
@@ -1986,6 +1992,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 if (!erased) {
                     // Doctrine: pixel-true erase or full removal, never cover-and-keep.
                     objsToDestroy.insert(obj);
+                    cropReplacementFailed = true;
                 }
             }
         } else if (type == FPDF_PAGEOBJ_PATH) {
@@ -2425,7 +2432,6 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     };
 
     bool inPlaceEdited = false;
-    bool cropReplacementFailed = false;
 
     for (auto& plan : plans) {
         fissionAttempted.insert(plan.originalObj);
