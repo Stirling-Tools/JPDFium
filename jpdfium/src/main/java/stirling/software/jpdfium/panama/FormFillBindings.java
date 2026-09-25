@@ -44,7 +44,7 @@ public final class FormFillBindings {
     public static final MethodHandle EPDFForm_CountFieldWidgets =
             downcallOptional("EPDFForm_CountFieldWidgets", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    public static final MethodHandle EPDFForm_GetFieldWidgetObjNum = downcall(
+    public static final MethodHandle EPDFForm_GetFieldWidgetObjNum = downcallOptional(
             "EPDFForm_GetFieldWidgetObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
     public static final MethodHandle EPDFForm_GetFieldObjNum =
