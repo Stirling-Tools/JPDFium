@@ -412,18 +412,21 @@ public final class CropTestPdfGenerator {
             org.apache.pdfbox.pdmodel.interactive.form.PDTextField field =
                     new org.apache.pdfbox.pdmodel.interactive.form.PDTextField(acroForm);
             field.setPartialName("shared");
-            var w0 = field.getWidgets().get(0);
+
+            // PDFBox 3 getWidgets() returns a detached list: register both
+            // widgets through setWidgets so the field's /Kids holds them both.
+            var w0 = new org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget();
             w0.setRectangle(new PDRectangle(400, 600, 150, 20));
             w0.setPage(p0);
             p0.getAnnotations().add(w0);
-            acroForm.getFields().add(field);
 
             var w1 = new org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationWidget();
-            w1.setParent(field);
             w1.setRectangle(new PDRectangle(400, 600, 150, 20));
             w1.setPage(p1);
             p1.getAnnotations().add(w1);
-            field.getWidgets().add(w1);
+
+            field.setWidgets(java.util.List.of(w0, w1));
+            acroForm.getFields().add(field);
             field.setValue("SHARED_VALUE");
             return save(doc);
         }
