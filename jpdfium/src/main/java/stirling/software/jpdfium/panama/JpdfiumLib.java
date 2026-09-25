@@ -74,8 +74,6 @@ public final class JpdfiumLib {
     private static final MemorySegment ADDR_SCRATCH   = GLOBAL.allocate(ADDRESS);
 
     private static final long DEFAULT_MAX_RENDER_PIXELS = 100_000_000L;
-    private static final long MAX_RENDER_PIXELS =
-            Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
 
     static {
         NativeLoader.ensureLoaded();
@@ -361,7 +359,8 @@ public final class JpdfiumLib {
 
     /** Refuse renders whose pixel dimensions exceed the configured bound. */
     private static void checkRenderBounds(long page, int dpi) {
-        long maxPixels = MAX_RENDER_PIXELS;
+        // Read per render so the bound stays configurable at runtime.
+        long maxPixels = Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
         if (maxPixels <= 0) return;
         double scale = dpi / 72.0;
         float pw = pageWidth0(page);
