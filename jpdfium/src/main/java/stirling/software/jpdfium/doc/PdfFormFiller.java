@@ -698,6 +698,15 @@ public final class PdfFormFiller {
         }
     }
 
+    /** Invoke long(ADDRESS, int, ADDRESS, long) -> 0 on error. */
+    private static long safeLong4(MethodHandle mh, MemorySegment a, int b, MemorySegment c, long d) {
+        if (mh == null) return 0L;
+        try { return (long) mh.invokeExact(a, b, c, d); } catch (Throwable t) {
+            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return 0L;
+        }
+    }
+
     /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
     private static int safeInt2(MethodHandle mh, MemorySegment a, int b) {
         try { return (int) mh.invokeExact(a, b); } catch (Throwable t) {
@@ -718,6 +727,12 @@ public final class PdfFormFiller {
         int flattened = 0;
         for (int pageIdx : pageIndices) {
             try (PdfPage page = document.page(pageIdx)) {
+                if (!widgetsHaveAppearance(page.rawHandle())) {
+                    // Flattening removes widget annotations; without an
+                    // appearance stream the painted value would be lost, so
+                    // leave this page unflattened.
+                    continue;
+                }
                 int rc = safeInt2(PageEditBindings.FPDFPage_Flatten, page.rawHandle(), 0);
                 if (rc == FLATTEN_SUCCESS) {
                     flattened++;
@@ -727,6 +742,24 @@ public final class PdfFormFiller {
             }
         }
         return flattened;
+    }
+
+    /** True when every widget annotation on the page has a normal appearance. */
+    private static boolean widgetsHaveAppearance(MemorySegment rawPage) {
+        int annotCount = safeInt0(AnnotationBindings.FPDFPage_GetAnnotCount, rawPage);
+        for (int i = 0; i < annotCount; i++) {
+            MemorySegment annot = safeSegment(AnnotationBindings.FPDFPage_GetAnnot, rawPage, i);
+            if (MemorySegment.NULL.equals(annot)) continue;
+            try {
+                if (safeInt0(AnnotationBindings.FPDFAnnot_GetSubtype, annot) != 20) continue;
+                long apLen = safeLong4(AnnotationBindings.FPDFAnnot_GetAP, annot, 0,
+                        MemorySegment.NULL, 0L);
+                if (apLen <= 0) return false;
+            } finally {
+                safeSilent0(AnnotationBindings.FPDFPage_CloseAnnot, annot);
+            }
+        }
+        return true;
     }
 
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */

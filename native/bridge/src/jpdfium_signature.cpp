@@ -4,6 +4,7 @@
 #include <fpdfview.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -70,7 +71,13 @@ std::string jsonEscape(const std::string& in) {
                 out += "\\t";
                 break;
             default:
-                out.push_back(c);
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char esc[7];
+                    snprintf(esc, sizeof(esc), "\\u%04x", static_cast<unsigned char>(c));
+                    out += esc;
+                } else {
+                    out.push_back(c);
+                }
         }
     }
     return out;

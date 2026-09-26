@@ -11,6 +11,7 @@ import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
 
@@ -50,27 +51,37 @@ public final class PdfFormRenderer {
      * @throws FormFillException if the form environment or the widget draw fails
      */
     public static RenderResult renderPage(PdfDocument document, int pageIndex, int dpi) {
+        if (dpi <= 0) {
+            throw new IllegalArgumentException("dpi must be > 0, got " + dpi);
+        }
         if (FormFillBindings.FPDF_FFLDraw == null) {
             throw new FormFillException("FPDF_FFLDraw is not available in this native build");
         }
-        MemorySegment rawDoc = document.rawHandle();
-        PdfFormFiller.FormEnv env = PdfFormFiller.initFormEnvironment(rawDoc);
-        try (PdfPage page = document.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
-            PageSize size = page.size();
-            int width = Math.max(1, (int) Math.round(size.width() * dpi / 72.0));
-            int height = Math.max(1, (int) Math.round(size.height() * dpi / 72.0));
-            if ((long) width * height > MAX_PIXELS) {
-                throw new FormFillException("render size exceeds the 256M pixel cap");
+        // The form environment and page must stay on one thread for the whole
+        // open/render/draw/teardown sequence: PDFium form state is process-wide.
+        NativeGuard.acquire();
+        try {
+            MemorySegment rawDoc = document.rawHandle();
+            PdfFormFiller.FormEnv env = PdfFormFiller.initFormEnvironment(rawDoc);
+            try (PdfPage page = document.page(pageIndex)) {
+                MemorySegment rawPage = page.rawHandle();
+                PageSize size = page.size();
+                int width = Math.max(1, (int) Math.round(size.width() * dpi / 72.0));
+                int height = Math.max(1, (int) Math.round(size.height() * dpi / 72.0));
+                if ((long) width * height > MAX_PIXELS) {
+                    throw new FormFillException("render size exceeds the 256M pixel cap");
+                }
+                return render(env, rawPage, width, height);
+            } finally {
+                try {
+                    DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(env.formHandle());
+                } catch (Throwable ignored) {
+                    // never mask a render failure while tearing the environment down
+                }
+                env.arena().close();
             }
-            return render(env, rawPage, width, height);
         } finally {
-            try {
-                DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(env.formHandle());
-            } catch (Throwable ignored) {
-                // never mask a render failure while tearing the environment down
-            }
-            env.arena().close();
+            NativeGuard.release();
         }
     }
 
