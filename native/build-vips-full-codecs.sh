@@ -81,7 +81,7 @@ install_deps() {
     if [ "$OS" = linux ]; then
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-            meson ninja-build pkg-config build-essential clang cmake \
+            meson ninja-build pkg-config build-essential cmake \
             autoconf automake libtool \
             libglib2.0-dev libexpat1-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
@@ -89,7 +89,7 @@ install_deps() {
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
             libopenjp2-7-dev \
             libopenexr-dev libraw-dev \
-            libspng-dev libhwy-dev lld \
+            libspng-dev libhwy-dev \
             zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
     else
         brew install meson ninja pkg-config cmake \
@@ -332,50 +332,33 @@ build_vips() {
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
-        # The static PDFium link needs lld (GNU ld rejects Chromium's objects)
-        # and -Db_lto=true. GCC's GIMPLE LTO is not linkable by lld, so build
-        # libvips with clang, whose LTO output is LLVM bitcode lld understands.
-        export CC=clang
-        export CXX=clang++
     fi
 
     # Wire the pinned PDFium prebuild (fetch-prebuilt-pdfium.sh extracts it
     # into native/pdfium) into libvips' pdfload. libvips only checks
     # pdfium >= 4200, so the placeholder version just has to clear that gate.
-    # The static archive is preferred: linking it whole-archive with
-    # gc-sections/dead-strip keeps only the used PDFium code and avoids the
-    # component libs (icuuc/harfbuzz/abseil), which duplicate the ones the
-    # rest of the stack links.
+    # The component build is used deliberately: its libpdfium exports only the
+    # FPDF API, so its bundled openjpeg/lcms/libpng/zlib cannot shadow the
+    # copies libvips was compiled against (a whole-archive static link did
+    # exactly that and crashed vips_jp2kload). Static dedup needs a PDFium
+    # prebuild built with use_system_* (see prebuild-pdfium.yml).
     local pdfium_flag="-Dpdfium=disabled"
     if [ -f "$SCRIPT_DIR/pdfium/include/fpdfview.h" ]; then
         local pdfium_pc="$work/pdfium-pc"
-        local pdfium_static="$SCRIPT_DIR/pdfium/lib/libpdfium.a"
         mkdir -p "$pdfium_pc"
-        {
-            echo "prefix=$SCRIPT_DIR/pdfium"
-            echo 'exec_prefix=${prefix}'
-            echo 'libdir=${exec_prefix}/lib'
-            echo 'includedir=${prefix}/include'
-            echo
-            echo "Name: pdfium"
-            echo "Description: pdfium"
-            echo "Version: 9999"
-            echo "Requires:"
-            if [ -f "$pdfium_static" ]; then
-                case "$OS" in
-                    darwin)
-                        echo "Libs: -L\${libdir} -Wl,-dead_strip -Wl,-force_load,$pdfium_static -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework AppKit -framework Security -framework SystemConfiguration"
-                        ;;
-                    *)
-                        echo "Libs: -L\${libdir} -fuse-ld=lld -Wl,--gc-sections -Wl,--whole-archive,$pdfium_static,--no-whole-archive -lpthread -ldl -lm -lstdc++"
-                        ;;
-                esac
-                echo "==> build-vips-full-codecs.sh: linking the static PDFium archive" >&2
-            else
-                echo "Libs: -L\${libdir} -lpdfium"
-            fi
-            echo "Cflags: -I\${includedir}"
-        } > "$pdfium_pc/pdfium.pc"
+        cat > "$pdfium_pc/pdfium.pc" <<EOF
+prefix=$SCRIPT_DIR/pdfium
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: pdfium
+Description: pdfium
+Version: 9999
+Requires:
+Libs: -L\${libdir} -lpdfium
+Cflags: -I\${includedir}
+EOF
         export PKG_CONFIG_PATH="$pdfium_pc:${PKG_CONFIG_PATH:-}"
         pdfium_flag="-Dpdfium=enabled"
         echo "==> build-vips-full-codecs.sh: libvips will load PDFs with PDFium ($SCRIPT_DIR/pdfium)"

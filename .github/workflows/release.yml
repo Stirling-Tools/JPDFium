@@ -638,9 +638,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # Static archive: libvips links it whole-archive so the component
-          # ICU/harfbuzz/abseil duplicates stay out of the vips bundle.
-          JPDFIUM_BUILD_MODE: static
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: x86_64 brew bootstrap (darwin-x64)

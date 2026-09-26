@@ -96,8 +96,9 @@ jobs:
           PDFIUM_DIR="$(cygpath -m "$PWD/native/pdfium")"
 
           # libvips requires pdfium >= 4200; the placeholder clears the gate.
-          # The static archive is linked whole-archive (below) so PDFium's
-          # initializers survive, mirroring the core bridge's CMake.
+          # The component libpdfium is linked deliberately: it exports only the
+          # FPDF API, so PDFium's bundled openjpeg/lcms/libpng/zlib cannot
+          # shadow the copies libvips was compiled against.
           PC_DIR="$PWD/vips-pc"
           mkdir -p "$PC_DIR"
           cat > "$PC_DIR/pdfium.pc" <<EOF
