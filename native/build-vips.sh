@@ -87,14 +87,12 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
-    # The upstream MXE zip is GPL-contaminated: libimagequant is linked into
-    # libvips-42.dll (libpoppler/libfftw3 are unused and dropped below). A
-    # separate-DLL check cannot see a statically linked copy, so require the
-    # source-built provenance marker instead; set JPDFIUM_ALLOW_UPSTREAM_VIPS=1
-    # only for local experiments with the upstream zip.
+    # The upstream MXE zip is GPL-contaminated (libimagequant is linked into
+    # libvips-42.dll; libpoppler/libfftw3 are unused and dropped below). A
+    # separate-DLL check cannot see a statically linked copy, so only the
+    # source-built provenance marker is accepted: there is no GPL path.
     rm -f "$DIST"/libpoppler*.dll "$DIST"/libfftw3*.dll
-    if [ "${JPDFIUM_ALLOW_UPSTREAM_VIPS:-}" != "1" ] && \
-       [ ! -f "$VIPS_LOC/vips-source-built" ] && \
+    if [ ! -f "$VIPS_LOC/vips-source-built" ] && \
        [ ! -f "$(dirname "$VIPS_LOC")/vips-source-built" ]; then
         echo "ERROR: Windows vips must come from the GPL-free source prebuild" >&2
         echo "(prebuild-vips.yml, pinned in native/vips.version)." >&2

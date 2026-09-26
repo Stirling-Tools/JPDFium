@@ -718,35 +718,21 @@ jobs:
           # A pinned prebuild (native/vips.version) carries libvips with PDFium
           # linked in and without GPL poppler/fftw. An empty pin keeps the
           # upstream MXE zip, which ships both.
+          # GPL-free only: the upstream libvips/build-win64-mxe zip links
+          # GPL-3 libimagequant and ships GPL fftw/poppler. Windows vips must
+          # come from the pinned source prebuild (prebuild-vips.yml); there is
+          # no fallback.
           PIN=$(grep -v '^#' native/vips.version | grep -v '^$' | head -n1 || true)
-          if [ -n "$PIN" ]; then
-            ASSET="vips-${{ matrix.platform }}.zip"
-            rm -rf /tmp/vips-win && mkdir -p /tmp/vips-win
-            gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
-              --pattern "$ASSET" --dir /tmp/vips-win
-            unzip -q "/tmp/vips-win/$ASSET" -d /tmp/vips-win/extracted
-            echo "VIPS_WIN_DIST=/tmp/vips-win/extracted" >> "$GITHUB_ENV"
-            exit 0
+          if [ -z "$PIN" ]; then
+            echo "::error::no GPL-free Windows vips prebuild pinned in native/vips.version"
+            exit 1
           fi
-          # Pinned on purpose: querying releases/latest hits the anonymous
-          # GitHub API rate limit on shared runners (HTTP 403) and fails the
-          # leg. Bump deliberately, like the PDFium pin.
-          if [ "${{ matrix.platform }}" = "windows-arm64" ]; then
-            url="https://github.com/libvips/build-win64-mxe/releases/download/v8.18.6/vips-dev-arm64-all-8.18.6.zip"
-            sha="1248317fc7e4933191b308846186342a5fdccdba757dc4c8c00eb25fdea43ea1"
-          else
-            url="https://github.com/libvips/build-win64-mxe/releases/download/v8.18.6/vips-dev-x64-all-8.18.6.zip"
-            sha="e36b34f9c955e66fa47ec7c02b756026fad5560c5db6ff7884123be04792f89c"
-          fi
-          curl -fsSL --retry 3 --retry-delay 10 "$url" -o /tmp/vips.zip
-          echo "$sha  /tmp/vips.zip" | sha256sum -c -
-          mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
-          VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)
-          if [ -n "$VIPS_DIR" ]; then
-            echo "VIPS_WIN_DIST=$(dirname "$VIPS_DIR")" >> "$GITHUB_ENV"
-          else
-            echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
-          fi
+          ASSET="vips-${{ matrix.platform }}.zip"
+          rm -rf /tmp/vips-win && mkdir -p /tmp/vips-win
+          gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ASSET" --dir /tmp/vips-win
+          unzip -q "/tmp/vips-win/$ASSET" -d /tmp/vips-win/extracted
+          echo "VIPS_WIN_DIST=/tmp/vips-win/extracted" >> "$GITHUB_ENV"
 
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'darwin-')
