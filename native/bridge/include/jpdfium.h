@@ -70,6 +70,9 @@ JPDFIUM_EXPORT int32_t jpdfium_init(void);
 // JPDFIUM_ERR_INVALID when SKIA is requested from a build without it.
 // Must be called before any other bridge function.
 JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer);
+
+// Active renderer after init: JPDFIUM_RENDERER_AGG or JPDFIUM_RENDERER_SKIA.
+JPDFIUM_EXPORT int32_t jpdfium_active_renderer(void);
 JPDFIUM_EXPORT void jpdfium_destroy(void);
 
 // Raw handle extraction - allows direct FFM calls to PDFium functions.

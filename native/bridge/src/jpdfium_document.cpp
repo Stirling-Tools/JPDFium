@@ -72,6 +72,10 @@ int32_t jpdfium_init_ex(int32_t renderer) {
     return jpdfium_init_library(renderer);
 }
 
+int32_t jpdfium_active_renderer() {
+    return g_jpdfiumUseSkia ? JPDFIUM_RENDERER_SKIA : JPDFIUM_RENDERER_AGG;
+}
+
 void jpdfium_destroy() {
     FPDF_DestroyLibrary();
 }

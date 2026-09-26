@@ -130,7 +130,7 @@ val jextractBin: String = run {
 
 val jpdfiumFunctions = listOf(
     "jpdfium_init",
-    "jpdfium_init_ex", "jpdfium_destroy",
+    "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
     "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",

@@ -104,6 +104,16 @@ public final class JpdfiumLib {
 
     private JpdfiumLib() {}
 
+    /** Active renderer after init: 0 = AGG, 1 = Skia. */
+    public static int activeRenderer() {
+        return JpdfiumH.jpdfium_active_renderer();
+    }
+
+    /** Whether the Skia renderer is active for this JVM. */
+    public static boolean isSkiaActive() {
+        return activeRenderer() == 1;
+    }
+
     static void check(int rc, String ctx) {
         if (rc == OK) return;
         throw switch (rc) {
