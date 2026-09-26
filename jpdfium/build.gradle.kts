@@ -189,7 +189,12 @@ val jpdfiumFunctions = listOf(
     "jpdfium_qpdf_merge",
     "jpdfium_qpdf_extract_pages",
     "jpdfium_qpdf_encrypt",
-    "jpdfium_qpdf_decrypt"
+    "jpdfium_qpdf_decrypt",
+    // Signatures
+    "jpdfium_signature_count",
+    "jpdfium_signature_revision_count",
+    "jpdfium_signature_info",
+    "jpdfium_signature_digest"
 )
 
 val generateBindings = tasks.register<Exec>("generateBindings") {

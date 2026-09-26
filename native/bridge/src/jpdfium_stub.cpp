@@ -1054,3 +1054,21 @@ int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uin
     if (out_len) *out_len = 0;
     return -1;
 }
+
+int32_t jpdfium_signature_count(int64_t, int32_t* count) {
+    if (count) *count = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_revision_count(int64_t, int32_t* count) {
+    if (count) *count = -1;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_info(int64_t, int32_t, char** json) {
+    if (json) *json = nullptr;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_digest(int64_t, int32_t, int32_t, uint8_t** digest, int64_t* len) {
+    if (digest) *digest = nullptr;
+    if (len) *len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}

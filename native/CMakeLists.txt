@@ -201,7 +201,8 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
-        bridge/src/jpdfium_openjpeg.cpp)
+        bridge/src/jpdfium_openjpeg.cpp
+        bridge/src/jpdfium_signature.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")

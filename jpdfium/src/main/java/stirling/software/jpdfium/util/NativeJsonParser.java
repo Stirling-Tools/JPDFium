@@ -73,6 +73,18 @@ public final class NativeJsonParser {
         return Integer.parseInt(json.substring(idx, end));
     }
 
+    /** Extract a long field from a single JSON object string. Returns 0 if missing. */
+    public static long longField(String json, String key) {
+        String needle = "\"" + key + "\":";
+        int idx = json.indexOf(needle);
+        if (idx < 0) return 0L;
+        idx += needle.length();
+        int end = idx;
+        while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
+        if (end == idx) return 0L;
+        return Long.parseLong(json.substring(idx, end));
+    }
+
     /** Extract a boolean field from a single JSON object string. Returns false if missing. */
     public static boolean boolField(String json, String key) {
         String needle = "\"" + key + "\":";

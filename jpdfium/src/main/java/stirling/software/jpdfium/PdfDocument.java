@@ -10,6 +10,7 @@ import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
+import stirling.software.jpdfium.doc.SignatureDetails;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
@@ -588,6 +589,34 @@ public final class PdfDocument implements AutoCloseable {
      */
     public List<Signature> signatures() {
         return PdfSignatures.list(rawHandle());
+    }
+
+    /**
+     * Verification-oriented details for one signature field: /ByteRange coverage,
+     * the revision it seals, DocMDP permission and the signing strings.
+     *
+     * @param index 0-based signature field index
+     */
+    public SignatureDetails signatureDetails(int index) {
+        ensureOpen();
+        return PdfSignatures.details(handle, index);
+    }
+
+    /**
+     * Digest of the signature's /ByteRange over the document's own bytes.
+     *
+     * @param index     0-based signature field index
+     * @param algorithm 0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512
+     */
+    public byte[] signatureDigest(int index, int algorithm) {
+        ensureOpen();
+        return PdfSignatures.digest(handle, index, algorithm);
+    }
+
+    /** Number of byte revisions in the loaded document (-1 when indeterminate). */
+    public int signatureRevisionCount() {
+        ensureOpen();
+        return PdfSignatures.revisionCount(handle);
     }
 
     /**

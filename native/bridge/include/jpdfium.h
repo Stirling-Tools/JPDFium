@@ -540,6 +540,25 @@ JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputW
                                                      float outputHeight, int32_t cols, int32_t rows,
                                                      uint8_t** output, int64_t* outputLen);
 
+// Signatures (read-only inspection via the EmbedPDF signature model).
+
+// Number of signature fields (signed or unsigned).
+JPDFIUM_EXPORT int32_t jpdfium_signature_count(int64_t doc, int32_t* count);
+
+// Number of byte revisions in the loaded document (-1 when indeterminate).
+JPDFIUM_EXPORT int32_t jpdfium_signature_revision_count(int64_t doc, int32_t* count);
+
+// Flat JSON with the signature field facts: fieldName, signed, kind, coverage,
+// revisionIndex, br0..br3, docMdpPermission, catalogCertification,
+// revisionChainValid, filter, subFilter, name, reason, location, contactInfo,
+// signingTime, contentsLength. Caller frees with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json);
+
+// Digest of the signature's /ByteRange (algorithm: 0=SHA1, 1=SHA256,
+// 2=SHA384, 3=SHA512). Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm,
+                                                uint8_t** digest, int64_t* len);
+
 // Rust-powered compression, repair, and image resize functions.
 // Declared in a separate header for clarity; included here so jextract and
 // callers only need to include jpdfium.h.

@@ -871,4 +871,58 @@ public final class JpdfiumLib {
             }
         }
     }
+
+    // ---- Signatures ----
+
+    public static int signatureCount(long doc) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_count(doc, INT_SCRATCH), "signatureCount");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static int signatureRevisionCount(long doc) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_revision_count(doc, INT_SCRATCH), "signatureRevisionCount");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Flat JSON info for one signature field. */
+    public static String signatureInfo(long doc, int index) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_info(doc, index, ADDR_SCRATCH), "signatureInfo");
+            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
+            JpdfiumH.jpdfium_free_string(strPtr);
+            return result;
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Digest of the signature /ByteRange (0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512). */
+    public static byte[] signatureDigest(long doc, int index, int algorithm) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, ADDR_SCRATCH, LONG_SCRATCH),
+                    "signatureDigest");
+            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+            byte[] result = nativePtr == null ? new byte[0] : nativePtr.reinterpret(len).toArray(JAVA_BYTE);
+            if (nativePtr != null) {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+            }
+            return result;
+        } finally {
+            NativeGuard.release();
+        }
+    }
 }
