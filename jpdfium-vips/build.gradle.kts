@@ -26,7 +26,9 @@ dependencies {
     // the other vips tests) exercise the exact bundled libvips being shipped.
     // Resolved lazily by Gradle; a no-op when the dist dir is empty (tests then
     // fall back to a system libvips or skip).
-    testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testVipsNatives"))
+    findProject(":jpdfium-natives:jpdfium-natives-$testVipsNatives")?.let {
+        testRuntimeOnly(it)
+    }
 }
 
 // Run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=<platform> -Pjpdfium.testVipsNatives=vips-<platform>

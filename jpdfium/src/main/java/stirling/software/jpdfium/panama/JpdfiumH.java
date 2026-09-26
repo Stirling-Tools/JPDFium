@@ -82,6 +82,124 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_init_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_init_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_init_ex$descriptor() {
+        return jpdfium_init_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static MethodHandle jpdfium_init_ex$handle() {
+        return jpdfium_init_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static MemorySegment jpdfium_init_ex$address() {
+        return jpdfium_init_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static int jpdfium_init_ex(int renderer) {
+        var mh$ = jpdfium_init_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_init_ex", renderer);
+            }
+            return (int)mh$.invokeExact(renderer);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_active_renderer {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT    );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_active_renderer");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_active_renderer()
+     * }
+     */
+    public static FunctionDescriptor jpdfium_active_renderer$descriptor() {
+        return jpdfium_active_renderer.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_active_renderer()
+     * }
+     */
+    public static MethodHandle jpdfium_active_renderer$handle() {
+        return jpdfium_active_renderer.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_active_renderer()
+     * }
+     */
+    public static MemorySegment jpdfium_active_renderer$address() {
+        return jpdfium_active_renderer.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_active_renderer()
+     * }
+     */
+    public static int jpdfium_active_renderer() {
+        var mh$ = jpdfium_active_renderer.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_active_renderer");
+            }
+            return (int)mh$.invokeExact();
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_destroy {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(    );
 
@@ -5075,6 +5193,254 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_signature_count {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_count");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_signature_count$descriptor() {
+        return jpdfium_signature_count.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static MethodHandle jpdfium_signature_count$handle() {
+        return jpdfium_signature_count.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static MemorySegment jpdfium_signature_count$address() {
+        return jpdfium_signature_count.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static int jpdfium_signature_count(long doc, MemorySegment count) {
+        var mh$ = jpdfium_signature_count.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_signature_count", doc, count);
+            }
+            return (int)mh$.invokeExact(doc, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_signature_revision_count {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_revision_count");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_revision_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_signature_revision_count$descriptor() {
+        return jpdfium_signature_revision_count.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_revision_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static MethodHandle jpdfium_signature_revision_count$handle() {
+        return jpdfium_signature_revision_count.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_revision_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static MemorySegment jpdfium_signature_revision_count$address() {
+        return jpdfium_signature_revision_count.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_revision_count(int64_t doc, int32_t *count)
+     * }
+     */
+    public static int jpdfium_signature_revision_count(long doc, MemorySegment count) {
+        var mh$ = jpdfium_signature_revision_count.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_signature_revision_count", doc, count);
+            }
+            return (int)mh$.invokeExact(doc, count);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_signature_info {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_info");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_info(int64_t doc, int32_t index, char **json)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_signature_info$descriptor() {
+        return jpdfium_signature_info.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_info(int64_t doc, int32_t index, char **json)
+     * }
+     */
+    public static MethodHandle jpdfium_signature_info$handle() {
+        return jpdfium_signature_info.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_info(int64_t doc, int32_t index, char **json)
+     * }
+     */
+    public static MemorySegment jpdfium_signature_info$address() {
+        return jpdfium_signature_info.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_info(int64_t doc, int32_t index, char **json)
+     * }
+     */
+    public static int jpdfium_signature_info(long doc, int index, MemorySegment json) {
+        var mh$ = jpdfium_signature_info.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_signature_info", doc, index, json);
+            }
+            return (int)mh$.invokeExact(doc, index, json);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_signature_digest {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_signature_digest");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, uint8_t **digest, int64_t *len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_signature_digest$descriptor() {
+        return jpdfium_signature_digest.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, uint8_t **digest, int64_t *len)
+     * }
+     */
+    public static MethodHandle jpdfium_signature_digest$handle() {
+        return jpdfium_signature_digest.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, uint8_t **digest, int64_t *len)
+     * }
+     */
+    public static MemorySegment jpdfium_signature_digest$address() {
+        return jpdfium_signature_digest.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm, uint8_t **digest, int64_t *len)
+     * }
+     */
+    public static int jpdfium_signature_digest(long doc, int index, int algorithm, MemorySegment digest, MemorySegment len) {
+        var mh$ = jpdfium_signature_digest.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_signature_digest", doc, index, algorithm, digest, len);
+            }
+            return (int)mh$.invokeExact(doc, index, algorithm, digest, len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_rust_compress_pdf {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -5263,6 +5629,73 @@ public class JpdfiumH extends JpdfiumH$shared {
                 traceDowncall("jpdfium_rust_resize_pixels", src_pixels, src_len, src_width, src_height, components, dst_width, dst_height, out_ptr, out_len);
             }
             return (int)mh$.invokeExact(src_pixels, src_len, src_width, src_height, components, dst_width, dst_height, out_ptr, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_rust_svg_to_rgba {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_svg_to_rgba");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_rust_svg_to_rgba$descriptor() {
+        return jpdfium_rust_svg_to_rgba.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static MethodHandle jpdfium_rust_svg_to_rgba$handle() {
+        return jpdfium_rust_svg_to_rgba.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static MemorySegment jpdfium_rust_svg_to_rgba$address() {
+        return jpdfium_rust_svg_to_rgba.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static int jpdfium_rust_svg_to_rgba(MemorySegment svg, long svg_len, int width, int height, MemorySegment out_ptr, MemorySegment out_len, MemorySegment out_w, MemorySegment out_h) {
+        var mh$ = jpdfium_rust_svg_to_rgba.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_rust_svg_to_rgba", svg, svg_len, width, height, out_ptr, out_len, out_w, out_h);
+            }
+            return (int)mh$.invokeExact(svg, svg_len, width, height, out_ptr, out_len, out_w, out_h);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

@@ -481,7 +481,7 @@ public final class PdfImageConverter {
         return ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
     }
 
-    private static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
+    public static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
         BufferedImage bufferedImage = image;
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
 

@@ -129,7 +129,8 @@ val jextractBin: String = run {
 }
 
 val jpdfiumFunctions = listOf(
-    "jpdfium_init", "jpdfium_destroy",
+    "jpdfium_init",
+    "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
     "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
@@ -182,6 +183,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_compress_pdf",
     "jpdfium_rust_repair_lopdf",
     "jpdfium_rust_resize_pixels",
+    "jpdfium_rust_svg_to_rgba",
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
@@ -189,7 +191,12 @@ val jpdfiumFunctions = listOf(
     "jpdfium_qpdf_merge",
     "jpdfium_qpdf_extract_pages",
     "jpdfium_qpdf_encrypt",
-    "jpdfium_qpdf_decrypt"
+    "jpdfium_qpdf_decrypt",
+    // Signatures
+    "jpdfium_signature_count",
+    "jpdfium_signature_revision_count",
+    "jpdfium_signature_info",
+    "jpdfium_signature_digest"
 )
 
 val generateBindings = tasks.register<Exec>("generateBindings") {

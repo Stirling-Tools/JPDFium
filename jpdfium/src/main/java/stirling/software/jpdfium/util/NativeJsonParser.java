@@ -73,6 +73,22 @@ public final class NativeJsonParser {
         return Integer.parseInt(json.substring(idx, end));
     }
 
+    /** Extract a long field from a single JSON object string. Returns 0 if missing. */
+    public static long longField(String json, String key) {
+        String needle = "\"" + key + "\":";
+        int idx = json.indexOf(needle);
+        if (idx < 0) return 0L;
+        idx += needle.length();
+        int end = idx;
+        while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
+        if (end == idx) return 0L;
+        try {
+            return Long.parseLong(json.substring(idx, end));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
     /** Extract a boolean field from a single JSON object string. Returns false if missing. */
     public static boolean boolField(String json, String key) {
         String needle = "\"" + key + "\":";
@@ -80,13 +96,48 @@ public final class NativeJsonParser {
         return idx >= 0 && json.indexOf("true", idx + needle.length()) == idx + needle.length();
     }
 
-    /** Extract a string field from a single JSON object string. Returns "" if missing. */
+    /**
+     * Extract a string field from a single JSON object string, decoding JSON
+     * escapes. Returns "" if missing.
+     */
     public static String stringField(String json, String key) {
         String needle = "\"" + key + "\":\"";
         int idx = json.indexOf(needle);
         if (idx < 0) return "";
-        idx += needle.length();
-        int end = json.indexOf('"', idx);
-        return end > idx ? json.substring(idx, end) : "";
+        StringBuilder out = new StringBuilder();
+        boolean escaped = false;
+        for (int i = idx + needle.length(); i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                switch (c) {
+                    case 'n' -> out.append('\n');
+                    case 'r' -> out.append('\r');
+                    case 't' -> out.append('\t');
+                    case 'b' -> out.append('\b');
+                    case 'f' -> out.append('\f');
+                    case 'u' -> {
+                        if (i + 4 < json.length()) {
+                            try {
+                                out.append((char) Integer.parseInt(json.substring(i + 1, i + 5), 16));
+                                i += 4;
+                            } catch (NumberFormatException e) {
+                                out.append("\\u");
+                            }
+                        } else {
+                            out.append("\\u");
+                        }
+                    }
+                    default -> out.append(c);
+                }
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                return out.toString();
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 }

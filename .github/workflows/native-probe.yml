@@ -26,7 +26,7 @@ jobs:
           # Alpine containers on arm64 runners, so a container-based probe leg
           # would need a full docker-run pipeline for little added signal.
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15-intel
           - platform: darwin-arm64
             runner: macos-14
           - platform: windows-x64

@@ -14,6 +14,16 @@ apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
   rust cargo github-cli \
   py3-pip py3-httplib2 py3-six
 
+# gsutil (depot_tools) rejects Python 3.14+, and Alpine's python3 moves with
+# the image tag, so pin a 3.12 interpreter when the default is too new.
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info < (3, 14) else 1)' 2>/dev/null; then
+  apk add --no-cache 'python3~3.12' >/dev/null 2>&1 || true
+  if command -v python3.12 >/dev/null 2>&1; then
+    export CLOUDSDK_PYTHON="$(command -v python3.12)"
+    echo "==> musl.sh: pinned gsutil to $(python3.12 --version 2>&1)"
+  fi
+fi
+
 stage_and_bundle() {
     local plat="$1"
     mkdir -p "native/dist/$plat"

@@ -223,6 +223,12 @@ int64_t g_next_flash = 88001;
 
 // Core Document Functions
 
+int32_t jpdfium_init_ex(int32_t) {
+    return 0;
+}
+int32_t jpdfium_active_renderer() {
+    return 0;
+}
 int32_t jpdfium_init() {
     return JPDFIUM_OK;
 }
@@ -913,6 +919,10 @@ int64_t jpdfium_page_doc_raw_handle(int64_t) {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
+int32_t jpdfium_has_rust(void) {
+    return 0;
+}
+
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
                                   int32_t) {
     return fail_native_bytes(out_ptr, out_len);
@@ -1053,4 +1063,22 @@ int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uin
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
     return -1;
+}
+
+int32_t jpdfium_signature_count(int64_t, int32_t* count) {
+    if (count) *count = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_revision_count(int64_t, int32_t* count) {
+    if (count) *count = -1;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_info(int64_t, int32_t, char** json) {
+    if (json) *json = nullptr;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_digest(int64_t, int32_t, int32_t, uint8_t** digest, int64_t* len) {
+    if (digest) *digest = nullptr;
+    if (len) *len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
 }

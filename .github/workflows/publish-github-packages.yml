@@ -77,10 +77,9 @@ jobs:
           # musl PDFium prebuilds from prebuild-pdfium.yml.
           - { platform: linux-musl-x64,   runner: ubuntu-latest,    libc: musl }
           - { platform: linux-musl-arm64, runner: ubuntu-24.04-arm, libc: musl }
-          # darwin-x64 cross-compiles from macos-14 (arm64 host) with an
-          # x86_64 Homebrew installed at /usr/local under Rosetta. macos-13
-          # free runners have unworkable queue times.
-          - { platform: darwin-x64,   runner: macos-14,         target_cpu: x64   }
+          # darwin-x64 runs natively on an Intel runner: Homebrew lives at
+          # /usr/local and no Rosetta translation is involved.
+          - { platform: darwin-x64,   runner: macos-15-intel,   target_cpu: x64   }
           - { platform: darwin-arm64, runner: macos-14,         target_cpu: arm64 }
           - { platform: windows-x64,  runner: windows-latest,   target_cpu: x64   }
           - { platform: windows-arm64, runner: windows-11-arm,  target_cpu: arm64 }
@@ -153,11 +152,11 @@ jobs:
             /usr/local/Frameworks
             /usr/local/var/homebrew
             ~/Library/Caches/Homebrew/downloads
-          key: brew-x64-sonoma-v1
+          key: brew-x64-macos15-v1
           restore-keys: |
-            brew-x64-sonoma-
+            brew-x64-macos15-
 
-      - name: Install build deps (macOS, x86_64 cross-compile)
+      - name: Install build deps (macOS, x86_64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -269,12 +268,24 @@ jobs:
         # The musl PDFium prebuilds are experimental (Prebuild PDFium's release
         # sanity check treats linux-musl-* as warn-only). Until that workflow is
         # green, a missing pdfium-linux-musl-*.tar.gz must SKIP the musl legs,
-        # not fail the publish - the skip is surfaced by the step below.
-        continue-on-error: ${{ matrix.libc == 'musl' }}
+        # not fail the publish - the fetch step records the skip as an output
+        # and the step below surfaces it.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+        run: |
+          # A missing musl prebuild is an expected state until Prebuild PDFium
+          # is green. Record it as an output so the musl steps skip cleanly
+          # instead of failing the step (continue-on-error still annotates).
+          if [ "${{ matrix.libc }}" = "musl" ]; then
+            if ! bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}; then
+              echo "musl_missing=true" >> "$GITHUB_OUTPUT"
+              echo "musl prebuild missing for ${{ matrix.platform }}; skipping musl natives"
+              exit 0
+            fi
+          else
+            bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+          fi
 
       # musl legs run the ENTIRE native build + smoke inside an Alpine container
       # via docker run from the host (GitHub cannot host JS actions in Alpine
@@ -284,7 +295,7 @@ jobs:
       # opens a PDF on the musl JVM - the linux-musl-* leg is red until both pass.
       - name: Build + smoke musl natives (Alpine container)
         id: musl
-        if: matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        if: matrix.libc == 'musl' && steps.fetch.outputs.musl_missing != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -293,7 +304,7 @@ jobs:
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
 
       - name: Skip musl natives (missing musl PDFium prebuild)
-        if: matrix.libc == 'musl' && steps.fetch.outcome == 'failure'
+        if: matrix.libc == 'musl' && steps.fetch.outputs.musl_missing == 'true'
         run: |
           echo "::warning::linux-musl-* natives skipped: pdfium-linux-musl-*.tar.gz is not in the pinned PDFium prebuild release yet."
           echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
@@ -438,10 +449,10 @@ jobs:
         if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64'
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
-      # x86_64 smoke under Rosetta with an x86_64 JDK so it gets the same
+      # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
+      # smoke with an x86_64 JDK so it gets the same
       # INIT + open-a-PDF gate as every other platform.
-      - name: Functional smoke test - darwin-x64 (Rosetta)
+      - name: Functional smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64'
         shell: bash
         run: |
@@ -460,7 +471,7 @@ jobs:
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Verify musl smoke actually ran
-        if: always() && matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        if: always() && matrix.libc == 'musl' && steps.fetch.outputs.musl_missing != 'true'
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Upload hs_err logs (smoke crash diagnostics)

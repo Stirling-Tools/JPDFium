@@ -33,13 +33,60 @@ FILE* safe_fopen_write(const char* path) {
 
 }  // namespace
 
-int32_t jpdfium_init() {
+bool g_jpdfiumUseSkia = false;
+
+namespace {
+bool g_libraryInitialized = false;
+}
+
+int jpdfium_init_library(int renderer) {
+    // Re-initialising would reset g_jpdfiumUseSkia while PDFium keeps the
+    // renderer it was configured with, so the first selection wins.
+    if (g_libraryInitialized) return JPDFIUM_OK;
+    if (renderer != JPDFIUM_RENDERER_AUTO && renderer != JPDFIUM_RENDERER_AGG &&
+        renderer != JPDFIUM_RENDERER_SKIA) {
+        return JPDFIUM_ERR_INVALID;
+    }
+#ifdef JPDFIUM_HAS_SKIA
+    // AUTO (-1) and SKIA (1) both pick Skia; AGG (0) forces the legacy path.
+    bool useSkia = renderer != JPDFIUM_RENDERER_AGG;
+    FPDF_LIBRARY_CONFIG config{};
+    config.version = 4;
+    config.m_RendererType = useSkia ? FPDF_RENDERERTYPE_SKIA : FPDF_RENDERERTYPE_AGG;
+    FPDF_InitLibraryWithConfig(&config);
+    g_jpdfiumUseSkia = useSkia;
+#else
+    // Selecting Skia from a build without it crashes PDFium, so refuse.
+    if (renderer == JPDFIUM_RENDERER_SKIA) return JPDFIUM_ERR_INVALID;
     FPDF_InitLibrary();
+    g_jpdfiumUseSkia = false;
+#endif
+    g_libraryInitialized = true;
     return JPDFIUM_OK;
+}
+
+void jpdfium_ensure_library() {
+    if (!g_libraryInitialized) {
+        jpdfium_init_library(JPDFIUM_RENDERER_AUTO);
+    }
+}
+
+int32_t jpdfium_init() {
+    return jpdfium_init_library(JPDFIUM_RENDERER_AUTO);
+}
+
+int32_t jpdfium_init_ex(int32_t renderer) {
+    return jpdfium_init_library(renderer);
+}
+
+int32_t jpdfium_active_renderer() {
+    return g_jpdfiumUseSkia ? JPDFIUM_RENDERER_SKIA : JPDFIUM_RENDERER_AGG;
 }
 
 void jpdfium_destroy() {
     FPDF_DestroyLibrary();
+    g_libraryInitialized = false;
+    g_jpdfiumUseSkia = false;
 }
 
 int32_t jpdfium_doc_create(int64_t* handle) {

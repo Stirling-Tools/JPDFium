@@ -66,7 +66,10 @@ bundle_macos() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib found to bundle"; return 0; }
 
-    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
+    # native/pdfium/lib is where the vips build links the component PDFium
+    # prebuild; its own @rpath deps (icuuc, harfbuzz-ng, ...) live there too.
+    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib
+                      "$(dirname "${BASH_SOURCE[0]}")/pdfium/lib")
     local rpath_globs=(/opt/homebrew/opt/*/lib /usr/local/opt/*/lib)
 
     _resolve_rpath_dep() {
@@ -332,9 +335,104 @@ bundle_windows() {
     fi
 }
 
+# Cross legs have shipped a wrong-arch dependency before (darwin-x64 staged an
+# arm64 libsharpyuv), so every staged binary must match the target arch.
+assert_bundle_arch() {
+    local unix_arch win_arch failed=0 f archs machine
+    case "$PLATFORM" in
+        *-arm64) unix_arch=arm64; win_arch=ARM64 ;;
+        *-x64)   unix_arch=x86_64; win_arch=x64 ;;
+        *) echo "FAIL: cannot derive arch from platform $PLATFORM" >&2; exit 1 ;;
+    esac
+    case "$PLATFORM" in
+        linux-*|vips-linux-*) [ "$unix_arch" = arm64 ] && unix_arch=aarch64 ;;
+    esac
+    case "$PLATFORM" in
+        darwin-*|vips-darwin-*)
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -e "$f" ] || continue
+                archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
+                case " $archs " in
+                    *" $unix_arch "*) ;;
+                    *) echo "FAIL: $(basename "$f") has arch [$archs], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        linux-*|vips-linux-*)
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -e "$f" ] || continue
+                machine=$(readelf -h "$f" 2>/dev/null | awk -F: '/Machine:/{print $2}' | xargs)
+                case "$unix_arch:$machine" in
+                    x86_64:"Advanced Micro Devices X86-64") ;;
+                    aarch64:"AArch64") ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        windows-*|vips-windows-*)
+            local db=""
+            if command -v dumpbin >/dev/null 2>&1; then
+                db=dumpbin
+            else
+                db=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+            fi
+            [ -n "$db" ] || return 0
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                machine=$("$db" //headers "$f" 2>/dev/null | grep -m1 "machine (" | sed -E 's/.*machine \(([^)]*)\).*/\1/')
+                case "$win_arch:$machine" in
+                    x64:x64|ARM64:ARM64) ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $win_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+    esac
+    [ "$failed" -eq 0 ] || exit 1
+}
+
+# The source-built vips links the distro ICU, whose full data file (~30 MB)
+# would dominate the bundle. Swap it for the core bundle's trimmed copy (same
+# data, ~0.45 MB) before strip/sign/checks. The core dist for this platform is
+# native/dist/<platform without the vips- prefix>.
+swap_full_icudata() {
+    case "$PLATFORM" in
+        vips-*) ;;
+        *) return 0 ;;
+    esac
+    local core_platform="${PLATFORM#vips-}"
+    local trimmed=""
+    for cand in "native/dist/$core_platform"/libicudata.* "native/dist/$core_platform"/icudt*.dll; do
+        [ -e "$cand" ] || continue
+        trimmed="$cand"
+        break
+    done
+    [ -n "$trimmed" ] || return 0
+    [ "$(wc -c < "$trimmed")" -lt 1572864 ] || return 0
+    # Only swap same-major ICU versions: the vips build links the distro/
+    # brew ICU, whose major must match the trimmed core data's.
+    icu_major() {
+        echo "$1" | grep -oE '(icudata\.so\.|icudata\.|icudt)([0-9]+)' | grep -oE '[0-9]+$' | head -1
+    }
+    local trimmed_major
+    trimmed_major=$(icu_major "$(basename "$trimmed")")
+    [ -n "$trimmed_major" ] || return 0
+    local f
+    for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
+        [ -e "$f" ] || continue
+        [ "$(wc -c < "$f")" -gt 1572864 ] || continue
+        if [ "$(icu_major "$(basename "$f")")" != "$trimmed_major" ]; then
+            echo "WARNING: not replacing $(basename "$f") with ICU $trimmed_major data" >&2
+            continue
+        fi
+        cp -v "$trimmed" "$f"
+    done
+}
+
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
+        assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -347,26 +445,44 @@ case "$PLATFORM" in
         ;;
     darwin-*|vips-darwin-*)
         bundle_macos
+        assert_bundle_arch
+        swap_full_icudata
         if command -v strip >/dev/null 2>&1; then
-            strip -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
+            # -x drops local symbols too (the static harfbuzz contributes
+            # thousands); exports and the dynamic symbol table stay.
+            strip -x "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
             for f in "$DIST_DIR"/*.dylib; do
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
-                strip -S "$f" 2>/dev/null || true
+                strip -x "$f" 2>/dev/null || true
             done
         fi
         sign_macos
         ;;
     windows-*|vips-windows-*)
         bundle_windows
+        assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
+        if command -v llvm-strip >/dev/null 2>&1; then
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                llvm-strip --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2
         exit 1
         ;;
 esac
+
+# Stripping must not remove exports the JNI loader binds to.
+SYMBOL_CHECK="$(dirname "${BASH_SOURCE[0]}")/../.github/scripts/check-native-symbols.sh"
+if [ -f "$SYMBOL_CHECK" ]; then
+    bash "$SYMBOL_CHECK" "$PLATFORM" "$DIST_DIR"
+fi
 
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR" "$PLATFORM"
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"

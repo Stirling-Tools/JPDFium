@@ -13,6 +13,11 @@ on:
         required: false
         default: 'false'
         type: boolean
+      verifyReleased:
+        description: 'Run the Maven Central probe after a manual release'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -57,7 +62,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-icu-trimmed
-          path: native/dist/windows-x64/icudt78.dll
+          path: |
+            native/dist/windows-x64/icudt78.dll
+            native/dist/windows-arm64/icudt78.dll
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
@@ -95,10 +102,10 @@ jobs:
             runner: ubuntu-24.04-arm
             shell: bash
             libc: musl
-          # darwin-x64 cross-compiles from macos-14 (arm64) under Rosetta
-          # with a second Homebrew installed at /usr/local for x86_64 deps.
+          # darwin-x64 runs natively on an Intel runner: Homebrew lives at
+          # /usr/local and no Rosetta translation is involved.
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15-intel
             shell: bash
           - platform: darwin-arm64
             runner: macos-14
@@ -176,11 +183,11 @@ jobs:
             /usr/local/Frameworks
             /usr/local/var/homebrew
             ~/Library/Caches/Homebrew/downloads
-          key: brew-x64-sonoma-v1
+          key: brew-x64-macos15-v1
           restore-keys: |
-            brew-x64-sonoma-
+            brew-x64-macos15-
 
-      - name: Install build deps (macOS, x86_64 cross-compile)
+      - name: Install build deps (macOS, x86_64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -277,8 +284,8 @@ jobs:
         # The musl PDFium prebuilds are experimental (Prebuild PDFium's release
         # sanity check treats linux-musl-* as warn-only). Until that workflow is
         # green, a missing pdfium-linux-musl-*.tar.gz must SKIP the musl legs,
-        # not fail the release - the skip is surfaced by the step below.
-        continue-on-error: ${{ matrix.libc == 'musl' }}
+        # not fail the release - the fetch step records the skip as an output
+        # and the step below surfaces it.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -295,7 +302,19 @@ jobs:
           # prebuild plumbing, but the value isn't there with the obvious
           # whole-archive approach. Set JPDFIUM_BUILD_MODE=static manually
           # via workflow_dispatch if you want to experiment.
-        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+        run: |
+          # A missing musl prebuild is an expected state until Prebuild PDFium
+          # is green. Record it as an output so the musl steps skip cleanly
+          # instead of failing the step (continue-on-error still annotates).
+          if [ "${{ matrix.libc }}" = "musl" ]; then
+            if ! bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}; then
+              echo "musl_missing=true" >> "$GITHUB_OUTPUT"
+              echo "musl prebuild missing for ${{ matrix.platform }}; skipping musl natives"
+              exit 0
+            fi
+          else
+            bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+          fi
 
       # musl legs run the ENTIRE native build + smoke inside an Alpine container
       # via docker run from the host (GitHub cannot host JS actions in Alpine
@@ -305,7 +324,7 @@ jobs:
       # opens a PDF on the musl JVM - the linux-musl-* leg is red until both pass.
       - name: Build + smoke musl natives (Alpine container)
         id: musl
-        if: matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        if: matrix.libc == 'musl' && steps.fetch.outputs.musl_missing != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -314,7 +333,7 @@ jobs:
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} natives smoke
 
       - name: Skip musl natives (missing musl PDFium prebuild)
-        if: matrix.libc == 'musl' && steps.fetch.outcome == 'failure'
+        if: matrix.libc == 'musl' && steps.fetch.outputs.musl_missing == 'true'
         run: |
           echo "::warning::linux-musl-* natives skipped: pdfium-linux-musl-*.tar.gz is not in the pinned PDFium prebuild release yet."
           echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
@@ -389,12 +408,12 @@ jobs:
       # The trimmed icudt78.dll must replace the full 33 MB vcpkg one BEFORE
       # the bundler's size gate runs, or the windows bundle fails its budget.
       - name: Override icudt78.dll with trimmed copy (Windows only)
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
         with:
           name: windows-icu-trimmed
-          path: native/dist/windows-x64/
+          path: native/dist/
 
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl'
@@ -424,7 +443,7 @@ jobs:
       # (never green) until both pass on every platform.
       - name: Install jextract (for smoke build)
         # jextract only ships glibc (linux-x64/aarch64, macos, windows-x64)
-        # builds. musl + windows-arm64 + the darwin-x64 Rosetta leg use the
+        # builds. musl + windows-arm64 + the darwin-x64 Intel leg use the
         # committed FFM bindings instead (generateBindings is skipped when
         # jextract is absent).
         if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && matrix.libc != 'musl'
@@ -449,10 +468,10 @@ jobs:
         if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64'
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
-      # x86_64 smoke under Rosetta with an x86_64 JDK so it gets the same
+      # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
+      # smoke with an x86_64 JDK so it gets the same
       # INIT + open-a-PDF gate as every other release platform.
-      - name: Functional smoke test - darwin-x64 (Rosetta)
+      - name: Functional smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64'
         shell: bash
         run: |
@@ -471,7 +490,7 @@ jobs:
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Verify musl smoke actually ran
-        if: always() && matrix.libc == 'musl' && steps.fetch.outcome == 'success'
+        if: always() && matrix.libc == 'musl' && steps.fetch.outputs.musl_missing != 'true'
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       - name: Upload hs_err logs (smoke crash diagnostics)
@@ -518,7 +537,7 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          - { platform: darwin-x64,   runner: macos-14         }
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
     runs-on: ${{ matrix.runner }}
@@ -585,13 +604,17 @@ jobs:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          # darwin-x64 intentionally skipped (2026-09-14): the arch-wrapped
-          # source build stages an arm64 libsharpyuv into the x64 bundle and
-          # the smoke then cannot dlopen it. The Rosetta/bootstrap/smoke
-          # steps below are kept so the leg can return by re-adding one line
-          # here (plus the validate matrix below) once that is fixed.
+          # darwin-x64 runs on an Intel runner: the keg-only deps resolve
+          # from /usr/local and the bundler asserts x86_64.
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
-          - { platform: windows-x64,  runner: windows-latest   }
+          # Windows vips is disabled until the GPL-free source prebuild is
+          # pinned (native/vips.version): the upstream MXE zip links GPL-3
+          # libimagequant and ships GPL fftw/poppler. See prebuild-vips.yml.
+          # - { platform: windows-x64,  runner: windows-latest   }
+          # - { platform: windows-arm64, runner: windows-11-arm  }
+          # - { platform: windows-x64,  runner: windows-latest   }
+          # - { platform: windows-arm64, runner: windows-11-arm  }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -600,7 +623,7 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
       - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         with:
-          distribution: 'temurin'
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
       - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
 
@@ -610,7 +633,16 @@ jobs:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
 
-      - name: Rosetta brew bootstrap (darwin-x64)
+      - name: Fetch prebuilt PDFium (vips pdfload)
+        # Source-built vips links PDFium so vips can load PDFs itself; the
+        # Windows leg consumes the upstream zip and keeps the Java path.
+        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
+
+      - name: x86_64 brew bootstrap (darwin-x64)
         if: matrix.platform == 'darwin-x64'
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
@@ -677,23 +709,29 @@ jobs:
           fi
 
       - name: Fetch prebuilt libvips (Windows)
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          # Pinned on purpose: querying releases/latest hits the anonymous
-          # GitHub API rate limit on shared runners (HTTP 403) and fails the
-          # leg. Bump deliberately, like the PDFium pin.
-          url="https://github.com/libvips/build-win64-mxe/releases/download/v8.18.6/vips-dev-x64-all-8.18.6.zip"
-          sha="e36b34f9c955e66fa47ec7c02b756026fad5560c5db6ff7884123be04792f89c"
-          curl -fsSL --retry 3 --retry-delay 10 "$url" -o /tmp/vips.zip
-          echo "$sha  /tmp/vips.zip" | sha256sum -c -
-          mkdir -p /tmp/vips-win && unzip -q /tmp/vips.zip -d /tmp/vips-win
-          VIPS_DIR=$(find /tmp/vips-win -maxdepth 2 -name "bin" -type d | head -n1)
-          if [ -n "$VIPS_DIR" ]; then
-            echo "VIPS_WIN_DIST=$(dirname "$VIPS_DIR")" >> "$GITHUB_ENV"
-          else
-            echo "VIPS_WIN_DIST=/tmp/vips-win" >> "$GITHUB_ENV"
+          # A pinned prebuild (native/vips.version) carries libvips with PDFium
+          # linked in and without GPL poppler/fftw. An empty pin keeps the
+          # upstream MXE zip, which ships both.
+          # GPL-free only: the upstream libvips/build-win64-mxe zip links
+          # GPL-3 libimagequant and ships GPL fftw/poppler. Windows vips must
+          # come from the pinned source prebuild (prebuild-vips.yml); there is
+          # no fallback.
+          PIN=$(grep -v '^#' native/vips.version | grep -v '^$' | head -n1 || true)
+          if [ -z "$PIN" ]; then
+            echo "::error::no GPL-free Windows vips prebuild pinned in native/vips.version"
+            exit 1
           fi
+          ASSET="vips-${{ matrix.platform }}.zip"
+          rm -rf /tmp/vips-win && mkdir -p /tmp/vips-win
+          gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ASSET" --dir /tmp/vips-win
+          unzip -q "/tmp/vips-win/$ASSET" -d /tmp/vips-win/extracted
+          echo "VIPS_WIN_DIST=/tmp/vips-win/extracted" >> "$GITHUB_ENV"
 
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'darwin-')
@@ -709,6 +747,10 @@ jobs:
           fi
 
       - name: Stage libvips + codec chain
+        env:
+          # Refuse the system-libvips fallback: it would silently ship a
+          # different dependency set (librsvg/X11) and feature set.
+          JPDFIUM_REQUIRE_SOURCE_VIPS: '1'
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
       - name: Assert x86_64 binaries (darwin-x64)
@@ -725,16 +767,16 @@ jobs:
           [ "$bad" -eq 0 ] || { echo "ERROR: non-x86_64 binaries staged for darwin-x64" >&2; exit 1; }
 
       - name: Diagnose windows vips bundle
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         shell: bash
         run: |
-          echo "DIST dll count:"; ls native/dist/vips-windows-x64/*.dll | wc -l
+          echo "DIST dll count:"; ls native/dist/vips-${{ matrix.platform }}/*.dll | wc -l
           echo "VIPS_WIN_DIST=$VIPS_WIN_DIST"; ls "$VIPS_WIN_DIST/bin" | head -20
           echo "--- pristine upstream vips.exe --version ---"
           (cd "$VIPS_WIN_DIST/bin" && ./vips.exe --version) || true
           echo "--- dumpbin dependents of staged libvips-42.dll ---"
           DUMPBIN=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
-          if [ -n "$DUMPBIN" ]; then "$DUMPBIN" //dependents native/dist/vips-windows-x64/libvips-42.dll | head -60; else echo "no dumpbin"; fi || true
+          if [ -n "$DUMPBIN" ]; then "$DUMPBIN" //dependents native/dist/vips-${{ matrix.platform }}/libvips-42.dll | head -60; else echo "no dumpbin"; fi || true
 
       - name: Build vips natives jar
         run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
@@ -744,10 +786,10 @@ jobs:
         run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
         timeout-minutes: 60
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; run its
-      # x86_64 vips smoke under Rosetta with an x86_64 JDK so platform
-      # detection resolves darwin-x64 (same gate as the core Rosetta smoke).
-      - name: Vips smoke test - darwin-x64 (Rosetta)
+      # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
+      # vips smoke with an x86_64 JDK so platform detection resolves
+      # darwin-x64 (same gate as the core Intel smoke).
+      - name: Vips smoke test - darwin-x64 (Intel)
         if: matrix.platform == 'darwin-x64'
         shell: bash
         run: |
@@ -884,27 +926,28 @@ jobs:
           fi
 
 
-  # ── Post-Release Verification: Pull from Central and execute full smoke ──
-  validate-maven-central:
-    name: Verify Maven Central (${{ matrix.platform }})
+  # ── Pre-release verification: every artifact in the staged deployment ──
+  verify-staging:
+    name: Verify staged artifacts (${{ matrix.platform }})
     needs: publish
-    if: inputs.autoRelease == true || startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
     strategy:
       fail-fast: false
       matrix:
         include:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
-          # darwin-x64 skipped like the vips matrix above (no artifact published).
+          - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
           - { platform: windows-x64,  runner: windows-latest   }
+          - { platform: windows-arm64, runner: windows-11-arm  }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         with:
-          distribution: 'temurin'
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
 
       - name: Resolve version
@@ -919,11 +962,56 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for Maven Central availability & execute standalone validation
+      - name: Verify every staged artifact and run the smoke
         shell: bash
         env:
+          MODE: staging
           VERSION: ${{ steps.v.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
-        run: |
-          bash .github/scripts/verify-central.sh
+          CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
+          CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
+        run: bash .github/scripts/verify-central.sh
 
+  # ── Post-release verification: probe Maven Central once it is released ──
+  verify-released:
+    name: Verify Maven Central (${{ matrix.platform }})
+    needs: publish
+    if: inputs.autoRelease == true || inputs.verifyReleased == true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,   runner: macos-15-intel }
+          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: windows-x64,  runner: windows-latest   }
+          - { platform: windows-arm64, runner: windows-11-arm  }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
+        with:
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
+          java-version: '25'
+
+      - name: Resolve version
+        id: v
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            REF="${GITHUB_REF_NAME}"
+            VERSION="${REF#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Probe Maven Central and run the smoke
+        shell: bash
+        env:
+          MODE: released
+          VERSION: ${{ steps.v.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/verify-central.sh

@@ -77,7 +77,25 @@ public final class JpdfiumLib {
 
     static {
         NativeLoader.ensureLoaded();
-        int rc = JpdfiumH.jpdfium_init();
+        // Renderer selection is fixed for the JVM lifetime. Skia is the default
+        // when the native build includes it; -Djpdfium.renderer=agg (or
+        // JPDFIUM_RENDERER=agg) forces the legacy AGG backend, =skia forces
+        // Skia with an AGG fallback on builds that lack it.
+        String renderer = System.getProperty(
+                "jpdfium.renderer", System.getenv().getOrDefault("JPDFIUM_RENDERER", ""));
+        int rc;
+        if ("agg".equalsIgnoreCase(renderer)) {
+            rc = JpdfiumH.jpdfium_init_ex(0);
+        } else if ("skia".equalsIgnoreCase(renderer)) {
+            rc = JpdfiumH.jpdfium_init_ex(1);
+            if (rc != OK) {
+                System.err.println(
+                        "jpdfium: Skia renderer requested but this native build has no Skia; using AGG");
+                rc = JpdfiumH.jpdfium_init();
+            }
+        } else {
+            rc = JpdfiumH.jpdfium_init();
+        }
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
         // Native teardown must wait for in-flight calls or PDFium segfaults.
         // Platform thread required: virtual threads cannot be shutdown hooks.
@@ -85,6 +103,16 @@ public final class JpdfiumLib {
     }
 
     private JpdfiumLib() {}
+
+    /** Active renderer after init: 0 = AGG, 1 = Skia. */
+    public static int activeRenderer() {
+        return JpdfiumH.jpdfium_active_renderer();
+    }
+
+    /** Whether the Skia renderer is active for this JVM. */
+    public static boolean isSkiaActive() {
+        return activeRenderer() == 1;
+    }
 
     static void check(int rc, String ctx) {
         if (rc == OK) return;
@@ -374,6 +402,105 @@ public final class JpdfiumLib {
                             + "exceeds jpdfium.maxRenderPixels=%d. Reduce the DPI or raise "
                             + "-Djpdfium.maxRenderPixels (0 disables the bound)",
                     w, h, pw, ph, dpi, maxPixels));
+        }
+    }
+
+    /**
+     * Whether this native build exports the Rust SVG rasterizer. The stub
+     * bridge used by the availability probe does not, so callers that require
+     * resvg should skip rather than fail there.
+     */
+    public static boolean isSvgRasterizerAvailable() {
+        if (RustBindings.jpdfium_has_rust == null) {
+            return false;
+        }
+        try {
+            return (int) RustBindings.jpdfium_has_rust.invokeExact() == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * A native straight-RGBA SVG raster. The buffer lives in native memory
+     * until {@link #close()}; consumers that can take a {@link MemorySegment}
+     * (libvips) avoid the Java-heap copy entirely.
+     */
+    public static final class SvgRaster implements AutoCloseable {
+        private final MemorySegment pixels;
+        private final int width;
+        private final int height;
+        private final java.util.concurrent.atomic.AtomicBoolean closed =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        private SvgRaster(MemorySegment pixels, int width, int height) {
+            this.pixels = pixels;
+            this.width = width;
+            this.height = height;
+        }
+
+        public MemorySegment pixels() {
+            return pixels;
+        }
+
+        public int width() {
+            return width;
+        }
+
+        public int height() {
+            return height;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                JpdfiumH.jpdfium_rust_free(pixels);
+            }
+        }
+    }
+
+    /**
+     * Rasterize an SVG document to straight RGBA with the Rust resvg renderer,
+     * keeping the pixels in native memory.
+     *
+     * @param svg    SVG bytes
+     * @param width  target box width in pixels, or 0 for the natural size
+     * @param height target box height in pixels, or 0 for the natural size
+     */
+    public static SvgRaster svgToNative(byte[] svg, int width, int height) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
+            NativeGuard.acquire();
+            try {
+                check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
+                        ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToNative");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+                int w = INT_SCRATCH.get(JAVA_INT, 0);
+                int h = INT2_SCRATCH.get(JAVA_INT, 0);
+                if (ptr == null) {
+                    throw new JPDFiumException("svgToNative returned no buffer");
+                }
+                return new SvgRaster(ptr.reinterpret(len), w, h);
+            } finally {
+                NativeGuard.release();
+            }
+        }
+    }
+
+    /**
+     * Rasterize an SVG document to straight RGBA with the Rust resvg renderer.
+     * This copies the pixels onto the Java heap; the vips path uses
+     * {@link #svgToNative} to stay zero-copy.
+     *
+     * @param svg    SVG bytes
+     * @param width  target box width in pixels, or 0 for the natural size
+     * @param height target box height in pixels, or 0 for the natural size
+     */
+    public static RenderResult svgToRgba(byte[] svg, int width, int height) {
+        try (SvgRaster raster = svgToNative(svg, width, height)) {
+            return new RenderResult(
+                    raster.width(), raster.height(), raster.pixels().toArray(JAVA_BYTE));
         }
     }
 
@@ -869,6 +996,60 @@ public final class JpdfiumLib {
             } finally {
                 NativeGuard.release();
             }
+        }
+    }
+
+    // ---- Signatures ----
+
+    public static int signatureCount(long doc) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_count(doc, INT_SCRATCH), "signatureCount");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static int signatureRevisionCount(long doc) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_revision_count(doc, INT_SCRATCH), "signatureRevisionCount");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Flat JSON info for one signature field. */
+    public static String signatureInfo(long doc, int index) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_info(doc, index, ADDR_SCRATCH), "signatureInfo");
+            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
+            JpdfiumH.jpdfium_free_string(strPtr);
+            return result;
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Digest of the signature /ByteRange (0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512). */
+    public static byte[] signatureDigest(long doc, int index, int algorithm) {
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, ADDR_SCRATCH, LONG_SCRATCH),
+                    "signatureDigest");
+            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+            byte[] result = nativePtr == null ? new byte[0] : nativePtr.reinterpret(len).toArray(JAVA_BYTE);
+            if (nativePtr != null) {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+            }
+            return result;
+        } finally {
+            NativeGuard.release();
         }
     }
 }

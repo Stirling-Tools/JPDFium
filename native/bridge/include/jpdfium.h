@@ -58,6 +58,21 @@ extern "C" {
 #define JPDFIUM_POSITION_BOTTOM_RIGHT 8
 
 JPDFIUM_EXPORT int32_t jpdfium_init(void);
+
+// Renderer selection for jpdfium_init_ex().
+// AUTO prefers Skia when the build includes it, else AGG.
+#define JPDFIUM_RENDERER_AUTO (-1)
+#define JPDFIUM_RENDERER_AGG 0
+#define JPDFIUM_RENDERER_SKIA 1
+
+// Initialize PDFium with an explicit renderer (JPDFIUM_RENDERER_*). Skia is
+// the default when present; pass AGG to force the legacy backend. Returns
+// JPDFIUM_ERR_INVALID when SKIA is requested from a build without it.
+// Must be called before any other bridge function.
+JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer);
+
+// Active renderer after init: JPDFIUM_RENDERER_AGG or JPDFIUM_RENDERER_SKIA.
+JPDFIUM_EXPORT int32_t jpdfium_active_renderer(void);
 JPDFIUM_EXPORT void jpdfium_destroy(void);
 
 // Raw handle extraction - allows direct FFM calls to PDFium functions.
@@ -539,6 +554,25 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
 JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth,
                                                      float outputHeight, int32_t cols, int32_t rows,
                                                      uint8_t** output, int64_t* outputLen);
+
+// Signatures (read-only inspection via the EmbedPDF signature model).
+
+// Number of signature fields (signed or unsigned).
+JPDFIUM_EXPORT int32_t jpdfium_signature_count(int64_t doc, int32_t* count);
+
+// Number of byte revisions in the loaded document (-1 when indeterminate).
+JPDFIUM_EXPORT int32_t jpdfium_signature_revision_count(int64_t doc, int32_t* count);
+
+// Flat JSON with the signature field facts: fieldName, signed, kind, coverage,
+// revisionIndex, br0..br3, docMdpPermission, catalogCertification,
+// revisionChainValid, filter, subFilter, name, reason, location, contactInfo,
+// signingTime, contentsLength. Caller frees with jpdfium_free_string.
+JPDFIUM_EXPORT int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json);
+
+// Digest of the signature's /ByteRange (algorithm: 0=SHA1, 1=SHA256,
+// 2=SHA384, 3=SHA512). Caller frees with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int32_t algorithm,
+                                                uint8_t** digest, int64_t* len);
 
 // Rust-powered compression, repair, and image resize functions.
 // Declared in a separate header for clarity; included here so jextract and

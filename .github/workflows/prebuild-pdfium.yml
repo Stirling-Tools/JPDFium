@@ -98,6 +98,8 @@ jobs:
         # by release.yml). Two variants per platform doubles prebuild
         # runtime but the workflow runs rarely (weekly cron + on PDFium pin
         # bumps), and trims ~16 MB across the 5-platform release-time bundle.
+        # Every mode builds with Skia + AGG and ships lib/pdfium-use-skia, so
+        # the bridge defaults to Skia and jpdfium_init_ex(0) can force AGG.
         include:
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: component }
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: static    }
@@ -139,6 +141,10 @@ jobs:
           # MSVC ARM64 build tools + SDK libs.
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: component }
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: static    }
+          # Experimental JavaScript / XFA variants (linux-x64 only: V8 builds
+          # are hours long and add tens of MB). Warn-only below.
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: v8 }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: xfa }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -220,11 +226,12 @@ jobs:
         id: pkg
         run: |
           mkdir -p .prebuild
-          if [ "${{ matrix.mode }}" = "static" ]; then
-            SUFFIX="-static"
-          else
-            SUFFIX=""
-          fi
+          case "${{ matrix.mode }}" in
+            static) SUFFIX="-static" ;;
+            v8)     SUFFIX="-v8" ;;
+            xfa)    SUFFIX="-xfa" ;;
+            *)      SUFFIX="" ;;
+          esac
           ASSET="pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz"
           tar -czf ".prebuild/${ASSET}" -C native/pdfium include lib
           ls -lh .prebuild/
@@ -298,6 +305,9 @@ jobs:
             test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) - musl build not green yet";
             test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) - musl build not green yet";
           done
+          # V8/XFA variants are experimental: warn, never block.
+          test -f ".prebuild/pdfium-linux-x64-v8.tar.gz"  || echo "WARNING: missing linux-x64 (v8) - experimental";
+          test -f ".prebuild/pdfium-linux-x64-xfa.tar.gz" || echo "WARNING: missing linux-x64 (xfa) - experimental";
 
       - name: Create GitHub Release
         env:
