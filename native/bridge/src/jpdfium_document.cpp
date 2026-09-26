@@ -40,6 +40,13 @@ bool g_libraryInitialized = false;
 }
 
 int jpdfium_init_library(int renderer) {
+    // Re-initialising would reset g_jpdfiumUseSkia while PDFium keeps the
+    // renderer it was configured with, so the first selection wins.
+    if (g_libraryInitialized) return JPDFIUM_OK;
+    if (renderer != JPDFIUM_RENDERER_AUTO && renderer != JPDFIUM_RENDERER_AGG &&
+        renderer != JPDFIUM_RENDERER_SKIA) {
+        return JPDFIUM_ERR_INVALID;
+    }
 #ifdef JPDFIUM_HAS_SKIA
     // AUTO (-1) and SKIA (1) both pick Skia; AGG (0) forces the legacy path.
     bool useSkia = renderer != JPDFIUM_RENDERER_AGG;
@@ -78,6 +85,8 @@ int32_t jpdfium_active_renderer() {
 
 void jpdfium_destroy() {
     FPDF_DestroyLibrary();
+    g_libraryInitialized = false;
+    g_jpdfiumUseSkia = false;
 }
 
 int32_t jpdfium_doc_create(int64_t* handle) {
