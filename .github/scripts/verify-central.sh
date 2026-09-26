@@ -44,13 +44,26 @@ module_paths() {
   echo "${base}.module"
 }
 
+# Windows vips natives are only published once native/vips.version pins a
+# GPL-free prebuild (the upstream MXE zip links GPL libimagequant), so the
+# module list and the vips smoke are conditional there.
+VIPS_SUPPORTED=1
+case "$PLATFORM" in
+  windows-*)
+    VIPS_PIN=$(grep -v '^#' native/vips.version 2>/dev/null | grep -v '^$' | head -n1 || true)
+    [ -n "$VIPS_PIN" ] || VIPS_SUPPORTED=0
+    ;;
+esac
+
 EXPECTED=()
 while read -r path; do EXPECTED+=("$path"); done < <(module_paths jpdfium yes)
 while read -r path; do EXPECTED+=("$path"); done < <(module_paths jpdfium-spring yes)
 while read -r path; do EXPECTED+=("$path"); done < <(module_paths jpdfium-vips yes)
 while read -r path; do EXPECTED+=("$path"); done < <(module_paths jpdfium-bom no)
 while read -r path; do EXPECTED+=("$path"); done < <(module_paths "jpdfium-natives-${PLATFORM}" yes)
-while read -r path; do EXPECTED+=("$path"); done < <(module_paths "jpdfium-natives-vips-${PLATFORM}" yes)
+if [ "$VIPS_SUPPORTED" = "1" ]; then
+  while read -r path; do EXPECTED+=("$path"); done < <(module_paths "jpdfium-natives-vips-${PLATFORM}" yes)
+fi
 
 fetch() {
   local path="$1" out="${2:-/dev/null}"
@@ -128,7 +141,9 @@ dependencies {
     implementation("com.stirling:jpdfium:${VERSION}")
     implementation("com.stirling:jpdfium-vips:${VERSION}")
     runtimeOnly("com.stirling:jpdfium-natives-${PLATFORM}:${VERSION}")
-    runtimeOnly("com.stirling:jpdfium-natives-vips-${PLATFORM}:${VERSION}")
+    if (System.getenv("VERIFY_VIPS") != "false") {
+        runtimeOnly("com.stirling:jpdfium-natives-vips-${PLATFORM}:${VERSION}")
+    }
 }
 
 application {
@@ -149,7 +164,17 @@ public class VerifyCentral {
             "JVBERi0xLjYKJfbk/N8KMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwovVmVyc2lvbiAvMS42Ci9QYWdlcyAyIDAgUgo+PgplbmRvYmoKOSAwIG9iago8PAovTGVuZ3RoIDQxCi9GaWx0ZXIgL0ZsYXRlRGVjb2RlCj4+CnN0cmVhbQ0KeJxzCuHSdzNUMDRSCEnjMjdSMDcwUAhJ4dJw1FQIyeJyDeECAHMSBs0NCmVuZHN0cmVhbQplbmRvYmoKMTAgMCBvYmoKPDwKL0xlbmd0aCAxODYKL1R5cGUgL09ialN0bQovTiA1Ci9GaWx0ZXIgL0ZsYXRlRGVjb2RlCi9GaXJzdCAyNwo+PgpzdHJlYW0NCnicVY7LCsJADEV/5X6BmenTQimoKIIIUgUXxUVtgwxIRpyp6N9LW5C6SOCeHJIEUAgRBYigwwwxdJxgDp1q5DmdPg8GHeobO9DOtA5VCIUSF9DKduKhURT/JmjPramX9o1KzRT6SnQwU0izvl967cniEQyrqGRnu2fDDtEIVlY8i3fIhjwe2FjxiKdAYz6J4wODRcfu6ofYQw1a1o7HyZbvL/amqUFraWxr5AY6G1mIMz9QFPgCJrlM0w0KZW5kc3RyZWFtCmVuZG9iagoxMSAwIG9iago8PAovTGVuZ3RoIDM1Ci9Sb290IDEgMCBSCi9JRCBbPDk3MTkwNUZEM0Y5RjhCNkY5REZCRjI1NkNENkYwMjMxPiA8OTcxOTA1RkQzRjlGOEI2RjlERkJGMjU2Q0Q2RjAyMzE+XQovVHlwZSAvWFJlZgovU2l6ZSAxMgovSW5kZXggWzAgNiA4IDNdCi9XIFsxIDEgMV0KL0ZpbHRlciAvRmxhdGVEZWNvZGUKPj4Kc3RyZWFtDQp4nGNg+M/Iz8DExcDExcjExcTExczExcLox8B4gAEAITgCZg0KZW5kc3RyZWFtCmVuZG9iagpzdGFydHhyZWYKNDgyCiUlRU9GCg==";
 
     public static void main(String[] args) throws Exception {
-        System.out.println("=== Verifying JPDFium + libvips natives ===");
+        boolean vipsSupported = !"false".equals(System.getenv("VERIFY_VIPS"));
+        System.out.println("=== Verifying JPDFium natives (vips=" + vipsSupported + ") ===");
+
+        if (!vipsSupported) {
+            byte[] pdf = Base64.getDecoder().decode(PDF_BASE64);
+            try (PdfDocument doc = PdfDocument.open(pdf)) {
+                System.out.println("Pages: " + doc.pageCount());
+            }
+            System.out.println("=== JPDFium verification successful (vips omitted) ===");
+            return;
+        }
 
         VipsNatives.configure();
         NativeLoader.ensureLoaded();
@@ -186,6 +211,10 @@ public class VerifyCentral {
     }
 }
 JAVA
+
+if [ "$VIPS_SUPPORTED" != "1" ]; then
+  export VERIFY_VIPS=false
+fi
 
 if [ "$MODE" = "staging" ]; then
   export VERIFY_STAGING=true
