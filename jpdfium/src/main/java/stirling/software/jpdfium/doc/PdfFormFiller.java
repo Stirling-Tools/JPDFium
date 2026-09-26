@@ -56,6 +56,10 @@ import java.util.Set;
  */
 public final class PdfFormFiller {
 
+    /** FPDFPage_Flatten() return values (fpdf_flatten.h). */
+    private static final int FLATTEN_FAIL = 0;
+    private static final int FLATTEN_SUCCESS = 1;
+
     private final PdfDocument document;
 
     // Type-specific fill operations (collected from builder calls)
@@ -211,14 +215,14 @@ public final class PdfFormFiller {
 
         List<String> filledList = new ArrayList<>();
         List<String> skippedList = new ArrayList<>();
-        int[] flattenedPages = {0};
+        Set<Integer> pagesToFlatten = new LinkedHashSet<>();
 
         FormEnv formEnv = initFormEnvironment(rawDoc);
         try {
             Map<String, List<RadioMember>> radioGroupMembers = new LinkedHashMap<>();
 
-            processStandardFields(formEnv, pageCount, filledList, skippedList, flattenedPages, radioGroupMembers);
-            processRadioGroups(formEnv.formHandle, radioGroupMembers, filledList, flattenedPages);
+            processStandardFields(formEnv, pageCount, filledList, skippedList, pagesToFlatten, radioGroupMembers);
+            processRadioGroups(formEnv.formHandle, radioGroupMembers, filledList, pagesToFlatten);
             collectSkipped(filledList, skippedList);
 
         } finally {
@@ -226,7 +230,8 @@ public final class PdfFormFiller {
             formEnv.arena().close();
         }
 
-        return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages[0]);
+        int flattenedPages = flattenTouchedPages(pagesToFlatten);
+        return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages);
     }
 
     record FormEnv(MemorySegment formHandle, Arena arena) {}
@@ -252,7 +257,8 @@ public final class PdfFormFiller {
 
     private void processStandardFields(FormEnv formEnv, int pageCount,
                                         List<String> filledList, List<String> skippedList,
-                                        int[] flattenedPages, Map<String, List<RadioMember>> radioGroupMembers) {
+                                        Set<Integer> pagesToFlatten,
+                                        Map<String, List<RadioMember>> radioGroupMembers) {
         for (int pageIdx = 0; pageIdx < pageCount; pageIdx++) {
             boolean[] pageModified = {false};
             PdfPage pdfPage = document.page(pageIdx);
@@ -276,8 +282,7 @@ public final class PdfFormFiller {
                     safeSilent0(FormFillBindings.FORM_ForceToKillFocus, formEnv.formHandle);
                 }
                 if (flattenAfterFill && pageModified[0]) {
-                    safeSilentInt2(PageEditBindings.FPDFPage_Flatten, rawPage, 0);
-                    flattenedPages[0]++;
+                    pagesToFlatten.add(pageIdx);
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formEnv.formHandle);
 
@@ -290,11 +295,11 @@ public final class PdfFormFiller {
     }
 
     private void processRadioGroups(MemorySegment formHandle, Map<String, List<RadioMember>> radioGroupMembers,
-                                     List<String> filledList, int[] flattenedPages) {
+                                     List<String> filledList, Set<Integer> pagesToFlatten) {
         for (Map.Entry<String, List<RadioMember>> entry : radioGroupMembers.entrySet()) {
             String fieldName = entry.getKey();
             String selectedExportValue = getRadioValue(fieldName);
-            boolean filled = fillRadioGroup(formHandle, selectedExportValue, entry.getValue(), flattenedPages);
+            boolean filled = fillRadioGroup(formHandle, selectedExportValue, entry.getValue(), pagesToFlatten);
             if (filled && !filledList.contains(fieldName)) filledList.add(fieldName);
         }
     }
@@ -465,7 +470,7 @@ public final class PdfFormFiller {
     }
 
     private boolean fillRadioGroup(MemorySegment formHandle, String selectedExportValue,
-                                    List<RadioMember> members, int[] flattenedPages) {
+                                    List<RadioMember> members, Set<Integer> pagesToFlatten) {
         Map<Integer, List<RadioMember>> byPage = new LinkedHashMap<>();
         for (RadioMember m : members) {
             byPage.computeIfAbsent(m.pageIdx(), k -> new ArrayList<>()).add(m);
@@ -520,8 +525,7 @@ public final class PdfFormFiller {
                 }
                 if (pageModified) safeSilent0(FormFillBindings.FORM_ForceToKillFocus, formHandle);
                 if (flattenAfterFill && pageModified) {
-                    safeSilentInt2(PageEditBindings.FPDFPage_Flatten, rawPage, 0);
-                    flattenedPages[0]++;
+                    pagesToFlatten.add(pageIdx);
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formHandle);
             } catch (Throwable _) {}
@@ -695,10 +699,34 @@ public final class PdfFormFiller {
     }
 
     /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
-    private static void safeSilentInt2(MethodHandle mh, MemorySegment a, int b) {
-        try { mh.invokeExact(a, b); } catch (Throwable t) {
+    private static int safeInt2(MethodHandle mh, MemorySegment a, int b) {
+        try { return (int) mh.invokeExact(a, b); } catch (Throwable t) {
             stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            return 0;
         }
+    }
+
+    /**
+     * Flatten the touched pages after the form fill environment has been torn
+     * down: PDFium's FPDFPage_Flatten silently fails while a form environment
+     * is active, which previously left every widget annotation in place.
+     *
+     * @return the number of pages flattened
+     */
+    private int flattenTouchedPages(Set<Integer> pageIndices) {
+        if (!flattenAfterFill || pageIndices.isEmpty()) return 0;
+        int flattened = 0;
+        for (int pageIdx : pageIndices) {
+            try (PdfPage page = document.page(pageIdx)) {
+                int rc = safeInt2(PageEditBindings.FPDFPage_Flatten, page.rawHandle(), 0);
+                if (rc == FLATTEN_SUCCESS) {
+                    flattened++;
+                } else if (rc == FLATTEN_FAIL) {
+                    throw new FormFillException("FPDFPage_Flatten failed on page " + pageIdx);
+                }
+            }
+        }
+        return flattened;
     }
 
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
