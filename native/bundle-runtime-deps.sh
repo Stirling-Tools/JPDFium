@@ -408,12 +408,23 @@ swap_full_icudata() {
     done
     [ -n "$trimmed" ] || return 0
     [ "$(wc -c < "$trimmed")" -lt 1572864 ] || return 0
+    # Only swap same-major ICU versions: the vips build links the distro/
+    # brew ICU, whose major must match the trimmed core data's.
+    icu_major() {
+        echo "$1" | grep -oE '(icudata\.so\.|icudata\.|icudt)([0-9]+)' | grep -oE '[0-9]+$' | head -1
+    }
+    local trimmed_major
+    trimmed_major=$(icu_major "$(basename "$trimmed")")
+    [ -n "$trimmed_major" ] || return 0
     local f
     for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
         [ -e "$f" ] || continue
-        if [ "$(wc -c < "$f")" -gt 1572864 ]; then
-            cp -v "$trimmed" "$f"
+        [ "$(wc -c < "$f")" -gt 1572864 ] || continue
+        if [ "$(icu_major "$(basename "$f")")" != "$trimmed_major" ]; then
+            echo "WARNING: not replacing $(basename "$f") with ICU $trimmed_major data" >&2
+            continue
         fi
+        cp -v "$trimmed" "$f"
     done
 }
 

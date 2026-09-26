@@ -81,7 +81,7 @@ install_deps() {
     if [ "$OS" = linux ]; then
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
-            meson ninja-build pkg-config build-essential cmake \
+            meson ninja-build pkg-config build-essential clang cmake \
             autoconf automake libtool \
             libglib2.0-dev libexpat1-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
@@ -332,6 +332,11 @@ build_vips() {
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
+        # The static PDFium link needs lld (GNU ld rejects Chromium's objects)
+        # and -Db_lto=true. GCC's GIMPLE LTO is not linkable by lld, so build
+        # libvips with clang, whose LTO output is LLVM bitcode lld understands.
+        export CC=clang
+        export CXX=clang++
     fi
 
     # Wire the pinned PDFium prebuild (fetch-prebuilt-pdfium.sh extracts it

@@ -87,14 +87,21 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
-    # The upstream MXE zip is GPL-contaminated: libpoppler (unused) and
-    # libfftw3 (unused) can be dropped, but libimagequant is linked into
-    # libvips-42.dll. Windows vips must come from the GPL-free source
-    # prebuild (prebuild-vips.yml); this path is a hard error now.
+    # The upstream MXE zip is GPL-contaminated: libimagequant is linked into
+    # libvips-42.dll (libpoppler/libfftw3 are unused and dropped below). A
+    # separate-DLL check cannot see a statically linked copy, so require the
+    # source-built provenance marker instead; set JPDFIUM_ALLOW_UPSTREAM_VIPS=1
+    # only for local experiments with the upstream zip.
     rm -f "$DIST"/libpoppler*.dll "$DIST"/libfftw3*.dll
+    if [ "${JPDFIUM_ALLOW_UPSTREAM_VIPS:-}" != "1" ] && \
+       [ ! -f "$VIPS_LOC/vips-source-built" ] && \
+       [ ! -f "$(dirname "$VIPS_LOC")/vips-source-built" ]; then
+        echo "ERROR: Windows vips must come from the GPL-free source prebuild" >&2
+        echo "(prebuild-vips.yml, pinned in native/vips.version)." >&2
+        exit 1
+    fi
     if ls "$DIST"/libimagequant*.dll >/dev/null 2>&1; then
-        echo "ERROR: upstream vips zip links GPL-3 libimagequant." >&2
-        echo "Use the pinned GPL-free Windows prebuild (native/vips.version)." >&2
+        echo "ERROR: staged vips links GPL-3 libimagequant." >&2
         exit 1
     fi
     # The JXL codec ships as a loadable module, not linked into libvips.
