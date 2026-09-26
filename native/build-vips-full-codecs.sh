@@ -79,7 +79,7 @@ install_deps() {
         sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config build-essential cmake \
             autoconf automake libtool \
-            libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
+            libglib2.0-dev libexpat1-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
             libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
@@ -89,7 +89,7 @@ install_deps() {
             zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
     else
         brew install meson ninja pkg-config cmake \
-            glib expat fftw orc libexif little-cms2 \
+            glib expat orc libexif little-cms2 \
             jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff \
             openjpeg \
@@ -318,7 +318,7 @@ EOF
         -Dspng=enabled -Dhighway=enabled \
         -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
-        -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \
+        -Dexif=enabled -Dlcms=enabled -Dorc=enabled \
         -Dzlib=enabled \
         || { echo "build-vips-full-codecs.sh: meson configure failed" >&2; exit 1; }
 
