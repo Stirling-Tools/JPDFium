@@ -7,9 +7,11 @@
 # pdfium.pc so libvips' pdfload renders PDFs with the same BSD-licensed
 # renderer as the core bridge instead of GPL poppler. The permissive loaders
 # (librsvg, OpenEXR, libraw, libspng, highway) are enabled to match the
-# upstream Windows "all" bundle; ImageMagick is enabled where a clean IM7 is
-# available (brew/macOS), never the apt IM6 (it links GPL liblqr). cfitsio is
-# skipped: the distro build drags in the whole curl/gnutls/krb5/ldap closure.
+# upstream Windows "all" bundle. cfitsio is skipped: the distro build drags in
+# the whole curl/gnutls/krb5/ldap closure. ImageMagick stays off: apt's IM6
+# links GPL-3 liblqr and brew's IM7 loads its coders from module files that
+# are not relocatable into the bundle without MAGICK_CODER_MODULE_PATH; a
+# from-source IM7 built --without-modules is the follow-up.
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
@@ -93,7 +95,7 @@ install_deps() {
             jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff \
             openjpeg \
-            librsvg openexr libraw libspng highway imagemagick
+            librsvg openexr libraw libspng highway
     fi
 }
 
@@ -293,12 +295,11 @@ EOF
         echo "==> build-vips-full-codecs.sh: no PDFium tree; libvips built without PDF loading" >&2
     fi
 
-    # magick: only where ImageMagick 7 is available (brew/macOS). The apt
-    # libmagickcore is IM6, which links GPL-3 liblqr - not shippable here.
+    # magick stays disabled: apt IM6 links GPL-3 liblqr, and brew IM7 loads
+    # its coders from module .so files that need MAGICK_CODER_MODULE_PATH at
+    # runtime (not relocatable into the bundle). Follow-up: build IM7 from
+    # source with --without-modules.
     local magick_flag="-Dmagick=disabled"
-    if [ "$OS" = darwin ]; then
-        magick_flag="-Dmagick=enabled"
-    fi
 
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/libvips/libvips/archive/refs/tags/${VIPS_TAG}.tar.gz" \
