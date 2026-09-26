@@ -187,25 +187,6 @@ if(JPDFIUM_USE_PDFIUM)
         message(STATUS "PDFium link mode: component (${PDFIUM_LIB})")
     endif()
 
-    # Which dependency implementations come from PDFium itself. The static
-    # archive is a complete lib and exports freetype/harfbuzz/lcms2/openjpeg;
-    # the component build exposes freetype in libpdfium and harfbuzz as a
-    # sibling component library. Linking PDFium's copies keeps exactly one of
-    # each in the bundle instead of a second system copy.
-    set(PDFIUM_COMPONENT_HARFBUZZ "")
-    if(PDFIUM_LINK_MODE STREQUAL "component")
-        foreach(cand
-                "${PDFIUM_LIB_DIR}/libthird_party_harfbuzz-ng.so"
-                "${PDFIUM_LIB_DIR}/libthird_party_harfbuzz-ng.dylib"
-                "${PDFIUM_LIB_DIR}/libthird_party_harfbuzz-ng.dll.lib"
-                "${PDFIUM_LIB_DIR}/third_party_harfbuzz-ng.dll.lib")
-            if(EXISTS "${cand}")
-                set(PDFIUM_COMPONENT_HARFBUZZ "${cand}")
-                break()
-            endif()
-        endforeach()
-    endif()
-
     add_library(jpdfium SHARED
         bridge/src/jpdfium_document.cpp
         bridge/src/jpdfium_render.cpp
@@ -406,41 +387,15 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::PCRE2_32)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PCRE2)
 
-    # FreeType - font extraction, classification, width repair. Headers come
-    # from the system; the implementation comes from PDFium's copy (the static
-    # archive, or libpdfium's exported FT_* in a component build).
+    # FreeType - font extraction, classification, width repair
     find_package(Freetype REQUIRED)
-    if(PDFIUM_LINK_MODE STREQUAL "static")
-        target_include_directories(jpdfium PRIVATE ${FREETYPE_INCLUDE_DIRS})
-    else()
-        target_include_directories(jpdfium PRIVATE ${FREETYPE_INCLUDE_DIRS})
-        target_link_libraries(jpdfium PRIVATE Freetype::Freetype)
-    endif()
+    target_link_libraries(jpdfium PRIVATE Freetype::Freetype)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_FREETYPE)
 
-    # HarfBuzz - text shaping + hb-subset for font subsetting. Same split: the
-    # headers come from the system, the implementation from PDFium.
+    # HarfBuzz - text shaping + hb-subset for font subsetting
     pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz harfbuzz-subset)
-    if(PDFIUM_LINK_MODE STREQUAL "static")
-        target_include_directories(jpdfium PRIVATE ${HARFBUZZ_INCLUDE_DIRS})
-    elseif(PDFIUM_COMPONENT_HARFBUZZ)
-        target_include_directories(jpdfium PRIVATE ${HARFBUZZ_INCLUDE_DIRS})
-        target_link_libraries(jpdfium PRIVATE "${PDFIUM_COMPONENT_HARFBUZZ}")
-    else()
-        target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
-    endif()
+    target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
-
-    # lcms2 / OpenJPEG - only the static archive exports these, so the ICC and
-    # JPX bridge paths are enabled for release (static) builds. Component
-    # builds keep the stubs.
-    if(PDFIUM_LINK_MODE STREQUAL "static")
-        pkg_check_modules(LCMS2 REQUIRED lcms2)
-        target_include_directories(jpdfium PRIVATE ${LCMS2_INCLUDE_DIRS})
-        pkg_check_modules(OPENJPEG REQUIRED libopenjp2)
-        target_include_directories(jpdfium PRIVATE ${OPENJPEG_INCLUDE_DIRS})
-        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_LCMS2 JPDFIUM_HAS_OPENJPEG)
-    endif()
 
     # ICU4C - Unicode normalization, BiDi, sentence segmentation
     pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc icu-i18n)
