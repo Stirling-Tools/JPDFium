@@ -394,7 +394,15 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         return JPDFIUM_ERR_GENERIC;
     }
     let data = slice::from_raw_parts(svg, svg_len);
-    let tree = match usvg::Tree::from_data(data, &usvg::Options::default()) {
+    // Untrusted SVG: allow only inline data: images. The default string
+    // resolver reads image files from the local filesystem, which would let a
+    // crafted document embed host files into the raster.
+    let mut options = usvg::Options::default();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    let tree = match usvg::Tree::from_data(data, &options) {
         Ok(tree) => tree,
         Err(_) => return JPDFIUM_ERR_GENERIC,
     };
@@ -418,11 +426,23 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         )
     };
 
+    // Untrusted input sets the output size: cap the dimensions and the total
+    // pixels before any allocation so a crafted SVG cannot OOM the JVM.
+    // 16384^2 = 268M pixels, the same 1 GiB RGBA bound the bridge renders use.
+    const MAX_DIM: u32 = 16384;
+    const MAX_PIXELS: u64 = 16384 * 16384;
+    if target_w == 0 || target_h == 0 || target_w > MAX_DIM || target_h > MAX_DIM {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    if (target_w as u64) * (target_h as u64) > MAX_PIXELS {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
     // Render straight into a malloc'd buffer: PixmapMut borrows the exact
     // memory the caller will free with jpdfium_rust_free, so there is no
     // intermediate Vec and no second copy. Zero it first (PixmapMut over
     // uninitialised memory would be UB).
-    let byte_len = target_w as usize * target_h as usize * 4;
+    let byte_len = (target_w as usize) * (target_h as usize) * 4;
     let ptr = libc::malloc(byte_len) as *mut u8;
     if ptr.is_null() {
         return JPDFIUM_ERR_GENERIC;
@@ -441,6 +461,8 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap,
     );
+    // End the mutable borrow of `buf` before touching it again.
+    drop(pixmap);
 
     // tiny-skia stores premultiplied RGBA; the JVM and libvips want straight.
     for px in buf.chunks_exact_mut(4) {
