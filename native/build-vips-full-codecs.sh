@@ -114,12 +114,27 @@ build_aom() {
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' RETURN
 
-    curl -fsSL --retry 3 --retry-delay 3 \
-        "https://aomedia.googlesource.com/aom/+archive/${tag}.tar.gz" \
-        -o "$work/aom.tar.gz" \
-        || { echo "build-vips-full-codecs.sh: aom download failed" >&2; exit 1; }
+    # aomedia.googlesource.com intermittently answers 503 to shared runner
+    # IPs; retry with backoff and fall back to brew's aom (which links the
+    # permissive BSD libvmaf) rather than failing the whole vips leg.
+    local attempt ok=0
+    for attempt in 1 2 3 4 5; do
+        if curl -fsSL --retry 3 --retry-delay 3 \
+            "https://aomedia.googlesource.com/aom/+archive/${tag}.tar.gz" \
+            -o "$work/aom.tar.gz"; then
+            ok=1
+            break
+        fi
+        echo "build-vips-full-codecs.sh: aom download attempt $attempt failed; retrying..." >&2
+        sleep $((attempt * 15))
+    done
+    if [ "$ok" != "1" ]; then
+        echo "build-vips-full-codecs.sh: aom download failed; keeping brew's aom (with libvmaf)" >&2
+        return 0
+    fi
     mkdir -p "$work/src"
-    tar -xzf "$work/aom.tar.gz" -C "$work/src"
+    tar -xzf "$work/aom.tar.gz" -C "$work/src" \
+        || { echo "build-vips-full-codecs.sh: aom extract failed; keeping brew's aom" >&2; return 0; }
 
     local arch_args=()
     if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
@@ -132,17 +147,17 @@ build_aom() {
         -DENABLE_TESTS=0 -DENABLE_EXAMPLES=0 -DENABLE_TOOLS=0 -DENABLE_DOCS=0 \
         -DCONFIG_TUNE_VMAF=0 \
         ${arch_args[@]+"${arch_args[@]}"} \
-        || { echo "build-vips-full-codecs.sh: aom cmake configure failed" >&2; exit 1; }
+        || { echo "build-vips-full-codecs.sh: aom cmake configure failed; keeping brew's aom" >&2; return 0; }
 
     local nproc
     nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
     cmake --build "$work/build" --parallel "$nproc" \
-        || { echo "build-vips-full-codecs.sh: aom build failed" >&2; exit 1; }
+        || { echo "build-vips-full-codecs.sh: aom build failed; keeping brew's aom" >&2; return 0; }
     cmake --install "$work/build"
 
     if otool -L "$prefix/lib/libaom.3.dylib" 2>/dev/null | grep -qi vmaf; then
-        echo "build-vips-full-codecs.sh: aom still links vmaf" >&2
-        exit 1
+        echo "build-vips-full-codecs.sh: aom still links vmaf; keeping brew's aom" >&2
+        return 0
     fi
     # Make libheif and libvips pick this aom over brew's.
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"

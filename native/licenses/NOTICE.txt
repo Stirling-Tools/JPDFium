@@ -127,3 +127,7 @@ This distribution bundles binary forms of the following open-source projects:
       BSD-3-Clause (tiny-skia), MIT (fontdb, harfrust, ...). The Apache-2.0
       text is in HIGHWAY-APACHE-2.0.txt, MIT in HARFBUZZ.txt, BSD-3-Clause
       in PDFIUM-BSD-3.txt.
+
+30. libvmaf (only when the macOS aom source build falls back to brew's aom)
+    - Copyright (c) Netflix, Inc. and contributors
+    - License: BSD-2-Clause Plus Patent (see PDFIUM-BSD-3.txt for the BSD text)
