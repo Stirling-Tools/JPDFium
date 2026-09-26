@@ -73,14 +73,12 @@ jobs:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           TRIPLET="${{ matrix.triplet }}"
-          # Permissive deps only: no poppler (GPL), no fftw (GPL), no x265.
+          # Manifest mode: the manifest disables libheif's default `hevc`
+          # feature (GPL-2 x265) and selects permissive codecs only.
           bash native/vcpkg-install.sh \
-            pkgconf:$TRIPLET glib:$TRIPLET expat:$TRIPLET orc:$TRIPLET \
-            libjpeg-turbo:$TRIPLET libpng:$TRIPLET libtiff:$TRIPLET \
-            libwebp:$TRIPLET libheif:$TRIPLET libjxl:$TRIPLET \
-            openjpeg:$TRIPLET lcms:$TRIPLET libexif:$TRIPLET \
-            librsvg:$TRIPLET openexr:$TRIPLET libraw:$TRIPLET \
-            libspng:$TRIPLET highway:$TRIPLET
+            --x-manifest-root="$PWD/native/vcpkg-vips" \
+            --x-install-root="$VCPKG_INSTALLATION_ROOT/installed" \
+            --triplet="$TRIPLET"
           echo "PKG_CONFIG_PATH=$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "$VCPKG_INSTALLATION_ROOT/installed/$TRIPLET/tools/pkgconf" >> "$GITHUB_PATH"
 
