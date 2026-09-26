@@ -23,10 +23,6 @@ fi
 # list (~4 MB) or the full data (~31 MB) would balloon every core jar.
 case "$PLATFORM" in
     vips-*) ;;
-    # windows-arm64 still ships the full icudt78.dll: the trim script is
-    # x64-only (no aarch64 mingw on the Linux prep runner). TODO: cross-build
-    # a trimmed aarch64 ICU, then drop this exemption.
-    windows-arm64) ;;
     *)
         for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
             [ -e "$f" ] || continue

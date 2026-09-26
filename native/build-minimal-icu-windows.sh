@@ -212,3 +212,70 @@ SHARED_DIST="$(dirname "$0")/dist/icu-data"
 mkdir -p "$SHARED_DIST"
 cp -v "$TRIMMED_DAT" "$SHARED_DIST/icudt${ICU_VER}l.dat"
 echo "Pre-staged  : $SHARED_DIST/icudt${ICU_VER}l.dat ($(du -h "$SHARED_DIST/icudt${ICU_VER}l.dat" | cut -f1))"
+
+# --- aarch64 wrapper -------------------------------------------------------
+# Ubuntu has no aarch64-w64-mingw32 toolchain, so the arm64 DLL is wrapped
+# with llvm-mingw (pinned like every other toolchain here). lld refuses a DLL
+# with no entry point, hence the DllMain stub. Best-effort: the arm64 bundle
+# then keeps PDFium's full icudt78.dll and the ICU size guard fails the build.
+LLVM_MINGW_VERSION="${LLVM_MINGW_VERSION:-20260922}"
+build_arm64_icu() {
+    local host
+    case "$(uname -m)" in
+        x86_64) host=x86_64 ;;
+        aarch64|arm64) host=aarch64 ;;
+        *)
+            echo "build-minimal-icu-windows.sh: unsupported host $(uname -m); skipping arm64" >&2
+            return 0
+            ;;
+    esac
+    local tool_dir="$WORK/llvm-mingw"
+    if [ ! -x "$tool_dir/bin/aarch64-w64-mingw32-clang" ]; then
+        local url="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-${host}.tar.xz"
+        curl -fsSL --retry 3 --retry-delay 3 "$url" -o "$WORK/llvm-mingw.tar.xz" \
+            || { echo "build-minimal-icu-windows.sh: llvm-mingw download failed; skipping arm64" >&2; return 0; }
+        mkdir -p "$tool_dir"
+        tar xf "$WORK/llvm-mingw.tar.xz" -C "$tool_dir" --strip-components=1 \
+            || { echo "build-minimal-icu-windows.sh: llvm-mingw extract failed; skipping arm64" >&2; return 0; }
+    fi
+    export PATH="$tool_dir/bin:$PATH"
+
+    cat > "$WORK/icudata_arm64.S" <<EOF
+.section .rdata,"dr"
+.globl icudt${ICU_VER}_dat
+.p2align 4
+icudt${ICU_VER}_dat:
+.incbin "$TRIMMED_DAT"
+EOF
+    cat > "$WORK/dllmain_arm64.c" <<'EOF'
+#include <windows.h>
+BOOL WINAPI DllMain(HINSTANCE h, DWORD r, LPVOID v) {
+    (void)h; (void)r; (void)v;
+    return TRUE;
+}
+EOF
+    cat > "$WORK/icudata_arm64.def" <<EOF
+LIBRARY icudt${ICU_VER}.dll
+EXPORTS
+icudt${ICU_VER}_dat DATA
+EOF
+
+    local out="$WORK/icudt${ICU_VER}-arm64.dll"
+    aarch64-w64-mingw32-clang -c "$WORK/icudata_arm64.S" -o "$WORK/icudata_arm64.o" \
+        && aarch64-w64-mingw32-clang -c "$WORK/dllmain_arm64.c" -o "$WORK/dllmain_arm64.o" \
+        && aarch64-w64-mingw32-clang -shared -Wl,--enable-stdcall-fixup \
+               -o "$out" "$WORK/icudata_arm64.o" "$WORK/dllmain_arm64.o" "$WORK/icudata_arm64.def" \
+        || { echo "build-minimal-icu-windows.sh: arm64 link failed; skipping arm64" >&2; return 0; }
+    if ! aarch64-w64-mingw32-objdump -p "$out" 2>/dev/null | grep -qE "icudt${ICU_VER}_dat"; then
+        echo "build-minimal-icu-windows.sh: icudt${ICU_VER}_dat NOT exported by arm64 DLL; skipping arm64" >&2
+        return 0
+    fi
+
+    local arm_dist
+    arm_dist="$(dirname "$0")/dist/windows-arm64"
+    mkdir -p "$arm_dist"
+    cp -v "$out" "$arm_dist/icudt${ICU_VER}.dll"
+    echo "Pre-staged  : $arm_dist/icudt${ICU_VER}.dll ($(du -h "$arm_dist/icudt${ICU_VER}.dll" | cut -f1))"
+}
+
+build_arm64_icu
