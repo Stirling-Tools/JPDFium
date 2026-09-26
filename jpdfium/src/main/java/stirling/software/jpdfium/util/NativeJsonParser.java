@@ -82,7 +82,11 @@ public final class NativeJsonParser {
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0L;
-        return Long.parseLong(json.substring(idx, end));
+        try {
+            return Long.parseLong(json.substring(idx, end));
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** Extract a boolean field from a single JSON object string. Returns false if missing. */

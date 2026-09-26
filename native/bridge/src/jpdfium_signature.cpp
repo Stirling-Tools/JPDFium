@@ -18,15 +18,18 @@ namespace {
 std::string utf16leToUtf8(const uint16_t* s, size_t count) {
     std::string out;
     out.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
+    size_t i = 0;
+    while (i < count) {
         uint32_t cp = s[i];
+        size_t advance = 1;
         if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < count) {
             uint32_t lo = s[i + 1];
             if (lo >= 0xDC00 && lo <= 0xDFFF) {
                 cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                ++i;
+                advance = 2;
             }
         }
+        i += advance;
         if (cp < 0x80) {
             out.push_back(static_cast<char>(cp));
         } else if (cp < 0x800) {

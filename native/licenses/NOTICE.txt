@@ -109,7 +109,7 @@ This distribution bundles binary forms of the following open-source projects:
       (see LIBRAW-LGPL-2.1.txt)
 
 26. libspng (PNG loader)
-    - Copyright (c) 2018-2024 Randy <randy408@protonmail.com>
+    - Copyright (c) 2018-2026 Randy <randy408@protonmail.com>
     - License: BSD 2-Clause License (see LIBSPNG-BSD-2.txt)
 
 27. Google Highway (SIMD kernels used by libvips)
