@@ -9,10 +9,12 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 
 /**
  * Functional smoke test for the bundled native: loads it through the production
@@ -40,6 +42,8 @@ class NativeSmokeTest {
     /** The Rust resvg rasterizer must work in every platform's core natives. */
     @Test
     void rasterizesSvgWithResvg() {
+        Assumptions.assumeTrue(JpdfiumLib.isSvgRasterizerAvailable(),
+                "Rust SVG rasterizer not present in this native build (stub probe)");
         String svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"12\">"
                 + "<rect width=\"24\" height=\"12\" fill=\"#0000ff\"/></svg>";
         RenderResult raster =

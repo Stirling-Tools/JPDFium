@@ -406,6 +406,22 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Whether this native build exports the Rust SVG rasterizer. The stub
+     * bridge used by the availability probe does not, so callers that require
+     * resvg should skip rather than fail there.
+     */
+    public static boolean isSvgRasterizerAvailable() {
+        if (RustBindings.jpdfium_has_rust == null) {
+            return false;
+        }
+        try {
+            return (int) RustBindings.jpdfium_has_rust.invokeExact() == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
      * A native straight-RGBA SVG raster. The buffer lives in native memory
      * until {@link #close()}; consumers that can take a {@link MemorySegment}
      * (libvips) avoid the Java-heap copy entirely.

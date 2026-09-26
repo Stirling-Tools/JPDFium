@@ -364,6 +364,13 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
 }
 
 
+/// Whether this library was built with the Rust-powered features (always 1
+/// here; the C++ stub bridge answers 0 so callers can probe capability).
+#[no_mangle]
+pub extern "C" fn jpdfium_has_rust() -> i32 {
+    1
+}
+
 /// Rasterize an SVG document to straight (unpremultiplied) RGBA using resvg.
 ///
 /// `width`/`height` <= 0 keep the SVG's natural size; otherwise the document is

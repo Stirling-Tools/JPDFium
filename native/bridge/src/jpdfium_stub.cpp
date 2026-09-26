@@ -919,6 +919,10 @@ int64_t jpdfium_page_doc_raw_handle(int64_t) {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
+int32_t jpdfium_has_rust(void) {
+    return 0;
+}
+
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
                                   int32_t) {
     return fail_native_bytes(out_ptr, out_len);

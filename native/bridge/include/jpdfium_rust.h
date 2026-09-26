@@ -15,6 +15,10 @@
 extern "C" {
 #endif
 
+// Whether the Rust-powered functions are present in this build (1) or the
+// C++ stub bridge answered (0). Lets callers probe resvg/lopdf support.
+JPDFIUM_EXPORT int32_t jpdfium_has_rust(void);
+
 // Compress a PDF using lopdf + zopfli for superior FlateDecode streams.
 //
 // Loads the PDF with lopdf, decompresses all streams, then recompresses each
