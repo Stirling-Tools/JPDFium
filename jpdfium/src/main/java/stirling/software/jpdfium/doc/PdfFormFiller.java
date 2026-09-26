@@ -229,9 +229,9 @@ public final class PdfFormFiller {
         return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages[0]);
     }
 
-    private record FormEnv(MemorySegment formHandle, Arena arena) {}
+    record FormEnv(MemorySegment formHandle, Arena arena) {}
 
-    private static FormEnv initFormEnvironment(MemorySegment rawDoc) {
+    static FormEnv initFormEnvironment(MemorySegment rawDoc) {
         Arena formArena = Arena.ofConfined();
         MemorySegment formInfo = formArena.allocate(256);
         formInfo.set(ValueLayout.JAVA_INT, 0, 1);
