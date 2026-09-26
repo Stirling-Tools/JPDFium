@@ -60,6 +60,23 @@ resolve_libvips() {
     return 1
 }
 
+# In CI the source build must have produced the libvips we bundle: falling
+# back to a system/brew libvips silently ships its whole dependency set
+# (librsvg/X11/...) and a different feature set. JPDFIUM_REQUIRE_SOURCE_VIPS=1
+# turns that fallback into an error.
+if [ "${JPDFIUM_REQUIRE_SOURCE_VIPS:-}" = "1" ]; then
+    case "$OS" in
+        linux) REQUIRED_VIPS="/usr/local/lib/$LIBVIPS_NAME" ;;
+        darwin) REQUIRED_VIPS="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib/$LIBVIPS_NAME" ;;
+        *) REQUIRED_VIPS="" ;;
+    esac
+    if [ -n "$REQUIRED_VIPS" ] && [ ! -f "$REQUIRED_VIPS" ]; then
+        echo "ERROR: source-built libvips not found at $REQUIRED_VIPS." >&2
+        echo "The full-codecs build must succeed; refusing to bundle a system libvips." >&2
+        exit 1
+    fi
+fi
+
 VIPS_LOC="$(resolve_libvips || true)"
 if [ -z "$VIPS_LOC" ]; then
     echo "ERROR: libvips ($LIBVIPS_NAME) not found for $PLATFORM." >&2

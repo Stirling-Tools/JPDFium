@@ -754,6 +754,9 @@ jobs:
         continue-on-error: true
         env:
           MACOS_ALLOW_UNSIGNED: '1'
+          # Refuse the system-libvips fallback: it would silently ship a
+          # different dependency set (librsvg/X11) and feature set.
+          JPDFIUM_REQUIRE_SOURCE_VIPS: '1'
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
       - name: Build vips natives jar

@@ -762,6 +762,10 @@ jobs:
           fi
 
       - name: Stage libvips + codec chain
+        env:
+          # Refuse the system-libvips fallback: it would silently ship a
+          # different dependency set (librsvg/X11) and feature set.
+          JPDFIUM_REQUIRE_SOURCE_VIPS: '1'
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
       - name: Assert x86_64 binaries (darwin-x64)
