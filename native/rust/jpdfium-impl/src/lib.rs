@@ -411,19 +411,32 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         )
     };
 
-    let mut pixmap = match tiny_skia::Pixmap::new(target_w, target_h) {
+    // Render straight into a malloc'd buffer: PixmapMut borrows the exact
+    // memory the caller will free with jpdfium_rust_free, so there is no
+    // intermediate Vec and no second copy. Zero it first (PixmapMut over
+    // uninitialised memory would be UB).
+    let byte_len = target_w as usize * target_h as usize * 4;
+    let ptr = libc::malloc(byte_len) as *mut u8;
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    std::ptr::write_bytes(ptr, 0, byte_len);
+    let buf = slice::from_raw_parts_mut(ptr, byte_len);
+    let mut pixmap = match tiny_skia::PixmapMut::from_bytes(buf, target_w, target_h) {
         Some(pixmap) => pixmap,
-        None => return JPDFIUM_ERR_GENERIC,
+        None => {
+            libc::free(ptr as *mut libc::c_void);
+            return JPDFIUM_ERR_GENERIC;
+        }
     };
     resvg::render(
         &tree,
         tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
+        &mut pixmap,
     );
 
     // tiny-skia stores premultiplied RGBA; the JVM and libvips want straight.
-    let mut rgba = pixmap.take();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in buf.chunks_exact_mut(4) {
         let a = px[3] as u32;
         if a != 0 && a != 255 {
             px[0] = ((px[0] as u32 * 255 + a / 2) / a) as u8;
@@ -432,12 +445,8 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
         }
     }
 
-    let ptr = malloc_copy(&rgba);
-    if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
-    }
     *out_ptr = ptr;
-    *out_len = rgba.len() as i64;
+    *out_len = byte_len as i64;
     if !out_w.is_null() {
         *out_w = target_w as i32;
     }

@@ -1,19 +1,14 @@
 package stirling.software.jpdfium.vips;
 
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.SvgConverter;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
-import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 
 import java.io.IOException;
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -71,16 +66,15 @@ public final class VipsImageConverter {
      * @return encoded image bytes
      */
     public static byte[] svgToBytes(byte[] svg, int width, int height, VipsFormat format, int quality) {
-        RenderResult result = SvgConverter.toRgba(svg, width, height);
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment pixels = arena.allocateFrom(JAVA_BYTE, result.rgba());
-            try (RenderedPageView view = new RenderedPageView(
-                    result.width(), result.height(), result.width() * 4, 4,
-                    PixelFormat.RGBA_STRAIGHT, pixels, null)) {
-                VipsEncodeOptions encodeOptions =
-                        VipsEncodeOptions.builder(format).quality(quality).build();
-                return VipsEncoder.encodeToBytes(view, encodeOptions);
-            }
+        // The resvg raster stays in native memory and is handed to vips as a
+        // MemorySegment: no Java-heap RGBA copy, no intermediate BufferedImage.
+        try (JpdfiumLib.SvgRaster raster = JpdfiumLib.svgToNative(svg, width, height);
+             RenderedPageView view = new RenderedPageView(
+                     raster.width(), raster.height(), raster.width() * 4, 4,
+                     PixelFormat.RGBA_STRAIGHT, raster.pixels(), null)) {
+            VipsEncodeOptions encodeOptions =
+                    VipsEncodeOptions.builder(format).quality(quality).build();
+            return VipsEncoder.encodeToBytes(view, encodeOptions);
         }
     }
 

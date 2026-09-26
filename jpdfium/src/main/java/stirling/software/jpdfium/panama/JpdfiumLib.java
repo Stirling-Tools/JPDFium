@@ -406,31 +406,85 @@ public final class JpdfiumLib {
     }
 
     /**
+     * A native straight-RGBA SVG raster. The buffer lives in native memory
+     * until {@link #close()}; consumers that can take a {@link MemorySegment}
+     * (libvips) avoid the Java-heap copy entirely.
+     */
+    public static final class SvgRaster implements AutoCloseable {
+        private final MemorySegment pixels;
+        private final int width;
+        private final int height;
+        private final java.util.concurrent.atomic.AtomicBoolean closed =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        private SvgRaster(MemorySegment pixels, int width, int height) {
+            this.pixels = pixels;
+            this.width = width;
+            this.height = height;
+        }
+
+        public MemorySegment pixels() {
+            return pixels;
+        }
+
+        public int width() {
+            return width;
+        }
+
+        public int height() {
+            return height;
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                JpdfiumH.jpdfium_rust_free(pixels);
+            }
+        }
+    }
+
+    /**
+     * Rasterize an SVG document to straight RGBA with the Rust resvg renderer,
+     * keeping the pixels in native memory.
+     *
+     * @param svg    SVG bytes
+     * @param width  target box width in pixels, or 0 for the natural size
+     * @param height target box height in pixels, or 0 for the natural size
+     */
+    public static SvgRaster svgToNative(byte[] svg, int width, int height) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
+            NativeGuard.acquire();
+            try {
+                check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
+                        ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToNative");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+                int w = INT_SCRATCH.get(JAVA_INT, 0);
+                int h = INT2_SCRATCH.get(JAVA_INT, 0);
+                if (ptr == null) {
+                    throw new JPDFiumException("svgToNative returned no buffer");
+                }
+                return new SvgRaster(ptr.reinterpret(len), w, h);
+            } finally {
+                NativeGuard.release();
+            }
+        }
+    }
+
+    /**
      * Rasterize an SVG document to straight RGBA with the Rust resvg renderer.
+     * This copies the pixels onto the Java heap; the vips path uses
+     * {@link #svgToNative} to stay zero-copy.
      *
      * @param svg    SVG bytes
      * @param width  target box width in pixels, or 0 for the natural size
      * @param height target box height in pixels, or 0 for the natural size
      */
     public static RenderResult svgToRgba(byte[] svg, int width, int height) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
-            NativeGuard.acquire();
-            try {
-                check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
-                        ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToRgba");
-                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
-                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
-                int w = INT_SCRATCH.get(JAVA_INT, 0);
-                int h = INT2_SCRATCH.get(JAVA_INT, 0);
-                byte[] rgba = ptr == null ? new byte[0] : ptr.reinterpret(len).toArray(JAVA_BYTE);
-                if (ptr != null) {
-                    JpdfiumH.jpdfium_rust_free(ptr);
-                }
-                return new RenderResult(w, h, rgba);
-            } finally {
-                NativeGuard.release();
-            }
+        try (SvgRaster raster = svgToNative(svg, width, height)) {
+            return new RenderResult(
+                    raster.width(), raster.height(), raster.pixels().toArray(JAVA_BYTE));
         }
     }
 
