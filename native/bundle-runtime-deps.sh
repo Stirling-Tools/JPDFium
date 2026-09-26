@@ -390,10 +390,38 @@ assert_bundle_arch() {
     [ "$failed" -eq 0 ] || exit 1
 }
 
+# The source-built vips links the distro ICU, whose full data file (~30 MB)
+# would dominate the bundle. Swap it for the core bundle's trimmed copy (same
+# data, ~0.45 MB) before strip/sign/checks. The core dist for this platform is
+# native/dist/<platform without the vips- prefix>.
+swap_full_icudata() {
+    case "$PLATFORM" in
+        vips-*) ;;
+        *) return 0 ;;
+    esac
+    local core_platform="${PLATFORM#vips-}"
+    local trimmed=""
+    for cand in "native/dist/$core_platform"/libicudata.* "native/dist/$core_platform"/icudt*.dll; do
+        [ -e "$cand" ] || continue
+        trimmed="$cand"
+        break
+    done
+    [ -n "$trimmed" ] || return 0
+    [ "$(wc -c < "$trimmed")" -lt 1572864 ] || return 0
+    local f
+    for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
+        [ -e "$f" ] || continue
+        if [ "$(wc -c < "$f")" -gt 1572864 ]; then
+            cp -v "$trimmed" "$f"
+        fi
+    done
+}
+
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
         assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -407,6 +435,7 @@ case "$PLATFORM" in
     darwin-*|vips-darwin-*)
         bundle_macos
         assert_bundle_arch
+        swap_full_icudata
         if command -v strip >/dev/null 2>&1; then
             # -x drops local symbols too (the static harfbuzz contributes
             # thousands); exports and the dynamic symbol table stay.
@@ -422,6 +451,7 @@ case "$PLATFORM" in
     windows-*|vips-windows-*)
         bundle_windows
         assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
         if command -v llvm-strip >/dev/null 2>&1; then
