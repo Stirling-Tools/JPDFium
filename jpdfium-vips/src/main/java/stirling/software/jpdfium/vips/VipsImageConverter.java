@@ -1,13 +1,20 @@
 package stirling.software.jpdfium.vips;
 
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.SvgConverter;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -46,6 +53,40 @@ public final class VipsImageConverter {
             VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).quality(quality).build();
             return VipsEncoder.encodeToBytes(view, encodeOptions);
         }
+    }
+
+    /**
+     * Rasterize an SVG with the core resvg renderer and encode it with libvips.
+     *
+     * <p>This is the SVG path for the vips stack: the source build ships no
+     * librsvg (its cairo/gdk-pixbuf chain hard-links X11), so SVG is rasterized
+     * by the Rust resvg renderer in the core natives and handed to vips as raw
+     * RGBA.
+     *
+     * @param svg     SVG document bytes
+     * @param width   target box width in pixels, or 0 for the natural size
+     * @param height  target box height in pixels, or 0 for the natural size
+     * @param format  output format (any libvips saver)
+     * @param quality codec quality (1-100)
+     * @return encoded image bytes
+     */
+    public static byte[] svgToBytes(byte[] svg, int width, int height, VipsFormat format, int quality) {
+        RenderResult result = SvgConverter.toRgba(svg, width, height);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment pixels = arena.allocateFrom(JAVA_BYTE, result.rgba());
+            try (RenderedPageView view = new RenderedPageView(
+                    result.width(), result.height(), result.width() * 4, 4,
+                    PixelFormat.RGBA_STRAIGHT, pixels, null)) {
+                VipsEncodeOptions encodeOptions =
+                        VipsEncodeOptions.builder(format).quality(quality).build();
+                return VipsEncoder.encodeToBytes(view, encodeOptions);
+            }
+        }
+    }
+
+    /** @return SVG rasterized and encoded with the codec's default quality. */
+    public static byte[] svgToBytes(byte[] svg, int width, int height, VipsFormat format) {
+        return svgToBytes(svg, width, height, format, 75);
     }
 
     /** @return one encoded byte buffer per page, in page order. */

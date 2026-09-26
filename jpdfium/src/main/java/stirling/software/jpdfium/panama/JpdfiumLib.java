@@ -406,6 +406,35 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Rasterize an SVG document to straight RGBA with the Rust resvg renderer.
+     *
+     * @param svg    SVG bytes
+     * @param width  target box width in pixels, or 0 for the natural size
+     * @param height target box height in pixels, or 0 for the natural size
+     */
+    public static RenderResult svgToRgba(byte[] svg, int width, int height) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
+            NativeGuard.acquire();
+            try {
+                check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
+                        ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToRgba");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+                int w = INT_SCRATCH.get(JAVA_INT, 0);
+                int h = INT2_SCRATCH.get(JAVA_INT, 0);
+                byte[] rgba = ptr == null ? new byte[0] : ptr.reinterpret(len).toArray(JAVA_BYTE);
+                if (ptr != null) {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+                return new RenderResult(w, h, rgba);
+            } finally {
+                NativeGuard.release();
+            }
+        }
+    }
+
+    /**
      * Fast path that returns a heap {@link RenderResult}. Avoids the
      * {@link RenderedPageView} wrapper (object + {@link java.util.concurrent.atomic.AtomicBoolean}
      * + cleanup lambda) so the common {@code page.renderAt()} call stays allocation-lean;

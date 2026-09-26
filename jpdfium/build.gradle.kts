@@ -183,6 +183,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_compress_pdf",
     "jpdfium_rust_repair_lopdf",
     "jpdfium_rust_resize_pixels",
+    "jpdfium_rust_svg_to_rgba",
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",

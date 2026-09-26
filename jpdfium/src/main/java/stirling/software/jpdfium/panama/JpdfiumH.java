@@ -5636,6 +5636,73 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_rust_svg_to_rgba {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_svg_to_rgba");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_rust_svg_to_rgba$descriptor() {
+        return jpdfium_rust_svg_to_rgba.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static MethodHandle jpdfium_rust_svg_to_rgba$handle() {
+        return jpdfium_rust_svg_to_rgba.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static MemorySegment jpdfium_rust_svg_to_rgba$address() {
+        return jpdfium_rust_svg_to_rgba.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_svg_to_rgba(const uint8_t *svg, int64_t svg_len, int32_t width, int32_t height, uint8_t **out_ptr, int64_t *out_len, int32_t *out_w, int32_t *out_h)
+     * }
+     */
+    public static int jpdfium_rust_svg_to_rgba(MemorySegment svg, long svg_len, int width, int height, MemorySegment out_ptr, MemorySegment out_len, MemorySegment out_w, MemorySegment out_h) {
+        var mh$ = jpdfium_rust_svg_to_rgba.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_rust_svg_to_rgba", svg, svg_len, width, height, out_ptr, out_len, out_w, out_h);
+            }
+            return (int)mh$.invokeExact(svg, svg_len, width, height, out_ptr, out_len, out_w, out_h);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_rust_free {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             JpdfiumH.C_POINTER

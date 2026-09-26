@@ -364,6 +364,89 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
 }
 
 
+/// Rasterize an SVG document to straight (unpremultiplied) RGBA using resvg.
+///
+/// `width`/`height` <= 0 keep the SVG's natural size; otherwise the document is
+/// scaled, preserving aspect ratio, to fit the requested box. The output is
+/// allocated with libc::malloc and must be freed with jpdfium_rust_free.
+///
+/// # Safety
+/// `svg` must point to `svg_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
+    svg: *const u8,
+    svg_len: usize,
+    width: i32,
+    height: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+    out_w: *mut i32,
+    out_h: *mut i32,
+) -> i32 {
+    if svg.is_null() || svg_len == 0 || out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let data = slice::from_raw_parts(svg, svg_len);
+    let tree = match usvg::Tree::from_data(data, &usvg::Options::default()) {
+        Ok(tree) => tree,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let size = tree.size();
+    let (natural_w, natural_h) = (size.width(), size.height());
+    if !(natural_w.is_finite() && natural_h.is_finite()) || natural_w <= 0.0 || natural_h <= 0.0 {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let (target_w, target_h, scale) = if width > 0 && height > 0 {
+        let scale = (width as f32 / natural_w).min(height as f32 / natural_h);
+        (
+            (natural_w * scale).round().max(1.0) as u32,
+            (natural_h * scale).round().max(1.0) as u32,
+            scale,
+        )
+    } else {
+        (
+            natural_w.round().max(1.0) as u32,
+            natural_h.round().max(1.0) as u32,
+            1.0,
+        )
+    };
+
+    let mut pixmap = match tiny_skia::Pixmap::new(target_w, target_h) {
+        Some(pixmap) => pixmap,
+        None => return JPDFIUM_ERR_GENERIC,
+    };
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+
+    // tiny-skia stores premultiplied RGBA; the JVM and libvips want straight.
+    let mut rgba = pixmap.take();
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            px[0] = ((px[0] as u32 * 255 + a / 2) / a) as u8;
+            px[1] = ((px[1] as u32 * 255 + a / 2) / a) as u8;
+            px[2] = ((px[2] as u32 * 255 + a / 2) / a) as u8;
+        }
+    }
+
+    let ptr = malloc_copy(&rgba);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = rgba.len() as i64;
+    if !out_w.is_null() {
+        *out_w = target_w as i32;
+    }
+    if !out_h.is_null() {
+        *out_h = target_h as i32;
+    }
+    JPDFIUM_OK
+}
+
 /// Free a buffer previously allocated by any jpdfium_rust_* function.
 ///
 /// Safe to call with a null pointer (no-op).

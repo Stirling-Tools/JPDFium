@@ -14,3 +14,8 @@ oxipng = { version = "10.1", default-features = false, features = ["zopfli"] }
 zopfli = "0.8"
 flate2 = "1.1"
 fast_image_resize = "6.0"
+# SVG rasterizer (Apache-2.0 OR MIT stack: resvg/usvg/tiny-skia/fontdb).
+# Replaces librsvg in the vips stack: no cairo/gdk-pixbuf/X11, no GPL.
+resvg = "0.48"
+usvg = "0.48"
+tiny-skia = "0.12"

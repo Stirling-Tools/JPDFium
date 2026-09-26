@@ -119,3 +119,11 @@ This distribution bundles binary forms of the following open-source projects:
 28. libnsgif (GIF loader, vendored by libvips)
     - Copyright (c) 2004-2024 NetSurf contributors
     - License: MIT License (see LIBNSGIF-MIT.txt)
+
+29. SVG rasterization (resvg, usvg, tiny-skia, fontdb, harfrust, rustybuzz,
+    ttf-parser, skrifa, read-fonts, svgtypes, kurbo and their support crates)
+    - Copyright (c) the resvg/usvg/tiny-skia contributors
+    - License: Apache-2.0 OR MIT (resvg/usvg/svgtypes/skrifa/read-fonts/...),
+      BSD-3-Clause (tiny-skia), MIT (fontdb, harfrust, ...). The Apache-2.0
+      text is in HIGHWAY-APACHE-2.0.txt, MIT in HARFBUZZ.txt, BSD-3-Clause
+      in PDFIUM-BSD-3.txt.
