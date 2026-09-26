@@ -139,6 +139,20 @@ jobs:
           # MSVC ARM64 build tools + SDK libs.
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: component }
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: static    }
+          # Experimental Skia variant (pdf_use_skia=true + pdf_use_agg=true) so
+          # the embedder can pick the renderer at init. Not consumed by default;
+          # dispatch snapshot.yml with build_mode=skia and set
+          # -Djpdfium.renderer=skia to exercise it. Warn-only below.
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: skia }
+          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: skia }
+          - { platform: darwin-x64,   runner: macos-14,          target_cpu: x64,   mode: skia }
+          - { platform: darwin-arm64, runner: macos-14,          target_cpu: arm64, mode: skia }
+          - { platform: windows-x64,  runner: windows-2022,      target_cpu: x64,   mode: skia }
+          - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: skia }
+          # Experimental JavaScript / XFA variants (linux-x64 only: V8 builds
+          # are hours long and add tens of MB). Warn-only below.
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: v8 }
+          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: xfa }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -220,11 +234,13 @@ jobs:
         id: pkg
         run: |
           mkdir -p .prebuild
-          if [ "${{ matrix.mode }}" = "static" ]; then
-            SUFFIX="-static"
-          else
-            SUFFIX=""
-          fi
+          case "${{ matrix.mode }}" in
+            static) SUFFIX="-static" ;;
+            skia)   SUFFIX="-skia" ;;
+            v8)     SUFFIX="-v8" ;;
+            xfa)    SUFFIX="-xfa" ;;
+            *)      SUFFIX="" ;;
+          esac
           ASSET="pdfium-${{ matrix.platform }}${SUFFIX}.tar.gz"
           tar -czf ".prebuild/${ASSET}" -C native/pdfium include lib
           ls -lh .prebuild/
@@ -298,6 +314,12 @@ jobs:
             test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) - musl build not green yet";
             test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) - musl build not green yet";
           done
+          # Skia and V8/XFA variants are experimental: warn, never block.
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
+            test -f ".prebuild/pdfium-$p-skia.tar.gz" || echo "WARNING: missing $p (skia) - experimental";
+          done
+          test -f ".prebuild/pdfium-linux-x64-v8.tar.gz"  || echo "WARNING: missing linux-x64 (v8) - experimental";
+          test -f ".prebuild/pdfium-linux-x64-xfa.tar.gz" || echo "WARNING: missing linux-x64 (xfa) - experimental";
 
       - name: Create GitHub Release
         env:

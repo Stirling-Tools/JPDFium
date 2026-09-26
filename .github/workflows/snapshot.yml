@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       build_mode:
-        description: 'PDFium build mode (default: component, fast iteration; static: matches release.yml, smaller jars)'
+        description: 'PDFium build mode (component: fast; static: release-like; skia/v8/xfa: experimental variants from prebuild-pdfium.yml)'
         type: choice
-        options: [component, static]
+        options: [component, static, skia, v8, xfa]
         default: component
       skip_publish:
         description: 'Dry run: build + sign + upload artifacts but do NOT publish to Central Portal (use to verify signing without shipping)'
@@ -149,6 +149,12 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - name: Select the Skia renderer for this run
+        # With build_mode=skia the fetched PDFium has both backends and the
+        # smoke JVM picks Skia via the property; other modes stay on AGG.
+        if: inputs.build_mode == 'skia'
+        run: echo "JPDFIUM_RENDERER=skia" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@1aa87b638dacaa70f1c903fa9ec9cbd91058e2ff # v5.7.0
         # The musl legs build + smoke inside an Alpine container which ships its
