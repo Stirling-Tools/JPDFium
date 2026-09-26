@@ -96,9 +96,8 @@ char* dupString(const std::string& s) {
 }
 
 std::string sigString(EPDF_SIGNATURE_MODEL model, int index, int key) {
-    return readUtf16([&](FPDF_WCHAR* b, unsigned long n) {
-        return EPDFSig_GetString(model, index, key, b, n);
-    });
+    return readUtf16(
+        [&](FPDF_WCHAR* b, unsigned long n) { return EPDFSig_GetString(model, index, key, b, n); });
 }
 
 }  // namespace
@@ -161,15 +160,17 @@ int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json) {
         bool chainValid = EPDFSig_IsRevisionChainValid(model) != 0;
 
         std::ostringstream os;
-        os << "{\"fieldName\":\"" << jsonEscape(fieldName) << "\",\"signed\":"
-           << (signedFlag ? "true" : "false") << ",\"kind\":" << EPDFSig_GetKind(model, index)
+        os << "{\"fieldName\":\"" << jsonEscape(fieldName)
+           << "\",\"signed\":" << (signedFlag ? "true" : "false")
+           << ",\"kind\":" << EPDFSig_GetKind(model, index)
            << ",\"coverage\":" << EPDFSig_GetCoverage(model, index)
-           << ",\"revisionIndex\":" << EPDFSig_GetRevisionIndex(model, index) << ",\"br0\":"
-           << (hasRange ? static_cast<int64_t>(range[0]) : -1) << ",\"br1\":"
-           << (hasRange ? static_cast<int64_t>(range[1]) : -1) << ",\"br2\":"
-           << (hasRange ? static_cast<int64_t>(range[2]) : -1) << ",\"br3\":"
-           << (hasRange ? static_cast<int64_t>(range[3]) : -1) << ",\"docMdpPermission\":"
-           << EPDFSig_GetDocMDPPermission(model, index) << ",\"catalogCertification\":"
+           << ",\"revisionIndex\":" << EPDFSig_GetRevisionIndex(model, index)
+           << ",\"br0\":" << (hasRange ? static_cast<int64_t>(range[0]) : -1)
+           << ",\"br1\":" << (hasRange ? static_cast<int64_t>(range[1]) : -1)
+           << ",\"br2\":" << (hasRange ? static_cast<int64_t>(range[2]) : -1)
+           << ",\"br3\":" << (hasRange ? static_cast<int64_t>(range[3]) : -1)
+           << ",\"docMdpPermission\":" << EPDFSig_GetDocMDPPermission(model, index)
+           << ",\"catalogCertification\":"
            << (EPDFSig_IsCatalogCertification(model, index) ? "true" : "false")
            << ",\"revisionChainValid\":" << (chainValid ? "true" : "false") << ",\"filter\":\""
            << jsonEscape(sigString(model, index, EPDF_SIG_STRING_FILTER)) << "\",\"subFilter\":\""
@@ -179,8 +180,7 @@ int32_t jpdfium_signature_info(int64_t doc, int32_t index, char** json) {
            << jsonEscape(sigString(model, index, EPDF_SIG_STRING_LOCATION))
            << "\",\"contactInfo\":\""
            << jsonEscape(sigString(model, index, EPDF_SIG_STRING_CONTACT_INFO))
-           << "\",\"signingTime\":\""
-           << jsonEscape(sigString(model, index, EPDF_SIG_STRING_M))
+           << "\",\"signingTime\":\"" << jsonEscape(sigString(model, index, EPDF_SIG_STRING_M))
            << "\",\"contentsLength\":" << static_cast<int64_t>(contentsLen) << '}';
 
         EPDFSig_CloseModel(model);
