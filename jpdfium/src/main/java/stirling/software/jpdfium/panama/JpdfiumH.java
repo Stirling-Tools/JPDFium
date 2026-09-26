@@ -82,6 +82,66 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_init_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_init_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_init_ex$descriptor() {
+        return jpdfium_init_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static MethodHandle jpdfium_init_ex$handle() {
+        return jpdfium_init_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static MemorySegment jpdfium_init_ex$address() {
+        return jpdfium_init_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_init_ex(int32_t renderer)
+     * }
+     */
+    public static int jpdfium_init_ex(int renderer) {
+        var mh$ = jpdfium_init_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_init_ex", renderer);
+            }
+            return (int)mh$.invokeExact(renderer);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_destroy {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(    );
 

@@ -21,10 +21,9 @@ inline int renderFlagsForScreen() {
 
 inline int bitmapFormatForRenderer() {
 #ifdef JPDFIUM_HAS_SKIA
-    return FPDFBitmap_BGRA_Premul;
-#else
-    return FPDFBitmap_BGRA;
+    if (g_jpdfiumUseSkia) return FPDFBitmap_BGRA_Premul;
 #endif
+    return FPDFBitmap_BGRA;
 }
 
 inline void bgraToRgbaInPlace(uint8_t* buf, int w, int h, int stride) {
@@ -85,16 +84,17 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
 
     FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
 #ifdef JPDFIUM_HAS_SKIA
-    FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
-                        static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
-    FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
-    FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, renderFlagsForScreen());
+    if (g_jpdfiumUseSkia) {
+        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
+                            static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
+        FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
+        FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, renderFlagsForScreen());
+        unpremulInPlace(out, w_px, h_px, w_px * 4);
+    } else {
+        FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
+    }
 #else
     FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
-#endif
-
-#ifdef JPDFIUM_HAS_SKIA
-    unpremulInPlace(out, w_px, h_px, w_px * 4);
 #endif
     bgraToRgbaInPlace(out, w_px, h_px, w_px * 4);
 

@@ -407,6 +407,16 @@ OUT_DIR="out/Release"
 #         the bridge links against at the consumer end. Build is fast and
 #         per-component, debugging is easier.
 #
+#   "skia" (experimental): the component build plus pdf_use_skia=true with
+#       pdf_use_agg=true, so the embedder can pick the renderer at init via
+#       jpdfium_init_ex(). Consumed by dispatching snapshot.yml with
+#       build_mode=skia; never the default.
+#
+#   "v8" / "xfa" (experimental, linux-x64 only): add PDF JavaScript
+#       (pdf_enable_v8=true) and, for xfa, the incomplete XFA forms engine
+#       (pdf_enable_xfa=true, implies V8). Large and slow to build; not
+#       consumed by any default workflow.
+#
 #   "static" (release-only, used by release.yml - release-size-optimized
 #       path):
 #         is_component_build=false + pdf_is_complete_lib=true → roll all of
@@ -430,11 +440,20 @@ case "$JPDFIUM_BUILD_MODE" in
     component)
         GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
+    skia)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    v8)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    xfa)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=true pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
     static)
         GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     *)
-        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
+        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static, skia, v8, xfa)" >&2
         exit 1
         ;;
 esac
@@ -597,6 +616,15 @@ if [ ! -f "${MAIN_LIB_PATH}" ]; then
     exit 1
 fi
 echo "  Main library: ${MAIN_LIB_PATH}"
+
+# Marker for consumers: this build includes the experimental Skia renderer,
+# selectable at runtime via jpdfium_init_ex(1). The header's
+# FPDF_RenderPageSkia declaration is guarded by PDF_USE_SKIA, which only the
+# PDFium build defines, so an outside probe cannot see it otherwise.
+if [ "$JPDFIUM_BUILD_MODE" = "skia" ]; then
+    : > "${TARGET_DIR}/lib/pdfium-use-skia"
+    echo "  Skia marker: ${TARGET_DIR}/lib/pdfium-use-skia"
+fi
 
 # Verify EPDF symbols are exported. nm flags differ by OS AND by whether
 # we built a .so/.dylib (dynamic symbols, -D / -gU) or a .a (defined

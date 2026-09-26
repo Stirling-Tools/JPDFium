@@ -223,6 +223,9 @@ int64_t g_next_flash = 88001;
 
 // Core Document Functions
 
+int32_t jpdfium_init_ex(int32_t) {
+    return 0;
+}
 int32_t jpdfium_init() {
     return JPDFIUM_OK;
 }

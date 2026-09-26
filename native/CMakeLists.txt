@@ -542,7 +542,16 @@ endif()
 if(JPDFIUM_USE_PDFIUM)
     include(CheckSymbolExists)
     set(CMAKE_REQUIRED_INCLUDES "${PDFIUM_INCLUDE_DIR}")
-    check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    # A Skia prebuild drops lib/pdfium-use-skia next to the library. The
+    # header's FPDF_RenderPageSkia declaration is guarded by PDF_USE_SKIA,
+    # which only the PDFium build itself defines, so a header probe cannot
+    # detect a Skia build from the outside; keep it as a fallback for
+    # consumers that define PDF_USE_SKIA themselves.
+    if(EXISTS "${PDFIUM_LIB_DIR}/pdfium-use-skia")
+        set(JPDFIUM_HAS_SKIA TRUE)
+    else()
+        check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    endif()
     if(NOT JPDFIUM_HAS_SKIA)
         message(STATUS "Skia check: FPDF_RenderPageSkia not found (using standard AGG renderer backend)")
     else()

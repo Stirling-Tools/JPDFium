@@ -135,6 +135,19 @@ struct PageWrapper {
     }
 };
 
+// Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
+// selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
+// render paths read this to pick the bitmap format and draw call.
+extern bool g_jpdfiumUseSkia;
+
+// Shared PDFium library init so every entry point that lazily initializes
+// uses the same renderer configuration. Returns JPDFIUM_OK, or
+// JPDFIUM_ERR_INVALID when Skia is requested from a non-Skia build.
+int jpdfium_init_library(int renderer);
+
+// Initialize once, preserving whatever renderer was already selected.
+void jpdfium_ensure_library();
+
 // Mandatory qpdf sanitize stage for redacted saves (jpdfium_sanitize.cpp).
 // Returns 0 and fills out/reportJson on success; -1 on failure.
 int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,

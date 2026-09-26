@@ -58,6 +58,11 @@ extern "C" {
 #define JPDFIUM_POSITION_BOTTOM_RIGHT 8
 
 JPDFIUM_EXPORT int32_t jpdfium_init(void);
+
+// Initialize PDFium with an explicit renderer: 0 = AGG (default), 1 = Skia.
+// Returns JPDFIUM_ERR_INVALID when Skia is requested from a build without it.
+// Must be called before any other bridge function (jpdfium_init does 0).
+JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer);
 JPDFIUM_EXPORT void jpdfium_destroy(void);
 
 // Raw handle extraction - allows direct FFM calls to PDFium functions.

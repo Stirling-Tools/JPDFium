@@ -77,7 +77,18 @@ public final class JpdfiumLib {
 
     static {
         NativeLoader.ensureLoaded();
-        int rc = JpdfiumH.jpdfium_init();
+        // Renderer selection is fixed for the JVM lifetime: -Djpdfium.renderer=skia
+        // (or JPDFIUM_RENDERER=skia) picks the experimental Skia backend when the
+        // native build includes it, otherwise AGG stays the default.
+        boolean wantSkia = "skia".equalsIgnoreCase(
+                System.getProperty("jpdfium.renderer",
+                        System.getenv().getOrDefault("JPDFIUM_RENDERER", "")));
+        int rc = wantSkia ? JpdfiumH.jpdfium_init_ex(1) : JpdfiumH.jpdfium_init();
+        if (wantSkia && rc != OK) {
+            System.err.println(
+                    "jpdfium: Skia renderer requested but this native build has no Skia; using AGG");
+            rc = JpdfiumH.jpdfium_init();
+        }
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
         // Native teardown must wait for in-flight calls or PDFium segfaults.
         // Platform thread required: virtual threads cannot be shutdown hooks.

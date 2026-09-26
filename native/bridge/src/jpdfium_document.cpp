@@ -33,9 +33,42 @@ FILE* safe_fopen_write(const char* path) {
 
 }  // namespace
 
-int32_t jpdfium_init() {
+bool g_jpdfiumUseSkia = false;
+
+namespace {
+bool g_libraryInitialized = false;
+}
+
+int jpdfium_init_library(int renderer) {
+#ifdef JPDFIUM_HAS_SKIA
+    FPDF_LIBRARY_CONFIG config{};
+    config.version = 4;
+    config.m_RendererType =
+        renderer == 1 ? FPDF_RENDERERTYPE_SKIA : FPDF_RENDERERTYPE_AGG;
+    FPDF_InitLibraryWithConfig(&config);
+    g_jpdfiumUseSkia = renderer == 1;
+#else
+    // Selecting Skia from a build without it crashes PDFium, so refuse.
+    if (renderer == 1) return JPDFIUM_ERR_INVALID;
     FPDF_InitLibrary();
+    g_jpdfiumUseSkia = false;
+#endif
+    g_libraryInitialized = true;
     return JPDFIUM_OK;
+}
+
+void jpdfium_ensure_library() {
+    if (!g_libraryInitialized) {
+        jpdfium_init_library(0);
+    }
+}
+
+int32_t jpdfium_init() {
+    return jpdfium_init_library(0);
+}
+
+int32_t jpdfium_init_ex(int32_t renderer) {
+    return jpdfium_init_library(renderer);
 }
 
 void jpdfium_destroy() {
