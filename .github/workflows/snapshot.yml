@@ -700,8 +700,23 @@ jobs:
           fi
       - name: Fetch prebuilt libvips (Windows)
         if: startsWith(matrix.platform, 'windows-')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
+          # A pinned prebuild (native/vips.version) carries libvips with PDFium
+          # linked in and without GPL poppler/fftw. An empty pin keeps the
+          # upstream MXE zip, which ships both.
+          PIN=$(grep -v '^#' native/vips.version | grep -v '^$' | head -n1 || true)
+          if [ -n "$PIN" ]; then
+            ASSET="vips-${{ matrix.platform }}.zip"
+            rm -rf /tmp/vips-win && mkdir -p /tmp/vips-win
+            gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$ASSET" --dir /tmp/vips-win
+            unzip -q "/tmp/vips-win/$ASSET" -d /tmp/vips-win/extracted
+            echo "VIPS_WIN_DIST=/tmp/vips-win/extracted" >> "$GITHUB_ENV"
+            exit 0
+          fi
           # Pinned on purpose: querying releases/latest hits the anonymous
           # GitHub API rate limit on shared runners (HTTP 403) and fails the
           # leg. Bump deliberately, like the PDFium pin.

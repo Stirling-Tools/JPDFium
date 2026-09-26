@@ -1,0 +1,13 @@
+# This file pins the prebuilt libvips release that the Windows vips jobs may
+# consume instead of the upstream libvips/build-win64-mxe zip.
+#
+# The value must be the tag of a GitHub Release in this repository produced by
+# the `Prebuild libvips` workflow (.github/workflows/prebuild-vips.yml). That
+# release carries vips-windows-<arch>.zip: a bundled libvips (bin/ layout) with
+# PDFium linked in and without GPL poppler/fftw.
+#
+# Format: vips-YYYYMMDD-<shortSha>
+# Example: vips-20260927-abcdef0
+#
+# Empty (the default) means: keep consuming the upstream MXE zip. Do not set
+# this until a prebuild run has produced a validated asset.
