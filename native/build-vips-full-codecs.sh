@@ -6,18 +6,20 @@
 # The pinned PDFium prebuild (native/pdfium) is wired in via a generated
 # pdfium.pc so libvips' pdfload renders PDFs with the same BSD-licensed
 # renderer as the core bridge instead of GPL poppler. The permissive loaders
-# (librsvg, OpenEXR, libraw, libspng, highway) are enabled to match the
-# upstream Windows "all" bundle. cfitsio is skipped: the distro build drags in
-# the whole curl/gnutls/krb5/ldap closure. ImageMagick stays off: apt's IM6
-# links GPL-3 liblqr and brew's IM7 loads its coders from module files that
-# are not relocatable into the bundle without MAGICK_CODER_MODULE_PATH; a
-# from-source IM7 built --without-modules is the follow-up.
+# (OpenEXR, libraw, libspng, highway) are enabled to match the upstream
+# Windows "all" bundle. cfitsio is skipped: the distro build drags in the
+# whole curl/gnutls/krb5/ldap closure. ImageMagick stays off: apt's IM6 links
+# GPL-3 liblqr and brew's IM7 loads its coders from module files that are not
+# relocatable into the bundle without MAGICK_CODER_MODULE_PATH; a from-source
+# IM7 built --without-modules is the follow-up. librsvg is dropped: its cairo/
+# gdk-pixbuf chain hard-links X11 (4-5 MB on a headless server).
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
 
 VIPS_TAG="${VIPS_VERSION:-}"
 LIBHEIF_TAG="${LIBHEIF_VERSION:-}"
+AOM_TAG="${AOM_VERSION:-v3.15.1}"
 case "$(uname -s)" in
     Linux*)
         OS=linux
@@ -86,8 +88,8 @@ install_deps() {
             libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
             libopenjp2-7-dev \
-            librsvg2-dev libopenexr-dev libraw-dev \
-            libspng-dev libhwy-dev \
+            libopenexr-dev libraw-dev \
+            libspng-dev libhwy-dev lld \
             zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
     else
         brew install meson ninja pkg-config cmake \
@@ -95,8 +97,57 @@ install_deps() {
             jpeg-xl aom libde265 kvazaar \
             webp libpng jpeg-turbo libtiff \
             openjpeg \
-            librsvg openexr libraw libspng highway
+            openexr libraw libspng highway nasm
     fi
+}
+
+build_aom() {
+    # macOS only: brew's aom links libvmaf (~1 MB of video-quality code that
+    # AVIF never uses). The apt build is vmaf-free already. Install under
+    # PREFIX/opt so the bundler's /opt/homebrew/opt/*/lib (or /usr/local/opt)
+    # rpath search finds the @rpath install name, and brew's aom is untouched.
+    [ "$OS" = darwin ] || return 0
+    local tag="${AOM_TAG:-v3.15.1}"
+    local prefix="$PREFIX/opt/aom-${tag#v}"
+    echo "==> build-vips-full-codecs.sh: building aom ${tag} (no vmaf) -> $prefix"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    curl -fsSL --retry 3 --retry-delay 3 \
+        "https://aomedia.googlesource.com/aom/+archive/${tag}.tar.gz" \
+        -o "$work/aom.tar.gz" \
+        || { echo "build-vips-full-codecs.sh: aom download failed" >&2; exit 1; }
+    mkdir -p "$work/src"
+    tar -xzf "$work/aom.tar.gz" -C "$work/src"
+
+    local arch_args=()
+    if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
+        arch_args=("-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES")
+    fi
+    cmake -S "$work/src" -B "$work/build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$prefix" \
+        -DBUILD_SHARED_LIBS=1 \
+        -DENABLE_TESTS=0 -DENABLE_EXAMPLES=0 -DENABLE_TOOLS=0 -DENABLE_DOCS=0 \
+        -DCONFIG_TUNE_VMAF=0 \
+        ${arch_args[@]+"${arch_args[@]}"} \
+        || { echo "build-vips-full-codecs.sh: aom cmake configure failed" >&2; exit 1; }
+
+    local nproc
+    nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+    cmake --build "$work/build" --parallel "$nproc" \
+        || { echo "build-vips-full-codecs.sh: aom build failed" >&2; exit 1; }
+    cmake --install "$work/build"
+
+    if otool -L "$prefix/lib/libaom.3.dylib" 2>/dev/null | grep -qi vmaf; then
+        echo "build-vips-full-codecs.sh: aom still links vmaf" >&2
+        exit 1
+    fi
+    # Make libheif and libvips pick this aom over brew's.
+    export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export CMAKE_PREFIX_PATH="$prefix:${CMAKE_PREFIX_PATH:-}"
+    echo "==> build-vips-full-codecs.sh: aom installed (vmaf-free)"
 }
 
 build_kvazaar() {
@@ -271,23 +322,40 @@ build_vips() {
     # Wire the pinned PDFium prebuild (fetch-prebuilt-pdfium.sh extracts it
     # into native/pdfium) into libvips' pdfload. libvips only checks
     # pdfium >= 4200, so the placeholder version just has to clear that gate.
+    # The static archive is preferred: linking it whole-archive with
+    # gc-sections/dead-strip keeps only the used PDFium code and avoids the
+    # component libs (icuuc/harfbuzz/abseil), which duplicate the ones the
+    # rest of the stack links.
     local pdfium_flag="-Dpdfium=disabled"
     if [ -f "$SCRIPT_DIR/pdfium/include/fpdfview.h" ]; then
         local pdfium_pc="$work/pdfium-pc"
+        local pdfium_static="$SCRIPT_DIR/pdfium/lib/libpdfium.a"
         mkdir -p "$pdfium_pc"
-        cat > "$pdfium_pc/pdfium.pc" <<EOF
-prefix=$SCRIPT_DIR/pdfium
-exec_prefix=\${prefix}
-libdir=\${exec_prefix}/lib
-includedir=\${prefix}/include
-
-Name: pdfium
-Description: pdfium
-Version: 9999
-Requires:
-Libs: -L\${libdir} -lpdfium
-Cflags: -I\${includedir}
-EOF
+        {
+            echo "prefix=$SCRIPT_DIR/pdfium"
+            echo 'exec_prefix=${prefix}'
+            echo 'libdir=${exec_prefix}/lib'
+            echo 'includedir=${prefix}/include'
+            echo
+            echo "Name: pdfium"
+            echo "Description: pdfium"
+            echo "Version: 9999"
+            echo "Requires:"
+            if [ -f "$pdfium_static" ]; then
+                case "$OS" in
+                    darwin)
+                        echo "Libs: -L\${libdir} -Wl,-dead_strip -Wl,-force_load,$pdfium_static -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework AppKit -framework Security -framework SystemConfiguration"
+                        ;;
+                    *)
+                        echo "Libs: -L\${libdir} -fuse-ld=lld -Wl,--gc-sections -Wl,--whole-archive,$pdfium_static,--no-whole-archive -lpthread -ldl -lm -lstdc++"
+                        ;;
+                esac
+                echo "==> build-vips-full-codecs.sh: linking the static PDFium archive" >&2
+            else
+                echo "Libs: -L\${libdir} -lpdfium"
+            fi
+            echo "Cflags: -I\${includedir}"
+        } > "$pdfium_pc/pdfium.pc"
         export PKG_CONFIG_PATH="$pdfium_pc:${PKG_CONFIG_PATH:-}"
         pdfium_flag="-Dpdfium=enabled"
         echo "==> build-vips-full-codecs.sh: libvips will load PDFs with PDFium ($SCRIPT_DIR/pdfium)"
@@ -311,11 +379,12 @@ EOF
         --prefix="$PREFIX" --libdir=lib \
         --buildtype=release -Db_lto=true \
         -Dauto_features=disabled \
+        -Dc_args="-ffunction-sections -fdata-sections" \
         -Ddeprecated=false -Dexamples=false \
         -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
         -Dcplusplus=false \
         "$pdfium_flag" "$magick_flag" \
-        -Drsvg=enabled -Dopenexr=enabled -Draw=enabled \
+        -Drsvg=disabled -Dopenexr=enabled -Draw=enabled \
         -Dspng=enabled -Dhighway=enabled \
         -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
@@ -340,6 +409,7 @@ EOF
 
 resolve_versions
 install_deps
+build_aom
 build_kvazaar
 build_libtiff
 build_libheif

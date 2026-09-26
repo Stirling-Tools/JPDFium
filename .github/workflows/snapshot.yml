@@ -109,7 +109,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-icu-trimmed
-          path: native/dist/windows-x64/icudt78.dll
+          path: |
+            native/dist/windows-x64/icudt78.dll
+            native/dist/windows-arm64/icudt78.dll
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
@@ -482,12 +484,12 @@ jobs:
         # 33 MB icudt78.dll) and BEFORE the bundler so the small trimmed copy
         # wins. download-artifact@v4 extracts on top, overwriting the larger
         # one.
-        if: matrix.platform == 'windows-x64'
+        if: startsWith(matrix.platform, 'windows-')
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
         continue-on-error: true        # missing artifact -> stay with PDFium's full 33 MB icudt78.dll
         with:
           name: windows-icu-trimmed
-          path: native/dist/windows-x64/
+          path: native/dist/
 
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl'
@@ -643,6 +645,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Static archive: libvips links it whole-archive so the component
+          # ICU/harfbuzz/abseil duplicates stay out of the vips bundle.
+          JPDFIUM_BUILD_MODE: static
         run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: x86_64 brew bootstrap (darwin-x64)
