@@ -70,9 +70,16 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
-    # libpoppler is GPL-2.0 and nothing staged links it (only its own
-    # wrapper and the unstaged vips-poppler plugin do), so leave it out.
-    rm -f "$DIST"/libpoppler*.dll
+    # The upstream MXE zip is GPL-contaminated: libpoppler (unused) and
+    # libfftw3 (unused) can be dropped, but libimagequant is linked into
+    # libvips-42.dll. Windows vips must come from the GPL-free source
+    # prebuild (prebuild-vips.yml); this path is a hard error now.
+    rm -f "$DIST"/libpoppler*.dll "$DIST"/libfftw3*.dll
+    if ls "$DIST"/libimagequant*.dll >/dev/null 2>&1; then
+        echo "ERROR: upstream vips zip links GPL-3 libimagequant." >&2
+        echo "Use the pinned GPL-free Windows prebuild (native/vips.version)." >&2
+        exit 1
+    fi
     # The JXL codec ships as a loadable module, not linked into libvips.
     if [ -f "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" ]; then
         cp -v "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" "$DIST"/

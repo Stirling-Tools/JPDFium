@@ -607,8 +607,13 @@ jobs:
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel   }
           - { platform: darwin-arm64, runner: macos-14         }
-          - { platform: windows-x64,  runner: windows-latest   }
-          - { platform: windows-arm64, runner: windows-11-arm  }
+          # Windows vips is disabled until the GPL-free source prebuild is
+          # pinned (native/vips.version): the upstream MXE zip links GPL-3
+          # libimagequant and ships GPL fftw/poppler. See prebuild-vips.yml.
+          # - { platform: windows-x64,  runner: windows-latest   }
+          # - { platform: windows-arm64, runner: windows-11-arm  }
+          # - { platform: windows-x64,  runner: windows-latest   }
+          # - { platform: windows-arm64, runner: windows-11-arm  }
     runs-on: ${{ matrix.runner }}
     continue-on-error: true
     defaults:

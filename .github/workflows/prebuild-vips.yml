@@ -6,8 +6,9 @@ name: Prebuild libvips (Windows)
 # libvips/build-win64-mxe zip contains both and cannot be relinked).
 #
 # Publishes vips-windows-<arch>.zip (a bundled bin/ layout) to a prerelease.
-# Wiring this asset into release.yml/snapshot.yml is a follow-up: only do it
-# once a run here is green and the smoke proves vips pdfload works.
+# This is REQUIRED for Windows vips: the upstream MXE zip links GPL-3
+# libimagequant and ships GPL fftw/poppler, so those legs are disabled until
+# a run here is green and native/vips.version pins the asset.
 
 on:
   workflow_dispatch:
