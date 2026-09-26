@@ -30,11 +30,10 @@ JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
 case "$JPDFIUM_BUILD_MODE" in
     component) SUFFIX="" ;;
     static)    SUFFIX="-static" ;;
-    skia)      SUFFIX="-skia" ;;
     v8)        SUFFIX="-v8" ;;
     xfa)       SUFFIX="-xfa" ;;
     *)
-        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static, skia, v8, xfa)" >&2
+        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static, v8, xfa)" >&2
         exit 1
         ;;
 esac

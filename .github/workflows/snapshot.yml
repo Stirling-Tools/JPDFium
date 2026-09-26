@@ -334,7 +334,9 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           # Default to component (fast PR iteration). Manual workflow_dispatch
           # can override to "static" to sanity-check the release.yml path.
-          JPDFIUM_BUILD_MODE: ${{ inputs.build_mode || 'component' }}
+          # build_mode=skia selects the Skia *renderer*, not a different
+          # asset: every prebuild carries both backends now.
+          JPDFIUM_BUILD_MODE: ${{ inputs.build_mode == 'skia' && 'component' || inputs.build_mode || 'component' }}
         run: |
           # A missing musl prebuild is an expected state until Prebuild PDFium
           # is green. Record it as an output so the musl steps skip cleanly

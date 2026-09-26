@@ -59,9 +59,16 @@ extern "C" {
 
 JPDFIUM_EXPORT int32_t jpdfium_init(void);
 
-// Initialize PDFium with an explicit renderer: 0 = AGG (default), 1 = Skia.
-// Returns JPDFIUM_ERR_INVALID when Skia is requested from a build without it.
-// Must be called before any other bridge function (jpdfium_init does 0).
+// Renderer selection for jpdfium_init_ex().
+// AUTO prefers Skia when the build includes it, else AGG.
+#define JPDFIUM_RENDERER_AUTO (-1)
+#define JPDFIUM_RENDERER_AGG 0
+#define JPDFIUM_RENDERER_SKIA 1
+
+// Initialize PDFium with an explicit renderer (JPDFIUM_RENDERER_*). Skia is
+// the default when present; pass AGG to force the legacy backend. Returns
+// JPDFIUM_ERR_INVALID when SKIA is requested from a build without it.
+// Must be called before any other bridge function.
 JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer);
 JPDFIUM_EXPORT void jpdfium_destroy(void);
 

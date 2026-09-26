@@ -77,16 +77,23 @@ public final class JpdfiumLib {
 
     static {
         NativeLoader.ensureLoaded();
-        // Renderer selection is fixed for the JVM lifetime: -Djpdfium.renderer=skia
-        // (or JPDFIUM_RENDERER=skia) picks the experimental Skia backend when the
-        // native build includes it, otherwise AGG stays the default.
-        boolean wantSkia = "skia".equalsIgnoreCase(
-                System.getProperty("jpdfium.renderer",
-                        System.getenv().getOrDefault("JPDFIUM_RENDERER", "")));
-        int rc = wantSkia ? JpdfiumH.jpdfium_init_ex(1) : JpdfiumH.jpdfium_init();
-        if (wantSkia && rc != OK) {
-            System.err.println(
-                    "jpdfium: Skia renderer requested but this native build has no Skia; using AGG");
+        // Renderer selection is fixed for the JVM lifetime. Skia is the default
+        // when the native build includes it; -Djpdfium.renderer=agg (or
+        // JPDFIUM_RENDERER=agg) forces the legacy AGG backend, =skia forces
+        // Skia with an AGG fallback on builds that lack it.
+        String renderer = System.getProperty(
+                "jpdfium.renderer", System.getenv().getOrDefault("JPDFIUM_RENDERER", ""));
+        int rc;
+        if ("agg".equalsIgnoreCase(renderer)) {
+            rc = JpdfiumH.jpdfium_init_ex(0);
+        } else if ("skia".equalsIgnoreCase(renderer)) {
+            rc = JpdfiumH.jpdfium_init_ex(1);
+            if (rc != OK) {
+                System.err.println(
+                        "jpdfium: Skia renderer requested but this native build has no Skia; using AGG");
+                rc = JpdfiumH.jpdfium_init();
+            }
+        } else {
             rc = JpdfiumH.jpdfium_init();
         }
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
