@@ -14,6 +14,17 @@ apk add --no-cache bash build-base clang lld cmake ninja pkgconf \
   rust cargo github-cli \
   py3-pip py3-httplib2 py3-six
 
+# gsutil (depot_tools) rejects Python 3.14+, and Alpine's python3 moves with
+# the image tag, so pin a 3.12 interpreter when the default is too new.
+if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info < (3, 14) else 1)' 2>/dev/null; then
+  apk add --no-cache 'python3~3.12' >/dev/null 2>&1 || true
+  if command -v python3.12 >/dev/null 2>&1; then
+    CLOUDSDK_PYTHON="$(command -v python3.12)"
+    export CLOUDSDK_PYTHON
+    echo "==> musl.sh: pinned gsutil to $(python3.12 --version 2>&1)"
+  fi
+fi
+
 stage_and_bundle() {
     local plat="$1"
     mkdir -p "native/dist/$plat"
@@ -51,6 +62,59 @@ for step in "$@"; do
             LD_LIBRARY_PATH=native/pdfium/lib /tmp/pdfium_smoke \
                 native/pdfium/lib/libpdfium.so \
                 jpdfium/src/test/resources/pdfs/redact/redact-test-empty.pdf
+            ;;
+        vips)
+            echo "==> musl.sh [$PLATFORM] vips"
+            export JPDFIUM_LIBC=musl
+            # Component musl PDFium for vips pdfload (from the pinned PDFium
+            # release); when absent the build proceeds without PDF loading.
+            bash native/fetch-prebuilt-pdfium.sh "$PLATFORM" || true
+            bash native/build-vips-full-codecs.sh
+            # Alpine's busybox ldd output does not match the glibc bundler, so
+            # stage the dependency closure with readelf instead.
+            dist="native/dist/vips-$PLATFORM"
+            rm -rf "$dist"; mkdir -p "$dist"
+            vips_so=$(ls /usr/local/lib/libvips.so.42* 2>/dev/null | head -1 || ls /usr/local/lib/libvips.so* | head -1)
+            cp -L "$vips_so" "$dist/"
+            cp -L /usr/local/lib/libkvazaar.so* "$dist/" 2>/dev/null || true
+            queue=("$dist/$(basename "$vips_so")")
+            skip='libc.musl-|^libc\.so|^ld-musl|^libgcc_s\.so|^libstdc\+\+\.so|^libm\.so|^libdl\.so|^libpthread\.so|^librt\.so|^libresolv\.so'
+            while [ "${#queue[@]}" -gt 0 ]; do
+                f="${queue[0]}"; queue=("${queue[@]:1}")
+                needed=$(readelf -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+                for n in $needed; do
+                    echo "$n" | grep -qE "$skip" && continue
+                    [ -e "$dist/$n" ] && continue
+                    for d in /usr/local/lib /usr/lib /lib; do
+                        if [ -e "$d/$n" ]; then
+                            cp -L "$d/$n" "$dist/"
+                            queue+=("$dist/$n")
+                            break
+                        fi
+                    done
+                done
+            done
+            for f2 in "$dist"/lib*.so*; do
+                [ -f "$f2" ] || continue
+                patchelf --set-rpath '$ORIGIN' "$f2" 2>/dev/null || true
+                # The lean gate rejects unstripped bundles (kvazaar ships with
+                # a full symtab).
+                strip --strip-unneeded "$f2" 2>/dev/null || true
+            done
+            bash native/check-no-execstack.sh "$dist"
+            echo "--- staged ($PLATFORM) ---"; ls -la "$dist"
+            # Smoke the bundled dist with the CLI installed in this container.
+            export LD_LIBRARY_PATH="$PWD/native/dist/vips-$PLATFORM:/usr/local/lib"
+            /usr/local/bin/vips --version
+            /usr/local/bin/vips black out.png 64 64
+            /usr/local/bin/vips jpegsave out.png out.jpg
+            /usr/local/bin/vips webpsave out.png out.webp
+            /usr/local/bin/vips heifsave out.png out.heic
+            /usr/local/bin/vips heifsave out.png out.avif
+            /usr/local/bin/vips jxlsave out.png out.jxl
+            /usr/local/bin/vips jp2ksave out.png out.jp2
+            /usr/local/bin/vips tiffsave out.png out.tif
+            /usr/local/bin/vipsheader out.png out.jpg out.webp out.heic out.avif out.jxl out.jp2 out.tif
             ;;
         natives)
             echo "==> musl.sh [$PLATFORM] natives"
