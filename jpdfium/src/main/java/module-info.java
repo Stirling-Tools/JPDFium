@@ -24,6 +24,10 @@ module stirling.software.jpdfium {
     exports stirling.software.jpdfium.doc;
     // Returned by public panama API (renderPageView) - exported so consumers can use the result
     exports stirling.software.jpdfium.internal;
+    // Image codec SPI: jpdfium-vips registers a libvips-backed implementation
+    exports stirling.software.jpdfium.spi;
+
+    uses stirling.software.jpdfium.spi.ImageCodec;
 
     // Standard library requirements
     requires transitive java.desktop;      // java.awt.image.BufferedImage surfaces in the public API
