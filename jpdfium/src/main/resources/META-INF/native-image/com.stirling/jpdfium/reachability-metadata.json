@@ -1615,6 +1615,16 @@
           "void*",
           "void*"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jint",
+          "void*",
+          "jlong",
+          "void*"
+        ]
       }
     ],
     "upcalls": [
