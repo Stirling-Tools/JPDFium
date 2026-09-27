@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.NativeGuard;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -323,6 +324,33 @@ public final class EmbedPdfAnnotations {
         finally { closeAnnot(annot); }
     }
 
+
+    /**
+     * Set FreeText appearance from a registered font id.
+     *
+     * @param page   raw FPDF_PAGE
+     * @param index  annotation index
+     * @param fontId id from font registration
+     * @param size   font size in points
+     */
+    public static void setFreeTextFont(MemorySegment page, int index, int fontId, float size,
+                                       int r, int g, int b) {
+        if (EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont == null) {
+            throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont not in this native build");
+        }
+        NativeGuard.acquire();
+        try {
+            MemorySegment annot = openAnnot(page, index);
+            try {
+                int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont.invokeExact(
+                        annot, fontId, size, r, g, b);
+                if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont failed");
+            } catch (JPDFiumException e) {
+                throw e;
+            } catch (Throwable t) { throw new JPDFiumException(t); }
+            finally { closeAnnot(annot); }
+        } finally { NativeGuard.release(); }
+    }
 
     /**
      * Set text alignment on a FreeText annotation.

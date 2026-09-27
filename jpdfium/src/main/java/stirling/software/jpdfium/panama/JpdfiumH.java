@@ -3226,6 +3226,134 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_font_covers_text {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_font_covers_text");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_font_covers_text(const uint8_t *data, int64_t len, const int32_t *codepoints, int32_t count, uint8_t *out_covered)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_font_covers_text$descriptor() {
+        return jpdfium_font_covers_text.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_font_covers_text(const uint8_t *data, int64_t len, const int32_t *codepoints, int32_t count, uint8_t *out_covered)
+     * }
+     */
+    public static MethodHandle jpdfium_font_covers_text$handle() {
+        return jpdfium_font_covers_text.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_font_covers_text(const uint8_t *data, int64_t len, const int32_t *codepoints, int32_t count, uint8_t *out_covered)
+     * }
+     */
+    public static MemorySegment jpdfium_font_covers_text$address() {
+        return jpdfium_font_covers_text.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_font_covers_text(const uint8_t *data, int64_t len, const int32_t *codepoints, int32_t count, uint8_t *out_covered)
+     * }
+     */
+    public static int jpdfium_font_covers_text(MemorySegment data, long len, MemorySegment codepoints, int count, MemorySegment out_covered) {
+        var mh$ = jpdfium_font_covers_text.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_font_covers_text", data, len, codepoints, count, out_covered);
+            }
+            return (int)mh$.invokeExact(data, len, codepoints, count, out_covered);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_text_shape {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_text_shape");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_text_shape(const uint8_t *font_data, int64_t font_len, const char *utf8_text, float font_size, char **json)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_text_shape$descriptor() {
+        return jpdfium_text_shape.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_text_shape(const uint8_t *font_data, int64_t font_len, const char *utf8_text, float font_size, char **json)
+     * }
+     */
+    public static MethodHandle jpdfium_text_shape$handle() {
+        return jpdfium_text_shape.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_text_shape(const uint8_t *font_data, int64_t font_len, const char *utf8_text, float font_size, char **json)
+     * }
+     */
+    public static MemorySegment jpdfium_text_shape$address() {
+        return jpdfium_text_shape.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_text_shape(const uint8_t *font_data, int64_t font_len, const char *utf8_text, float font_size, char **json)
+     * }
+     */
+    public static int jpdfium_text_shape(MemorySegment font_data, long font_len, MemorySegment utf8_text, float font_size, MemorySegment json) {
+        var mh$ = jpdfium_text_shape.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_text_shape", font_data, font_len, utf8_text, font_size, json);
+            }
+            return (int)mh$.invokeExact(font_data, font_len, utf8_text, font_size, json);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_font_fix_tounicode {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

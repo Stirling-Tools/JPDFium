@@ -260,6 +260,20 @@ JPDFIUM_EXPORT int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, u
 //                "units_per_em":2048,"has_kerning":true,"is_subset":true}
 JPDFIUM_EXPORT int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json);
 
+// Per-codepoint glyph coverage using the font's charmap.
+// out_covered[i] is 1 when the font has a glyph for codepoints[i], else 0.
+// Used to decide rewrite-vs-regenerate before editing text with a font.
+JPDFIUM_EXPORT int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len,
+                                                const int32_t* codepoints, int32_t count,
+                                                uint8_t* out_covered);
+
+// Shape UTF-8 text with a font program via HarfBuzz.
+// Returns a flat JSON array, one object per glyph:
+// [{"g":gid,"ax":x_advance,"ay":y_advance,"dx":x_offset,"dy":y_offset,"cluster":byte_index}]
+// Advances and offsets are 26.6 fractional points at font_size. Caller frees *json.
+JPDFIUM_EXPORT int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len,
+                                          const char* utf8_text, float font_size, char** json);
+
 // Fix /ToUnicode CMap for all fonts on a page using the font's internal cmap table.
 // This is the most critical step for reliable auto-redact: wrong ToUnicode -> wrong text
 // extraction -> patterns miss -> redact silently fails.
