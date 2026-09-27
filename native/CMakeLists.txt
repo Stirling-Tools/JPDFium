@@ -201,7 +201,8 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
-        bridge/src/jpdfium_openjpeg.cpp)
+        bridge/src/jpdfium_openjpeg.cpp
+        bridge/src/jpdfium_signature.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
@@ -213,6 +214,27 @@ if(JPDFIUM_USE_PDFIUM)
     else()
         target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Werror
                                -Wno-ignored-qualifiers)
+    endif()
+
+    # Size/perf: only JPDFIUM_EXPORT symbols leave the bridge, and the linker
+    # may drop bridge and static-dependency code the JVM never calls. PDFium's
+    # FPDF_* exports keep default visibility so the FFM bindings resolve them.
+    if(MSVC)
+        target_compile_options(jpdfium PRIVATE /Gy /Gw)
+        target_link_options(jpdfium PRIVATE /OPT:REF /OPT:ICF)
+    else()
+        target_compile_options(jpdfium PRIVATE -fvisibility=hidden
+                               -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(jpdfium PRIVATE "-Wl,-dead_strip" "-Wl,-x")
+        else()
+            target_link_options(jpdfium PRIVATE "-Wl,--gc-sections")
+        endif()
+    endif()
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _jpdfium_ipo_ok OUTPUT _jpdfium_ipo_msg)
+    if(_jpdfium_ipo_ok AND CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT _jpdfium_san_flags)
+        set_property(TARGET jpdfium PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
 
     if(PDFIUM_LINK_MODE STREQUAL "static")
@@ -520,7 +542,16 @@ endif()
 if(JPDFIUM_USE_PDFIUM)
     include(CheckSymbolExists)
     set(CMAKE_REQUIRED_INCLUDES "${PDFIUM_INCLUDE_DIR}")
-    check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    # A Skia prebuild drops lib/pdfium-use-skia next to the library. The
+    # header's FPDF_RenderPageSkia declaration is guarded by PDF_USE_SKIA,
+    # which only the PDFium build itself defines, so a header probe cannot
+    # detect a Skia build from the outside; keep it as a fallback for
+    # consumers that define PDF_USE_SKIA themselves.
+    if(EXISTS "${PDFIUM_LIB_DIR}/pdfium-use-skia")
+        set(JPDFIUM_HAS_SKIA TRUE)
+    else()
+        check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    endif()
     if(NOT JPDFIUM_HAS_SKIA)
         message(STATUS "Skia check: FPDF_RenderPageSkia not found (using standard AGG renderer backend)")
     else()
