@@ -13,3 +13,5 @@ EXPORTS
     jpdfium_rust_resize_pixels
     jpdfium_rust_compress_png
     jpdfium_rust_free
+    jpdfium_rust_svg_to_rgba
+    jpdfium_has_rust
