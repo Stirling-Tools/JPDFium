@@ -29,6 +29,15 @@ EMBEDPDF_BRANCH="embedpdf/main"
 if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     export VPYTHON_BYPASS="manually managed python not supported by chrome operations"
     echo "  musl/Alpine: VPYTHON_BYPASS set - gclient will use the system python3"
+    # gsutil's own check rejects Python 3.14+; relax it when the interpreter
+    # could not be pinned to a supported version.
+    depot_dir="$(dirname "$(command -v gclient 2>/dev/null || echo .)")"
+    for g in "$depot_dir/third_party/gsutil/gsutil" "$depot_dir/gsutil.py"; do
+        [ -f "$g" ] || continue
+        grep -q "gsutil requires Python version" "$g" 2>/dev/null || continue
+        sed -i 's/(3, 14)/(3, 99)/g; s/(3,14)/(3,99)/g' "$g" 2>/dev/null || true
+        echo "  musl/Alpine: relaxed the gsutil Python bound in $g"
+    done
 fi
 
 # ---------- argument handling ----------
@@ -398,6 +407,15 @@ OUT_DIR="out/Release"
 #         the bridge links against at the consumer end. Build is fast and
 #         per-component, debugging is easier.
 #
+#   "v8" / "xfa" (experimental, linux-x64 only): add PDF JavaScript
+#       (pdf_enable_v8=true) and, for xfa, the incomplete XFA forms engine
+#       (pdf_enable_xfa=true, implies V8). Large and slow to build; not
+#       consumed by any default workflow.
+#
+# All modes enable the Skia renderer alongside AGG (pdf_use_skia=true
+# pdf_use_agg=true). Skia is the default at runtime (jpdfium_init() picks it
+# when present); jpdfium_init_ex(0) forces AGG.
+#
 #   "static" (release-only, used by release.yml - release-size-optimized
 #       path):
 #         is_component_build=false + pdf_is_complete_lib=true → roll all of
@@ -419,13 +437,19 @@ OUT_DIR="out/Release"
 JPDFIUM_BUILD_MODE="${JPDFIUM_BUILD_MODE:-component}"
 case "$JPDFIUM_BUILD_MODE" in
     component)
-        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    v8)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        ;;
+    xfa)
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=true pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     static)
-        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=false pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     *)
-        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static)" >&2
+        echo "ERROR: unknown JPDFIUM_BUILD_MODE=$JPDFIUM_BUILD_MODE (expected: component, static, v8, xfa)" >&2
         exit 1
         ;;
 esac
@@ -588,6 +612,13 @@ if [ ! -f "${MAIN_LIB_PATH}" ]; then
     exit 1
 fi
 echo "  Main library: ${MAIN_LIB_PATH}"
+
+# Marker for consumers: every mode builds with the Skia renderer, which is
+# the default at runtime (jpdfium_init()). The header's FPDF_RenderPageSkia
+# declaration is guarded by PDF_USE_SKIA, which only the PDFium build defines,
+# so an outside probe cannot see it otherwise.
+: > "${TARGET_DIR}/lib/pdfium-use-skia"
+echo "  Skia marker: ${TARGET_DIR}/lib/pdfium-use-skia"
 
 # Verify EPDF symbols are exported. nm flags differ by OS AND by whether
 # we built a .so/.dylib (dynamic symbols, -D / -gU) or a .a (defined
