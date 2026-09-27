@@ -26,7 +26,7 @@ jobs:
           # Alpine containers on arm64 runners, so a container-based probe leg
           # would need a full docker-run pipeline for little added signal.
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15-intel
           - platform: darwin-arm64
             runner: macos-14
           - platform: windows-x64
@@ -88,11 +88,8 @@ jobs:
           ls -R ~/.m2/repository/com/stirling/jpdfium-natives-${{ matrix.platform }}/ | head -n 50
 
       - name: Functional smoke test (load native)
-        # darwin-x64 is cross-compiled on an arm64 (macos-14) host: the arm64
-        # JVM cannot load the x64 dylib, and NativeLoader resolves the host
-        # arch (darwin-arm64). Skip it, matching snapshot.yml's darwin-x64
-        # guard. The "Verify artifact contents" step already checks jar wiring.
-        if: matrix.platform != 'darwin-x64'
+        # darwin-x64 runs natively on macos-15-intel, so its x64 JVM loads the
+        # x64 dylib; every probe leg gets the same load smoke.
         run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
 
       - name: Symbol export check
