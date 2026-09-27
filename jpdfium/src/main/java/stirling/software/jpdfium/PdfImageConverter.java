@@ -8,21 +8,17 @@ import stirling.software.jpdfium.model.Position;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
+import stirling.software.jpdfium.internal.ImageCodecs;
+
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -59,11 +55,6 @@ import java.util.Set;
  * }</pre>
  */
 public final class PdfImageConverter {
-
-    static {
-        // Ensure ImageIO is initialized with all providers
-        ImageIO.scanForPlugins();
-    }
 
     private PdfImageConverter() {}
 
@@ -210,11 +201,14 @@ public final class PdfImageConverter {
      * @throws IOException if reading images fails
      */
     public static PdfDocument imagesToPdf(List<Path> imagePaths, ImageToPdfOptions options) throws IOException {
-        List<BufferedImage> images = new ArrayList<>();
+        // Decode through the active codec (libvips when jpdfium-vips is on the
+        // classpath, which also adds HEIC/HEIF/AVIF/JXL/JPEG2000 inputs), with
+        // ImageIO as the fallback.
+        List<byte[]> frames = new ArrayList<>(imagePaths.size());
         for (Path path : imagePaths) {
-            images.add(ImageIO.read(path.toFile()));
+            frames.addAll(ImageCodecs.decodeFrames(path));
         }
-        return imagesToPdfInternal(images, options);
+        return embedRgbaImages(frames, options);
     }
 
     /**
@@ -237,7 +231,7 @@ public final class PdfImageConverter {
         }
         List<byte[]> frames = new ArrayList<>(images.size());
         for (BufferedImage image : images) {
-            frames.add(bufferedImageToRgba(image));
+            frames.add(ImageCodecs.frameFromImage(image));
         }
         return embedRgbaImages(frames, options);
     }
@@ -246,10 +240,10 @@ public final class PdfImageConverter {
      * Embed pre-decoded RGBA frames into a new PDF document. Each frame must
      * carry the 8-byte {@code [width LE][height LE]} header the C bridge's
      * {@code format=3} path reads, followed by {@code width*height*4} RGBA bytes
-     * (the layout {@link #bufferedImageToRgba} produces). Shared by
-     * {@link #imagesToPdfInternal} (ImageIO decode) and the optional
-     * {@code jpdfium-vips} {@code VipsImageToPdf} (libvips decode) so the
-     * page-size/position/embed logic lives in one place.
+     * (the layout {@link ImageCodecs#frameFromImage} produces). Shared by
+     * {@link #imagesToPdfInternal} and the optional {@code jpdfium-vips}
+     * {@code VipsImageToPdf} (libvips decode) so the page-size/position/embed
+     * logic lives in one place.
      */
     public static PdfDocument embedRgbaImages(List<byte[]> rgbaFrames, ImageToPdfOptions options) {
         if (rgbaFrames.isEmpty()) {
@@ -343,39 +337,6 @@ public final class PdfImageConverter {
         }
     }
 
-    /**
-     * Encode a BufferedImage as raw RGBA bytes with an 8-byte header [width int32_le][height int32_le].
-     * The C bridge's format=3 path reads the header to determine pixel dimensions without a separate codec.
-     */
-    private static byte[] bufferedImageToRgba(BufferedImage img) {
-        int w = img.getWidth();
-        int h = img.getHeight();
-        // 8-byte header: [width int32 LE][height int32 LE] + pixel data
-        byte[] rgba = new byte[8 + w * h * 4];
-
-        rgba[0] = (byte)(w & 0xFF);
-        rgba[1] = (byte)((w >> 8) & 0xFF);
-        rgba[2] = (byte)((w >> 16) & 0xFF);
-        rgba[3] = (byte)((w >> 24) & 0xFF);
-        rgba[4] = (byte)(h & 0xFF);
-        rgba[5] = (byte)((h >> 8) & 0xFF);
-        rgba[6] = (byte)((h >> 16) & 0xFF);
-        rgba[7] = (byte)((h >> 24) & 0xFF);
-
-        int[] pixels = new int[w * h];
-        img.getRGB(0, 0, w, h, pixels, 0, w);
-
-        for (int i = 0; i < pixels.length; i++) {
-            int p = pixels[i];
-            rgba[8 + i * 4]     = (byte) ((p >> 16) & 0xFF); // R
-            rgba[8 + i * 4 + 1] = (byte) ((p >> 8) & 0xFF);  // G
-            rgba[8 + i * 4 + 2] = (byte) (p & 0xFF);          // B
-            rgba[8 + i * 4 + 3] = (byte) ((p >> 24) & 0xFF); // A
-        }
-
-        return rgba;
-    }
-
     private static int toNativePosition(Position pos) {
         return switch (pos) {
             case TOP_LEFT -> JpdfiumLib.POSITION_TOP_LEFT;
@@ -434,41 +395,7 @@ public final class PdfImageConverter {
     }
 
     private static void writeImage(BufferedImage image, Path path, PdfToImageOptions options) throws IOException {
-        BufferedImage bufferedImage = image;
-        ImageFormat format = options.format();
-        String formatName = format.extension();
-
-        if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            if (bufferedImage.getColorModel().hasAlpha()) {
-                bufferedImage = createWhiteBackground(bufferedImage);
-            }
-            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(formatName);
-            if (writers.hasNext()) {
-                ImageWriter writer = writers.next();
-                try {
-                    ImageWriteParam param = writer.getDefaultWriteParam();
-                    param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                    param.setCompressionQuality(options.quality() / 100.0f);
-                    try (var out = ImageIO.createImageOutputStream(path.toFile())) {
-                        writer.setOutput(out);
-                        writer.write(null, new IIOImage(bufferedImage, null, null), param);
-                    }
-                } finally {
-                    writer.dispose();
-                }
-                return;
-            }
-            throw new IOException(
-                    "No ImageIO writer found for format: " + formatName
-                    + (format == ImageFormat.WEBP
-                        ? ". WebP writing requires a WebP ImageIO plugin with write support"
-                            + " (e.g., org.sejda.imageio:webp-imageio)."
-                        : ""));
-        }
-
-        if (!ImageIO.write(bufferedImage, formatName, path.toFile())) {
-            throw new IOException("No ImageIO writer found for format: " + formatName);
-        }
+        Files.write(path, ImageCodecs.encode(image, options.format(), options.quality()));
     }
 
     /**
@@ -478,35 +405,10 @@ public final class PdfImageConverter {
      * @return true if the format can be written
      */
     public static boolean canWrite(ImageFormat format) {
-        return ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
+        return ImageCodecs.canEncode(format);
     }
 
-    private static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
-        BufferedImage bufferedImage = image;
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-
-        if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            // JPEG/WEBP don't support alpha channels; composite over white if needed
-            if (bufferedImage.getColorModel().hasAlpha()) {
-                bufferedImage = createWhiteBackground(bufferedImage);
-            }
-            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(format.extension());
-            if (writers.hasNext()) {
-                ImageWriter writer = writers.next();
-                try {
-                    ImageWriteParam param = writer.getDefaultWriteParam();
-                    param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                    param.setCompressionQuality(quality / 100.0f);
-                    writer.setOutput(ImageIO.createImageOutputStream(baos));
-                    writer.write(null, new IIOImage(bufferedImage, null, null), param);
-                } finally {
-                    writer.dispose();
-                }
-                return baos.toByteArray();
-            }
-        }
-
-        ImageIO.write(bufferedImage, format.extension(), baos);
-        return baos.toByteArray();
+    public static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
+        return ImageCodecs.encode(image, format, quality);
     }
 }
