@@ -4,6 +4,8 @@ Java 25 FFM bindings for PDFium (EmbedPDF fork).
 
 - Linux x64/arm64, macOS x64/arm64, Windows x64/arm64 (+ Linux musl builds)
 - MIT licensed; bundled natives carry their own licenses (see NOTICE)
+- Skia is the default renderer (AGG fallback)
+- Image I/O prefers the optional libvips natives when `jpdfium-vips` is present
 
 Requires the JVM flag `--enable-native-access=ALL-UNNAMED`.
 
@@ -12,7 +14,9 @@ Requires the JVM flag `--enable-native-access=ALL-UNNAMED`.
 ```java
 try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
     try (var page = doc.page(0)) {
-        ImageIO.write(page.renderAt(150).toBufferedImage(), "PNG", new File("page0.png"));
+        // PDF -> image bytes through the active codec (libvips when present)
+        Files.write(Path.of("page0.png"),
+                PdfImageConverter.pageToBytes(doc, 0, 150, ImageFormat.PNG));
         page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
         page.flatten();
     }
@@ -21,6 +25,10 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
 ```
 
 More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S95_RedactPipelinePerf`). Full API reference is in the Javadoc.
+
+## Image I/O
+
+Add `stirling.software.jpdfium:jpdfium-vips` (+ a `jpdfium-natives-vips-<platform>` jar) and its libvips-backed `ImageCodec` registers through the service loader as the default for `PdfImageConverter`, `SvgConverter`, `Watermark`, and `ExtractedImage`: more formats (HEIC/HEIF/AVIF/JXL/JPEG2000) and WebP writes without ImageIO plugins. Without the module, `javax.imageio` is used. `-Djpdfium.renderer=agg|skia|auto` (or `JPDFIUM_RENDERER`) selects the renderer; Skia is the default.
 
 ## Native Loading
 
@@ -45,7 +53,7 @@ native/setup-pdfium.sh  download and build the EmbedPDF PDFium fork
 native/rust/            optional Rust modules (lopdf + zopfli compression, repair, resize)
 jpdfium/                Java API (stirling.software.jpdfium): core API, panama/ FFM
                         bindings, doc/ inspection & editing, text/, redact/, transform/,
-                        fonts/, model/, util/, plus runnable samples under src/test
+                        fonts/, model/, util/, spi/, plus runnable samples
 jpdfium-natives-<platform>/  native JARs: linux/darwin/windows × x64/arm64
                         (+ linux-musl-{x64,arm64} for Alpine / musl runtimes)
 jpdfium-vips/         optional libvips image conversions (HEIC, AVIF, JXL, WebP, PNG, JPEG)
@@ -62,20 +70,6 @@ jpdfium-bom/            Maven BOM for dependency management
 - CMake 3.20+
 - Gradle 9.7 (via wrapper)
 - jextract 25 (optional, to regenerate FFM bindings)
-
-Fedora / RHEL:
-```bash
-sudo dnf install -y pcre2-devel freetype-devel harfbuzz-devel \
-    libicu-devel qpdf-devel pugixml-devel libunibreak-devel
-```
-
-Ubuntu / Debian:
-```bash
-sudo apt install -y libpcre2-dev libfreetype-dev libharfbuzz-dev \
-    libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev
-```
-
-Missing libraries are auto-detected via pkg-config and silently skipped at runtime.
 
 ### Build via Gradle
 
