@@ -1,6 +1,7 @@
 // jpdfium_render.cpp - Page rendering and page-to-image conversion.
 
 #include <fpdf_edit.h>
+#include <fpdf_formfill.h>
 #include <fpdfview.h>
 
 #include <cstddef>
@@ -21,10 +22,9 @@ inline int renderFlagsForScreen() {
 
 inline int bitmapFormatForRenderer() {
 #ifdef JPDFIUM_HAS_SKIA
-    return FPDFBitmap_BGRA_Premul;
-#else
-    return FPDFBitmap_BGRA;
+    if (g_jpdfiumUseSkia) return FPDFBitmap_BGRA_Premul;
 #endif
+    return FPDFBitmap_BGRA;
 }
 
 inline void bgraToRgbaInPlace(uint8_t* buf, int w, int h, int stride) {
@@ -52,6 +52,65 @@ inline void unpremulInPlace(uint8_t* buf, int w, int h, int stride) {
     }
 }
 #endif
+
+// Render a page (plus optional form widgets) into a caller-provided buffer.
+// Shared by the zero-allocation FFM render paths so the Skia premultiply/
+// matrix handling lives in one place.
+int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target, int32_t width,
+                         int32_t height, int32_t stride, int32_t flags) {
+    if (!page || !target || width <= 0 || height <= 0 || stride < width * 4)
+        return JPDFIUM_ERR_INVALID;
+
+    int pdfium_flags = flags;
+#ifdef JPDFIUM_HAS_SKIA
+    bool reverse_byte_order = false;
+    if (g_jpdfiumUseSkia && (flags & FPDF_REVERSE_BYTE_ORDER) != 0) {
+        // The Skia device driver does not swap the byte order; strip the flag
+        // and swap ourselves after unpremultiplying.
+        reverse_byte_order = true;
+        pdfium_flags = flags & ~FPDF_REVERSE_BYTE_ORDER;
+    }
+#endif
+
+    const int fmt = bitmapFormatForRenderer();
+    FPDF_BITMAP bmp = FPDFBitmap_CreateEx(width, height, fmt, target, stride);
+    if (!bmp) return JPDFIUM_ERR_NATIVE;
+
+#ifdef JPDFIUM_HAS_SKIA
+    if (g_jpdfiumUseSkia) {
+        double w_pt = FPDF_GetPageWidth(page);
+        double h_pt = FPDF_GetPageHeight(page);
+        if (w_pt <= 0 || h_pt <= 0) {
+            FPDFBitmap_Destroy(bmp);
+            return JPDFIUM_ERR_INVALID;
+        }
+        FS_MATRIX matrix = {static_cast<float>(width) / static_cast<float>(w_pt),  0, 0,
+                            static_cast<float>(height) / static_cast<float>(h_pt), 0, 0};
+        FS_RECTF clip = {0, 0, static_cast<float>(width), static_cast<float>(height)};
+        FPDF_RenderPageBitmapWithMatrix(bmp, page, &matrix, &clip, pdfium_flags);
+    } else {
+        FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, pdfium_flags);
+    }
+#else
+    FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, pdfium_flags);
+#endif
+
+    if (form) {
+        FPDF_FFLDraw(form, bmp, page, 0, 0, width, height, 0, pdfium_flags);
+    }
+
+#ifdef JPDFIUM_HAS_SKIA
+    if (g_jpdfiumUseSkia) {
+        unpremulInPlace(target, width, height, stride);
+        if (reverse_byte_order) {
+            bgraToRgbaInPlace(target, width, height, stride);
+        }
+    }
+#endif
+
+    FPDFBitmap_Destroy(bmp);
+    return JPDFIUM_OK;
+}
 
 }  // namespace
 
@@ -85,16 +144,17 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
 
     FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
 #ifdef JPDFIUM_HAS_SKIA
-    FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
-                        static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
-    FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
-    FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, renderFlagsForScreen());
+    if (g_jpdfiumUseSkia) {
+        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
+                            static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
+        FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
+        FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, renderFlagsForScreen());
+        unpremulInPlace(out, w_px, h_px, w_px * 4);
+    } else {
+        FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
+    }
 #else
     FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
-#endif
-
-#ifdef JPDFIUM_HAS_SKIA
-    unpremulInPlace(out, w_px, h_px, w_px * 4);
 #endif
     bgraToRgbaInPlace(out, w_px, h_px, w_px * 4);
 
@@ -103,6 +163,18 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
     *width = w_px;
     *height = h_px;
     return JPDFIUM_OK;
+}
+
+int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target, int32_t width, int32_t height,
+                                 int32_t stride, int32_t flags) {
+    return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page), nullptr, target, width, height,
+                            stride, flags);
+}
+
+int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target, int32_t width,
+                                      int32_t height, int32_t stride, int32_t flags) {
+    return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page), static_cast<FPDF_FORMHANDLE>(form),
+                            target, width, height, stride, flags);
 }
 
 void jpdfium_free_buffer(uint8_t* buffer) {

@@ -244,8 +244,8 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
         return JPDFIUM_ERR_INVALID;
     }
 
-    // Initialize PDFium if needed
-    FPDF_InitLibrary();
+    // Initialize PDFium if needed, keeping the renderer chosen at startup.
+    jpdfium_ensure_library();
 
     // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.)
     auto* dw = new DocWrapper();
