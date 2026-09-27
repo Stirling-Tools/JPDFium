@@ -29,6 +29,18 @@ public final class AnnotationBindings {
         return Symbols.downcallCritical(name, desc);
     }
 
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
+    }
+
+    /**
+     * {@code unsigned long FPDFAnnot_GetAP(FPDF_ANNOTATION annot, int appearanceMode,
+     * FPDF_WCHAR* buffer, unsigned long buflen)} - normal appearance stream length,
+     * 0 when the annotation has no usable appearance.
+     */
+    public static final MethodHandle FPDFAnnot_GetAP = downcallOptional("FPDFAnnot_GetAP",
+            FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
+
     /** Layout of {@code FS_RECTF}: {@code { float left, top, right, bottom }}. */
     public static final StructLayout FS_RECTF_LAYOUT = MemoryLayout.structLayout(
             JAVA_FLOAT.withName("left"),
