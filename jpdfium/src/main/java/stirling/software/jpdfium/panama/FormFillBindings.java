@@ -115,6 +115,18 @@ public final class FormFillBindings {
             FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, JAVA_INT, JAVA_DOUBLE, JAVA_DOUBLE));
 
     /**
+     * {@code FPDF_BOOL FPDF_FFLDraw(FPDF_FORMHANDLE hHandle, FPDF_BITMAP bitmap,
+     * FPDF_PAGE page, int start_x, int start_y, int size_x, int size_y, int rotate, int flags)}.
+     *
+     * <p>Draws the form widgets on top of an already-rendered page bitmap. Needed for
+     * widgets whose appearance streams are absent (NeedAppearances) or that carry
+     * interactive state the page content does not include. Returns nothing.
+     */
+    public static final MethodHandle FPDF_FFLDraw = downcall("FPDF_FFLDraw",
+            FunctionDescriptor.ofVoid(ADDRESS, ADDRESS, ADDRESS,
+                    JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
+
+    /**
      * {@code FORM_ForceToKillFocus(FPDF_FORMHANDLE hHandle) -> FPDF_BOOL}.
      *
      * <p>Commits the value of the currently focused field and removes focus.
