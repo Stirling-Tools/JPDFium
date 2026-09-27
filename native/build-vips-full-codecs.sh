@@ -2,12 +2,24 @@
 # Build libvips (+ libheif with static codecs) from source against whatever
 # codec libraries (libjxl, libaom, libde265, kvazaar, libwebp, libpng, libjpeg,
 # libtiff) the package manager provides. x265 is intentionally excluded (GPL).
+#
+# The pinned PDFium prebuild (native/pdfium) is wired in via a generated
+# pdfium.pc so libvips' pdfload renders PDFs with the same BSD-licensed
+# renderer as the core bridge instead of GPL poppler. The permissive loaders
+# (libspng, highway) are enabled to match the upstream Windows "all" bundle;
+# OpenEXR and libraw are disabled to reduce bundle size. cfitsio is skipped: the distro build drags in the
+# whole curl/gnutls/krb5/ldap closure. ImageMagick stays off: apt's IM6 links
+# GPL-3 liblqr and brew's IM7 loads its coders from module files that are not
+# relocatable into the bundle without MAGICK_CODER_MODULE_PATH; a from-source
+# IM7 built --without-modules is the follow-up. librsvg is dropped: its cairo/
+# gdk-pixbuf chain hard-links X11 (4-5 MB on a headless server).
 set -euo pipefail
 
 echo "build-vips-full-codecs.sh: start  ($(uname -s) $(uname -m))"
 
 VIPS_TAG="${VIPS_VERSION:-}"
 LIBHEIF_TAG="${LIBHEIF_VERSION:-}"
+AOM_TAG="${AOM_VERSION:-v3.15.1}"
 case "$(uname -s)" in
     Linux*)
         OS=linux
@@ -24,6 +36,8 @@ case "$(uname -s)" in
         exit 1
         ;;
 esac
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 resolve_latest_tag() {
     local repo="$1"
@@ -64,24 +78,148 @@ resolve_versions() {
 
 install_deps() {
     echo "==> build-vips-full-codecs.sh: installing codec + build deps"
-    if [ "$OS" = linux ]; then
+    if command -v apk >/dev/null 2>&1; then
+        # Alpine/musl: install everything available, disable missing codecs.
+        apk add --no-cache meson ninja pkgconf cmake build-base \
+            glib-dev expat-dev orc-dev libexif-dev lcms2-dev \
+            aom-dev libde265-dev \
+            libwebp-dev libpng-dev libjpeg-turbo-dev tiff-dev \
+            openjpeg-dev \
+            zlib-dev xz-dev zstd-dev libdeflate-dev brotli-dev nasm
+        # Alpine ships no kvazaar -dev package, so build the BSD HEVC encoder
+        # from source (musl) with a pkg-config file for libheif.
+        local kvz_tag="${KVAZAAR_VERSION:-v2.3.2}"
+        curl -fsSL --retry 3 --retry-delay 3 \
+            "https://github.com/ultravideo/kvazaar/archive/refs/tags/${kvz_tag}.tar.gz" \
+            -o /tmp/kvazaar.tar.gz
+        tar xzf /tmp/kvazaar.tar.gz -C /tmp
+        cmake -S "/tmp/kvazaar-${kvz_tag#v}" -B /tmp/kvazaar-build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local >/dev/null
+        cmake --build /tmp/kvazaar-build --parallel "$(nproc)"
+        cmake --install /tmp/kvazaar-build
+        mkdir -p /usr/local/lib/pkgconfig
+        cat > /usr/local/lib/pkgconfig/kvazaar.pc <<EOF
+prefix=/usr/local
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: kvazaar
+Description: kvazaar HEVC encoder
+Version: ${kvz_tag#v}
+Libs: -L\${libdir} -lkvazaar
+Cflags: -I\${includedir}
+EOF
+        ldconfig 2>/dev/null || true
+        local disable=""
+        for dep in jpeg-xl spng highway; do
+            case "$dep" in
+                jpeg-xl) pkg=libjxl-dev ;;
+                spng)    pkg=libspng-dev ;;
+                highway) pkg=highway-dev ;;
+            esac
+            if apk add --no-cache "$pkg" >/dev/null 2>&1; then
+                :
+            else
+                echo "==> build-vips-full-codecs.sh: $pkg unavailable; disabling $dep"
+                disable="$disable $dep"
+            fi
+        done
+        export JPDFIUM_VIPS_DISABLE_CODECS="$disable"
+    elif [ "$OS" = linux ]; then
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
             meson ninja-build pkg-config build-essential cmake \
             autoconf automake libtool \
-            libglib2.0-dev libexpat1-dev libfftw3-dev liborc-0.4-dev \
+            libglib2.0-dev libexpat1-dev liborc-0.4-dev \
             libexif-dev liblcms2-dev \
             libjxl-dev libaom-dev libde265-dev \
             libwebp-dev libpng-dev libjpeg-turbo8-dev libtiff-dev \
             libopenjp2-7-dev \
-            zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev
+            libspng-dev libhwy-dev \
+            zlib1g-dev liblzma-dev libzstd-dev libdeflate-dev \
+            icu-devtools
     else
-        brew install meson ninja pkg-config cmake \
-            glib expat fftw orc libexif little-cms2 \
-            jpeg-xl aom libde265 kvazaar \
-            webp libpng jpeg-turbo libtiff \
+        local pkgs=(meson ninja pkg-config cmake
+            glib expat orc libexif little-cms2
+            jpeg-xl aom libde265 kvazaar
+            webp libpng jpeg-turbo libtiff
             openjpeg
+            libspng highway nasm)
+        # Homebrew occasionally trips over a stale Cellar symlink on the Intel
+        # runners; one retry clears it.
+        brew install "${pkgs[@]}" || brew install "${pkgs[@]}"
     fi
+}
+
+build_aom() {
+    # macOS only, opt-in: brew's aom links libvmaf (BSD-2-Clause-Patent, ~1 MB
+    # of video-quality code AVIF never uses). The apt build is vmaf-free
+    # already. The source build keeps pulling 503s from aomedia.googlesource,
+    # so default to brew's aom; set JPDFIUM_BUILD_AOM=1 to build it.
+    [ "$OS" = darwin ] || return 0
+    [ "${JPDFIUM_BUILD_AOM:-0}" = "1" ] || {
+        echo "==> build-vips-full-codecs.sh: using brew's aom (JPDFIUM_BUILD_AOM=1 to build)"
+        return 0
+    }
+    local tag="${AOM_TAG:-v3.15.1}"
+    local prefix="$PREFIX/opt/aom-${tag#v}"
+    echo "==> build-vips-full-codecs.sh: building aom ${tag} (no vmaf) -> $prefix"
+    local work
+    work="$(mktemp -d)"
+    trap 'rm -rf "$work"' RETURN
+
+    # aomedia.googlesource.com intermittently answers 503 to shared runner
+    # IPs; retry with backoff and fall back to brew's aom (which links the
+    # permissive BSD libvmaf) rather than failing the whole vips leg.
+    local attempt ok=0
+    for attempt in 1 2 3 4 5; do
+        if curl -fsSL --retry 3 --retry-delay 3 \
+            "https://aomedia.googlesource.com/aom/+archive/${tag}.tar.gz" \
+            -o "$work/aom.tar.gz"; then
+            ok=1
+            break
+        fi
+        echo "build-vips-full-codecs.sh: aom download attempt $attempt failed; retrying..." >&2
+        sleep $((attempt * 15))
+    done
+    if [ "$ok" != "1" ]; then
+        echo "build-vips-full-codecs.sh: aom download failed; keeping brew's aom (with libvmaf)" >&2
+        return 0
+    fi
+    mkdir -p "$work/src"
+    tar -xzf "$work/aom.tar.gz" -C "$work/src" \
+        || { echo "build-vips-full-codecs.sh: aom extract failed; keeping brew's aom" >&2; return 0; }
+
+    local arch_args=()
+    if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
+        arch_args=("-DCMAKE_OSX_ARCHITECTURES=$CMAKE_OSX_ARCHITECTURES")
+    fi
+    cmake -S "$work/src" -B "$work/build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX="$prefix" \
+        -DBUILD_SHARED_LIBS=1 \
+        -DENABLE_TESTS=0 -DENABLE_EXAMPLES=0 -DENABLE_TOOLS=0 -DENABLE_DOCS=0 \
+        -DCONFIG_TUNE_VMAF=0 \
+        ${arch_args[@]+"${arch_args[@]}"} \
+        || { echo "build-vips-full-codecs.sh: aom cmake configure failed; keeping brew's aom" >&2; return 0; }
+
+    local nproc
+    nproc="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+    cmake --build "$work/build" --parallel "$nproc" \
+        || { echo "build-vips-full-codecs.sh: aom build failed; keeping brew's aom" >&2; return 0; }
+    cmake --install "$work/build" \
+        || { echo "build-vips-full-codecs.sh: aom install failed; keeping brew's aom" >&2; return 0; }
+
+    if otool -L "$prefix/lib/libaom.3.dylib" 2>/dev/null | grep -qi vmaf; then
+        echo "build-vips-full-codecs.sh: aom still links vmaf; keeping brew's aom" >&2
+        return 0
+    fi
+    # Make libheif and libvips pick this aom over brew's.
+    export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export CMAKE_PREFIX_PATH="$prefix:${CMAKE_PREFIX_PATH:-}"
+    echo "==> build-vips-full-codecs.sh: aom installed (vmaf-free)"
 }
 
 build_kvazaar() {
@@ -89,6 +227,12 @@ build_kvazaar() {
     # macOS takes the bottled kvazaar from the brew list above; Linux has
     # no kvazaar package on the runner distro, so build the pinned source.
     [ "$OS" = linux ] || return 0
+    # Alpine/musl: install_deps already built kvazaar from source and left a
+    # pkg-config file, so reuse it instead of rebuilding via autotools.
+    if pkg-config --exists kvazaar 2>/dev/null; then
+        echo "==> build-vips-full-codecs.sh: kvazaar already available; skipping source build"
+        return 0
+    fi
     local tag="${KVAZAAR_TAG:-v2.3.2}"
     echo "==> build-vips-full-codecs.sh: building kvazaar ${tag}"
     local work
@@ -156,7 +300,18 @@ build_libheif() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        # Keg-only deps (libsharpyuv, zlib, ...) keep their .pc files out of
+        # lib/pkgconfig. Without them pkg-config resolves the host copy, which
+        # staged an arm64 libsharpyuv into the darwin-x64 bundle.
+        local opt_pc
+        for opt_pc in "$bp"/opt/*/lib/pkgconfig; do
+            [ -d "$opt_pc" ] || continue
+            PKG_CONFIG_PATH="$opt_pc:${PKG_CONFIG_PATH:-}"
+        done
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            export PKG_CONFIG="$bp/bin/pkg-config"
+        fi
     else
         $SUDO apt-get remove -y libheif* 2>/dev/null || true
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -207,8 +362,11 @@ build_libheif() {
         || { echo "build-vips-full-codecs.sh: libheif build failed" >&2; exit 1; }
     if [ "$OS" = linux ]; then
         $SUDO cmake --install "$work/build"
-        echo "$PREFIX/lib" | $SUDO tee /etc/ld.so.conf.d/00-local.conf >/dev/null
-        $SUDO ldconfig 2>/dev/null || true
+        # musl/Alpine has no ld.so.conf.d; glibc needs the prefix registered.
+        if [ -d /etc/ld.so.conf.d ]; then
+            echo "$PREFIX/lib" | $SUDO tee /etc/ld.so.conf.d/00-local.conf >/dev/null
+            $SUDO ldconfig 2>/dev/null || true
+        fi
     else
         cmake --install "$work/build"
     fi
@@ -225,11 +383,60 @@ build_vips() {
     if [ "$OS" = darwin ]; then
         local bp
         bp="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
+        # Keg-only deps (libsharpyuv, zlib, ...) keep their .pc files out of
+        # lib/pkgconfig. Without them pkg-config resolves the host copy, which
+        # staged an arm64 libsharpyuv into the darwin-x64 bundle.
+        local opt_pc
+        for opt_pc in "$bp"/opt/*/lib/pkgconfig; do
+            [ -d "$opt_pc" ] || continue
+            PKG_CONFIG_PATH="$opt_pc:${PKG_CONFIG_PATH:-}"
+        done
         export PKG_CONFIG_PATH="$bp/lib/pkgconfig:$bp/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+        if [ "${CMAKE_OSX_ARCHITECTURES:-}" = "x86_64" ]; then
+            export PKG_CONFIG="$bp/bin/pkg-config"
+        fi
     else
         export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
         export LD_LIBRARY_PATH="$PREFIX/lib:${LD_LIBRARY_PATH:-}"
     fi
+
+    # Wire the pinned PDFium prebuild (fetch-prebuilt-pdfium.sh extracts it
+    # into native/pdfium) into libvips' pdfload. libvips only checks
+    # pdfium >= 4200, so the placeholder version just has to clear that gate.
+    # The component build is used deliberately: its libpdfium exports only the
+    # FPDF API, so its bundled openjpeg/lcms/libpng/zlib cannot shadow the
+    # copies libvips was compiled against (a whole-archive static link did
+    # exactly that and crashed vips_jp2kload). Static dedup needs a PDFium
+    # prebuild built with use_system_* (see prebuild-pdfium.yml).
+    local pdfium_flag="-Dpdfium=disabled"
+    if [ -f "$SCRIPT_DIR/pdfium/include/fpdfview.h" ]; then
+        local pdfium_pc="$work/pdfium-pc"
+        mkdir -p "$pdfium_pc"
+        cat > "$pdfium_pc/pdfium.pc" <<EOF
+prefix=$SCRIPT_DIR/pdfium
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: pdfium
+Description: pdfium
+Version: 9999
+Requires:
+Libs: -L\${libdir} -lpdfium
+Cflags: -I\${includedir}
+EOF
+        export PKG_CONFIG_PATH="$pdfium_pc:${PKG_CONFIG_PATH:-}"
+        pdfium_flag="-Dpdfium=enabled"
+        echo "==> build-vips-full-codecs.sh: libvips will load PDFs with PDFium ($SCRIPT_DIR/pdfium)"
+    else
+        echo "==> build-vips-full-codecs.sh: no PDFium tree; libvips built without PDF loading" >&2
+    fi
+
+    # magick stays disabled: apt IM6 links GPL-3 liblqr, and brew IM7 loads
+    # its coders from module .so files that need MAGICK_CODER_MODULE_PATH at
+    # runtime (not relocatable into the bundle). Follow-up: build IM7 from
+    # source with --without-modules.
+    local magick_flag="-Dmagick=disabled"
 
     curl -fsSL --retry 3 --retry-delay 3 \
         "https://github.com/libvips/libvips/archive/refs/tags/${VIPS_TAG}.tar.gz" \
@@ -237,17 +444,35 @@ build_vips() {
     tar -xzf "$work/vips.tar.gz" -C "$work"
     local src="$work/libvips-${VIPS_TAG#v}"
 
+    local link_flags=()
+    if [ "$OS" = linux ]; then
+        link_flags=(-Dc_link_args="-Wl,--gc-sections" -Dcpp_link_args="-Wl,--gc-sections")
+    elif [ "$OS" = darwin ]; then
+        link_flags=(-Dc_link_args="-Wl,-dead_strip" -Dcpp_link_args="-Wl,-dead_strip")
+    fi
+    local disable_flags=()
+    if [ -n "${JPDFIUM_VIPS_DISABLE_CODECS:-}" ]; then
+        for dep in $JPDFIUM_VIPS_DISABLE_CODECS; do
+            disable_flags+=("-D$dep=disabled")
+        done
+    fi
     meson setup "$work/build" "$src" \
         --prefix="$PREFIX" --libdir=lib \
-        --buildtype=release \
+        --buildtype=release -Db_lto=true \
         -Dauto_features=disabled \
+        -Dc_args="-ffunction-sections -fdata-sections" \
         -Ddeprecated=false -Dexamples=false \
         -Dmodules=disabled -Dintrospection=disabled -Dvapi=false \
         -Dcplusplus=false \
+        "$pdfium_flag" "$magick_flag" \
+        -Drsvg=disabled -Dopenexr=disabled -Draw=disabled \
+        -Dspng=enabled -Dhighway=enabled \
         -Dheif=enabled -Djpeg-xl=enabled -Dopenjpeg=enabled \
         -Dwebp=enabled -Dpng=enabled -Djpeg=enabled -Dtiff=enabled \
-        -Dexif=enabled -Dlcms=enabled -Dfftw=enabled -Dorc=enabled \
+        -Dexif=enabled -Dlcms=enabled -Dorc=enabled \
         -Dzlib=enabled \
+        ${disable_flags[@]+"${disable_flags[@]}"} \
+        ${link_flags[@]+"${link_flags[@]}"} \
         || { echo "build-vips-full-codecs.sh: meson configure failed" >&2; exit 1; }
 
     local nproc
@@ -267,6 +492,7 @@ build_vips() {
 
 resolve_versions
 install_deps
+build_aom
 build_kvazaar
 build_libtiff
 build_libheif
