@@ -14,7 +14,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Locale;
 import java.util.ServiceLoader;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;

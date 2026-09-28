@@ -2,7 +2,6 @@ package stirling.software.jpdfium.model;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 

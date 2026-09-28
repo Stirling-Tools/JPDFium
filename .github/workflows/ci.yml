@@ -100,7 +100,7 @@ jobs:
         run: bash native/build-stub.sh
 
       - name: Compile main and test sources
-        run: ./gradlew :jpdfium:compileJava :jpdfium:compileTestJava :jpdfium:processResources --no-daemon --stacktrace
+        run: ./gradlew :jpdfium:compileJava :jpdfium:compileTestJava :jpdfium:processResources :jpdfium-vips:compileJava :jpdfium-vips:compileTestJava :jpdfium-vips:processResources --no-daemon --stacktrace
 
   # -------------------------------------------------------------------------
   # Job 1b: Validate musl native detection on a real Alpine/musl JVM
@@ -161,6 +161,50 @@ jobs:
 
       - name: Run Unit Tests
         run: ./gradlew :jpdfium:test --no-daemon --stacktrace
+
+  # -------------------------------------------------------------------------
+  # Job 2b: Natural upstream libvips and Stirling-PDF downstream integration
+  # -------------------------------------------------------------------------
+  vips-system-integration:
+    name: Natural System Libvips & Downstream Integration (Linux x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@97c5a5e13aa773f277f72c1287dda3c789f1366c # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+
+      - name: Install system libvips and codec dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libvips-dev libvips42 libheif-dev libwebp-dev
+
+      - name: Install jextract
+        run: |
+          JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
+          mkdir -p "$HOME/jextract-install"
+          curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
+          echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
+
+      - name: Build stub bridge
+        run: bash native/build-stub.sh
+
+      - name: Run libvips tests and Stirling-PDF integration suite
+        run: ./gradlew :jpdfium-vips:test --no-daemon --stacktrace
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vips-system-integration-reports
+          path: jpdfium-vips/build/reports/tests/test/
 
   # -------------------------------------------------------------------------
   # Job 3: Robustness, leak detection, and determinism tests
