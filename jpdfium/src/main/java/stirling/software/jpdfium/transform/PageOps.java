@@ -2,6 +2,7 @@ package stirling.software.jpdfium.transform;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.RenderResult;
 
 import java.awt.image.BufferedImage;
@@ -42,16 +43,23 @@ public final class PageOps {
     }
 
     /**
-     * Flatten a specific page using the specified mode with default DPI (150).
+     * Flatten a specific page to an image at the specified resolution.
      */
-    public static void flatten(PdfDocument doc, int pageIndex, stirling.software.jpdfium.model.FlattenMode mode) {
+    public static void flatten(PdfDocument doc, int pageIndex, int dpi) {
+        doc.flattenPage(pageIndex, dpi);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode with default DPI.
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, FlattenMode mode) {
         doc.flattenPage(pageIndex, mode);
     }
 
     /**
      * Flatten a specific page using the specified mode.
      */
-    public static void flatten(PdfDocument doc, int pageIndex, stirling.software.jpdfium.model.FlattenMode mode, int dpi) {
+    public static void flatten(PdfDocument doc, int pageIndex, FlattenMode mode, int dpi) {
         doc.flattenPage(pageIndex, mode, dpi);
     }
 
@@ -65,16 +73,26 @@ public final class PageOps {
     }
 
     /**
-     * Flatten all pages in the document using the specified mode with default DPI (150).
+     * Flatten all pages in the document to images at the specified resolution.
+     *
+     * @param doc open PDF document
+     * @param dpi render resolution in DPI
      */
-    public static void flattenAll(PdfDocument doc, stirling.software.jpdfium.model.FlattenMode mode) {
+    public static void flattenAll(PdfDocument doc, int dpi) {
+        doc.flatten(dpi);
+    }
+
+    /**
+     * Flatten all pages in the document using the specified mode with default DPI.
+     */
+    public static void flattenAll(PdfDocument doc, FlattenMode mode) {
         doc.flatten(mode);
     }
 
     /**
      * Flatten all pages in the document using the specified mode.
      */
-    public static void flattenAll(PdfDocument doc, stirling.software.jpdfium.model.FlattenMode mode, int dpi) {
+    public static void flattenAll(PdfDocument doc, FlattenMode mode, int dpi) {
         doc.flatten(mode, dpi);
     }
 

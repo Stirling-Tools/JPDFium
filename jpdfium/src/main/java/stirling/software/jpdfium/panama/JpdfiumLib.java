@@ -786,6 +786,15 @@ public final class JpdfiumLib {
     public static void pageFlatten(long page) {
         NativeGuard.acquire();
         try {
+            if (FastLinks.PAGE_FLATTEN != null) {
+                try {
+                    int rc = (int) FastLinks.PAGE_FLATTEN.invokeExact(page);
+                    check(rc, "pageFlatten");
+                    return;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                }
+            }
             check(JpdfiumH.jpdfium_page_flatten(page), "pageFlatten");
         } finally {
             NativeGuard.release();

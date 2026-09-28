@@ -67,12 +67,22 @@ class FlattenApiTest {
     }
 
     @Test
+    void docFlattenWithDpi() {
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            assertDoesNotThrow(() -> doc.flatten(120));
+            assertDoesNotThrow(() -> doc.flattenPage(0, 120));
+        }
+    }
+
+    @Test
     void pageOpsFlattenMethods() {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             assertDoesNotThrow(() -> PageOps.flatten(doc, 0));
+            assertDoesNotThrow(() -> PageOps.flatten(doc, 0, 120));
             assertDoesNotThrow(() -> PageOps.flatten(doc, 0, FlattenMode.ANNOTATIONS));
             assertDoesNotThrow(() -> PageOps.flatten(doc, 0, FlattenMode.FULL, 100));
             assertDoesNotThrow(() -> PageOps.flattenAll(doc));
+            assertDoesNotThrow(() -> PageOps.flattenAll(doc, 120));
             assertDoesNotThrow(() -> PageOps.flattenAll(doc, FlattenMode.ANNOTATIONS));
             assertDoesNotThrow(() -> PageOps.flattenAll(doc, FlattenMode.FULL, 100));
         }

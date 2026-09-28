@@ -7,6 +7,7 @@ import stirling.software.jpdfium.model.ImageFormat;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
@@ -260,7 +261,7 @@ public final class PdfImageIO {
      */
     public static void writeMultiPageTiff(List<BufferedImage> images, Path output) throws IOException {
         if (output == null) throw new IllegalArgumentException("output must not be null");
-        try (OutputStream os = Files.newOutputStream(output)) {
+        try (OutputStream os = new BufferedOutputStream(Files.newOutputStream(output))) {
             writeMultiPageTiff(images, os, 1.0f);
         }
     }
@@ -284,7 +285,13 @@ public final class PdfImageIO {
      * Writes multiple images as consecutive frames of a multi-page TIFF to an OutputStream with compression quality.
      */
     public static void writeMultiPageTiff(List<BufferedImage> images, OutputStream output, float quality) throws IOException {
-        ImageCodecs.writeMultiPageTiff(images, output, quality);
+        if (output instanceof BufferedOutputStream || output instanceof ByteArrayOutputStream) {
+            ImageCodecs.writeMultiPageTiff(images, output, quality);
+        } else {
+            BufferedOutputStream bos = new BufferedOutputStream(output);
+            ImageCodecs.writeMultiPageTiff(images, bos, quality);
+            bos.flush();
+        }
     }
 
     /**
