@@ -11,4 +11,5 @@
 #
 # The pinned tag must carry vips-windows-x64.zip and vips-windows-arm64.zip
 # (flat dist layout) plus .sha256 files for both.
-vips-20260927-be11343
+
+vips-20260928-c350bfe
