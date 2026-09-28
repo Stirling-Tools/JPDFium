@@ -118,6 +118,13 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
                             int32_t* height) {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page || !rgba || !width || !height) return JPDFIUM_ERR_INVALID;
+    if (dpi == INT32_MIN || dpi == 0) return JPDFIUM_ERR_INVALID;
+
+    bool transparent = false;
+    if (dpi < 0) {
+        transparent = true;
+        dpi = -dpi;
+    }
 
     double w_pt = FPDF_GetPageWidth(pw->page);
     double h_pt = FPDF_GetPageHeight(pw->page);
@@ -142,19 +149,20 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
         return JPDFIUM_ERR_NATIVE;
     }
 
-    FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
+    FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, transparent ? 0x00000000 : 0xFFFFFFFF);
+    int render_flags = transparent ? FPDF_ANNOT : renderFlagsForScreen();
 #ifdef JPDFIUM_HAS_SKIA
     if (g_jpdfiumUseSkia) {
         FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
                             static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
         FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
-        FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, renderFlagsForScreen());
+        FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, render_flags);
         unpremulInPlace(out, w_px, h_px, w_px * 4);
     } else {
-        FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
+        FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, render_flags);
     }
 #else
-    FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, renderFlagsForScreen());
+    FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, render_flags);
 #endif
     bgraToRgbaInPlace(out, w_px, h_px, w_px * 4);
 
@@ -210,8 +218,7 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
 
     FPDF_ClosePage(page);
 
-    FPDFPage_Delete(dw->core->doc, pageIndex);
-    FPDF_PAGE newPage = FPDFPage_New(dw->core->doc, pageIndex, w_pt, h_pt);
+    FPDF_PAGE newPage = FPDFPage_New(dw->core->doc, pageIndex + 1, w_pt, h_pt);
     if (!newPage) {
         FPDFBitmap_Destroy(bmp);
         return JPDFIUM_ERR_NATIVE;
@@ -221,13 +228,16 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
     if (!imgObj) {
         FPDFBitmap_Destroy(bmp);
         FPDF_ClosePage(newPage);
+        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
         return JPDFIUM_ERR_NATIVE;
     }
 
     FPDF_BOOL ok = FPDFImageObj_SetBitmap(nullptr, 0, imgObj, bmp);
     FPDFBitmap_Destroy(bmp);
     if (!ok) {
+        FPDFPageObj_Destroy(imgObj);
         FPDF_ClosePage(newPage);
+        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
         return JPDFIUM_ERR_NATIVE;
     }
 
@@ -237,9 +247,11 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
     FPDFPage_InsertObject(newPage, imgObj);
     if (!FPDFPage_GenerateContent(newPage)) {
         FPDF_ClosePage(newPage);
+        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
         return JPDFIUM_ERR_NATIVE;
     }
 
     FPDF_ClosePage(newPage);
+    FPDFPage_Delete(dw->core->doc, pageIndex);
     return JPDFIUM_OK;
 }

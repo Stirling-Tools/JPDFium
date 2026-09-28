@@ -192,6 +192,7 @@ struct StubDoc {
     int32_t unappliedRedactMarksCount = 0;
     std::unordered_map<int32_t, int> pagePendingMarks;
     std::string sanitizeReport;
+    int32_t pageCount = 3;
 
     int32_t unappliedMarks() const {
         return unappliedRedactMarksCount;
@@ -272,8 +273,13 @@ int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handl
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_doc_page_count(int64_t, int32_t* count) {
-    *count = 3;
+int32_t jpdfium_doc_page_count(int64_t handle, int32_t* count) {
+    if (!count) return JPDFIUM_ERR_INVALID;
+    if (auto it = g_docs.find(handle); it != g_docs.end() && it->second.pageCount > 0) {
+        *count = it->second.pageCount;
+    } else {
+        *count = 3;
+    }
     return JPDFIUM_OK;
 }
 
@@ -395,17 +401,19 @@ void jpdfium_page_close(int64_t handle) {
     g_page_idx.erase(handle);
 }
 
-int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
-    // Small fake frame: the stub only needs to exercise the bridge contract
-    // (out-params, buffer ownership, free path). Keeping it small keeps the
-    // JMH microbenchmarks focused on the Java/FFM call-path cost instead of
-    // a large memset + byte[] copy of data that never represents real
-    // rendering work.
-    constexpr int dim = 16;
-    *w = dim;
-    *h = dim;
-    *rgba = alloc_zeroed(static_cast<std::size_t>(dim) * dim * 4);
-    return JPDFIUM_OK;
+int32_t jpdfium_render_page(int64_t, int32_t dpi, uint8_t** rgba, int32_t* w, int32_t* h) {
+    if (!rgba || !w || !h || dpi == INT32_MIN) return JPDFIUM_ERR_INVALID;
+    int32_t target_dpi = dpi < 0 ? -dpi : (dpi > 0 ? dpi : 72);
+    int32_t width =
+        static_cast<int32_t>(std::round(595.0f * static_cast<float>(target_dpi) / 72.0f));
+    int32_t height =
+        static_cast<int32_t>(std::round(842.0f * static_cast<float>(target_dpi) / 72.0f));
+    if (width <= 0) width = 1;
+    if (height <= 0) height = 1;
+    *w = width;
+    *h = height;
+    *rgba = alloc_zeroed(static_cast<std::size_t>(width) * height * 4);
+    return *rgba ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
 int32_t jpdfium_render_page_into(void*, uint8_t* target, int32_t width, int32_t height,
@@ -729,6 +737,19 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
     return *out_data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t jpdfium_font_covers_text(const uint8_t*, int64_t, const int32_t*, int32_t count,
+                                 uint8_t* out_covered) {
+    if (!out_covered || count <= 0) return JPDFIUM_ERR_INVALID;
+    std::memset(out_covered, 1, static_cast<std::size_t>(count));
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_text_shape(const uint8_t*, int64_t, const char*, float, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("[]");
+    return JPDFIUM_OK;
+}
+
 // Glyph-Level Redaction stub
 
 int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, float, uint32_t,
@@ -954,12 +975,65 @@ int32_t jpdfium_rust_compress_png(const uint8_t*, int64_t, uint8_t** out_ptr, in
     return fail_native_bytes(out_ptr, out_len);
 }
 
-void jpdfium_rust_free(uint8_t*) {
-    // No-op: the stub never allocates a Rust-owned buffer.
+int32_t jpdfium_rust_svg_to_rgba(const uint8_t*, int64_t, int32_t width, int32_t height,
+                                 uint8_t** out_ptr, int64_t* out_len, int32_t* out_w,
+                                 int32_t* out_h) {
+    if (!out_ptr || !out_len) return JPDFIUM_ERR_INVALID;
+    int32_t rw = width > 0 ? width : 16;
+    int32_t rh = height > 0 ? height : 16;
+    if (out_w) *out_w = rw;
+    if (out_h) *out_h = rh;
+    *out_len = static_cast<int64_t>(rw) * rh * 4;
+    *out_ptr = alloc_zeroed(static_cast<std::size_t>(*out_len));
+    return *out_ptr ? 0 : JPDFIUM_ERR_NATIVE;
+}
+
+void jpdfium_rust_free(uint8_t* p) {
+    std::free(p);
 }
 
 int32_t jpdfium_brotli_to_flate(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
     return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t compressedLen, uint8_t** output,
+                              int64_t* outputLen) {
+    if (!compressed || compressedLen <= 0 || !output || !outputLen) return JPDFIUM_ERR_INVALID;
+    *outputLen = compressedLen;
+    *output = dup_bytes(compressed, static_cast<std::size_t>(compressedLen));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_validate_icc_profile(const uint8_t*, int64_t, int32_t, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("{\"valid\":true,\"components\":3,\"profile_class\":\"display\"}");
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_generate_replacement_icc(int32_t, uint8_t** output, int64_t* outputLen) {
+    if (!output || !outputLen) return JPDFIUM_ERR_INVALID;
+    constexpr uint8_t fake_icc[4] = {0, 0, 0, 4};
+    *outputLen = sizeof(fake_icc);
+    *output = dup_bytes(fake_icc, sizeof(fake_icc));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_validate_jpx_stream(const uint8_t*, int64_t, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("{\"valid\":true,\"width\":100,\"height\":100,\"components\":3}");
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_jpx_to_raw(const uint8_t*, int64_t, uint8_t** output, int64_t* outputLen,
+                           int32_t* width, int32_t* height, int32_t* components) {
+    if (!output || !outputLen || !width || !height || !components) return JPDFIUM_ERR_INVALID;
+    constexpr int32_t w = 16, h = 16, comp = 3;
+    *width = w;
+    *height = h;
+    *components = comp;
+    *outputLen = static_cast<int64_t>(w) * h * comp;
+    *output = alloc_zeroed(static_cast<std::size_t>(*outputLen));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
 int32_t jpdfium_pdfio_repair(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
@@ -1093,4 +1167,31 @@ int32_t jpdfium_signature_digest(int64_t, int32_t, int32_t, uint8_t** digest, in
     if (digest) *digest = nullptr;
     if (len) *len = 0;
     return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_image_to_pdf(const uint8_t*, int64_t, float, float, float, int32_t, int32_t,
+                             int64_t* doc_handle) {
+    if (!doc_handle) return JPDFIUM_ERR_INVALID;
+    *doc_handle = g_next_doc++;
+    StubDoc doc;
+    doc.pageCount = 1;
+    g_docs[*doc_handle] = std::move(doc);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint8_t*, int64_t, float, float, float,
+                                   int32_t, int32_t, int32_t) {
+    auto it = g_docs.find(doc_handle);
+    if (it == g_docs.end()) return JPDFIUM_ERR_INVALID;
+    it->second.pageCount++;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_import_n_pages_to_one(void*, float, float, int32_t, int32_t, uint8_t** output,
+                                      int64_t* outputLen) {
+    constexpr std::string_view stub = "%PDF-1.4 stub n-up";
+    if (!output || !outputLen) return JPDFIUM_ERR_INVALID;
+    *outputLen = static_cast<int64_t>(stub.size());
+    *output = dup_bytes(stub.data(), stub.size());
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
