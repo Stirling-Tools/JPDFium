@@ -1,20 +1,27 @@
 package stirling.software.jpdfium.vips;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.panama.NativeLoader;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.NoSuchElementException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -75,6 +82,63 @@ class VipsDecoderTest {
         try (PdfDocument d = doc) {
             assertTrue(d.pageCount() >= 1, "embedded PDF must have >= 1 page");
         }
+    }
+
+    @Test
+    void decodeFromPathAndAllFrames(@TempDir Path tempDir) throws IOException {
+        assumeVips();
+        assumeTrue(VipsAvailability.isFormatAvailable(VipsFormat.PNG), "pngsave unavailable");
+        assumeTrue(VipsAvailability.isFormatDecodable(VipsFormat.PNG), "pngload unavailable");
+
+        byte[] png = encodeTestView(VipsFormat.PNG);
+        Path file = tempDir.resolve("test.png");
+        Files.write(file, png);
+
+        byte[] rgba = VipsDecoder.decodeToRgba(file);
+        assertNotNull(rgba);
+        int w = readLeInt32(rgba, 0);
+        int h = readLeInt32(rgba, 4);
+        assertEquals(64, w);
+        assertEquals(64, h);
+
+        List<byte[]> frames = VipsDecoder.decodeAllFrames(file);
+        assertEquals(1, frames.size());
+        assertEquals(rgba.length, frames.getFirst().length);
+    }
+
+    @Test
+    void thumbnailImageShrinkOnLoad(@TempDir Path tempDir) throws IOException {
+        assumeVips();
+        assumeTrue(VipsAvailability.isFormatAvailable(VipsFormat.PNG), "pngsave unavailable");
+        assumeTrue(VipsAvailability.isFormatDecodable(VipsFormat.PNG), "pngload unavailable");
+
+        byte[] png = encodeTestView(VipsFormat.PNG);
+        Path file = tempDir.resolve("test-thumb.png");
+        Files.write(file, png);
+
+        byte[] thumbBytes = VipsImageConverter.thumbnailImage(file, 32, VipsFormat.PNG, 85);
+        assertNotNull(thumbBytes);
+        assertTrue(thumbBytes.length > 0);
+
+        byte[] thumbFromBytes = VipsImageConverter.thumbnailImage(png, 32, VipsFormat.PNG, 85);
+        assertNotNull(thumbFromBytes);
+        assertTrue(thumbFromBytes.length > 0);
+    }
+
+    @Test
+    void bombProtectionRejectsHugeDimensions() {
+        byte[] fakeBombHeader = new byte[8];
+        writeLeInt32(fakeBombHeader, 0, 50_000);
+        writeLeInt32(fakeBombHeader, 4, 50_000);
+        assertThrows(IllegalArgumentException.class, () ->
+                ImageCodecs.imageFromFrame(fakeBombHeader));
+    }
+
+    private static void writeLeInt32(byte[] dst, int offset, int val) {
+        dst[offset] = (byte) (val & 0xFF);
+        dst[offset + 1] = (byte) ((val >> 8) & 0xFF);
+        dst[offset + 2] = (byte) ((val >> 16) & 0xFF);
+        dst[offset + 3] = (byte) ((val >> 24) & 0xFF);
     }
 
     private static void assumeVips() {

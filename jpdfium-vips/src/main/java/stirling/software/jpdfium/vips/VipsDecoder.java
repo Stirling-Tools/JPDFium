@@ -2,33 +2,29 @@ package stirling.software.jpdfium.vips;
 
 import app.photofox.vipsffm.VImage;
 import app.photofox.vipsffm.Vips;
+import app.photofox.vipsffm.VipsOption;
+import app.photofox.vipsffm.enums.VipsAccess;
 import app.photofox.vipsffm.enums.VipsInterpretation;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Decode image bytes (PNG, JPEG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, JPEG2000, ...) to the
- * 8-byte {@code [width LE][height LE]} + RGBA pixel layout the JPDFium bridge's
- * {@code format=3} embed path expects. libvips auto-detects the format from the
- * buffer header, so one entry point handles every loader libvips was built with.
- *
- * <p>This is the decode counterpart to {@link VipsEncoder}: together they give
- * JPDFium optional libvips-backed image I/O for formats ImageIO/PDFium can't
- * handle (HEIC/HEIF/JXL/AVIF). libvips is supplied as an optional native via the
- * {@code jpdfium-natives-vips-*} jars; when absent, {@link VipsAvailability}
- * reports unavailable and {@link #decodeToRgba} throws {@link VipsUnavailableException}.
+ * libvips-backed image decoder producing 8-byte LE header + RGBA straight pixels.
+ * Uses sequential disk streaming and validates dimensions against decompression bombs.
  */
 public final class VipsDecoder {
+
+    public static final long MAX_IMAGE_PIXELS = Long.getLong("jpdfium.image.max_pixels", 100_000_000L);
+    public static final int MAX_IMAGE_DIMENSION = Integer.getInteger("jpdfium.image.max_dimension", 30_000);
 
     private VipsDecoder() {}
 
     /**
-     * Decode {@code imageBytes} to a bridge-embeddable RGBA buffer: 8-byte
-     * little-endian {@code [width][height]} header followed by {@code width*height*4}
-     * bytes of R,G,B,A (pixel-interleaved, 8-bit sRGB, straight alpha). Matches
-     * {@code PdfImageConverter.bufferedImageToRgba}'s layout exactly.
+     * Decodes the first frame of {@code imageBytes} to RGBA.
      */
     public static byte[] decodeToRgba(byte[] imageBytes) {
         if (imageBytes == null || imageBytes.length == 0) {
@@ -40,33 +36,146 @@ public final class VipsDecoder {
         }
         byte[][] holder = new byte[1][];
         Vips.run((Arena arena) -> {
-            VImage image = VImage.newFromBytes(arena, imageBytes, "");
-            image = image.colourspace(VipsInterpretation.INTERPRETATION_sRGB);
-            if (!image.hasAlpha()) {
-                // Append a constant opaque (255) alpha band so the bridge's 4-band
-                // format=3 path receives RGBA for every input (RGB, grey, CMYK...).
-                image = image.bandjoinConst(List.of(255.0));
+            VImage image = VImage.newFromBytes(arena, imageBytes,
+                    VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            Integer interlaced = image.getInt("interlaced");
+            if (interlaced != null && interlaced != 0) {
+                image = image.copyMemory();
             }
-            int w = image.getWidth();
-            int h = image.getHeight();
-            long pixelBytes = (long) w * h * 4L;
-            if (pixelBytes > Integer.MAX_VALUE - 8L) {
-                throw new IllegalStateException("Image too large to embed: " + w + "x" + h);
-            }
-            MemorySegment pixels = image.writeToMemory();
-            long n = Math.min(pixelBytes, pixels.byteSize());
-            byte[] rgba = new byte[8 + (int) n];
-            writeLeInt32(rgba, 0, w);
-            writeLeInt32(rgba, 4, h);
-            MemorySegment.copy(pixels, 0L, MemorySegment.ofArray(rgba), 8L, n);
-            holder[0] = rgba;
+            holder[0] = toRgbaFrame(image);
         });
         return holder[0];
     }
 
     /**
-     * Whether {@link #decodeToRgba} can read the given format on this platform
-     * (requires the corresponding libvips loader operation to be present).
+     * Decodes the first frame of an image file to RGBA using sequential streaming.
+     */
+    public static byte[] decodeToRgba(Path path) {
+        if (path == null) {
+            throw new IllegalArgumentException("path must not be null");
+        }
+        VipsAvailability.State state = VipsAvailability.probe();
+        if (!state.available()) {
+            throw new VipsUnavailableException(VipsAvailability.installMessage(state));
+        }
+        byte[][] holder = new byte[1][];
+        Vips.run((Arena arena) -> {
+            VImage image = VImage.newFromFile(arena, path.toAbsolutePath().toString(),
+                    VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            Integer interlaced = image.getInt("interlaced");
+            if (interlaced != null && interlaced != 0) {
+                image = image.copyMemory();
+            }
+            holder[0] = toRgbaFrame(image);
+        });
+        return holder[0];
+    }
+
+    /**
+     * Decodes all frames of an image file (e.g. multi-page TIFF or GIF).
+     */
+    public static List<byte[]> decodeAllFrames(Path path) {
+        if (path == null) {
+            throw new IllegalArgumentException("path must not be null");
+        }
+        VipsAvailability.State state = VipsAvailability.probe();
+        if (!state.available()) {
+            throw new VipsUnavailableException(VipsAvailability.installMessage(state));
+        }
+        List<byte[]> frames = new ArrayList<>();
+        Vips.run((Arena arena) -> {
+            String p = path.toAbsolutePath().toString();
+            VImage probe = VImage.newFromFile(arena, p,
+                    VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            Integer nPages = probe.getInt("n-pages");
+            if (nPages == null || nPages <= 1) {
+                Integer interlaced = probe.getInt("interlaced");
+                if (interlaced != null && interlaced != 0) {
+                    probe = probe.copyMemory();
+                }
+                frames.add(toRgbaFrame(probe));
+            } else {
+                for (int i = 0; i < nPages; i++) {
+                    VImage pageImg = VImage.newFromFile(arena, p,
+                            VipsOption.Int("page", i),
+                            VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+                    Integer interlaced = pageImg.getInt("interlaced");
+                    if (interlaced != null && interlaced != 0) {
+                        pageImg = pageImg.copyMemory();
+                    }
+                    frames.add(toRgbaFrame(pageImg));
+                }
+            }
+        });
+        return frames;
+    }
+
+    /**
+     * Decodes all frames from in-memory image bytes.
+     */
+    public static List<byte[]> decodeAllFrames(byte[] imageBytes) {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new IllegalArgumentException("imageBytes must be non-empty");
+        }
+        VipsAvailability.State state = VipsAvailability.probe();
+        if (!state.available()) {
+            throw new VipsUnavailableException(VipsAvailability.installMessage(state));
+        }
+        List<byte[]> frames = new ArrayList<>();
+        Vips.run((Arena arena) -> {
+            VImage probe = VImage.newFromBytes(arena, imageBytes,
+                    VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            Integer nPages = probe.getInt("n-pages");
+            if (nPages == null || nPages <= 1) {
+                Integer interlaced = probe.getInt("interlaced");
+                if (interlaced != null && interlaced != 0) {
+                    probe = probe.copyMemory();
+                }
+                frames.add(toRgbaFrame(probe));
+            } else {
+                for (int i = 0; i < nPages; i++) {
+                    VImage pageImg = VImage.newFromBytes(arena, imageBytes,
+                            VipsOption.Int("page", i),
+                            VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+                    Integer interlaced = pageImg.getInt("interlaced");
+                    if (interlaced != null && interlaced != 0) {
+                        pageImg = pageImg.copyMemory();
+                    }
+                    frames.add(toRgbaFrame(pageImg));
+                }
+            }
+        });
+        return frames;
+    }
+
+    /** Validates bounds against decompression bombs and writes to the bridge RGBA buffer. */
+    private static byte[] toRgbaFrame(VImage image) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
+                || (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException(
+                    "Image dimensions " + w + "x" + h + " exceed safe limit (decompression bomb protection)");
+        }
+        VImage srgb = image.colourspace(VipsInterpretation.INTERPRETATION_sRGB);
+        if (!srgb.hasAlpha()) {
+            srgb = srgb.bandjoinConst(List.of(255.0));
+        }
+        long pixelBytes = (long) w * h * 4L;
+        if (pixelBytes > Integer.MAX_VALUE - 8L) {
+            throw new IllegalStateException("Image too large to embed: " + w + "x" + h);
+        }
+        MemorySegment pixels = srgb.writeToMemory();
+        long n = Math.min(pixelBytes, pixels.byteSize());
+        byte[] rgba = new byte[8 + (int) n];
+        writeLeInt32(rgba, 0, w);
+        writeLeInt32(rgba, 4, h);
+        MemorySegment.copy(pixels, 0L, MemorySegment.ofArray(rgba), 8L, n);
+        return rgba;
+    }
+
+    /**
+     * Whether {@link #decodeToRgba} can read the given format on this platform.
      */
     public static boolean canDecode(VipsFormat format) {
         return VipsAvailability.isFormatDecodable(format);

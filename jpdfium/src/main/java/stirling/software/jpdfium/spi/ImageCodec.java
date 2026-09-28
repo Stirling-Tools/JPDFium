@@ -32,6 +32,11 @@ public interface ImageCodec {
     /** Decode image bytes to a single RGBA frame. */
     byte[] decodeFrame(byte[] data) throws IOException;
 
+    /** Decode image bytes to all frames (multi-frame TIFF/GIF yields several). */
+    default List<byte[]> decodeFrames(byte[] data) throws IOException {
+        return List.of(decodeFrame(data));
+    }
+
     /** Encode an RGBA frame (8-byte header + pixels) to {@code format}. */
     byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) throws IOException;
 }

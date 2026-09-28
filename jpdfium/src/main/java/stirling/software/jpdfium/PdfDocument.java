@@ -20,6 +20,7 @@ import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.awt.image.BufferedImage;
@@ -747,14 +748,14 @@ public final class PdfDocument implements AutoCloseable {
                 int rot = (int) getRot.invokeExact(rawDocSegment, pageIndex);
                 if (rot >= 0) return rot;
             } catch (Throwable t) {
-                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                NativeRuntime.rethrowFatal(t);
             }
         }
         try (PdfPage p = page(pageIndex)) {
             int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandle());
             return r * 90;
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
@@ -777,7 +778,7 @@ public final class PdfDocument implements AutoCloseable {
                     return buf.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
-                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                NativeRuntime.rethrowFatal(t);
             }
         }
         return 1.0f;
@@ -905,7 +906,7 @@ public final class PdfDocument implements AutoCloseable {
                 return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
             }
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
         return 0L;
     }
@@ -920,7 +921,7 @@ public final class PdfDocument implements AutoCloseable {
                 return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
             }
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
         return 0;
     }

@@ -3,9 +3,7 @@ package stirling.software.jpdfium.vips;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.internal.PixelFormat;
@@ -45,10 +43,12 @@ public final class VipsImageCodec implements ImageCodec {
 
     @Override
     public List<byte[]> decodeFrames(Path path) throws IOException {
-        byte[] data = Files.readAllBytes(path);
-        List<byte[]> frames = new ArrayList<>(1);
-        frames.add(decodeFrame(data));
-        return frames;
+        return VipsDecoder.decodeAllFrames(path);
+    }
+
+    @Override
+    public List<byte[]> decodeFrames(byte[] data) throws IOException {
+        return VipsDecoder.decodeAllFrames(data);
     }
 
     @Override
