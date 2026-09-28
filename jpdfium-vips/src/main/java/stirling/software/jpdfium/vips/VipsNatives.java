@@ -20,6 +20,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 /**
@@ -46,6 +47,7 @@ public final class VipsNatives {
         String base = "/natives/vips-" + platform + "/";
         List<String> libs = readIndex(base + "native-libs.txt");
         if (libs.isEmpty()) {
+            discoverSystemLibs();
             configured = true;
             return; // no bundled vips; rely on system libvips / caller overrides
         }
@@ -250,5 +252,82 @@ public final class VipsNatives {
 
     private static boolean isGobjectLib(String n) {
         return n.startsWith("libgobject-2.0") || n.startsWith("gobject-2.0");
+    }
+
+    private static void discoverSystemLibs() {
+        if (System.getProperty("vipsffm.libpath.vips.override") != null) {
+            return;
+        }
+        List<Path> searchDirs = new ArrayList<>();
+        String dyld = System.getenv("DYLD_LIBRARY_PATH");
+        if (dyld != null) {
+            for (String p : dyld.split(":")) {
+                if (!p.isBlank()) searchDirs.add(Path.of(p));
+            }
+        }
+        String ld = System.getenv("LD_LIBRARY_PATH");
+        if (ld != null) {
+            for (String p : ld.split(":")) {
+                if (!p.isBlank()) searchDirs.add(Path.of(p));
+            }
+        }
+        // Well-known system library locations
+        searchDirs.add(Path.of("/opt/homebrew/lib"));
+        searchDirs.add(Path.of("/usr/local/lib"));
+        searchDirs.add(Path.of("/opt/local/lib"));
+        searchDirs.add(Path.of("/usr/lib64"));
+        searchDirs.add(Path.of("/usr/lib"));
+        searchDirs.add(Path.of("/usr/lib/x86_64-linux-gnu"));
+        searchDirs.add(Path.of("/usr/lib/aarch64-linux-gnu"));
+        searchDirs.add(Path.of("/usr/lib/arm-linux-gnueabihf"));
+        searchDirs.add(Path.of("/lib/x86_64-linux-gnu"));
+        searchDirs.add(Path.of("/lib/aarch64-linux-gnu"));
+
+        Path vips = findFirstLib(searchDirs, "libvips", ".dylib", ".so", ".dll");
+        if (vips != null) {
+            System.setProperty("vipsffm.libpath.vips.override", vips.toAbsolutePath().toString());
+            Path glib = findFirstLib(searchDirs, "libglib-2.0", ".dylib", ".so", ".dll");
+            if (glib != null) {
+                System.setProperty("vipsffm.libpath.glib.override", glib.toAbsolutePath().toString());
+            }
+            Path gobject = findFirstLib(searchDirs, "libgobject-2.0", ".dylib", ".so", ".dll");
+            if (gobject != null) {
+                System.setProperty("vipsffm.libpath.gobject.override", gobject.toAbsolutePath().toString());
+            }
+        }
+    }
+
+    private static Path findFirstLib(List<Path> dirs, String prefix, String ext1, String ext2, String ext3) {
+        for (Path dir : dirs) {
+            if (!Files.isDirectory(dir)) {
+                continue;
+            }
+            Path found = findLib(dir, prefix, ext1, ext2, ext3);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private static Path findLib(Path dir, String prefix, String ext1, String ext2, String ext3) {
+        Path p1 = dir.resolve(prefix + ext1);
+        if (Files.exists(p1)) return p1;
+        Path p2 = dir.resolve(prefix + ext2);
+        if (Files.exists(p2)) return p2;
+        Path p3 = dir.resolve(prefix + ext3);
+        if (Files.exists(p3)) return p3;
+        try (Stream<Path> stream = Files.list(dir)) {
+            return stream
+                    .filter(p -> {
+                        String name = p.getFileName().toString();
+                        return name.startsWith(prefix)
+                                && (name.contains(ext1) || name.contains(ext2) || name.contains(ext3));
+                    })
+                    .findFirst()
+                    .orElse(null);
+        } catch (IOException _) {
+            return null;
+        }
     }
 }
