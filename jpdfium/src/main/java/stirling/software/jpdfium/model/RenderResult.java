@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.model;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
 import java.awt.Graphics2D;
 
@@ -50,6 +51,9 @@ public record RenderResult(int width, int height, byte[] rgba) {
     /**
      * Converts the RGBA bytes into a {@link BufferedImage} with the specified {@link ColorType}.
      *
+     * <p>Fast-paths {@link ColorType#GRAY} and {@link ColorType#BINARY} by directly writing
+     * into the target raster byte buffers, avoiding intermediate RGB image allocations.
+     *
      * @param colorType color type (RGB, ARGB, GRAY, BINARY)
      * @return BufferedImage
      */
@@ -59,6 +63,39 @@ public record RenderResult(int width, int height, byte[] rgba) {
         }
         if (colorType == ColorType.ARGB) {
             return toBufferedImage(true);
+        }
+        if (colorType == ColorType.GRAY) {
+            BufferedImage grayImg = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+            byte[] grayPixels = ((DataBufferByte) grayImg.getRaster().getDataBuffer()).getData();
+            int total = width * height;
+            for (int i = 0; i < total; i++) {
+                int off = i * 4;
+                int r = rgba[off] & 0xFF;
+                int g = rgba[off + 1] & 0xFF;
+                int b = rgba[off + 2] & 0xFF;
+                grayPixels[i] = (byte) ((r * 77 + g * 150 + b * 29) >> 8);
+            }
+            return grayImg;
+        }
+        if (colorType == ColorType.BINARY) {
+            BufferedImage binImg = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_BINARY);
+            byte[] binData = ((DataBufferByte) binImg.getRaster().getDataBuffer()).getData();
+            int lineBytes = (width + 7) / 8;
+            for (int y = 0; y < height; y++) {
+                int lineOff = y * lineBytes;
+                int rowOff = y * width * 4;
+                for (int x = 0; x < width; x++) {
+                    int off = rowOff + x * 4;
+                    int r = rgba[off] & 0xFF;
+                    int g = rgba[off + 1] & 0xFF;
+                    int b = rgba[off + 2] & 0xFF;
+                    int lum = (r * 77 + g * 150 + b * 29) >> 8;
+                    if (lum > 128) {
+                        binData[lineOff + (x >> 3)] |= (byte) (0x80 >> (x & 7));
+                    }
+                }
+            }
+            return binImg;
         }
         BufferedImage rgb = toBufferedImage(false);
         BufferedImage out = new BufferedImage(width, height, colorType.bufferedImageType());
@@ -82,6 +119,14 @@ public record RenderResult(int width, int height, byte[] rgba) {
      * Converts to an 8-byte LE header + RGBA byte array, optionally flattening over white.
      */
     public byte[] toFrame(boolean hasAlpha) {
+        return toFrame(hasAlpha, ColorType.RGB);
+    }
+
+    /**
+     * Converts to an 8-byte LE header + RGBA byte array, applying optional alpha flattening
+     * and grayscale/binary luminance mapping for maximum compression efficiency.
+     */
+    public byte[] toFrame(boolean hasAlpha, ColorType colorType) {
         byte[] frame = new byte[8 + rgba.length];
         frame[0] = (byte) (width & 0xFF);
         frame[1] = (byte) ((width >> 8) & 0xFF);
@@ -91,34 +136,43 @@ public record RenderResult(int width, int height, byte[] rgba) {
         frame[5] = (byte) ((height >> 8) & 0xFF);
         frame[6] = (byte) ((height >> 16) & 0xFF);
         frame[7] = (byte) ((height >> 24) & 0xFF);
-        if (hasAlpha) {
-            System.arraycopy(rgba, 0, frame, 8, rgba.length);
-        } else {
-            int len = width * height;
-            for (int i = 0; i < len; i++) {
-                int srcOff = i * 4;
-                int dstOff = 8 + srcOff;
-                int r = rgba[srcOff] & 0xFF;
-                int g = rgba[srcOff + 1] & 0xFF;
-                int b = rgba[srcOff + 2] & 0xFF;
-                int a = rgba[srcOff + 3] & 0xFF;
-                if (a == 255) {
-                    frame[dstOff] = (byte) r;
-                    frame[dstOff + 1] = (byte) g;
-                    frame[dstOff + 2] = (byte) b;
-                    frame[dstOff + 3] = (byte) 255;
-                } else if (a == 0) {
-                    frame[dstOff] = (byte) 255;
-                    frame[dstOff + 1] = (byte) 255;
-                    frame[dstOff + 2] = (byte) 255;
-                    frame[dstOff + 3] = (byte) 255;
-                } else {
-                    frame[dstOff] = (byte) ((r * a + 255 * (255 - a)) / 255);
-                    frame[dstOff + 1] = (byte) ((g * a + 255 * (255 - a)) / 255);
-                    frame[dstOff + 2] = (byte) ((b * a + 255 * (255 - a)) / 255);
-                    frame[dstOff + 3] = (byte) 255;
+        boolean isGray = (colorType == ColorType.GRAY || colorType == ColorType.BINARY);
+        int len = width * height;
+        for (int i = 0; i < len; i++) {
+            int srcOff = i * 4;
+            int dstOff = 8 + srcOff;
+            int r = rgba[srcOff] & 0xFF;
+            int g = rgba[srcOff + 1] & 0xFF;
+            int b = rgba[srcOff + 2] & 0xFF;
+            int a = rgba[srcOff + 3] & 0xFF;
+
+            if (!hasAlpha) {
+                if (a == 0) {
+                    r = 255;
+                    g = 255;
+                    b = 255;
+                } else if (a != 255) {
+                    r = (r * a + 255 * (255 - a)) / 255;
+                    g = (g * a + 255 * (255 - a)) / 255;
+                    b = (b * a + 255 * (255 - a)) / 255;
                 }
+                a = 255;
             }
+
+            if (isGray) {
+                int gray = (r * 77 + g * 150 + b * 29) >> 8;
+                if (colorType == ColorType.BINARY) {
+                    gray = gray > 128 ? 255 : 0;
+                }
+                r = gray;
+                g = gray;
+                b = gray;
+            }
+
+            frame[dstOff] = (byte) r;
+            frame[dstOff + 1] = (byte) g;
+            frame[dstOff + 2] = (byte) b;
+            frame[dstOff + 3] = (byte) a;
         }
         return frame;
     }

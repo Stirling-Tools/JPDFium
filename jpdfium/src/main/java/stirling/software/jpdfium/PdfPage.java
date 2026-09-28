@@ -12,6 +12,7 @@ import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.internal.ImageCodecs;
+import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -158,15 +159,7 @@ public final class PdfPage implements AutoCloseable {
      * Render the page to encoded image bytes with fine-grained encoding control.
      */
     public byte[] renderToBytes(int dpi, ImageFormat format, int quality, boolean transparent) throws IOException {
-        ensureOpen();
-        if (ImageCodecs.canEncode(format)) {
-            boolean keepAlpha = transparent && format.supportsTransparency();
-            RenderResult result = renderAt(dpi, keepAlpha);
-            byte[] frame = result.toFrame(keepAlpha);
-            return ImageCodecs.encodeFrame(frame, format, quality);
-        }
-        BufferedImage image = renderImage(dpi, transparent);
-        return PdfImageIO.writeToBytes(image, format, quality);
+        return renderToBytes(dpi, format, quality, transparent ? ColorType.ARGB : ColorType.RGB);
     }
 
     /**
@@ -181,9 +174,17 @@ public final class PdfPage implements AutoCloseable {
      */
     public byte[] renderToBytes(int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
         ensureOpen();
-        if (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB) {
-            boolean transparent = (colorType == ColorType.ARGB);
-            return renderToBytes(dpi, format, quality, transparent);
+        boolean transparent = (colorType == ColorType.ARGB);
+        boolean keepAlpha = transparent && format.supportsTransparency();
+        if (ImageCodecs.canEncode(format) && (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB)) {
+            try (RenderedPageView view = JpdfiumLib.renderPageView(handle, dpi, keepAlpha)) {
+                return ImageCodecs.encodeView(view, format, quality);
+            }
+        }
+        if (ImageCodecs.canEncode(format)) {
+            RenderResult result = renderAt(dpi, keepAlpha);
+            byte[] frame = result.toFrame(keepAlpha, colorType);
+            return ImageCodecs.encodeFrame(frame, format, quality);
         }
         BufferedImage image = renderImage(dpi, colorType);
         return PdfImageIO.writeToBytes(image, format, quality);
@@ -193,9 +194,24 @@ public final class PdfPage implements AutoCloseable {
      * Render the page directly to a file at the specified DPI. Format is inferred from the path extension.
      */
     public void renderTo(Path outputPath, int dpi) throws IOException {
+        renderTo(outputPath, dpi, ImageFormat.fromPath(outputPath), 90, ColorType.RGB);
+    }
+
+    /**
+     * Render the page directly to a file with explicit format, quality, and color type.
+     */
+    public void renderTo(Path outputPath, int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
         if (outputPath == null) throw new IllegalArgumentException("outputPath must not be null");
-        ImageFormat format = ImageFormat.fromPath(outputPath);
-        byte[] bytes = renderToBytes(dpi, format);
+        ensureOpen();
+        boolean transparent = (colorType == ColorType.ARGB);
+        boolean keepAlpha = transparent && format.supportsTransparency();
+        if (ImageCodecs.canEncode(format) && (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB)) {
+            try (RenderedPageView view = JpdfiumLib.renderPageView(handle, dpi, keepAlpha)) {
+                ImageCodecs.encodeViewToFile(view, outputPath, format, quality);
+                return;
+            }
+        }
+        byte[] bytes = renderToBytes(dpi, format, quality, colorType);
         Files.write(outputPath, bytes);
     }
 

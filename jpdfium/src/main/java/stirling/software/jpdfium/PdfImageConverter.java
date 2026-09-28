@@ -111,9 +111,21 @@ public final class PdfImageConverter {
         }
 
         for (int i : pages) {
-            BufferedImage image = renderPageToImage(doc, i, options.dpi(), options.transparent());
             Path outputFile = outputDir.resolve(formatFilename(i, options.format()));
-            writeImage(image, outputFile, options);
+            try (PdfPage page = doc.page(i)) {
+                PageSize sz = page.size();
+                int effectiveDpi = options.dpi();
+                if (sz.width() > 0 && sz.height() > 0) {
+                    int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
+                    int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
+                    effectiveDpi = Math.min(options.dpi(), Math.min(maxDpiW, maxDpiH));
+                    if (effectiveDpi < 1) effectiveDpi = 1;
+                }
+                ColorType ct = options.transparent()
+                        ? (options.colorType() == null || options.colorType() == ColorType.RGB ? ColorType.ARGB : options.colorType())
+                        : options.colorType();
+                page.renderTo(outputFile, effectiveDpi, options.format(), options.quality(), ct);
+            }
             outputFiles.add(outputFile);
         }
 

@@ -249,6 +249,42 @@ public final class ImageCodecs {
                 || ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
     }
 
+    /** Direct rendered page view encoding (codec first, ImageIO fallback). */
+    public static byte[] encodeView(RenderedPageView view, ImageFormat format, int quality) throws IOException {
+        ImageCodec codec = Holder.CODEC;
+        if (codec != null && codec.canEncode(format)) {
+            try {
+                return codec.encodeView(view, format, quality);
+            } catch (RuntimeException _) {
+            }
+        }
+        return encodeFallbackView(view, format, quality);
+    }
+
+    /** Direct rendered page view to file encoding (codec first, ImageIO fallback). */
+    public static void encodeViewToFile(RenderedPageView view, Path output, ImageFormat format, int quality) throws IOException {
+        ImageCodec codec = Holder.CODEC;
+        if (codec != null && codec.canEncode(format)) {
+            try {
+                codec.encodeViewToFile(view, output, format, quality);
+                return;
+            } catch (RuntimeException _) {
+            }
+        }
+        byte[] bytes = encodeView(view, format, quality);
+        Files.write(output, bytes);
+    }
+
+    private static byte[] encodeFallbackView(RenderedPageView view, ImageFormat format, int quality) throws IOException {
+        int width = view.width();
+        int height = view.height();
+        byte[] frame = new byte[8 + (int) view.pixels().byteSize()];
+        writeLeInt32(frame, 0, width);
+        writeLeInt32(frame, 4, height);
+        view.pixels().asByteBuffer().get(frame, 8, (int) view.pixels().byteSize());
+        return encodeFrame(frame, format, quality);
+    }
+
     /** Direct RGBA frame encoding (codec first, ImageIO fallback). */
     public static byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) throws IOException {
         ImageCodec codec = Holder.CODEC;
@@ -258,7 +294,8 @@ public final class ImageCodecs {
             } catch (RuntimeException _) {
             }
         }
-        return encode(imageFromFrame(frame), format, quality);
+        boolean needAlpha = format.supportsTransparency();
+        return encode(imageFromFrame(frame, needAlpha), format, quality);
     }
 
     /** Encode an image (codec first, ImageIO fallback). */
@@ -366,6 +403,11 @@ public final class ImageCodecs {
 
     /** Convert a bridge RGBA frame to a {@link BufferedImage} (TYPE_INT_ARGB). */
     public static BufferedImage imageFromFrame(byte[] frame) {
+        return imageFromFrame(frame, true);
+    }
+
+    /** Convert a bridge RGBA frame to a {@link BufferedImage} with explicit alpha retention. */
+    public static BufferedImage imageFromFrame(byte[] frame, boolean hasAlpha) {
         if (frame == null || frame.length < 8) {
             throw new IllegalArgumentException("Frame must contain an 8-byte header");
         }
@@ -375,14 +417,37 @@ public final class ImageCodecs {
                 || (long) w * h > MAX_IMAGE_PIXELS || (long) w * h * 4L > frame.length - 8L) {
             throw new IllegalArgumentException("Invalid frame dimensions or payload length: " + w + "x" + h);
         }
-        BufferedImage image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        int imageType = hasAlpha ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
+        BufferedImage image = new BufferedImage(w, h, imageType);
         int[] pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
-        for (int i = 0; i < w * h; i++) {
-            int r = frame[8 + i * 4] & 0xFF;
-            int g = frame[8 + i * 4 + 1] & 0xFF;
-            int b = frame[8 + i * 4 + 2] & 0xFF;
-            int a = frame[8 + i * 4 + 3] & 0xFF;
-            pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        int total = w * h;
+        if (hasAlpha) {
+            for (int i = 0; i < total; i++) {
+                int off = 8 + i * 4;
+                int r = frame[off] & 0xFF;
+                int g = frame[off + 1] & 0xFF;
+                int b = frame[off + 2] & 0xFF;
+                int a = frame[off + 3] & 0xFF;
+                pixels[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        } else {
+            for (int i = 0; i < total; i++) {
+                int off = 8 + i * 4;
+                int r = frame[off] & 0xFF;
+                int g = frame[off + 1] & 0xFF;
+                int b = frame[off + 2] & 0xFF;
+                int a = frame[off + 3] & 0xFF;
+                if (a == 0) {
+                    r = 255;
+                    g = 255;
+                    b = 255;
+                } else if (a != 255) {
+                    r = (r * a + 255 * (255 - a)) / 255;
+                    g = (g * a + 255 * (255 - a)) / 255;
+                    b = (b * a + 255 * (255 - a)) / 255;
+                }
+                pixels[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
         }
         return image;
     }

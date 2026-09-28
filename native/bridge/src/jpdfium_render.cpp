@@ -27,6 +27,7 @@ inline int bitmapFormatForRenderer() {
     return FPDFBitmap_BGRA;
 }
 
+#ifdef JPDFIUM_HAS_SKIA
 inline void bgraToRgbaInPlace(uint8_t* buf, int w, int h, int stride) {
     for (int row = 0; row < h; ++row) {
         uint8_t* r = buf + static_cast<std::ptrdiff_t>(row) * stride;
@@ -38,16 +39,29 @@ inline void bgraToRgbaInPlace(uint8_t* buf, int w, int h, int stride) {
     }
 }
 
-#ifdef JPDFIUM_HAS_SKIA
-inline void unpremulInPlace(uint8_t* buf, int w, int h, int stride) {
+inline void unpremulAndSwapBgraInPlace(uint8_t* buf, int w, int h, int stride,
+                                       bool reverse_byte_order) {
     for (int row = 0; row < h; ++row) {
         uint8_t* r = buf + static_cast<std::ptrdiff_t>(row) * stride;
         for (int col = 0; col < w; ++col, r += 4) {
+            uint8_t b = r[0];
+            uint8_t g = r[1];
+            uint8_t red = r[2];
             uint8_t a = r[3];
-            if (a == 0 || a == 255) continue;
-            r[0] = static_cast<uint8_t>((r[0] * 255 + a / 2) / a);
-            r[1] = static_cast<uint8_t>((r[1] * 255 + a / 2) / a);
-            r[2] = static_cast<uint8_t>((r[2] * 255 + a / 2) / a);
+            if (a != 0 && a != 255) {
+                b = static_cast<uint8_t>((b * 255 + a / 2) / a);
+                g = static_cast<uint8_t>((g * 255 + a / 2) / a);
+                red = static_cast<uint8_t>((red * 255 + a / 2) / a);
+            }
+            if (reverse_byte_order) {
+                r[0] = red;
+                r[1] = g;
+                r[2] = b;
+            } else {
+                r[0] = b;
+                r[1] = g;
+                r[2] = red;
+            }
         }
     }
 }
@@ -65,8 +79,6 @@ int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target, 
 #ifdef JPDFIUM_HAS_SKIA
     bool reverse_byte_order = false;
     if (g_jpdfiumUseSkia && (flags & FPDF_REVERSE_BYTE_ORDER) != 0) {
-        // The Skia device driver does not swap the byte order; strip the flag
-        // and swap ourselves after unpremultiplying.
         reverse_byte_order = true;
         pdfium_flags = flags & ~FPDF_REVERSE_BYTE_ORDER;
     }
@@ -101,10 +113,7 @@ int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target, 
 
 #ifdef JPDFIUM_HAS_SKIA
     if (g_jpdfiumUseSkia) {
-        unpremulInPlace(target, width, height, stride);
-        if (reverse_byte_order) {
-            bgraToRgbaInPlace(target, width, height, stride);
-        }
+        unpremulAndSwapBgraInPlace(target, width, height, stride, reverse_byte_order);
     }
 #endif
 
@@ -130,9 +139,6 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
     double h_pt = FPDF_GetPageHeight(pw->page);
     double w_px_d = w_pt * dpi / 72.0 + 0.5;
     double h_px_d = h_pt * dpi / 72.0 + 0.5;
-    // dpi comes from the Java layer as untrusted input; reject non-positive
-    // sizes and total pixel counts that would exceed 1 GiB of RGBA output
-    // (double->int conversion outside int range is UB otherwise).
     if (w_px_d <= 0 || h_px_d <= 0 || w_px_d > INT32_MAX || h_px_d > INT32_MAX ||
         w_px_d * h_px_d > kMaxRenderPixels)
         return JPDFIUM_ERR_INVALID;
@@ -157,14 +163,19 @@ int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* 
                             static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
         FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
         FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, render_flags);
-        unpremulInPlace(out, w_px, h_px, w_px * 4);
+        if (transparent) {
+            unpremulAndSwapBgraInPlace(out, w_px, h_px, w_px * 4, true);
+        } else {
+            bgraToRgbaInPlace(out, w_px, h_px, w_px * 4);
+        }
     } else {
+        render_flags |= FPDF_REVERSE_BYTE_ORDER;
         FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, render_flags);
     }
 #else
+    render_flags |= FPDF_REVERSE_BYTE_ORDER;
     FPDF_RenderPageBitmap(bmp, pw->page, 0, 0, w_px, h_px, 0, render_flags);
 #endif
-    bgraToRgbaInPlace(out, w_px, h_px, w_px * 4);
 
     FPDFBitmap_Destroy(bmp);
     *rgba = out;
@@ -214,7 +225,18 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         return JPDFIUM_ERR_NATIVE;
     }
     FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
+#ifdef JPDFIUM_HAS_SKIA
+    if (g_jpdfiumUseSkia) {
+        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
+                            static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
+        FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
+        FPDF_RenderPageBitmapWithMatrix(bmp, page, &matrix, &clip, FPDF_ANNOT | FPDF_PRINTING);
+    } else {
+        FPDF_RenderPageBitmap(bmp, page, 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
+    }
+#else
     FPDF_RenderPageBitmap(bmp, page, 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
+#endif
 
     FPDF_ClosePage(page);
 
