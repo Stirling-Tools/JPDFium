@@ -106,6 +106,8 @@ JPDFIUM_EXPORT int32_t jpdfium_page_width(int64_t page, float* width);
 JPDFIUM_EXPORT int32_t jpdfium_page_height(int64_t page, float* height);
 JPDFIUM_EXPORT void jpdfium_page_close(int64_t page);
 
+// Negative dpi renders with transparent background (alpha = 0) at resolution abs(dpi).
+// Positive dpi renders over opaque white (0xFFFFFFFF) at resolution dpi.
 JPDFIUM_EXPORT int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba,
                                            int32_t* width, int32_t* height);
 // Render a raw FPDF_PAGE into a caller-provided pixel buffer (stride bytes per

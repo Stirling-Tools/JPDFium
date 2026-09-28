@@ -518,10 +518,15 @@ public final class JpdfiumLib {
      * native pixel buffer (e.g. the Vips encoder) should call {@link #renderPageView}.
      */
     public static RenderResult renderPage(long page, int dpi) {
+        return renderPage(page, dpi, false);
+    }
+
+    public static RenderResult renderPage(long page, int dpi, boolean transparent) {
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
-            check(JpdfiumH.jpdfium_render_page(page, dpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
+            int nativeDpi = transparent ? -dpi : dpi;
+            check(JpdfiumH.jpdfium_render_page(page, nativeDpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -534,10 +539,15 @@ public final class JpdfiumLib {
     }
 
     public static RenderedPageView renderPageView(long page, int dpi) {
+        return renderPageView(page, dpi, false);
+    }
+
+    public static RenderedPageView renderPageView(long page, int dpi, boolean transparent) {
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
-            check(JpdfiumH.jpdfium_render_page(page, dpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
+            int nativeDpi = transparent ? -dpi : dpi;
+            check(JpdfiumH.jpdfium_render_page(page, nativeDpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
