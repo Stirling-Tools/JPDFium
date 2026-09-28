@@ -60,7 +60,7 @@ public final class VipsEncoder {
                 VipsOption.Enum("interpretation", VipsInterpretation.INTERPRETATION_sRGB));
     }
 
-    private static VBlob encodeToBlob(VImage image, VipsEncodeOptions opts) {
+    static VBlob encodeToBlob(VImage image, VipsEncodeOptions opts) {
         VipsOption[] options = buildOptions(opts);
         return switch (opts.format()) {
             case HEIC, HEIF, AVIF -> image.heifsaveBuffer(options);

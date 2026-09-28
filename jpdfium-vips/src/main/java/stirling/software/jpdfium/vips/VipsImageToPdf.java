@@ -5,22 +5,12 @@ import stirling.software.jpdfium.PdfImageConverter;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * libvips-backed image→PDF embedding: decode any format libvips supports
- * (PNG, JPEG, HEIC, HEIF, AVIF, JXL, WebP, TIFF, ...) via {@link VipsDecoder}
- * and embed each as a page through the JPDFium bridge's shared format=3 path
- * ({@link PdfImageConverter#embedRgbaImages}). This is the decode counterpart
- * to {@link VipsEncoder}, and the libvips alternative to
- * {@code PdfImageConverter.imagesToPdf} (which is limited to ImageIO's
- * JPG/PNG/GIF/BMP).
- *
- * <p>Requires the optional {@code jpdfium-vips} module + a libvips native
- * (bundled via {@code jpdfium-natives-vips-*}, or a system libvips).
+ * libvips-backed image to PDF embedding.
  */
 public final class VipsImageToPdf {
 
@@ -31,29 +21,28 @@ public final class VipsImageToPdf {
         return fromImages(List.of(imagePath), options);
     }
 
-    /** Decode and embed each image file as a page in a new PDF. */
+    /** Decode and embed each image file as a page in a new PDF (supports multi-page TIFF/GIF). */
     public static PdfDocument fromImages(List<Path> imagePaths, ImageToPdfOptions options) throws IOException {
         if (imagePaths == null || imagePaths.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required");
         }
-        List<byte[]> images = new ArrayList<>(imagePaths.size());
+        List<byte[]> frames = new ArrayList<>();
         for (Path p : imagePaths) {
-            images.add(Files.readAllBytes(p));
+            frames.addAll(VipsDecoder.decodeAllFrames(p));
         }
-        return fromImageBytes(images, options);
+        return PdfImageConverter.embedRgbaImages(frames, options);
     }
 
     /**
-     * Decode and embed each in-memory image as a page. Opt-in for callers that
-     * already hold image bytes (e.g. downloaded or in-memory HEIC/JXL).
+     * Decode and embed each in-memory image as a page (supports multi-page TIFF/GIF).
      */
     public static PdfDocument fromImageBytes(List<byte[]> images, ImageToPdfOptions options) {
         if (images == null || images.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required");
         }
-        List<byte[]> frames = new ArrayList<>(images.size());
+        List<byte[]> frames = new ArrayList<>();
         for (byte[] bytes : images) {
-            frames.add(VipsDecoder.decodeToRgba(bytes));
+            frames.addAll(VipsDecoder.decodeAllFrames(bytes));
         }
         return PdfImageConverter.embedRgbaImages(frames, options);
     }

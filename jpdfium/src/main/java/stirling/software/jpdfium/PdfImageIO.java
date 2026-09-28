@@ -1,9 +1,13 @@
 package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.internal.ImageCodecs;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -287,7 +291,7 @@ public final class PdfImageIO {
      * Writes multiple images as consecutive frames of a multi-page TIFF returning the encoded bytes.
      */
     public static byte[] writeMultiPageTiffToBytes(List<BufferedImage> images) throws IOException {
-        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
         writeMultiPageTiff(images, baos, 1.0f);
         return baos.toByteArray();
     }
@@ -312,7 +316,7 @@ public final class PdfImageIO {
      * @param transparent true to allow transparency in ARGB
      * @return combined single image
      */
-    public static BufferedImage combineVertically(List<BufferedImage> images, stirling.software.jpdfium.model.ColorType colorType, boolean transparent) {
+    public static BufferedImage combineVertically(List<BufferedImage> images, ColorType colorType, boolean transparent) {
         if (images == null || images.isEmpty()) {
             throw new IllegalArgumentException("images must not be empty");
         }
@@ -338,10 +342,10 @@ public final class PdfImageIO {
         }
 
         BufferedImage combined = new BufferedImage(maxWidth, totalHeight, targetType);
-        java.awt.Graphics2D g = combined.createGraphics();
+        Graphics2D g = combined.createGraphics();
         try {
             if (!transparent && targetType != BufferedImage.TYPE_INT_ARGB) {
-                g.setColor(java.awt.Color.WHITE);
+                g.setColor(Color.WHITE);
                 g.fillRect(0, 0, maxWidth, totalHeight);
             }
             int currentY = 0;
@@ -376,5 +380,46 @@ public final class PdfImageIO {
      */
     public static boolean canWrite(ImageFormat format) {
         return format != null && ImageCodecs.canEncode(format);
+    }
+
+    /**
+     * Resizes an image file down to roughly {@code maxDim} on its longest edge.
+     *
+     * @param input  source image file
+     * @param maxDim maximum thumbnail dimension in pixels
+     * @return thumbnail as BufferedImage
+     * @throws IOException on error
+     */
+    public static BufferedImage thumbnailImage(Path input, int maxDim) throws IOException {
+        byte[] bytes = Files.readAllBytes(input);
+        return thumbnailImage(bytes, maxDim);
+    }
+
+    /**
+     * Resizes image bytes down to roughly {@code maxDim} on its longest edge.
+     *
+     * @param imageBytes source image bytes
+     * @param maxDim     maximum thumbnail dimension in pixels
+     * @return thumbnail as BufferedImage
+     * @throws IOException on error
+     */
+    public static BufferedImage thumbnailImage(byte[] imageBytes, int maxDim) throws IOException {
+        BufferedImage full = read(imageBytes);
+        int w = full.getWidth();
+        int h = full.getHeight();
+        if (w <= maxDim && h <= maxDim) {
+            return full;
+        }
+        double scale = Math.min((double) maxDim / w, (double) maxDim / h);
+        int targetW = Math.max(1, (int) Math.round(w * scale));
+        int targetH = Math.max(1, (int) Math.round(h * scale));
+        BufferedImage thumb = new BufferedImage(targetW, targetH, full.getType() != 0 ? full.getType() : BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = thumb.createGraphics();
+        try {
+            g.drawImage(full, 0, 0, targetW, targetH, null);
+        } finally {
+            g.dispose();
+        }
+        return thumb;
     }
 }

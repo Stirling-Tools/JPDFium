@@ -239,10 +239,10 @@ public final class PdfImageConverter {
      */
     public static byte[] thumbnail(PdfDocument doc, int pageIndex, int maxSize, ImageFormat format) throws IOException {
         try (PdfPage page = doc.page(pageIndex)) {
-            RenderResult result = page.renderAt(72);
-            BufferedImage img = result.toBufferedImage();
-
-            img = resizeToFit(img, maxSize, maxSize);
+            PageSize size = page.size();
+            float longer = Math.max(size.width(), size.height());
+            int dpi = (int) Math.max(1.0, Math.round(72.0 * maxSize / Math.max(1.0f, longer)));
+            BufferedImage img = pageToImage(page, dpi, false);
             return imageToBytes(img, format, 85);
         }
     }

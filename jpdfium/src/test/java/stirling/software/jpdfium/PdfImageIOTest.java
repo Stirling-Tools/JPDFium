@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 
 import java.awt.Color;
@@ -149,9 +150,20 @@ class PdfImageIOTest {
 
         BufferedImage combinedGray = PdfImageIO.combineVertically(
                 List.of(img1, img2),
-                stirling.software.jpdfium.model.ColorType.GRAY,
+                ColorType.GRAY,
                 false);
         assertNotNull(combinedGray);
         assertEquals(BufferedImage.TYPE_BYTE_GRAY, combinedGray.getType());
+    }
+
+    @Test
+    void thumbnailImageTest() throws Exception {
+        BufferedImage original = createSampleImage();
+        byte[] pngBytes = PdfImageIO.writeToBytes(original, "PNG");
+
+        BufferedImage thumb = PdfImageIO.thumbnailImage(pngBytes, 50);
+        assertNotNull(thumb);
+        assertEquals(50, thumb.getWidth());
+        assertEquals(40, thumb.getHeight());
     }
 }

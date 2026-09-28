@@ -1,5 +1,8 @@
 package stirling.software.jpdfium.vips;
 
+import app.photofox.vipsffm.VBlob;
+import app.photofox.vipsffm.VImage;
+import app.photofox.vipsffm.Vips;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
@@ -152,6 +155,33 @@ public final class VipsImageConverter {
              RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
             return VipsEncoder.encodeToBytes(view, VipsEncodeOptions.defaults(format));
         }
+    }
+
+    /**
+     * Thumbnail an image file using libvips shrink-on-load (vips_thumbnail).
+     */
+    public static byte[] thumbnailImage(Path imagePath, int maxDimPx, VipsFormat format, int quality) {
+        VipsAvailability.require(format);
+        byte[][] result = new byte[1][];
+        Vips.run(arena -> {
+            VImage thumb = VImage.thumbnail(arena, imagePath.toAbsolutePath().toString(), maxDimPx);
+            result[0] = VipsEncoder.encodeToBlob(thumb, VipsEncodeOptions.builder(format).quality(quality).build()).getBytes();
+        });
+        return result[0];
+    }
+
+    /**
+     * Thumbnail image bytes using libvips shrink-on-load (vips_thumbnail).
+     */
+    public static byte[] thumbnailImage(byte[] imageBytes, int maxDimPx, VipsFormat format, int quality) {
+        VipsAvailability.require(format);
+        byte[][] result = new byte[1][];
+        Vips.run(arena -> {
+            VBlob blob = VBlob.newFromBytes(arena, imageBytes);
+            VImage thumb = VImage.thumbnailBuffer(arena, blob, maxDimPx);
+            result[0] = VipsEncoder.encodeToBlob(thumb, VipsEncodeOptions.builder(format).quality(quality).build()).getBytes();
+        });
+        return result[0];
     }
 
     /**
