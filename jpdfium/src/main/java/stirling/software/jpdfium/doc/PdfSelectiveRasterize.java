@@ -1,13 +1,8 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.PdfPage;
-import stirling.software.jpdfium.panama.PageEditBindings;
-import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.text.PdfTextExtractor;
-import stirling.software.jpdfium.exception.JPDFiumException;
 
-import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -86,92 +81,6 @@ public final class PdfSelectiveRasterize {
     }
 
     private static void rasterizePage(PdfDocument doc, int pageIndex, int dpi) {
-        float pageW, pageH;
-        try (PdfPage page = doc.page(pageIndex)) {
-            pageW = page.size().width();
-            pageH = page.size().height();
-        }
-
-        int pixW = (int) (pageW * dpi / 72f);
-        int pixH = (int) (pageH * dpi / 72f);
-
-        // Render the page to a bitmap
-        MemorySegment bitmap;
-        try {
-            bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(pixW, pixH, 0);
-        } catch (Throwable t) { return; }
-
-        try {
-            // Fill white
-            try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, pixW, pixH, 0xFFFFFFFFL); }
-            catch (Throwable t) { return; }
-
-            // Render
-            try (PdfPage page = doc.page(pageIndex)) {
-                int flags = RenderBindings.FPDF_ANNOT | RenderBindings.FPDF_PRINTING;
-                try { RenderBindings.FPDF_RenderPageBitmap.invokeExact(bitmap, page.rawHandle(),
-                        0, 0, pixW, pixH, 0, flags); }
-                catch (Throwable t) { return; }
-            }
-
-            // Now clear the page and insert the rendered image
-            try (PdfPage page = doc.page(pageIndex)) {
-                MemorySegment rawPage = page.rawHandle();
-
-                // Remove all existing page objects
-                int objCount;
-                try {
-                    objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-                } catch (Throwable t) { return; }
-
-                for (int i = objCount - 1; i >= 0; i--) {
-                    try {
-                        MemorySegment obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                        int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
-            if (ok == 0) {
-                throw new JPDFiumException("FPDFPage_RemoveObject failed");
-            }
-                    } catch (Throwable _) {}
-                }
-
-                // Create an image object
-                MemorySegment imgObj;
-                try {
-                    imgObj = (MemorySegment) PageEditBindings.FPDFPageObj_NewImageObj.invokeExact(doc.rawHandle());
-                } catch (Throwable t) { return; }
-
-                // Set the bitmap on the image object
-                try {
-                    int ok = (int) PageEditBindings.FPDFImageObj_SetBitmap.invokeExact(
-                            MemorySegment.NULL, 0, imgObj, bitmap);
-            if (ok == 0) {
-                throw new JPDFiumException("FPDFImageObj_SetBitmap failed");
-            }
-                } catch (Throwable t) { return; }
-
-                // Transform the image to cover the full page
-                // The image object starts as 1x1 at origin. Scale to page size.
-                try {
-                    PageEditBindings.FPDFPageObj_Transform.invokeExact(imgObj,
-                            (double) pageW, 0.0, 0.0, (double) pageH, 0.0, 0.0);
-                } catch (Throwable t) { return; }
-
-                // Add image to page
-                try {
-                    PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, imgObj);
-                } catch (Throwable _) {}
-
-                // Generate content
-                try {
-                    int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-            if (ok == 0) {
-                throw new JPDFiumException("FPDFPage_GenerateContent failed");
-            }
-                } catch (Throwable _) {}
-            }
-        } finally {
-            try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable _) {}
-        }
+        doc.convertPageToImage(pageIndex, dpi);
     }
 }

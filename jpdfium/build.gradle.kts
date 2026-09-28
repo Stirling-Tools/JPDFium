@@ -101,6 +101,7 @@ dependencies {
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
+    jmhRuntimeOnly(project(":jpdfium-vips"))
 }
 
 jmh {

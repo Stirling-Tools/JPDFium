@@ -57,11 +57,29 @@ public final class VipsImageCodec implements ImageCodec {
     }
 
     @Override
-    public byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) {
+    public byte[] encodeView(RenderedPageView view, ImageFormat format, int quality) {
         VipsFormat vipsFormat = toVips(format);
         if (vipsFormat == null) {
             throw new IllegalArgumentException("libvips cannot encode " + format);
         }
+        VipsEncodeOptions options =
+                VipsEncodeOptions.builder(vipsFormat).quality(quality).build();
+        return VipsEncoder.encodeToBytes(view, options);
+    }
+
+    @Override
+    public void encodeViewToFile(RenderedPageView view, Path output, ImageFormat format, int quality) throws IOException {
+        VipsFormat vipsFormat = toVips(format);
+        if (vipsFormat == null) {
+            throw new IllegalArgumentException("libvips cannot encode " + format);
+        }
+        VipsEncodeOptions options =
+                VipsEncodeOptions.builder(vipsFormat).quality(quality).build();
+        VipsEncoder.encodeToFile(view, output, options);
+    }
+
+    @Override
+    public byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) {
         if (frame == null || frame.length < 8) {
             throw new IllegalArgumentException("Frame must contain an 8-byte header");
         }
@@ -76,9 +94,7 @@ public final class VipsImageCodec implements ImageCodec {
             pixels.copyFrom(MemorySegment.ofArray(frame).asSlice(8, pixelBytes));
             RenderedPageView view = new RenderedPageView(
                     width, height, width * 4, 4, PixelFormat.RGBA_STRAIGHT, pixels, null);
-            VipsEncodeOptions options =
-                    VipsEncodeOptions.builder(vipsFormat).quality(quality).build();
-            return VipsEncoder.encodeToBytes(view, options);
+            return encodeView(view, format, quality);
         }
     }
 

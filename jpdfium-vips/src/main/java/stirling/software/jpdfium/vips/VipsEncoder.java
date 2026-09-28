@@ -5,6 +5,8 @@ import app.photofox.vipsffm.VImage;
 import app.photofox.vipsffm.Vips;
 import app.photofox.vipsffm.VipsOption;
 import app.photofox.vipsffm.enums.VipsForeignHeifCompression;
+import app.photofox.vipsffm.enums.VipsForeignTiffCompression;
+import app.photofox.vipsffm.enums.VipsForeignTiffPredictor;
 import app.photofox.vipsffm.enums.VipsInterpretation;
 import stirling.software.jpdfium.internal.RenderedPageView;
 
@@ -51,11 +53,6 @@ public final class VipsEncoder {
         if (view.format().name().contains("PREMUL")) {
             image = image.unpremultiply();
         }
-        // A raw newFromMemory image has an undefined colour interpretation.
-        // libjxl's encoder rejects a 4-band image with an undefined
-        // interpretation (JxlEncoderSetBasicInfo error) while the other savers
-        // silently accept it - and tagging sRGB lets every saver write correct
-        // colour metadata. Same thing a PNG/JPEG loader would produce.
         return image.copy(
                 VipsOption.Enum("interpretation", VipsInterpretation.INTERPRETATION_sRGB));
     }
@@ -104,10 +101,6 @@ public final class VipsEncoder {
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         list.add(VipsOption.Int("bitdepth", opts.bitdepth()));
         list.add(VipsOption.Int("effort", opts.effort()));
-        // The heif `compression` property is a VipsForeignHeifCompression enum
-        // (GType int), not a string - passing a gchararray makes GLib refuse the
-        // property and, for AV1, the save then fails. Use the enum option so the
-        // raw int reaches vips_heifsave.
         VipsForeignHeifCompression codec = switch (opts.format()) {
             case AVIF -> VipsForeignHeifCompression.FOREIGN_HEIF_COMPRESSION_AV1;
             case HEIC, HEIF -> VipsForeignHeifCompression.FOREIGN_HEIF_COMPRESSION_HEVC;
@@ -130,6 +123,7 @@ public final class VipsEncoder {
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         list.add(VipsOption.Int("effort", opts.effort()));
+        list.add(VipsOption.Boolean("strip", true));
         return list.toArray(VipsOption[]::new);
     }
 
@@ -137,17 +131,25 @@ public final class VipsEncoder {
         List<VipsOption> list = new ArrayList<>();
         list.add(VipsOption.Int("compression", DEFAULT_PNG_COMPRESSION));
         list.add(VipsOption.Int("effort", opts.effort()));
+        list.add(VipsOption.Boolean("strip", true));
         return list.toArray(VipsOption[]::new);
     }
 
     private static VipsOption[] buildJpegOptions(VipsEncodeOptions opts) {
-        return new VipsOption[]{VipsOption.Int("Q", opts.quality())};
+        return new VipsOption[]{
+            VipsOption.Int("Q", opts.quality()),
+            VipsOption.Boolean("strip", true),
+            VipsOption.Boolean("optimize_coding", true)
+        };
     }
 
     private static VipsOption[] buildTiffOptions(VipsEncodeOptions opts) {
         List<VipsOption> list = new ArrayList<>();
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
+        list.add(VipsOption.Enum("compression", VipsForeignTiffCompression.FOREIGN_TIFF_COMPRESSION_DEFLATE));
+        list.add(VipsOption.Enum("predictor", VipsForeignTiffPredictor.FOREIGN_TIFF_PREDICTOR_HORIZONTAL));
+        list.add(VipsOption.Boolean("strip", true));
         return list.toArray(VipsOption[]::new);
     }
 
