@@ -11,6 +11,7 @@ import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -153,6 +154,11 @@ public final class PdfPage implements AutoCloseable {
      */
     public byte[] renderToBytes(int dpi, ImageFormat format, int quality, boolean transparent) throws IOException {
         ensureOpen();
+        if (ImageCodecs.canEncode(format)) {
+            RenderResult result = renderAt(dpi);
+            byte[] frame = result.toFrame();
+            return ImageCodecs.encodeFrame(frame, format, quality);
+        }
         BufferedImage image = renderImage(dpi, transparent);
         return PdfImageIO.writeToBytes(image, format, quality);
     }

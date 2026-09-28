@@ -16,6 +16,7 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageFormat;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
@@ -75,5 +76,13 @@ public class FlattenBenchmark {
     @Benchmark
     public byte[] frameFromImageConversion() {
         return ImageCodecs.frameFromImage(sampleImage);
+    }
+
+    @Benchmark
+    public byte[] pageRenderToBytesPng() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(minimalPdfBytes);
+             PdfPage page = doc.page(0)) {
+            return page.renderToBytes(150, ImageFormat.PNG);
+        }
     }
 }

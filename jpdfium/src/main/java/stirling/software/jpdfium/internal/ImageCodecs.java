@@ -245,6 +245,18 @@ public final class ImageCodecs {
         return ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
     }
 
+    /** Direct RGBA frame encoding (codec first, ImageIO fallback). */
+    public static byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) throws IOException {
+        ImageCodec codec = Holder.CODEC;
+        if (codec != null && codec.canEncode(format)) {
+            try {
+                return codec.encodeFrame(frame, format, quality);
+            } catch (RuntimeException _) {
+            }
+        }
+        return encode(imageFromFrame(frame), format, quality);
+    }
+
     /** Encode an image (codec first, ImageIO fallback). */
     public static byte[] encode(BufferedImage image, ImageFormat format, int quality)
             throws IOException {
@@ -252,9 +264,7 @@ public final class ImageCodecs {
         if (codec != null && codec.canEncode(format)) {
             try {
                 return codec.encodeFrame(frameFromImage(image), format, quality);
-            } catch (RuntimeException ignored) {
-                // Runtime failure in the codec (e.g. a missing encoder for the
-                // selected sub-format): fall through to ImageIO.
+            } catch (RuntimeException _) {
             }
         }
         return imageIoEncode(image, format, quality);

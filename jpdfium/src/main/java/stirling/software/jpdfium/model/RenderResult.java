@@ -70,4 +70,21 @@ public record RenderResult(int width, int height, byte[] rgba) {
         }
         return out;
     }
+
+    /**
+     * Converts to an 8-byte LE header + RGBA byte array for direct codec encoding.
+     */
+    public byte[] toFrame() {
+        byte[] frame = new byte[8 + rgba.length];
+        frame[0] = (byte) (width & 0xFF);
+        frame[1] = (byte) ((width >> 8) & 0xFF);
+        frame[2] = (byte) ((width >> 16) & 0xFF);
+        frame[3] = (byte) ((width >> 24) & 0xFF);
+        frame[4] = (byte) (height & 0xFF);
+        frame[5] = (byte) ((height >> 8) & 0xFF);
+        frame[6] = (byte) ((height >> 16) & 0xFF);
+        frame[7] = (byte) ((height >> 24) & 0xFF);
+        System.arraycopy(rgba, 0, frame, 8, rgba.length);
+        return frame;
+    }
 }
