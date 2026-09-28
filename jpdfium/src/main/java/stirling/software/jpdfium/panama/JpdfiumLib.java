@@ -518,15 +518,19 @@ public final class JpdfiumLib {
      * native pixel buffer (e.g. the Vips encoder) should call {@link #renderPageView}.
      */
     public static RenderResult renderPage(long page, int dpi) {
-        return renderPage(page, dpi, false);
+        return renderPage(page, dpi, false, 0);
     }
 
     public static RenderResult renderPage(long page, int dpi, boolean transparent) {
+        return renderPage(page, dpi, transparent, 0);
+    }
+
+    public static RenderResult renderPage(long page, int dpi, boolean transparent, int flags) {
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
-            check(JpdfiumH.jpdfium_render_page(page, nativeDpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
+            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -539,15 +543,19 @@ public final class JpdfiumLib {
     }
 
     public static RenderedPageView renderPageView(long page, int dpi) {
-        return renderPageView(page, dpi, false);
+        return renderPageView(page, dpi, false, 0);
     }
 
     public static RenderedPageView renderPageView(long page, int dpi, boolean transparent) {
+        return renderPageView(page, dpi, transparent, 0);
+    }
+
+    public static RenderedPageView renderPageView(long page, int dpi, boolean transparent, int flags) {
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
-            check(JpdfiumH.jpdfium_render_page(page, nativeDpi, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
+            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -555,6 +563,35 @@ public final class JpdfiumLib {
             MemorySegment pixels = nativePtr.reinterpret(byteLen);
             return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
                     pixels, () -> JpdfiumH.jpdfium_free_buffer(nativePtr));
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,
+                                                int width, int height, int stride, int flags,
+                                                MemorySegment cancelFlag) {
+        NativeGuard.acquire();
+        try {
+            return JpdfiumH.jpdfium_render_page_progressive_start(rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static int renderPageProgressiveContinue(MemorySegment rawPage, MemorySegment cancelFlag) {
+        NativeGuard.acquire();
+        try {
+            return JpdfiumH.jpdfium_render_page_progressive_continue(rawPage, cancelFlag);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    public static void renderPageProgressiveClose(MemorySegment rawPage) {
+        NativeGuard.acquire();
+        try {
+            JpdfiumH.jpdfium_render_page_progressive_close(rawPage);
         } finally {
             NativeGuard.release();
         }

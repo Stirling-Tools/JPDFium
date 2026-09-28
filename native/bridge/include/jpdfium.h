@@ -110,6 +110,9 @@ JPDFIUM_EXPORT void jpdfium_page_close(int64_t page);
 // Positive dpi renders over opaque white (0xFFFFFFFF) at resolution dpi.
 JPDFIUM_EXPORT int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba,
                                            int32_t* width, int32_t* height);
+JPDFIUM_EXPORT int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags,
+                                                 uint8_t** rgba, int32_t* width,
+                                                 int32_t* height) JPDFIUM_NOEXCEPT;
 // Render a raw FPDF_PAGE into a caller-provided pixel buffer (stride bytes per
 // row, >= width*4). Renderer-aware: with Skia the page is rendered through
 // FPDF_RenderPageBitmapWithMatrix into FPDFBitmap_BGRA_Premul and the result
@@ -122,6 +125,23 @@ JPDFIUM_EXPORT int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target
 JPDFIUM_EXPORT int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target,
                                                      int32_t width, int32_t height, int32_t stride,
                                                      int32_t flags);
+
+// Progressive rendering status (matches FPDF_RENDER_* values)
+#define JPDFIUM_RENDER_READY 0
+#define JPDFIUM_RENDER_TOBECONTINUED 1
+#define JPDFIUM_RENDER_DONE 2
+#define JPDFIUM_RENDER_FAILED 3
+
+JPDFIUM_EXPORT int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target,
+                                                             int32_t width, int32_t height,
+                                                             int32_t stride, int32_t flags,
+                                                             void* cancel_flag) JPDFIUM_NOEXCEPT;
+
+JPDFIUM_EXPORT int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
+                                                                void* cancel_flag) JPDFIUM_NOEXCEPT;
+
+JPDFIUM_EXPORT void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT;
+
 JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer);
 
 // Returns per-character data as a compact JSON array: [{i,u,x,y,w,h,font,size}, ...]

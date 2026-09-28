@@ -284,6 +284,9 @@ public final class EmbedPdfAnnotations {
      * @param index annotation index
      */
     public static void flatten(MemorySegment page, int index) {
+        if (EmbedPdfAnnotationBindings.EPDFAnnot_Flatten == null) {
+            return;
+        }
         MemorySegment annot = openAnnot(page, index);
         try {
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_Flatten.invokeExact(page, annot);
