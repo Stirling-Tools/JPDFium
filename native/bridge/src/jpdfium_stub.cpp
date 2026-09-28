@@ -416,6 +416,11 @@ int32_t jpdfium_render_page(int64_t, int32_t dpi, uint8_t** rgba, int32_t* w, in
     return *rgba ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t /*flags*/, uint8_t** rgba,
+                                  int32_t* w, int32_t* h) JPDFIUM_NOEXCEPT {
+    return jpdfium_render_page(page, dpi, rgba, w, h);
+}
+
 int32_t jpdfium_render_page_into(void*, uint8_t* target, int32_t width, int32_t height,
                                  int32_t stride, int32_t) {
     if (!target || width <= 0 || height <= 0 || stride < width * 4) return JPDFIUM_ERR_INVALID;
@@ -427,6 +432,26 @@ int32_t jpdfium_render_page_form_into(void* page, void*, uint8_t* target, int32_
                                       int32_t height, int32_t stride, int32_t flags) {
     return jpdfium_render_page_into(page, target, width, height, stride, flags);
 }
+
+int32_t jpdfium_render_page_progressive_start(void*, uint8_t* target, int32_t width, int32_t height,
+                                              int32_t stride, int32_t,
+                                              void* cancel_flag) JPDFIUM_NOEXCEPT {
+    if (!target || width <= 0 || height <= 0 || stride < width * 4) return JPDFIUM_ERR_INVALID;
+    std::memset(target, 0xFF, static_cast<std::size_t>(stride) * static_cast<std::size_t>(height));
+    if (cancel_flag && *static_cast<const int32_t*>(cancel_flag) != 0) {
+        return JPDFIUM_RENDER_TOBECONTINUED;
+    }
+    return JPDFIUM_RENDER_DONE;
+}
+
+int32_t jpdfium_render_page_progressive_continue(void*, void* cancel_flag) JPDFIUM_NOEXCEPT {
+    if (cancel_flag && *static_cast<const int32_t*>(cancel_flag) != 0) {
+        return JPDFIUM_RENDER_TOBECONTINUED;
+    }
+    return JPDFIUM_RENDER_DONE;
+}
+
+void jpdfium_render_page_progressive_close(void*) JPDFIUM_NOEXCEPT {}
 
 void jpdfium_free_buffer(uint8_t* buf) {
     std::free(buf);

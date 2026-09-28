@@ -30,6 +30,9 @@ public final class FastLinks {
 
     private static final Linker LINKER = Linker.nativeLinker();
 
+    private static final boolean CRITICAL_ENABLED = Boolean.parseBoolean(
+            System.getProperty("jpdfium.ffm.critical", "true"));
+
     public static final MethodHandle DOC_PAGE_COUNT;
     public static final MethodHandle PAGE_WIDTH;
     public static final MethodHandle PAGE_HEIGHT;
@@ -43,22 +46,29 @@ public final class FastLinks {
     public static final MethodHandle PAGE_FLATTEN;
 
     static {
-        DOC_PAGE_COUNT  = link("jpdfium_doc_page_count", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
-        PAGE_WIDTH      = link("jpdfium_page_width", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
-        PAGE_HEIGHT     = link("jpdfium_page_height", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
-        DOC_CLOSE       = link("jpdfium_doc_close", FunctionDescriptor.ofVoid(JAVA_LONG));
-        PAGE_CLOSE      = link("jpdfium_page_close", FunctionDescriptor.ofVoid(JAVA_LONG));
-        FREE_BUFFER     = link("jpdfium_free_buffer", FunctionDescriptor.ofVoid(ADDRESS));
-        FREE_STRING     = link("jpdfium_free_string", FunctionDescriptor.ofVoid(ADDRESS));
-        PCRE2_FREE      = link("jpdfium_pcre2_free", FunctionDescriptor.ofVoid(JAVA_LONG));
-        FLASHTEXT_FREE  = link("jpdfium_flashtext_free", FunctionDescriptor.ofVoid(JAVA_LONG));
-        FONT_FREE_INFO  = link("jpdfium_font_free_info", FunctionDescriptor.ofVoid(ADDRESS));
-        PAGE_FLATTEN    = link("jpdfium_page_flatten", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+        DOC_PAGE_COUNT  = link("jpdfium_doc_page_count", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
+        PAGE_WIDTH      = link("jpdfium_page_width", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
+        PAGE_HEIGHT     = link("jpdfium_page_height", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
+        DOC_CLOSE       = link("jpdfium_doc_close", FunctionDescriptor.ofVoid(JAVA_LONG), true);
+        PAGE_CLOSE      = link("jpdfium_page_close", FunctionDescriptor.ofVoid(JAVA_LONG), true);
+        FREE_BUFFER     = link("jpdfium_free_buffer", FunctionDescriptor.ofVoid(ADDRESS), true);
+        FREE_STRING     = link("jpdfium_free_string", FunctionDescriptor.ofVoid(ADDRESS), true);
+        PCRE2_FREE      = link("jpdfium_pcre2_free", FunctionDescriptor.ofVoid(JAVA_LONG), true);
+        FLASHTEXT_FREE  = link("jpdfium_flashtext_free", FunctionDescriptor.ofVoid(JAVA_LONG), true);
+        FONT_FREE_INFO  = link("jpdfium_font_free_info", FunctionDescriptor.ofVoid(ADDRESS), true);
+        PAGE_FLATTEN    = link("jpdfium_page_flatten", FunctionDescriptor.of(JAVA_INT, JAVA_LONG), false);
     }
 
-    private static MethodHandle link(String name, FunctionDescriptor desc) {
+    private static MethodHandle link(String name, FunctionDescriptor desc, boolean isLeafCritical) {
         Optional<MemorySegment> sym = Symbols.find(name);
-        return sym.map(memorySegment -> LINKER.downcallHandle(memorySegment, desc)).orElse(null);
+        if (sym.isEmpty()) return null;
+        if (isLeafCritical && CRITICAL_ENABLED) {
+            try {
+                return LINKER.downcallHandle(sym.get(), desc, Linker.Option.critical(false));
+            } catch (Throwable _) {
+            }
+        }
+        return LINKER.downcallHandle(sym.get(), desc);
     }
 
     private FastLinks() {}

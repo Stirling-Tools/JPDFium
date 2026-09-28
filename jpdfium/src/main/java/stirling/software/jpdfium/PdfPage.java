@@ -17,7 +17,10 @@ import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.model.ProgressiveStatus;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.model.RenderFlags;
+import stirling.software.jpdfium.model.RenderQuality;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
@@ -82,12 +85,21 @@ public final class PdfPage implements AutoCloseable {
     }
 
     public RenderResult renderAt(int dpi) {
-        return renderAt(dpi, false);
+        return renderAt(dpi, false, (RenderQuality) null);
     }
 
     public RenderResult renderAt(int dpi, boolean transparent) {
+        return renderAt(dpi, transparent, (RenderQuality) null);
+    }
+
+    public RenderResult renderAt(int dpi, RenderQuality quality) {
+        return renderAt(dpi, false, quality);
+    }
+
+    public RenderResult renderAt(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
-        return JpdfiumLib.renderPage(handle, dpi, transparent);
+        int flags = quality != null ? quality.flags() : 0;
+        return JpdfiumLib.renderPage(handle, dpi, transparent, flags);
     }
 
     /**
@@ -109,6 +121,10 @@ public final class PdfPage implements AutoCloseable {
         return renderImage(dpi, false);
     }
 
+    public BufferedImage renderImage(int dpi, RenderQuality quality) {
+        return renderImage(dpi, false, quality);
+    }
+
     /**
      * Render the page to a {@link BufferedImage} at the specified DPI with optional transparency.
      *
@@ -117,8 +133,12 @@ public final class PdfPage implements AutoCloseable {
      * @return rendered image
      */
     public BufferedImage renderImage(int dpi, boolean transparent) {
+        return renderImage(dpi, transparent, null);
+    }
+
+    public BufferedImage renderImage(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
-        RenderResult result = renderAt(dpi, transparent);
+        RenderResult result = renderAt(dpi, transparent, quality);
         return result.toBufferedImage(transparent);
     }
 
@@ -264,8 +284,17 @@ public final class PdfPage implements AutoCloseable {
      * @param height       render height in pixels
      */
     public void renderInto(MemorySegment targetBitmap, int width, int height) {
+        renderInto(targetBitmap, width, height, RenderFlags.REVERSE_BYTE_ORDER | RenderFlags.ANNOTATIONS);
+    }
+
+    public void renderInto(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
+        int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
+        renderInto(targetBitmap, width, height, flags);
+    }
+
+    public void renderInto(MemorySegment targetBitmap, int width, int height, int flags) {
         ensureOpen();
-        JpdfiumLib.renderPageIntoSegment(rawPageSegment, targetBitmap, width, height, 0x10 | 0x01 /* FPDF_REVERSE_BYTE_ORDER | FPDF_ANNOT */);
+        JpdfiumLib.renderPageIntoSegment(rawPageSegment, targetBitmap, width, height, flags);
     }
 
     /**
@@ -284,6 +313,69 @@ public final class PdfPage implements AutoCloseable {
             throw new IllegalArgumentException("targetBuffer must be a direct ByteBuffer");
         }
         renderInto(MemorySegment.ofBuffer(directBuffer), width, height);
+    }
+
+    public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
+        int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
+        return startProgressiveRender(targetBitmap, width, height, flags);
+    }
+
+    public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, int flags) {
+        ensureOpen();
+        return new ProgressiveSession(rawPageSegment, targetBitmap, width, height, width * 4, flags);
+    }
+
+    public static final class ProgressiveSession implements AutoCloseable {
+        private final MemorySegment rawPage;
+        private final Arena cancelArena;
+        private final MemorySegment cancelFlag;
+        private boolean closed = false;
+
+        ProgressiveSession(MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags) {
+            this.rawPage = rawPage;
+            this.cancelArena = Arena.ofConfined();
+            this.cancelFlag = cancelArena.allocate(ValueLayout.JAVA_INT);
+            this.cancelFlag.set(ValueLayout.JAVA_INT, 0, 0);
+            int status = JpdfiumLib.renderPageProgressiveStart(rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+            if (status == ProgressiveStatus.DONE.code()) {
+                closed = true;
+                cancelArena.close();
+            } else if (status == ProgressiveStatus.FAILED.code()) {
+                closed = true;
+                cancelArena.close();
+                throw new JPDFiumException("Progressive render start failed");
+            }
+        }
+
+        public void cancel() {
+            if (!closed) {
+                cancelFlag.set(ValueLayout.JAVA_INT, 0, 1);
+            }
+        }
+
+        public ProgressiveStatus step() {
+            if (closed) {
+                return ProgressiveStatus.DONE;
+            }
+            int code = JpdfiumLib.renderPageProgressiveContinue(rawPage, cancelFlag);
+            ProgressiveStatus status = ProgressiveStatus.fromCode(code);
+            if (status != ProgressiveStatus.TO_BE_CONTINUED) {
+                close();
+            }
+            return status;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                try {
+                    JpdfiumLib.renderPageProgressiveClose(rawPage);
+                } finally {
+                    cancelArena.close();
+                }
+            }
+        }
     }
 
     /**

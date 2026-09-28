@@ -225,6 +225,29 @@
       {
         "returnType": "jint",
         "parameterTypes": [
+          "jlong",
+          "jint",
+          "jint",
+          "void*",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jint",
+          "jint",
+          "jint",
+          "jint",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
           "void*",
           "jlong",
           "void*",
