@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_QPDF
@@ -25,6 +30,20 @@
 #include <qpdf/QPDFWriter.hh>
 
 namespace {
+
+// Create the output with owner-only permissions on POSIX (CodeQL
+// cpp/world-writable-file-creation); Windows has no mode argument here.
+static FILE* createOutputFile(const char* path) {
+#ifdef _WIN32
+    return std::fopen(path, "wb");
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return nullptr;
+    FILE* file = ::fdopen(fd, "wb");
+    if (!file) ::close(fd);
+    return file;
+#endif
+}
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -254,6 +273,86 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const in
     return 0;
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count,
+                                                const char* out_path) {
+    if (!paths || count <= 0 || !out_path) return -1;
+    try {
+        auto dest = QPDF::create();
+        dest->emptyPDF();
+        QPDFPageDocumentHelper dest_pdh{*dest};
+
+        std::vector<std::shared_ptr<QPDF>> sources;
+        sources.reserve(static_cast<size_t>(count));
+
+        for (int32_t i = 0; i < count; ++i) {
+            const char* path = paths[i];
+            if (!path || !*path) continue;
+
+            auto src = QPDF::create();
+            src->processFile(path);
+            sources.push_back(src);
+            QPDFPageDocumentHelper src_pdh{*src};
+            for (auto& page : src_pdh.getAllPages()) {
+                dest_pdh.addPage(page, false);
+            }
+        }
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) {
+            std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+            return -1;
+        }
+        QPDFWriter w{*dest};
+        w.setOutputFile("jpdfium-out", out, true);
+        w.setObjectStreamMode(qpdf_o_generate);
+        w.setCompressStreams(true);
+        w.write();
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf merge files: %s\n", e.what());
+        return -1;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
+                                                       const int32_t* pageIndices,
+                                                       int32_t pageCount, const char* out_path) {
+    if (!in_path || !pageIndices || pageCount <= 0 || !out_path) return -1;
+    try {
+        auto src = QPDF::create();
+        src->processFile(in_path);
+        QPDFPageDocumentHelper src_pdh{*src};
+        auto allPages = src_pdh.getAllPages();
+        int32_t totalPages = static_cast<int32_t>(allPages.size());
+
+        auto dest = QPDF::create();
+        dest->emptyPDF();
+        QPDFPageDocumentHelper dest_pdh{*dest};
+
+        for (int32_t i = 0; i < pageCount; ++i) {
+            int32_t idx = pageIndices[i];
+            if (idx >= 0 && idx < totalPages) {
+                dest_pdh.addPage(allPages[idx], false);
+            }
+        }
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) {
+            std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+            return -1;
+        }
+        QPDFWriter w{*dest};
+        w.setOutputFile("jpdfium-out", out, true);
+        w.setObjectStreamMode(qpdf_o_generate);
+        w.setCompressStreams(true);
+        w.write();
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract file: %s\n", e.what());
+        return -1;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen) {
@@ -361,6 +460,15 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t*, int64_t, const
                                                   uint8_t** output, int64_t* outputLen) {
     if (output) *output = nullptr;
     if (outputLen) *outputLen = 0;
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const*, int32_t, const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char*, const int32_t*, int32_t,
+                                                       const char*) {
     return -1;
 }
 
