@@ -606,13 +606,40 @@ public final class JpdfiumLib {
         }
     }
 
+    private static final boolean HAS_RENDER_PAGE_INTO = initHasRenderPageInto();
+
+    private static boolean initHasRenderPageInto() {
+        try {
+            return Symbols.find("jpdfium_render_page_into").isPresent();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
     private static void doRenderLocked(MemorySegment rawPage, MemorySegment targetBitmap,
                                        int width, int height, int flags) {
         // Centralized in the bridge: renderer-aware bitmap format, matrix
         // rendering + unpremultiply under Skia, straight pixels for AGG.
+        if (HAS_RENDER_PAGE_INTO) {
+            try {
+                check(JpdfiumH.jpdfium_render_page_into(rawPage, targetBitmap, width, height,
+                        width * 4, flags), "renderPageInto");
+                return;
+            } catch (RuntimeException re) {
+                throw re;
+            } catch (Throwable t) {
+                throw new JPDFiumException("renderPageInto failed", t);
+            }
+        }
         try {
-            check(JpdfiumH.jpdfium_render_page_into(rawPage, targetBitmap, width, height,
-                    width * 4, flags), "renderPageInto");
+            MemorySegment bitmap = (MemorySegment) PageEditBindings.FPDFBitmap_CreateEx.invokeExact(
+                    width, height, 4, targetBitmap, width * 4);
+            try {
+                RenderBindings.FPDF_RenderPageBitmap.invokeExact(
+                        bitmap, rawPage, 0, 0, width, height, 0, flags);
+            } finally {
+                PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap);
+            }
         } catch (RuntimeException re) {
             throw re;
         } catch (Throwable t) {

@@ -227,6 +227,138 @@ public final class PdfImageIO {
     }
 
     /**
+     * Reads all frames/pages from image bytes (e.g. multi-page TIFF).
+     */
+    public static List<BufferedImage> readAllFrames(byte[] data) throws IOException {
+        if (data == null) throw new IllegalArgumentException("data must not be null");
+        List<byte[]> frames = ImageCodecs.decodeFrames(data);
+        List<BufferedImage> images = new ArrayList<>(frames.size());
+        for (byte[] f : frames) {
+            images.add(ImageCodecs.imageFromFrame(f));
+        }
+        return images;
+    }
+
+    /**
+     * Reads all frames/pages from an InputStream.
+     */
+    public static List<BufferedImage> readAllFrames(InputStream input) throws IOException {
+        if (input == null) throw new IllegalArgumentException("input must not be null");
+        return readAllFrames(input.readAllBytes());
+    }
+
+    /**
+     * Writes multiple images as consecutive frames of a multi-page TIFF file.
+     *
+     * @param images list of images to write
+     * @param output destination file path
+     * @throws IOException if writing fails
+     */
+    public static void writeMultiPageTiff(List<BufferedImage> images, Path output) throws IOException {
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        try (OutputStream os = Files.newOutputStream(output)) {
+            writeMultiPageTiff(images, os, 1.0f);
+        }
+    }
+
+    /**
+     * Writes multiple images as consecutive frames of a multi-page TIFF file.
+     */
+    public static void writeMultiPageTiff(List<BufferedImage> images, File output) throws IOException {
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        writeMultiPageTiff(images, output.toPath());
+    }
+
+    /**
+     * Writes multiple images as consecutive frames of a multi-page TIFF to an OutputStream.
+     */
+    public static void writeMultiPageTiff(List<BufferedImage> images, OutputStream output) throws IOException {
+        writeMultiPageTiff(images, output, 1.0f);
+    }
+
+    /**
+     * Writes multiple images as consecutive frames of a multi-page TIFF to an OutputStream with compression quality.
+     */
+    public static void writeMultiPageTiff(List<BufferedImage> images, OutputStream output, float quality) throws IOException {
+        ImageCodecs.writeMultiPageTiff(images, output, quality);
+    }
+
+    /**
+     * Writes multiple images as consecutive frames of a multi-page TIFF returning the encoded bytes.
+     */
+    public static byte[] writeMultiPageTiffToBytes(List<BufferedImage> images) throws IOException {
+        java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+        writeMultiPageTiff(images, baos, 1.0f);
+        return baos.toByteArray();
+    }
+
+    /**
+     * Stitches multiple images vertically into a single image, horizontally centered.
+     * Matches Stirling-PDF's single-image generation behavior.
+     *
+     * @param images list of images to combine
+     * @return combined single image
+     */
+    public static BufferedImage combineVertically(List<BufferedImage> images) {
+        return combineVertically(images, null, false);
+    }
+
+    /**
+     * Stitches multiple images vertically into a single image, horizontally centered,
+     * with the specified color type and transparency.
+     *
+     * @param images      list of images to combine
+     * @param colorType   desired output color type (null for standard RGB)
+     * @param transparent true to allow transparency in ARGB
+     * @return combined single image
+     */
+    public static BufferedImage combineVertically(List<BufferedImage> images, stirling.software.jpdfium.model.ColorType colorType, boolean transparent) {
+        if (images == null || images.isEmpty()) {
+            throw new IllegalArgumentException("images must not be empty");
+        }
+        int maxWidth = 0;
+        int totalHeight = 0;
+        for (BufferedImage img : images) {
+            if (img != null) {
+                maxWidth = Math.max(maxWidth, img.getWidth());
+                totalHeight += img.getHeight();
+            }
+        }
+        if (maxWidth <= 0 || totalHeight <= 0) {
+            throw new IllegalArgumentException("Combined image dimensions must be greater than zero");
+        }
+
+        int targetType;
+        if (colorType != null) {
+            targetType = colorType.bufferedImageType();
+        } else if (transparent) {
+            targetType = BufferedImage.TYPE_INT_ARGB;
+        } else {
+            targetType = BufferedImage.TYPE_INT_RGB;
+        }
+
+        BufferedImage combined = new BufferedImage(maxWidth, totalHeight, targetType);
+        java.awt.Graphics2D g = combined.createGraphics();
+        try {
+            if (!transparent && targetType != BufferedImage.TYPE_INT_ARGB) {
+                g.setColor(java.awt.Color.WHITE);
+                g.fillRect(0, 0, maxWidth, totalHeight);
+            }
+            int currentY = 0;
+            for (BufferedImage img : images) {
+                if (img != null) {
+                    int x = (maxWidth - img.getWidth()) / 2;
+                    g.drawImage(img, x, currentY, null);
+                    currentY += img.getHeight();
+                }
+            }
+        } finally {
+            g.dispose();
+        }
+        return combined;
+    }
+
+    /**
      * Checks if the active environment supports writing the given format name.
      */
     public static boolean canWrite(String formatName) {

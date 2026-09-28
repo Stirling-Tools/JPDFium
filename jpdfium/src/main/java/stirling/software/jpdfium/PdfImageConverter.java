@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
@@ -16,6 +17,7 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -87,13 +89,27 @@ public final class PdfImageConverter {
 
         List<Path> outputFiles = new ArrayList<>();
         int totalPages = doc.pageCount();
-        Set<Integer> pages = options.pages();
+        Set<Integer> pages = options.resolvedPages(totalPages);
 
-        for (int i = 0; i < totalPages; i++) {
-            if (pages != null && !pages.isEmpty() && !pages.contains(i)) {
-                continue;
+        if (options.singleImage()) {
+            List<BufferedImage> rendered = new ArrayList<>();
+            for (int i : pages) {
+                rendered.add(renderPageToImage(doc, i, options.dpi(), options.transparent()));
             }
+            if (options.format() == ImageFormat.TIFF) {
+                Path outputFile = outputDir.resolve("document.tiff");
+                PdfImageIO.writeMultiPageTiff(rendered, outputFile);
+                outputFiles.add(outputFile);
+            } else {
+                BufferedImage combined = PdfImageIO.combineVertically(rendered, options.colorType(), options.transparent());
+                Path outputFile = outputDir.resolve("combined." + options.format().extension());
+                writeImage(combined, outputFile, options);
+                outputFiles.add(outputFile);
+            }
+            return outputFiles;
+        }
 
+        for (int i : pages) {
             BufferedImage image = renderPageToImage(doc, i, options.dpi(), options.transparent());
             Path outputFile = outputDir.resolve(formatFilename(i, options.format()));
             writeImage(image, outputFile, options);
@@ -231,10 +247,62 @@ public final class PdfImageConverter {
         }
     }
 
+    /**
+     * Converts a PDF to image bytes matching Stirling-PDF's convertFromPdf requirements.
+     * When singleImage is true:
+     * <ul>
+     *   <li>For TIFF: encodes all pages as consecutive frames in a multi-page TIFF byte array.</li>
+     *   <li>For other formats: stitches all pages vertically centered into a single image byte array.</li>
+     * </ul>
+     * When singleImage is false, renders the first page to bytes.
+     *
+     * @param doc         PDF document
+     * @param format      image format
+     * @param colorType   color type (RGB, ARGB, GRAY, BINARY)
+     * @param singleImage true to produce a single image
+     * @param dpi         render resolution
+     * @return image bytes
+     * @throws IOException on error
+     */
+    public static byte[] convertFromPdf(PdfDocument doc, ImageFormat format, ColorType colorType, boolean singleImage, int dpi) throws IOException {
+        if (doc == null) throw new IllegalArgumentException("doc must not be null");
+        if (format == null) format = ImageFormat.PNG;
+        if (colorType == null) colorType = ColorType.RGB;
+
+        PdfRenderer renderer = new PdfRenderer(doc);
+        if (singleImage) {
+            if (format == ImageFormat.TIFF) {
+                return renderer.renderToMultiPageTiffBytes(dpi, colorType);
+            } else {
+                return renderer.renderCombinedToBytes(dpi, format, colorType);
+            }
+        }
+        return renderer.renderToBytes(0, dpi, format);
+    }
+
+    /**
+     * Converts a PDF to image bytes by format name and color type name.
+     */
+    public static byte[] convertFromPdf(PdfDocument doc, String formatName, String colorTypeName, boolean singleImage, int dpi) throws IOException {
+        ImageFormat format = ImageFormat.fromExtension(formatName);
+        ColorType colorType = ColorType.fromString(colorTypeName);
+        return convertFromPdf(doc, format, colorType, singleImage, dpi);
+    }
+
+    /**
+     * Converts PDF bytes directly to image bytes.
+     */
+    public static byte[] convertFromPdf(byte[] pdfBytes, String formatName, String colorTypeName, boolean singleImage, int dpi) throws IOException {
+        try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
+            return convertFromPdf(doc, formatName, colorTypeName, singleImage, dpi);
+        }
+    }
+
     // Images -> PDF
 
     /**
      * Convert a list of image files to a PDF document.
+     * If an image is a multi-page format (e.g. multi-page TIFF), every frame becomes a page.
      *
      * @param imagePaths paths to image files
      * @param options    conversion options
@@ -248,6 +316,46 @@ public final class PdfImageConverter {
         List<byte[]> frames = new ArrayList<>(imagePaths.size());
         for (Path path : imagePaths) {
             frames.addAll(ImageCodecs.decodeFrames(path));
+        }
+        return embedRgbaImages(frames, options);
+    }
+
+    /**
+     * Convert a list of in-memory image byte arrays to a PDF document.
+     * Supports multi-page TIFFs and mixed image formats.
+     *
+     * @param imageBytes list of raw image byte arrays
+     * @param options    conversion options
+     * @return PDF document
+     * @throws IOException if decoding fails
+     */
+    public static PdfDocument imagesToPdfFromBytes(List<byte[]> imageBytes, ImageToPdfOptions options) throws IOException {
+        if (imageBytes == null || imageBytes.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required");
+        }
+        List<byte[]> frames = new ArrayList<>(imageBytes.size());
+        for (byte[] data : imageBytes) {
+            frames.addAll(ImageCodecs.decodeFrames(data));
+        }
+        return embedRgbaImages(frames, options);
+    }
+
+    /**
+     * Convert a list of InputStreams to a PDF document.
+     * Supports multi-page TIFFs and mixed image formats.
+     *
+     * @param streams list of image input streams
+     * @param options conversion options
+     * @return PDF document
+     * @throws IOException if reading fails
+     */
+    public static PdfDocument imagesToPdfFromStreams(List<InputStream> streams, ImageToPdfOptions options) throws IOException {
+        if (streams == null || streams.isEmpty()) {
+            throw new IllegalArgumentException("At least one stream is required");
+        }
+        List<byte[]> frames = new ArrayList<>(streams.size());
+        for (InputStream in : streams) {
+            frames.addAll(ImageCodecs.decodeFrames(in));
         }
         return embedRgbaImages(frames, options);
     }
@@ -311,6 +419,18 @@ public final class PdfImageConverter {
                 if (pageWidth <= 0 || pageHeight <= 0) {
                     pageWidth = w * 72f / 96;
                     pageHeight = h * 72f / 96;
+                } else if (options.autoRotate()) {
+                    boolean pageLandscape = pageWidth > pageHeight;
+                    boolean imageLandscape = w > h;
+                    if (pageLandscape != imageLandscape) {
+                        float tmp = pageWidth;
+                        pageWidth = pageHeight;
+                        pageHeight = tmp;
+                    }
+                }
+
+                if (options.colorType() == ColorType.GRAY || options.colorType() == ColorType.BINARY) {
+                    applyColorType(rgba, w, h, options.colorType());
                 }
 
                 int position = toNativePosition(options.position());
@@ -331,6 +451,22 @@ public final class PdfImageConverter {
             return new PdfDocument(docHandle);
         } catch (Exception e) {
             throw new UncheckedIOException("Failed to create PDF from images", new IOException(e));
+        }
+    }
+
+    private static void applyColorType(byte[] rgba, int w, int h, ColorType colorType) {
+        int count = w * h;
+        boolean isBinary = (colorType == ColorType.BINARY);
+        for (int i = 0; i < count; i++) {
+            int off = 8 + i * 4;
+            int r = rgba[off] & 0xFF;
+            int g = rgba[off + 1] & 0xFF;
+            int b = rgba[off + 2] & 0xFF;
+            int gray = (int) (0.299 * r + 0.587 * g + 0.114 * b);
+            byte val = isBinary ? (gray >= 128 ? (byte) 255 : (byte) 0) : (byte) gray;
+            rgba[off] = val;
+            rgba[off + 1] = val;
+            rgba[off + 2] = val;
         }
     }
 

@@ -54,19 +54,52 @@ public final class ImageCodecs {
         return Holder.CODEC != null;
     }
 
-    /** Decode every frame of an image file (codec first, ImageIO fallback). */
+    /** Decode every frame of an image file (multi-page TIFF/GIF support, codec, ImageIO fallback). */
     public static List<byte[]> decodeFrames(Path path) throws IOException {
-        ImageCodec codec = Holder.CODEC;
-        if (codec != null) {
-            try {
-                List<byte[]> frames = codec.decodeFrames(path);
-                if (frames != null && !frames.isEmpty()) {
-                    return frames;
+        String name = path.getFileName() != null ? path.getFileName().toString().toLowerCase(java.util.Locale.ROOT) : "";
+        boolean isTiffOrGif = name.endsWith(".tif") || name.endsWith(".tiff") || name.endsWith(".gif");
+
+        if (!isTiffOrGif) {
+            ImageCodec codec = Holder.CODEC;
+            if (codec != null) {
+                try {
+                    List<byte[]> frames = codec.decodeFrames(path);
+                    if (frames != null && !frames.isEmpty()) {
+                        return frames;
+                    }
+                } catch (IOException | RuntimeException ignored) {
+                    // Unsupported by the codec: fall through to ImageIO.
                 }
-            } catch (IOException | RuntimeException ignored) {
-                // Unsupported by the codec: fall through to ImageIO.
             }
         }
+
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(path)) {
+            List<BufferedImage> images = readAllImages(in);
+            if (!images.isEmpty()) {
+                List<byte[]> frames = new ArrayList<>(images.size());
+                for (BufferedImage img : images) {
+                    frames.add(frameFromImage(img));
+                }
+                return frames;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+
+        if (isTiffOrGif) {
+            ImageCodec codec = Holder.CODEC;
+            if (codec != null) {
+                try {
+                    List<byte[]> frames = codec.decodeFrames(path);
+                    if (frames != null && !frames.isEmpty()) {
+                        return frames;
+                    }
+                } catch (IOException | RuntimeException ignored) {
+                    // fall through
+                }
+            }
+        }
+
         BufferedImage image = ImageIO.read(path.toFile());
         if (image == null) {
             throw new IOException("Unsupported or corrupt image: " + path);
@@ -76,7 +109,54 @@ public final class ImageCodecs {
         return frames;
     }
 
-    /** Decode in-memory image bytes to a frame (codec first, ImageIO fallback). */
+    /** Decode all frames from in-memory image bytes (supports multi-page TIFF/GIF). */
+    public static List<byte[]> decodeFrames(byte[] data) throws IOException {
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("data must not be null or empty");
+        }
+        try (java.io.InputStream in = new ByteArrayInputStream(data)) {
+            List<BufferedImage> images = readAllImages(in);
+            if (!images.isEmpty()) {
+                List<byte[]> frames = new ArrayList<>(images.size());
+                for (BufferedImage img : images) {
+                    frames.add(frameFromImage(img));
+                }
+                return frames;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+
+        ImageCodec codec = Holder.CODEC;
+        if (codec != null) {
+            try {
+                byte[] frame = codec.decodeFrame(data);
+                if (frame != null) {
+                    List<byte[]> frames = new ArrayList<>(1);
+                    frames.add(frame);
+                    return frames;
+                }
+            } catch (IOException | RuntimeException ignored) {
+                // fall through
+            }
+        }
+
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(data));
+        if (image == null) {
+            throw new IOException("Unsupported or corrupt image data");
+        }
+        List<byte[]> frames = new ArrayList<>(1);
+        frames.add(frameFromImage(image));
+        return frames;
+    }
+
+    /** Decode all frames from an InputStream. */
+    public static List<byte[]> decodeFrames(java.io.InputStream in) throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        return decodeFrames(in.readAllBytes());
+    }
+
+    /** Decode in-memory image bytes to a single frame (codec first, ImageIO fallback). */
     public static byte[] decodeFrame(byte[] data) throws IOException {
         ImageCodec codec = Holder.CODEC;
         if (codec != null) {
@@ -96,6 +176,76 @@ public final class ImageCodecs {
     /** Decode image bytes to a {@link BufferedImage} for the AWT-based API surface. */
     public static BufferedImage decodeImage(byte[] data) throws IOException {
         return imageFromFrame(decodeFrame(data));
+    }
+
+    /** Reads all frames/images from an input stream using standard ImageIO readers. */
+    public static List<BufferedImage> readAllImages(java.io.InputStream in) throws IOException {
+        try (javax.imageio.stream.ImageInputStream iis = ImageIO.createImageInputStream(in)) {
+            if (iis == null) {
+                throw new IOException("Cannot create ImageInputStream from input");
+            }
+            Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(iis);
+            if (!readers.hasNext()) {
+                throw new IOException("No ImageReader found for image input");
+            }
+            javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(iis);
+                int count = reader.getNumImages(true);
+                List<BufferedImage> images = new ArrayList<>(Math.max(1, count));
+                for (int i = 0; i < count; i++) {
+                    images.add(reader.read(i));
+                }
+                return images;
+            } finally {
+                reader.dispose();
+            }
+        }
+    }
+
+    /** Writes multiple images as a sequence of frames to a TIFF output stream. */
+    public static void writeMultiPageTiff(List<BufferedImage> images, java.io.OutputStream output, float quality)
+            throws IOException {
+        if (images == null || images.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required for multi-page TIFF");
+        }
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("tiff");
+        if (!writers.hasNext()) {
+            writers = ImageIO.getImageWritersByFormatName("TIFF");
+        }
+        if (!writers.hasNext()) {
+            throw new IOException("No TIFF ImageWriter found. A TIFF ImageIO plugin is required.");
+        }
+        ImageWriter writer = writers.next();
+        try (javax.imageio.stream.ImageOutputStream ios = ImageIO.createImageOutputStream(output)) {
+            writer.setOutput(ios);
+            ImageWriteParam param = writer.getDefaultWriteParam();
+            if (param.canWriteCompressed()) {
+                param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+                String[] types = param.getCompressionTypes();
+                if (types != null && types.length > 0) {
+                    String chosen = null;
+                    for (String t : types) {
+                        if ("Deflate".equalsIgnoreCase(t) || "ZLib".equalsIgnoreCase(t)) {
+                            chosen = t;
+                            break;
+                        }
+                    }
+                    if (chosen == null) chosen = types[0];
+                    param.setCompressionType(chosen);
+                    if (param.canWriteProgressive()) {
+                        param.setProgressiveMode(ImageWriteParam.MODE_DISABLED);
+                    }
+                }
+            }
+            writer.prepareWriteSequence(null);
+            for (BufferedImage image : images) {
+                writer.writeToSequence(new IIOImage(image, null, null), param);
+            }
+            writer.endWriteSequence();
+        } finally {
+            writer.dispose();
+        }
     }
 
     /** True when {@code format} can be encoded by the codec or ImageIO. */

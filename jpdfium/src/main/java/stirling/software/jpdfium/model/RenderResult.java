@@ -2,6 +2,7 @@ package stirling.software.jpdfium.model;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.awt.Graphics2D;
 
 public record RenderResult(int width, int height, byte[] rgba) {
 
@@ -44,5 +45,29 @@ public record RenderResult(int width, int height, byte[] rgba) {
             }
         }
         return img;
+    }
+
+    /**
+     * Converts the RGBA bytes into a {@link BufferedImage} with the specified {@link ColorType}.
+     *
+     * @param colorType color type (RGB, ARGB, GRAY, BINARY)
+     * @return BufferedImage
+     */
+    public BufferedImage toBufferedImage(ColorType colorType) {
+        if (colorType == null || colorType == ColorType.RGB) {
+            return toBufferedImage(false);
+        }
+        if (colorType == ColorType.ARGB) {
+            return toBufferedImage(true);
+        }
+        BufferedImage rgb = toBufferedImage(false);
+        BufferedImage out = new BufferedImage(width, height, colorType.bufferedImageType());
+        Graphics2D g = out.createGraphics();
+        try {
+            g.drawImage(rgb, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return out;
     }
 }
