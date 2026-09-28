@@ -11,6 +11,7 @@ import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PageSize;
@@ -113,6 +114,19 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         RenderResult result = renderAt(dpi);
         return result.toBufferedImage(transparent);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with the given {@link ColorType}.
+     *
+     * @param dpi       render resolution in DPI
+     * @param colorType color type (RGB, ARGB, GRAY, BINARY)
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, ColorType colorType) {
+        ensureOpen();
+        RenderResult result = renderAt(dpi);
+        return result.toBufferedImage(colorType);
     }
 
     /**

@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -123,6 +124,108 @@ class PdfRendererTest {
             Path defaultDpiPath = tempDir.resolve("page-default.png");
             page.renderTo(defaultDpiPath);
             assertTrue(Files.exists(defaultDpiPath));
+        }
+    }
+
+    @Test
+    void multiPageRenderingAndForEachPage() {
+        Path multiPagePdf = Path.of("src/test/resources/pdfs/general/irs_f1040.pdf");
+        try (PdfDocument doc = PdfDocument.open(multiPagePdf)) {
+            int pageCount = doc.pageCount();
+            assertTrue(pageCount >= 2);
+
+            // forEachPage consumer
+            java.util.concurrent.atomic.AtomicInteger visited = new java.util.concurrent.atomic.AtomicInteger();
+            doc.forEachPage(page -> {
+                assertNotNull(page);
+                visited.incrementAndGet();
+            });
+            assertEquals(pageCount, visited.get());
+
+            // forEachPage with index
+            visited.set(0);
+            doc.forEachPage((page, idx) -> {
+                assertEquals(visited.getAndIncrement(), idx);
+            });
+            assertEquals(pageCount, visited.get());
+
+            // renderImages
+            List<BufferedImage> images = doc.renderImages(100);
+            assertEquals(pageCount, images.size());
+            for (BufferedImage img : images) {
+                assertNotNull(img);
+                assertTrue(img.getWidth() > 0);
+                assertTrue(img.getHeight() > 0);
+            }
+        }
+    }
+
+    @Test
+    void colorTypeRendering() {
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            PdfRenderer renderer = doc.renderer();
+
+            BufferedImage rgb = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.RGB);
+            assertNotNull(rgb);
+            assertFalse(rgb.getColorModel().hasAlpha());
+
+            BufferedImage argb = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.ARGB);
+            assertNotNull(argb);
+            assertTrue(argb.getColorModel().hasAlpha());
+
+            BufferedImage gray = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.GRAY);
+            assertNotNull(gray);
+            assertEquals(BufferedImage.TYPE_BYTE_GRAY, gray.getType());
+
+            BufferedImage bw = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.BINARY);
+            assertNotNull(bw);
+            assertEquals(BufferedImage.TYPE_BYTE_BINARY, bw.getType());
+        }
+    }
+
+    @Test
+    void combinedImageRendering() throws Exception {
+        Path multiPagePdf = Path.of("src/test/resources/pdfs/general/irs_f1040.pdf");
+        try (PdfDocument doc = PdfDocument.open(multiPagePdf)) {
+            PdfRenderer renderer = doc.renderer();
+
+            BufferedImage combined = renderer.renderCombinedImage(100);
+            assertNotNull(combined);
+
+            List<BufferedImage> separate = renderer.renderImages(100);
+            int expectedHeight = separate.stream().mapToInt(BufferedImage::getHeight).sum();
+            int maxExpectedWidth = separate.stream().mapToInt(BufferedImage::getWidth).max().orElse(0);
+
+            assertEquals(maxExpectedWidth, combined.getWidth());
+            assertEquals(expectedHeight, combined.getHeight());
+
+            byte[] combinedPng = renderer.renderCombinedToBytes(100, ImageFormat.PNG);
+            assertNotNull(combinedPng);
+            assertTrue(combinedPng.length > 0);
+        }
+    }
+
+    @Test
+    void multiPageTiffRendering(@TempDir Path tempDir) throws Exception {
+        Path multiPagePdf = Path.of("src/test/resources/pdfs/general/irs_f1040.pdf");
+        try (PdfDocument doc = PdfDocument.open(multiPagePdf)) {
+            PdfRenderer renderer = doc.renderer();
+
+            Path tiffOut = tempDir.resolve("doc.tiff");
+            renderer.renderToMultiPageTiff(tiffOut, 100);
+            assertTrue(Files.exists(tiffOut));
+            assertTrue(Files.size(tiffOut) > 0);
+
+            // Read all frames back
+            List<BufferedImage> frames = PdfImageIO.readAllFrames(tiffOut);
+            assertEquals(doc.pageCount(), frames.size());
+
+            // Check bytes method
+            byte[] tiffBytes = renderer.renderToMultiPageTiffBytes(100);
+            assertNotNull(tiffBytes);
+            assertTrue(tiffBytes.length > 0);
+            List<BufferedImage> framesFromBytes = PdfImageIO.readAllFrames(tiffBytes);
+            assertEquals(doc.pageCount(), framesFromBytes.size());
         }
     }
 }

@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -100,5 +101,57 @@ class PdfImageIOTest {
         BufferedImage readBack = PdfImageConverter.read(file);
         assertNotNull(readBack);
         assertEquals(original.getWidth(), readBack.getWidth());
+    }
+
+    @Test
+    void multiPageTiffRoundTrip(@TempDir Path tempDir) throws Exception {
+        BufferedImage frame1 = createSampleImage();
+        BufferedImage frame2 = new BufferedImage(120, 90, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = frame2.createGraphics();
+        try {
+            g.setColor(Color.GREEN);
+            g.fillRect(0, 0, 120, 90);
+        } finally {
+            g.dispose();
+        }
+
+        List<BufferedImage> frames = List.of(frame1, frame2);
+        Path tiffFile = tempDir.resolve("multipage.tiff");
+
+        PdfImageIO.writeMultiPageTiff(frames, tiffFile);
+        assertTrue(Files.exists(tiffFile));
+        assertTrue(Files.size(tiffFile) > 0);
+
+        List<BufferedImage> readBack = PdfImageIO.readAllFrames(tiffFile);
+        assertEquals(2, readBack.size());
+        assertEquals(100, readBack.get(0).getWidth());
+        assertEquals(80, readBack.get(0).getHeight());
+        assertEquals(120, readBack.get(1).getWidth());
+        assertEquals(90, readBack.get(1).getHeight());
+
+        // Test bytes round trip
+        byte[] tiffBytes = PdfImageIO.writeMultiPageTiffToBytes(frames);
+        assertNotNull(tiffBytes);
+        assertTrue(tiffBytes.length > 0);
+        List<BufferedImage> fromBytes = PdfImageIO.readAllFrames(tiffBytes);
+        assertEquals(2, fromBytes.size());
+    }
+
+    @Test
+    void combineVerticallyTest() {
+        BufferedImage img1 = new BufferedImage(100, 50, BufferedImage.TYPE_INT_RGB);
+        BufferedImage img2 = new BufferedImage(80, 70, BufferedImage.TYPE_INT_RGB);
+
+        BufferedImage combined = PdfImageIO.combineVertically(List.of(img1, img2));
+        assertNotNull(combined);
+        assertEquals(100, combined.getWidth()); // maxWidth(100, 80)
+        assertEquals(120, combined.getHeight()); // totalHeight(50 + 70)
+
+        BufferedImage combinedGray = PdfImageIO.combineVertically(
+                List.of(img1, img2),
+                stirling.software.jpdfium.model.ColorType.GRAY,
+                false);
+        assertNotNull(combinedGray);
+        assertEquals(BufferedImage.TYPE_BYTE_GRAY, combinedGray.getType());
     }
 }

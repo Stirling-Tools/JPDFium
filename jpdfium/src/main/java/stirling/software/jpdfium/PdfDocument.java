@@ -11,6 +11,7 @@ import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
@@ -42,6 +43,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.ObjIntConsumer;
 
 /**
  * Represents an open PDF document backed by native PDFium.
@@ -235,6 +238,106 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Create a PDF document from multiple image files.
+     */
+    public static PdfDocument fromImages(File... imageFiles) throws IOException {
+        if (imageFiles == null || imageFiles.length == 0) {
+            throw new IllegalArgumentException("At least one image file is required");
+        }
+        return fromImageFiles(List.of(imageFiles));
+    }
+
+    /**
+     * Create a PDF document from a list of image files.
+     */
+    public static PdfDocument fromImageFiles(List<File> imageFiles) throws IOException {
+        return fromImageFiles(imageFiles, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image files with custom options.
+     */
+    public static PdfDocument fromImageFiles(List<File> imageFiles, ImageToPdfOptions options) throws IOException {
+        if (imageFiles == null || imageFiles.isEmpty()) {
+            throw new IllegalArgumentException("imageFiles must not be empty");
+        }
+        List<Path> paths = new ArrayList<>(imageFiles.size());
+        for (File f : imageFiles) {
+            paths.add(f.toPath());
+        }
+        return PdfImageConverter.imagesToPdf(paths, options);
+    }
+
+    /**
+     * Create a PDF document from one or more raw image byte arrays.
+     * Supports multi-page TIFFs and mixed image formats.
+     */
+    public static PdfDocument fromImageBytes(byte[]... imageBytes) throws IOException {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new IllegalArgumentException("At least one image byte array is required");
+        }
+        return fromImageBytes(List.of(imageBytes), ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of raw image byte arrays.
+     */
+    public static PdfDocument fromImageBytes(List<byte[]> imageBytes) throws IOException {
+        return fromImageBytes(imageBytes, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of raw image byte arrays with custom options.
+     */
+    public static PdfDocument fromImageBytes(List<byte[]> imageBytes, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdfFromBytes(imageBytes, options);
+    }
+
+    /**
+     * Create a PDF document from a single raw image byte array.
+     */
+    public static PdfDocument fromImage(byte[] imageBytes) throws IOException {
+        return fromImage(imageBytes, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a single raw image byte array with custom options.
+     */
+    public static PdfDocument fromImage(byte[] imageBytes, ImageToPdfOptions options) throws IOException {
+        if (imageBytes == null) throw new IllegalArgumentException("imageBytes must not be null");
+        return fromImageBytes(List.of(imageBytes), options);
+    }
+
+    /**
+     * Create a PDF document from an image InputStream.
+     */
+    public static PdfDocument fromImage(InputStream in) throws IOException {
+        return fromImage(in, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from an image InputStream with custom options.
+     */
+    public static PdfDocument fromImage(InputStream in, ImageToPdfOptions options) throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        return fromImage(in.readAllBytes(), options);
+    }
+
+    /**
+     * Create a PDF document from multiple image InputStreams.
+     */
+    public static PdfDocument fromImageStreams(List<InputStream> streams) throws IOException {
+        return fromImageStreams(streams, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from multiple image InputStreams with custom options.
+     */
+    public static PdfDocument fromImageStreams(List<InputStream> streams, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdfFromStreams(streams, options);
+    }
+
+    /**
      * Create a new, empty document.
      *
      * <p>This is the recommended base for page-import operations
@@ -328,11 +431,101 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Executes the given action on each page in the document in sequential order.
+     * Each page is automatically closed after the action completes.
+     *
+     * @param action consumer receiving each open page
+     */
+    public void forEachPage(Consumer<PdfPage> action) {
+        ensureOpen();
+        if (action == null) throw new IllegalArgumentException("action must not be null");
+        int count = pageCount();
+        for (int i = 0; i < count; i++) {
+            try (PdfPage page = page(i)) {
+                action.accept(page);
+            }
+        }
+    }
+
+    /**
+     * Executes the given action on each page in the document along with its 0-based page index.
+     * Each page is automatically closed after the action completes.
+     *
+     * @param action consumer receiving each open page and its index
+     */
+    public void forEachPage(ObjIntConsumer<PdfPage> action) {
+        ensureOpen();
+        if (action == null) throw new IllegalArgumentException("action must not be null");
+        int count = pageCount();
+        for (int i = 0; i < count; i++) {
+            try (PdfPage page = page(i)) {
+                action.accept(page, i);
+            }
+        }
+    }
+
+    /**
      * Creates a new {@link PdfRenderer} for this document.
      */
     public PdfRenderer renderer() {
         ensureOpen();
         return new PdfRenderer(this);
+    }
+
+    /**
+     * Renders all pages in sequential order at the specified DPI.
+     */
+    public List<BufferedImage> renderImages(float dpi) {
+        return renderer().renderImages(dpi);
+    }
+
+    /**
+     * Renders all pages in sequential order at the specified DPI with the given color type.
+     */
+    public List<BufferedImage> renderImages(float dpi, ColorType colorType) {
+        return renderer().renderImages(dpi, colorType);
+    }
+
+    /**
+     * Combines all pages vertically into a single image, centered horizontally.
+     */
+    public BufferedImage renderCombinedImage(float dpi) {
+        return renderer().renderCombinedImage(dpi);
+    }
+
+    /**
+     * Combines all pages vertically into a single image with the given color type.
+     */
+    public BufferedImage renderCombinedImage(float dpi, ColorType colorType) {
+        return renderer().renderCombinedImage(dpi, colorType);
+    }
+
+    /**
+     * Renders all pages into a multi-page TIFF file.
+     */
+    public void renderToMultiPageTiff(Path outputPath, float dpi) throws IOException {
+        renderer().renderToMultiPageTiff(outputPath, dpi);
+    }
+
+    /**
+     * Renders all pages into a multi-page TIFF file with the given color type.
+     */
+    public void renderToMultiPageTiff(Path outputPath, float dpi, ColorType colorType) throws IOException {
+        renderer().renderToMultiPageTiff(outputPath, dpi, colorType);
+    }
+
+    /**
+     * Renders all pages into multi-page TIFF bytes.
+     */
+    public byte[] renderToMultiPageTiffBytes(float dpi) throws IOException {
+        return renderer().renderToMultiPageTiffBytes(dpi);
+    }
+
+    /**
+     * Renders all pages into multi-page TIFF bytes with the given color type.
+     */
+    public byte[] renderToMultiPageTiffBytes(float dpi, ColorType colorType) throws IOException {
+        return renderer().renderToMultiPageTiffBytes(dpi, colorType);
     }
 
     /**
