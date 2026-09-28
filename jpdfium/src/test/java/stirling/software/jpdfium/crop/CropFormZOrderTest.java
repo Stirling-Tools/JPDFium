@@ -12,20 +12,17 @@ import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.awt.image.BufferedImage;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Paint-order (z-order) regression guard for the crop form descent.
+ * Form-nested fission regression guard: the removed text must not survive in
+ * the saved form stream, and the survivors must keep their paint order.
  *
- * <p>A form XObject drawn BEFORE an opaque yellow rect contains a word
- * straddling the crop boundary. After a left-half crop the surviving glyphs
- * must remain UNDER the rect - the fissioned fragments are inserted at the
- * form's own position in the page object list, never appended on top of
- * content that was drawn after the form. Rendered pixels prove the visual
- * truth: the rect region must contain no dark (text) pixels, while the
- * straddling word must still exist in the text layer (fissioned, not lost).
- *
- * <p>Run: {@code ./gradlew :jpdfium:integrationTest --tests "stirling.software.jpdfium.crop.*"}
+ * <p>A form stream only regenerates when a child is removed from it, so the
+ * single surviving run is detached from the form, promoted to the page and
+ * edited in place. An existing object serializes at its page list position,
+ * so the survivors stay under content drawn after the form.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class CropFormZOrderTest {
@@ -43,11 +40,14 @@ class CropFormZOrderTest {
         }
 
         // The straddling word must still exist in the text layer (its surviving
-        // glyphs were fissioned out of the form, not lost).
+        // glyphs were fissioned out of the form, not lost), and the removed
+        // part must be gone from the stream.
         try (PDDocument doc = Loader.loadPDF(output)) {
             String text = new PDFTextStripper().getText(doc);
             assertTrue(text.contains("EDG"),
                     "surviving glyphs of the straddling word must exist: " + text);
+            assertFalse(text.contains("EDGE_WORD") || text.contains("E_WORD"),
+                    "the removed part of the form word must be gone from the stream: " + text);
         }
 
         // Visual truth: no dark (text) pixels may appear inside the rect that

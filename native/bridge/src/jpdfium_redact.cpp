@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -400,6 +401,17 @@ static bool isFullyContained(float al, float ab, float ar, float at, float bl, f
     return al >= bl && ab >= bb && ar <= br && at <= bt;
 }
 
+// FS_RECTF stores left, top, right, bottom (screen order), so a bottom-up
+// PDF rectangle must be re-ordered here or the vertical edges swap.
+static FS_RECTF makePageRect(float l, float b, float r, float t) {
+    FS_RECTF out{};
+    out.left = l;
+    out.top = t;
+    out.right = r;
+    out.bottom = b;
+    return out;
+}
+
 // Check if two rectangles overlap at all
 static bool rectsOverlap(float al, float ab, float ar, float at, float bl, float bb, float br,
                          float bt) {
@@ -530,13 +542,44 @@ static std::u32string survivingFingerprint(const std::u32string& normalizedText,
     return fp;
 }
 
-// Partial image redaction: rasterize the covered portion by overwriting the
-// source bitmap's pixels. Returns false if the format cannot be erased (the
-// caller must then remove the WHOLE image - Doctrine: pixel-true erase or
-// full removal, never cover-and-keep.
-static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatrix, float rx,
-                             float ry, float rr, float rt, uint32_t argb) {
-    FPDF_BITMAP bmp = FPDFImageObj_GetBitmap(imageObj);
+// Erases pixels whose center falls in |rects| (page space). Pixel (ix, iy)
+// maps to unit (ix/w, 1 - iy/h): row 0 is the top, so the mirror erases the
+// visible half. Rendered at source size because GetBitmap drops /SMask and
+// SetBitmap rebuilds the image from whatever bitmap it gets. Only the
+// affected pixel bbox is scanned; already-erased pixels are skipped.
+// Returns false when the caller must remove the whole image.
+static bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
+                             const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects,
+                             uint32_t argb, bool* pixelsChanged = nullptr) {
+    // |pixelsChanged| accumulates: it may be shared across images, so a call
+    // that changes nothing must not clear an earlier call's true.
+    if (rects.empty()) return true;
+    unsigned int srcW = 0, srcH = 0;
+    if (!FPDFImageObj_GetImagePixelSize(imageObj, &srcW, &srcH) || srcW == 0 || srcH == 0) {
+        return false;
+    }
+    FPDF_BITMAP bmp = nullptr;
+    FS_MATRIX original;
+    if (FPDFPageObj_GetMatrix(imageObj, &original)) {
+        // Unit matrix: 1 source pixel == 1 unit -> render at source size.
+        const FS_MATRIX unit{static_cast<float>(srcW), 0.0f, 0.0f,
+                             static_cast<float>(srcH), 0.0f, 0.0f};
+        if (FPDFPageObj_SetMatrix(imageObj, &unit)) {
+            bmp = FPDFImageObj_GetRenderedBitmap(doc, page, imageObj);
+            if (!FPDFPageObj_SetMatrix(imageObj, &original)) {
+                // Never ship an image left at the temporary unit matrix: the
+                // caller removes the whole image instead.
+                if (bmp) FPDFBitmap_Destroy(bmp);
+                return false;
+            }
+        }
+    }
+    if (!bmp) {
+        // Renderer unavailable: fall back to the mask-less base bitmap. The
+        // erase still removes pixels; a soft mask (if any) cannot survive
+        // this path.
+        bmp = FPDFImageObj_GetBitmap(imageObj);
+    }
     if (!bmp) return false;
     int w = FPDFBitmap_GetWidth(bmp);
     int h = FPDFBitmap_GetHeight(bmp);
@@ -562,38 +605,97 @@ static bool eraseImagePixels(FPDF_PAGEOBJECT imageObj, const FS_MATRIX& imgMatri
     unsigned int g = (argb >> 8) & 0xFF;
     unsigned int b = argb & 0xFF;
 
-    // Image -> page transform (row-vector convention). Iterating image
-    // pixels forward avoids inverse-matrix precision issues at edges.
-    double a = imgMatrix.a, b2 = imgMatrix.b, c = imgMatrix.c, d = imgMatrix.d;
-    double e = imgMatrix.e, f = imgMatrix.f;
+    // Pixel-center -> page map (row-vector convention, row 0 = top):
+    //   px = pa*ix + pc*iy + pe,  py = pb*ix + pd*iy + pf
+    const double pa = imgMatrix.a / w;
+    const double pc = -static_cast<double>(imgMatrix.c) / h;
+    const double pb = imgMatrix.b / w;
+    const double pd = -static_cast<double>(imgMatrix.d) / h;
+    const double pe = imgMatrix.e + imgMatrix.c + 0.5 * pa + 0.5 * pc;
+    const double pf = imgMatrix.f + imgMatrix.d + 0.5 * pb + 0.5 * pd;
+
+    int minIx = 0, minIy = 0, maxIx = w - 1, maxIy = h - 1;
+    const double det = pa * pd - pb * pc;
+    if (std::abs(det) < 1e-12) {
+        // Degenerate (zero-area) image: it paints nothing; nothing to erase.
+        FPDFBitmap_Destroy(bmp);
+        return true;
+    }
+    {
+        // Inverse linear map applied to each erase rect's corners gives the
+        // pixel-space bbox that can possibly be affected.
+        const double ia = pd / det, ib = -pc / det;
+        const double ic = -pb / det, id = pa / det;
+        double pMinX = std::numeric_limits<double>::max();
+        double pMinY = std::numeric_limits<double>::max();
+        double pMaxX = std::numeric_limits<double>::lowest();
+        double pMaxY = std::numeric_limits<double>::lowest();
+        for (const FS_RECTF& rc : rects) {
+            const double cx[4] = {rc.left, rc.right, rc.right, rc.left};
+            const double cy[4] = {rc.bottom, rc.bottom, rc.top, rc.top};
+            for (int k = 0; k < 4; k++) {
+                double dx = cx[k] - pe;
+                double dy = cy[k] - pf;
+                double px = ia * dx + ib * dy;
+                double py = ic * dx + id * dy;
+                if (px < pMinX) pMinX = px;
+                if (py < pMinY) pMinY = py;
+                if (px > pMaxX) pMaxX = px;
+                if (py > pMaxY) pMaxY = py;
+            }
+        }
+        // Clamp to the bitmap; an erase rect far outside leaves an empty box.
+        minIx = static_cast<int>(std::max(0.0, std::floor(pMinX)));
+        minIy = static_cast<int>(std::max(0.0, std::floor(pMinY)));
+        maxIx = static_cast<int>(std::min(static_cast<double>(w - 1), std::ceil(pMaxX)));
+        maxIy = static_cast<int>(std::min(static_cast<double>(h - 1), std::ceil(pMaxY)));
+        if (maxIx < minIx || maxIy < minIy) {
+            FPDFBitmap_Destroy(bmp);
+            return true;
+        }
+    }
 
     bool changed = false;
-    // PDF image space is a unit square: the object matrix maps (x/w, y/h).
-    double ux = a / w, uy = c / h, vx = b2 / w, vy = d / h;
-    for (int iy = 0; iy < h; iy++) {
-        for (int ix = 0; ix < w; ix++) {
-            double px = ux * ix + uy * iy + e;
-            double py = vx * ix + vy * iy + f;
-            if (px < rx || px > rr || py < ry || py > rt) continue;
-            size_t offset = static_cast<size_t>(iy) * stride + static_cast<size_t>(ix) * bpp;
-            if (offset + static_cast<size_t>(bpp) > static_cast<size_t>(stride * h)) continue;
-            uint8_t* p = static_cast<uint8_t*>(buf) + offset;
-            if (bpp == 1) {
-                p[0] = static_cast<uint8_t>((r * 299 + g * 587 + b * 114) / 1000);
-            } else {
-                p[0] = static_cast<uint8_t>(b);
-                p[1] = static_cast<uint8_t>(g);
-                p[2] = static_cast<uint8_t>(r);
-                if (bpp == 4) p[3] = 255;
+    for (int iy = minIy; iy <= maxIy; iy++) {
+        const double rowX = pc * iy + pe;
+        const double rowY = pd * iy + pf;
+        const size_t rowOffset = static_cast<size_t>(iy) * stride;
+        for (int ix = minIx; ix <= maxIx; ix++) {
+            const double px = pa * ix + rowX;
+            const double py = pb * ix + rowY;
+            bool inside = false;
+            for (const FS_RECTF& rc : rects) {
+                if (px >= rc.left && px <= rc.right && py >= rc.bottom && py <= rc.top) {
+                    inside = true;
+                    break;
+                }
             }
+            if (!inside) continue;
+            size_t offset = rowOffset + static_cast<size_t>(ix) * bpp;
+            if (offset + static_cast<size_t>(bpp) > static_cast<size_t>(stride) * h) continue;
+            uint8_t* p = static_cast<uint8_t*>(buf) + offset;
+            uint8_t want[4] = {0, 0, 0, 255};
+            // BGRx has an unused 4th byte: compare/write only the color bytes.
+            size_t n = (fmt == FPDFBitmap_BGRx) ? 3u : static_cast<size_t>(bpp);
+            if (bpp == 1) {
+                want[0] = static_cast<uint8_t>((r * 299 + g * 587 + b * 114) / 1000);
+            } else {
+                want[0] = static_cast<uint8_t>(b);
+                want[1] = static_cast<uint8_t>(g);
+                want[2] = static_cast<uint8_t>(r);
+            }
+            if (std::memcmp(p, want, n) == 0) continue;  // already erased
+            std::memcpy(p, want, n);
             changed = true;
         }
     }
+    bool ok = true;
     if (changed) {
-        FPDFImageObj_SetBitmap(nullptr, 0, imageObj, bmp);
+        ok = FPDFImageObj_SetBitmap(nullptr, 0, imageObj, bmp) != 0;
+        if (ok && pixelsChanged) *pixelsChanged = true;
     }
     FPDFBitmap_Destroy(bmp);
-    return true;
+    return ok;
 }
 
 // Char hit test for rectangle-based redaction (region redaction, annotation
@@ -897,16 +999,27 @@ struct ObjRef {
     int depth = 0;
 };
 
+// Crop mode (|cropRect| non-null): |matches| are the out-of-crop margins.
+// Fully outside objects are removed, the visible part of a straddling object
+// is never destroyed (images are pixel-erased outside, vector art is clipped
+// by the page boxes).
 static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE textPage,
                                    const std::vector<TextMatch>& matches, uint32_t argb,
                                    const std::shared_ptr<DocCore>& core,
-                                   std::vector<FPDF_PAGEOBJECT>* paintedCovers = nullptr) {
+                                   std::vector<FPDF_PAGEOBJECT>* paintedCovers = nullptr,
+                                   const FS_RECTF* cropRect = nullptr) {
     if (matches.empty()) return JPDFIUM_OK;
 
     unsigned int alf = (argb >> 24) & 0xFF;
     unsigned int red = (argb >> 16) & 0xFF;
     unsigned int grn = (argb >> 8) & 0xFF;
     unsigned int blu = argb & 0xFF;
+
+    // Only objects whose page-space bbox misses the crop entirely may be destroyed.
+    auto fullyOutsideCrop = [&](float l, float b, float r, float t) -> bool {
+        return cropRect != nullptr && !rectsOverlap(l, b, r, t, cropRect->left, cropRect->bottom,
+                                                    cropRect->right, cropRect->top);
+    };
 
     // Analysis phase (read-only - all text-page queries happen here)
 
@@ -1219,12 +1332,10 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // FreeType font cache: avoid re-loading font data for every fragment.
 #ifdef JPDFIUM_HAS_FREETYPE
     struct FtFontCache {
+        FT_Face face = nullptr;         // owned; freed after the plans are built
+        std::vector<uint8_t> fontData;  // backing store for |face|, must outlive it
         std::unordered_map<uint32_t, uint32_t> unicodeToGid;
-        // glyph id -> advance in FONT UNITS (FT_LOAD_NO_SCALE). Used by the
-        // TJ-deviation detector to decide when a surviving run must be
-        // emitted per-char (observed origin deltas that deviate from the
-        // predicted advances mean TJ kerning / Tc / Tw - the only way to
-        // keep those positions exact is one object per character).
+        // glyph id -> advance (font units, FT_LOAD_NO_SCALE), loaded on first use.
         std::unordered_map<uint32_t, int> advances;
         short upem = 0;
         bool isCidKeyed = false;
@@ -1232,18 +1343,18 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     };
     std::unordered_map<uintptr_t, FtFontCache> ftCache;
 
-    auto getFtMapping = [&](FPDF_FONT font) -> const FtFontCache& {
+    auto getFtMapping = [&](FPDF_FONT font) -> FtFontCache& {
         uintptr_t key = reinterpret_cast<uintptr_t>(font);
         auto it = ftCache.find(key);
         if (it != ftCache.end()) return it->second;
 
         FtFontCache& cache = ftCache[key];
-        std::vector<uint8_t> fontData;
-        if (loadFontDataWithFallback(font, fontData) && !fontData.empty()) {
+        if (loadFontDataWithFallback(font, cache.fontData) && !cache.fontData.empty()) {
             ensureFreeTypeInit();
             FT_Face face;
-            if (FT_New_Memory_Face(g_ft_lib, fontData.data(), static_cast<FT_Long>(fontData.size()),
-                                   0, &face) == 0) {
+            if (FT_New_Memory_Face(g_ft_lib, cache.fontData.data(),
+                                   static_cast<FT_Long>(cache.fontData.size()), 0, &face) == 0) {
+                cache.face = face;
                 cache.isCidKeyed = FT_IS_CID_KEYED(face) != 0;
                 // Select a Unicode cmap if available
                 for (int cm = 0; cm < face->num_charmaps; cm++) {
@@ -1259,14 +1370,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                     cache.unicodeToGid[static_cast<uint32_t>(charcode)] = gid;
                     charcode = FT_Get_Next_Char(face, charcode, &gid);
                 }
-                for (const auto& [uni, g] : cache.unicodeToGid) {
-                    if (cache.advances.count(g)) continue;
-                    if (FT_Load_Glyph(face, g, FT_LOAD_NO_SCALE) == 0) {
-                        cache.advances[g] = face->glyph->advance.x;
-                    }
-                }
                 cache.valid = !cache.unicodeToGid.empty();
-                FT_Done_Face(face);
             }
         }
         return cache;
@@ -1354,7 +1458,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                                      std::vector<double>& devs) -> bool {
             devs.clear();
             if (run.size() < 2) return true;
-            const FtFontCache& ft = getFtMapping(plan.font);
+            FtFontCache& ft = getFtMapping(plan.font);
             if (!ft.valid || ft.upem <= 0) return false;
             FS_MATRIX m;
             if (!FPDFText_GetMatrix(textPage, run[0], &m)) return false;
@@ -1373,7 +1477,14 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 auto git = ft.unicodeToGid.find(uni);
                 if (git == ft.unicodeToGid.end()) continue;
                 auto ait = ft.advances.find(git->second);
-                if (ait == ft.advances.end()) continue;
+                if (ait == ft.advances.end()) {
+                    // Lazy advance load: only glyphs that appear in a survivor
+                    // run are loaded (a full-cmap sweep costs thousands of
+                    // FT_Load_Glyph calls per crop).
+                    if (!ft.face || FT_Load_Glyph(ft.face, git->second, FT_LOAD_NO_SCALE) != 0)
+                        continue;
+                    ait = ft.advances.emplace(git->second, ft.face->glyph->advance.x).first;
+                }
                 double predicted = ait->second * scale;
                 devs.push_back(tx - predicted);
             }
@@ -1479,6 +1590,14 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         plans.push_back(std::move(plan));
     }
 
+#ifdef JPDFIUM_HAS_FREETYPE
+    // The deviation detector is done with the faces once every plan is built.
+    for (auto& [key, cache] : ftCache) {
+        if (cache.face) FT_Done_Face(cache.face);
+    }
+    ftCache.clear();
+#endif
+
     // 6. Remove non-text page objects that overlap redaction regions.
     //    This handles image, path, shading, and form XObject content.
     //
@@ -1573,6 +1692,95 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         return false;
     };
 
+    // All page-level insertions (fission fragments, rebuilt paths,
+    // re-parented nested objects) are collected here and applied later in one
+    // pass, ordered by the original page indices captured BEFORE any
+    // modification, so survivors keep their original paint order
+    // (FPDFPage_InsertObjectAtIndex).
+    struct Insertion {
+        FPDF_PAGEOBJECT obj = nullptr;
+        int insertIndex = 0;  // page index captured before any modification
+        int ordinal = 0;      // paint-order tie-breaker (child index in parent form)
+        int runIndex = 0;     // fragment order within its plan
+    };
+    std::vector<Insertion> insertions;
+    // Reused scratch for image erase rectangles (one allocation per pass).
+    std::vector<FS_RECTF> eraseRectsBuffer;
+    // Parents of children detached in markFormContents: their stale stream
+    // must be regenerated by the step 9b promotion or the moved child renders twice.
+    std::set<FPDF_PAGEOBJECT> detachedFromForms;
+    // Nested images the crop will promote (decided by the pre-pass below).
+    std::unordered_set<FPDF_PAGEOBJECT> promotionCandidates;
+    // True when a bitmap was rewritten: incremental save must be refused even
+    // when no object was destroyed or edited.
+    bool pixelsErased = false;
+    // Crop mode: visible content was dropped because it could not be handled
+    // safely (failed replacement or un-erasable straddling image).
+    bool cropReplacementFailed = false;
+
+    // Bounds of |obj| (parent space) transformed into page space.
+    auto transformedBounds = [](FPDF_PAGEOBJECT obj, const FS_MATRIX& m, float& l, float& b,
+                                float& r, float& t) -> bool {
+        float cl, cb, cr, ct;
+        if (!FPDFPageObj_GetBounds(obj, &cl, &cb, &cr, &ct)) return false;
+        const float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
+        l = std::numeric_limits<float>::max();
+        b = std::numeric_limits<float>::max();
+        r = std::numeric_limits<float>::lowest();
+        t = std::numeric_limits<float>::lowest();
+        for (const auto& c : corners) {
+            float tx = m.a * c[0] + m.c * c[1] + m.e;
+            float ty = m.b * c[0] + m.d * c[1] + m.f;
+            l = std::min(l, tx);
+            b = std::min(b, ty);
+            r = std::max(r, tx);
+            t = std::max(t, ty);
+        }
+        return true;
+    };
+
+    // Paint position of a nested object within its form chain. |leaving|
+    // candidates (promoted out of their form) and fully outside siblings are
+    // skipped: neither paints. Sibling bounds live in the PARENT form's
+    // children space. A nested parent's ObjRef.toPage already maps that space
+    // to the page; a page-level parent has identity toPage, so its own matrix
+    // is the map. Using the child's toPage would apply the parent matrix twice.
+    auto classifyPaintPosition = [&](const ObjRef& start, bool& hasEarlier, bool& hasLater) {
+        hasEarlier = false;
+        hasLater = false;
+        int ordinal = start.ordinal;
+        FPDF_PAGEOBJECT parent = start.parentForm;
+        while (parent) {
+            auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(parent));
+            if (pit == objPtrToIndex.end()) break;
+            const ObjRef& pref = allObjs[pit->second];
+            FS_MATRIX levelToPage;
+            if (pref.parentForm) {
+                levelToPage = pref.toPage;
+            } else if (!FPDFPageObj_GetMatrix(parent, &levelToPage)) {
+                break;
+            }
+            int siblings = FPDFFormObj_CountObjects(parent);
+            for (int si = 0; si < siblings; si++) {
+                if (si == ordinal) continue;
+                FPDF_PAGEOBJECT sib = FPDFFormObj_GetObject(parent, si);
+                if (!sib || promotionCandidates.count(sib)) continue;
+                float l, b, r, t;
+                if (transformedBounds(sib, levelToPage, l, b, r, t) &&
+                    fullyOutsideCrop(l, b, r, t)) {
+                    continue;  // destroyed, never paints
+                }
+                if (si < ordinal) {
+                    hasEarlier = true;
+                } else {
+                    hasLater = true;
+                }
+            }
+            ordinal = pref.ordinal;
+            parent = pref.parentForm;
+        }
+    };
+
     // Recursive form XObject marking: collects child objects covered by
     // redaction rects, accounting for the cumulative transform from
     // form-local to page space. Removal is DEFERRED into objsToDestroy so
@@ -1598,10 +1806,11 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             if (childType == FPDF_PAGEOBJ_FORM) {
                 FS_MATRIX childMatrix;
                 if (FPDFPageObj_GetMatrix(child, &childMatrix)) {
-                    // The child form matrix applies FIRST, then the parent
-                    // chain (matches CPDF_TextPage::ProcessFormObject).
+                    // Matrix order matches CPDF_TextPage::ProcessFormObject.
                     self(self, child, concatMatrix(childMatrix, parentToPage), depth + 1);
                 }
+                // Form bounds are unreliable; in crop mode its children decide.
+                if (cropRect) continue;
             }
 
             // Text children with mapped chars are fission's responsibility.
@@ -1628,6 +1837,63 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 if (ty > tMaxY) tMaxY = ty;
             }
 
+            if (cropRect) {
+                if (fullyOutsideCrop(tMinX, tMinY, tMaxX, tMaxY)) {
+                    objsToDestroy.insert(child);
+                    continue;
+                }
+                // A modified nested image is promoted to the page: SetBitmap
+                // does not dirty the form, so an in-place change would never
+                // reach the saved file (step 9b handles the stream).
+                if (childType == FPDF_PAGEOBJ_IMAGE) {
+                    FS_MATRIX childMatrix;
+                    if (!FPDFPageObj_GetMatrix(child, &childMatrix)) {
+                        objsToDestroy.insert(child);
+                        cropReplacementFailed = true;
+                        continue;
+                    }
+                    FS_MATRIX childToPage = concatMatrix(childMatrix, parentToPage);
+                    eraseRectsBuffer.clear();
+                    for (auto& m : matches) {
+                        if (rectsOverlap(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
+                                         m.bboxT)) {
+                            eraseRectsBuffer.push_back(
+                                makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT));
+                        }
+                    }
+                    if (eraseRectsBuffer.empty()) continue;  // fully inside: leave it
+                    if (!eraseImagePixels(doc, page, child, childToPage,
+                                          std::span<const FS_RECTF>(eraseRectsBuffer), argb,
+                                          &pixelsErased)) {
+                        objsToDestroy.insert(child);
+                        cropReplacementFailed = true;
+                        continue;
+                    }
+                    auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(child));
+                    if (pit == objPtrToIndex.end()) continue;
+                    const ObjRef& ref = allObjs[pit->second];
+                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
+                        continue;  // freed with the destroyed top form
+                    }
+                    // A page-level object sits before or after the WHOLE top
+                    // form. The pre-pass already rejected sandwiched images,
+                    // so only the "paints later" side decides placement.
+                    bool hasEarlier = false;
+                    bool hasLater = false;
+                    classifyPaintPosition(ref, hasEarlier, hasLater);
+                    // Detach before promoting, or the form still renders the child.
+                    if (!FPDFFormObj_RemoveObject(formObj, child)) {
+                        objsToDestroy.insert(child);
+                        continue;
+                    }
+                    detachedFromForms.insert(formObj);
+                    FPDFPageObj_SetMatrix(child, &childToPage);
+                    int targetIdx = hasLater ? ref.topFormPageIndex : (ref.topFormPageIndex + 1);
+                    insertions.push_back({child, targetIdx, ref.ordinal, -1});
+                }
+                continue;
+            }
+
             // Check overlap with any match bbox
             for (auto& m : matches) {
                 if (isFullyContained(tMinX, tMinY, tMaxX, tMaxY, m.bboxL, m.bboxB, m.bboxR,
@@ -1641,17 +1907,32 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
         }
     };
 
-    // All page-level insertions (fission fragments, rebuilt paths) are
-    // collected here and applied later in one pass, ordered by the original
-    // page indices captured BEFORE any modification, so survivors keep their
-    // original paint order (FPDFPage_InsertObjectAtIndex).
-    struct Insertion {
-        FPDF_PAGEOBJECT obj = nullptr;
-        int insertIndex = 0;  // page index captured before any modification
-        int ordinal = 0;      // paint-order tie-breaker (child index in parent form)
-        int runIndex = 0;     // fragment order within its plan
-    };
-    std::vector<Insertion> insertions;
+    if (cropRect) {
+        // Decide every promotion before mutating anything. A promoted image
+        // can only sit before or after the whole top form, so it must be the
+        // first or last painted content of its form chain; a sandwiched image
+        // fails loudly here, with nothing erased or detached yet.
+        for (const ObjRef& ref : allObjs) {
+            if (!ref.parentForm || FPDFPageObj_GetType(ref.obj) != FPDF_PAGEOBJ_IMAGE) continue;
+            float l, b, r, t;
+            if (!transformedBounds(ref.obj, ref.toPage, l, b, r, t)) continue;
+            if (fullyOutsideCrop(l, b, r, t)) continue;  // destroyed, not promoted
+            for (const auto& m : matches) {
+                if (rectsOverlap(l, b, r, t, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                    promotionCandidates.insert(ref.obj);
+                    break;
+                }
+            }
+        }
+        for (FPDF_PAGEOBJECT cand : promotionCandidates) {
+            auto cit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(cand));
+            if (cit == objPtrToIndex.end()) continue;
+            bool hasEarlier = false;
+            bool hasLater = false;
+            classifyPaintPosition(allObjs[cit->second], hasEarlier, hasLater);
+            if (hasEarlier && hasLater) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
+    }
 
     for (int i = objCount - 1; i >= 0; --i) {
         FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
@@ -1672,45 +1953,48 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 break;
             }
         }
-        if (!anyOverlap) continue;
+        // Forms are not bound-tested in crop mode: descend regardless.
+        if (!anyOverlap && !(cropRect && type == FPDF_PAGEOBJ_FORM)) continue;
 
         if (type == FPDF_PAGEOBJ_IMAGE) {
-            // Image: remove if fully contained or >70% overlap; otherwise
-            // PIXEL-TRUE erase the region under the redaction rectangles so
-            // the full-resolution content is not recoverable from the file.
-            // If the bitmap cannot be decoded the WHOLE image is removed -
-            // Doctrine: pixel-true erase or full removal, never cover-and-keep.
+            // Redaction: fully contained or >70% covered images are removed.
+            // Crop: only fully outside images are; a straddling image keeps
+            // its visible part and is pixel-erased outside.
             bool remove = false;
-            for (auto& m : matches) {
-                if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
-                    overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
-                    remove = true;
-                    break;
+            if (cropRect) {
+                remove = fullyOutsideCrop(ol, ob, or_, ot);
+            } else {
+                for (auto& m : matches) {
+                    if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
+                        overlapRatio(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) > 0.70f) {
+                        remove = true;
+                        break;
+                    }
                 }
             }
             if (remove) {
                 objsToDestroy.insert(obj);
             } else {
+                eraseRectsBuffer.clear();
+                for (auto& m : matches) {
+                    if (rectsOverlap(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                        eraseRectsBuffer.push_back(
+                            makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT));
+                    }
+                }
                 bool erased = true;
                 FS_MATRIX imgMatrix;
                 if (!FPDFPageObj_GetMatrix(obj, &imgMatrix)) {
                     erased = false;
                 } else {
-                    for (auto& m : matches) {
-                        if (!rectsOverlap(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT))
-                            continue;
-                        if (!eraseImagePixels(obj, imgMatrix, m.bboxL, m.bboxB, m.bboxR, m.bboxT,
-                                              argb)) {
-                            erased = false;
-                            break;
-                        }
-                    }
+                    erased = eraseImagePixels(doc, page, obj, imgMatrix,
+                                              std::span<const FS_RECTF>(eraseRectsBuffer), argb,
+                                              &pixelsErased);
                 }
                 if (!erased) {
-                    // Bitmap access failed: the redaction region would be a
-                    // visual cover over recoverable pixels. Remove the whole
-                    // image instead.
+                    // Doctrine: pixel-true erase or full removal, never cover-and-keep.
                     objsToDestroy.insert(obj);
+                    cropReplacementFailed = true;
                 }
             }
         } else if (type == FPDF_PAGEOBJ_PATH) {
@@ -1727,6 +2011,15 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             FPDF_BOOL drawStroke = 0;
             if (FPDFPath_GetDrawMode(obj, &drawFillMode, &drawStroke) &&
                 drawFillMode == FPDF_FILLMODE_NONE && !drawStroke) {
+                continue;
+            }
+
+            // Crop: remove fully outside paths, keep partial ones (dropping
+            // subpaths can change fill-rule holes and corrupt visible pixels).
+            if (cropRect) {
+                if (fullyOutsideCrop(ol, ob, or_, ot)) {
+                    objsToDestroy.insert(obj);
+                }
                 continue;
             }
 
@@ -1859,19 +2152,29 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 }
             }
         } else if (type == FPDF_PAGEOBJ_SHADING) {
-            // Shading: remove if fully contained in any redaction rect
-            for (auto& m : matches) {
-                if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
-                    objsToDestroy.insert(obj);
-                    break;
+            // Shading: fully outside (crop) or fully covered (redaction).
+            if (cropRect) {
+                if (fullyOutsideCrop(ol, ob, or_, ot)) objsToDestroy.insert(obj);
+            } else {
+                for (auto& m : matches) {
+                    if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
+                        objsToDestroy.insert(obj);
+                        break;
+                    }
                 }
             }
         } else if (type == FPDF_PAGEOBJ_FORM) {
-            // Form XObject: check if entire form is inside a redaction rect.
-            // When a form contains mapped text objects with surviving fragments,
-            // do not destroy the form wholesale on a partial (>70%) overlap;
-            // fission will emit the survivor fragments and markFormContents will
-            // clean up non-text children.
+            // Crop: always descend (form bounds are unreliable); outside
+            // children are removed. Redaction: remove when fully covered or
+            // >70% covered with no surviving text.
+            if (cropRect) {
+                FS_MATRIX cropFormMatrix;
+                if (FPDFPageObj_GetMatrix(obj, &cropFormMatrix)) {
+                    markFormContents(markFormContents, obj, cropFormMatrix, 0);
+                }
+                continue;
+            }
+
             bool hasSurvivingText = false;
             for (const auto& plan : plans) {
                 FPDF_PAGEOBJECT p = plan.originalObj;
@@ -1950,8 +2253,248 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     //    If all strategies fail, fragment is skipped and original preserved.
     std::unordered_set<FPDF_PAGEOBJECT> fissionAttempted;
 
+    auto boundsValid = [](FPDF_PAGEOBJECT obj) -> bool {
+        float fl, fb, fr, ft;
+        if (!FPDFPageObj_GetBounds(obj, &fl, &fb, &fr, &ft)) return false;
+        float w = fr - fl, h = ft - fb;
+        return w >= 0.01f || h >= 0.01f;
+    };
+
+    // Round-trip the object's DECODED text and compare it against the
+    // expected string (ligature spelling normalized). This catches silent
+    // glyph drops / .notdef substitutions that a bounds check alone would
+    // miss. The text page is still valid here (all removals happen later).
+    //
+    // Returns: 1 = verified match, 0 = verified mismatch, -1 = cannot decode
+    // (inline fonts without a usable encoding) - in that case only the
+    // bounds/width checks validate the emission.
+    auto fragmentTextStatus = [&](FPDF_PAGEOBJECT obj,
+                                  const std::vector<uint16_t>& expected) -> int {
+        unsigned long needBytes = FPDFTextObj_GetText(obj, textPage, nullptr, 0);
+        if (needBytes <= sizeof(FPDF_WCHAR)) return -1;
+        size_t numChars = needBytes / sizeof(FPDF_WCHAR);
+        std::vector<FPDF_WCHAR> buf(numChars, 0);
+        if (FPDFTextObj_GetText(obj, textPage, buf.data(), needBytes) != needBytes) return -1;
+        std::u32string gotW = fpdfWcharBufToU32(buf.data(), numChars);
+        if (gotW.empty()) return -1;  // cannot decode (inline fonts w/o encoding)
+        std::u32string expW;
+        size_t i = 0;
+        while (i < expected.size()) {
+            if (expected[i] == 0) break;
+            if (expected[i] >= 0xD800 && expected[i] <= 0xDBFF && i + 1 < expected.size()) {
+                uint16_t lo = expected[i + 1];
+                if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                    expW += static_cast<char32_t>(0x10000 + ((expected[i] - 0xD800) << 10) +
+                                                  (lo - 0xDC00));
+                    i += 2;
+                    continue;
+                }
+            }
+            expW += static_cast<char32_t>(expected[i]);
+            i++;
+        }
+        return decomposeLigatures(gotW) == decomposeLigatures(expW) ? 1 : 0;
+    };
+
+    // Encode |frag| into |obj|, place it with |matrix|, copy mode and colors.
+    // |verifyWithTextPage| is false for in-place edits (the text page is stale
+    // after SetText, so the round trip would compare against the old text).
+    // |invChainForGate| pulls the expected box into form-local space.
+    // |mutatedOut| reports whether the object's text was replaced.
+    auto emitFragment = [&](FPDF_PAGEOBJECT obj, const TextFragment& frag, const FissionPlan& plan,
+                            const FS_MATRIX& matrix, bool verifyWithTextPage,
+                            const FS_MATRIX* invChainForGate, bool* mutatedOut = nullptr) -> bool {
+        if (mutatedOut) *mutatedOut = false;
+        if (frag.utf16.size() <= 1) return false;  // null-only
+        const std::vector<uint16_t>& expectedText = frag.utf16;
+
+        FPDF_BOOL textOk = false;
+        bool boundsOk = false;
+        // 1 = emission verified by decoded-text round-trip, -1 = could not
+        // be decoded (the width gate below then validates it instead).
+        int emissionStatus = -1;
+
+        // Strategy A: SetText (Unicode -> font's CharCodeFromUnicode).
+        // Skipped when the source characters have broken ToUnicode
+        // mappings - the extracted codepoints cannot round-trip.
+        // Candidates are tried in order: ligature-recombined form first
+        // (fonts that subset only ligature glyphs cannot re-emit the
+        // components), then the original codepoints, then the decomposed
+        // variant.
+        if (!frag.unicodeUnreliable) {
+            for (const auto* cand : {&frag.utf16Ligated, &frag.utf16, &frag.utf16Decomposed}) {
+                if (cand->empty()) continue;
+                textOk = FPDFText_SetText(obj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
+                if (!textOk) continue;
+                if (mutatedOut) *mutatedOut = true;
+                if (!verifyWithTextPage) {
+                    break;  // first successful candidate; the width gate validates it
+                }
+                emissionStatus = fragmentTextStatus(obj, *cand);
+                if (emissionStatus != 0) break;  // 1 verified, -1 width-gated
+                textOk = false;
+            }
+            if (textOk) boundsOk = boundsValid(obj);
+        }
+
+        // Strategy B (legacy FreeType GID injection) was removed because
+        // FreeType GIDs are glyph IDs inside the font program and do not
+        // correspond to PDF content stream character codes for subset CID and
+        // custom-encoded fonts. Passing raw GIDs to FPDFText_SetCharcodes
+        // causes glyph misalignment and missing lowercase characters.
+        // Strategy A (Unicode) and Strategy C (WinAnsi) ensure valid PDF encoding.
+        // If encoding is impossible, fission safely keeps original under the redaction box.
+
+        // Strategy C: WinAnsi SetCharcodes (Standard 14 / non-embedded).
+        if (!textOk || !boundsOk) {
+            for (const auto* cand : {&frag.utf16, &frag.utf16Decomposed}) {
+                if (cand->empty()) continue;
+                std::vector<uint32_t> codes;
+                bool allMappable = true;
+                for (size_t i = 0; i + 1 < cand->size(); i++) {
+                    uint32_t code = unicodeToWinAnsiCharcode((*cand)[i]);
+                    if (code != 0) {
+                        codes.push_back(code);
+                    } else {
+                        allMappable = false;
+                        break;
+                    }
+                }
+                if (allMappable && !codes.empty()) {
+                    FPDFText_SetCharcodes(obj, codes.data(), codes.size());
+                    if (mutatedOut) *mutatedOut = true;
+                    emissionStatus = fragmentTextStatus(obj, expectedText);
+                    if (emissionStatus != 0) {
+                        textOk = true;
+                        boundsOk = boundsValid(obj);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!textOk || !boundsOk) return false;
+
+        FPDFPageObj_SetMatrix(obj, &matrix);
+
+        // Loose width gate for emissions that could not be verified by
+        // decoded-text round-trip and do not use a standard-14 font:
+        // wrong glyphs from custom encodings change the glyph sequence
+        // and therefore the bounding box. Standard-14 fonts are trusted
+        // (fixed encoding); Strategy A is trusted (direct Unicode encoding
+        // via PDFium font map); the tolerance is loose enough for Tc/Tw
+        // spacing drift while still rejecting wholesale garbage.
+        if (emissionStatus == -1 && !isStandard14Font(plan.font) && frag.hasExpectedBox) {
+            // Expected box in the object's own coordinate space.
+            float eL = frag.expL, eB = frag.expB, eR = frag.expR, eT = frag.expT;
+            if (invChainForGate) {
+                const float corners[4][2] = {{frag.expL, frag.expB},
+                                             {frag.expR, frag.expB},
+                                             {frag.expR, frag.expT},
+                                             {frag.expL, frag.expT}};
+                eL = std::numeric_limits<float>::max();
+                eB = std::numeric_limits<float>::max();
+                eR = std::numeric_limits<float>::lowest();
+                eT = std::numeric_limits<float>::lowest();
+                for (const auto& c : corners) {
+                    float tx =
+                        invChainForGate->a * c[0] + invChainForGate->c * c[1] + invChainForGate->e;
+                    float ty =
+                        invChainForGate->b * c[0] + invChainForGate->d * c[1] + invChainForGate->f;
+                    if (tx < eL) eL = tx;
+                    if (ty < eB) eB = ty;
+                    if (tx > eR) eR = tx;
+                    if (ty > eT) eT = ty;
+                }
+            }
+            float fl, fb, fr, ft;
+            if (!FPDFPageObj_GetBounds(obj, &fl, &fb, &fr, &ft)) return false;
+            // Wrong-glyph emissions (custom encodings) almost always
+            // change the glyph HEIGHTS, so the height check is tight.
+            // The width check is deliberately loose: character spacing
+            // (Tc) is not re-emitted by the fission, so correctly mapped
+            // fragments may be narrower than the source run.
+            float tolH = std::max(2.0f, (eT - eB) * 0.10f);
+            float tolWL = std::max(2.0f, (eR - eL) * 0.10f);
+            float tolWR = std::max(3.0f, (eR - eL) * 0.40f);
+            if (std::abs(fl - eL) > tolWL || std::abs(fr - eR) > tolWR ||
+                std::abs(fb - eB) > tolH || std::abs(ft - eT) > tolH) {
+                return false;
+            }
+        }
+
+        FPDFTextObj_SetTextRenderMode(obj, plan.renderMode);
+
+        // Restore original text colors
+        FPDFPageObj_SetFillColor(obj, plan.fillR, plan.fillG, plan.fillB, plan.fillA);
+        if (plan.hasStroke) {
+            FPDFPageObj_SetStrokeColor(obj, plan.strokeR, plan.strokeG, plan.strokeB, plan.strokeA);
+        }
+        return true;
+    };
+
+    bool inPlaceEdited = false;
+
     for (auto& plan : plans) {
         fissionAttempted.insert(plan.originalObj);
+        bool originalDropped = false;
+
+        // One surviving run edits the original object in place. New objects
+        // land in a stream appended after all existing content, so they would
+        // paint above later page content. A form child is first detached from
+        // its form (which marks the form stream dirty; that is the only
+        // dirty-stream hook) and promoted to the page: the existing object
+        // then serializes at its page list position, keeping paint order.
+        if (plan.fragments.size() == 1) {
+            const TextFragment& frag = plan.fragments[0];
+            bool canEdit = true;
+            bool promotedFromForm = false;
+            if (plan.parentForm) {
+                auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(plan.originalObj));
+                if (pit == objPtrToIndex.end()) {
+                    canEdit = false;
+                } else {
+                    const ObjRef& ref = allObjs[pit->second];
+                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
+                        canEdit = false;  // freed with the destroyed top form
+                    } else if (!FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
+                        canEdit = false;
+                    } else {
+                        detachedFromForms.insert(plan.parentForm);
+                        promotedFromForm = true;
+                    }
+                }
+            }
+            if (canEdit) {
+                bool mutated = false;
+                if (emitFragment(plan.originalObj, frag, plan, frag.matrix,
+                                 /*verifyWithTextPage=*/false, nullptr, &mutated)) {
+                    inPlaceEdited = true;
+                    if (promotedFromForm) {
+                        auto pit =
+                            objPtrToIndex.find(reinterpret_cast<uintptr_t>(plan.originalObj));
+                        if (pit != objPtrToIndex.end()) {
+                            const ObjRef& ref = allObjs[pit->second];
+                            insertions.push_back(
+                                {plan.originalObj, ref.topFormPageIndex + 1, ref.ordinal, -1});
+                        }
+                    }
+                    continue;  // edited in place: nothing to destroy
+                }
+                // A mutated object cannot be trusted; never rebuild it from
+                // decoded Unicode (that drops TJ adjustments). Drop it instead.
+                // A detached object is already off the page and out of its
+                // form, so it must be dropped even when the edit changed
+                // nothing: leaving it orphaned would silently lose the text.
+                if (mutated || promotedFromForm) {
+                    objsToDestroy.insert(plan.originalObj);
+                    originalDropped = true;
+                }
+            }
+            // In-place edit failed (or cannot be verified): fall through to
+            // the create-new-object path below.
+        }
+
         std::vector<FPDF_PAGEOBJECT> createdObjs;
         bool allOk = true;
 
@@ -1990,169 +2533,12 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
                 allOk = false;
                 break;
             }
-
-            auto boundsValid = [](FPDF_PAGEOBJECT obj) -> bool {
-                float fl, fb, fr, ft;
-                if (!FPDFPageObj_GetBounds(obj, &fl, &fb, &fr, &ft)) return false;
-                float w = fr - fl, h = ft - fb;
-                return w >= 0.01f || h >= 0.01f;
-            };
-
-            // Round-trip the new object's DECODED text and compare it against
-            // the expected string (ligature spelling normalized). This catches
-            // silent glyph drops / .notdef substitutions that a bounds check
-            // alone would miss - including wrong GIDs from Strategy B. The
-            // text page is still valid here (all removals happen later).
-            //
-            // Returns: 1 = verified match, 0 = verified mismatch,
-            // -1 = cannot decode (inline fonts without a usable encoding) -
-            // in that case only the bounds check validates the fragment.
-            auto fragmentTextStatus = [&](FPDF_PAGEOBJECT obj,
-                                          const std::vector<uint16_t>& expected) -> int {
-                unsigned long needBytes = FPDFTextObj_GetText(obj, textPage, nullptr, 0);
-                if (needBytes <= sizeof(FPDF_WCHAR)) return -1;
-                size_t numChars = needBytes / sizeof(FPDF_WCHAR);
-                std::vector<FPDF_WCHAR> buf(numChars, 0);
-                if (FPDFTextObj_GetText(obj, textPage, buf.data(), needBytes) != needBytes)
-                    return -1;
-                std::u32string gotW = fpdfWcharBufToU32(buf.data(), numChars);
-                if (gotW.empty()) return -1;  // cannot decode (inline fonts w/o encoding)
-                std::u32string expW;
-                size_t i = 0;
-                while (i < expected.size()) {
-                    if (expected[i] == 0) break;
-                    if (expected[i] >= 0xD800 && expected[i] <= 0xDBFF && i + 1 < expected.size()) {
-                        uint16_t lo = expected[i + 1];
-                        if (lo >= 0xDC00 && lo <= 0xDFFF) {
-                            expW += static_cast<char32_t>(0x10000 + ((expected[i] - 0xD800) << 10) +
-                                                          (lo - 0xDC00));
-                            i += 2;
-                            continue;
-                        }
-                    }
-                    expW += static_cast<char32_t>(expected[i]);
-                    i++;
-                }
-                return decomposeLigatures(gotW) == decomposeLigatures(expW) ? 1 : 0;
-            };
-
-            // The codepoints to lay out: original (ligatures intact) first,
-            // decomposed variant as fallback. The round-trip expectation is
-            // always the original codepoints (ligature spelling normalized).
-            const std::vector<uint16_t>& expectedText = frag.utf16;
-
-            FPDF_BOOL textOk = false;
-            bool boundsOk = false;
-            // 1 = emission verified by decoded-text round-trip, -1 = could not
-            // be decoded (the width gate below then validates it instead).
-            int emissionStatus = -1;
-
-            // Strategy A: SetText (Unicode -> font's CharCodeFromUnicode).
-            // Skipped when the source characters have broken ToUnicode
-            // mappings - the extracted codepoints cannot round-trip.
-            // Candidates are tried in order: ligature-recombined form first
-            // (fonts that subset only ligature glyphs cannot re-emit the
-            // components), then the original codepoints, then the decomposed
-            // variant.
-            bool strategyAUsed = false;
-            if (!frag.unicodeUnreliable) {
-                for (const auto* cand : {&frag.utf16Ligated, &frag.utf16, &frag.utf16Decomposed}) {
-                    if (cand->empty()) continue;
-                    textOk =
-                        FPDFText_SetText(fragObj, reinterpret_cast<FPDF_WIDESTRING>(cand->data()));
-                    if (!textOk) continue;
-                    strategyAUsed = true;
-                    emissionStatus = fragmentTextStatus(fragObj, *cand);
-                    if (emissionStatus != 0) break;  // 1 verified, -1 width-gated
-                    textOk = false;
-                    strategyAUsed = false;
-                }
-                if (textOk) boundsOk = boundsValid(fragObj);
-            }
-
-            // Strategy B (legacy FreeType GID injection) was removed because
-            // FreeType GIDs are glyph IDs inside the font program and do not
-            // correspond to PDF content stream character codes for subset CID and
-            // custom-encoded fonts. Passing raw GIDs to FPDFText_SetCharcodes
-            // causes glyph misalignment and missing lowercase characters.
-            // Strategy A (Unicode) and Strategy C (WinAnsi) ensure valid PDF encoding.
-            // If encoding is impossible, fission safely keeps original under the redaction box.
-
-            // Strategy C: WinAnsi SetCharcodes (Standard 14 / non-embedded).
-            if (!textOk || !boundsOk) {
-                for (const auto* cand : {&frag.utf16, &frag.utf16Decomposed}) {
-                    if (cand->empty()) continue;
-                    std::vector<uint32_t> codes;
-                    bool allMappable = true;
-                    for (size_t i = 0; i + 1 < cand->size(); i++) {
-                        uint32_t code = unicodeToWinAnsiCharcode((*cand)[i]);
-                        if (code != 0) {
-                            codes.push_back(code);
-                        } else {
-                            allMappable = false;
-                            break;
-                        }
-                    }
-                    if (allMappable && !codes.empty()) {
-                        FPDFText_SetCharcodes(fragObj, codes.data(), codes.size());
-                        emissionStatus = fragmentTextStatus(fragObj, expectedText);
-                        if (emissionStatus != 0) {
-                            textOk = true;
-                            boundsOk = boundsValid(fragObj);
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!textOk || !boundsOk) {
+            if (!emitFragment(fragObj, frag, plan, frag.matrix, /*verifyWithTextPage=*/true,
+                              nullptr)) {
                 FPDFPageObj_Destroy(fragObj);
                 allOk = false;
                 break;
             }
-
-            FPDFPageObj_SetMatrix(fragObj, &frag.matrix);
-
-            // Loose width gate for emissions that could not be verified by
-            // decoded-text round-trip and do not use a standard-14 font:
-            // wrong glyphs from custom encodings change the glyph sequence
-            // and therefore the page-space bbox. Standard-14 fonts are
-            // trusted (fixed encoding); Strategy A is trusted (direct Unicode
-            // encoding via PDFium font map); the tolerance is loose enough for
-            // Tc/Tw spacing drift while still rejecting wholesale garbage.
-            if (!strategyAUsed && emissionStatus == -1 && !isStandard14Font(plan.font) &&
-                frag.hasExpectedBox) {
-                float fl, fb, fr, ft;
-                if (!FPDFPageObj_GetBounds(fragObj, &fl, &fb, &fr, &ft)) {
-                    FPDFPageObj_Destroy(fragObj);
-                    allOk = false;
-                    break;
-                }
-                // Wrong-glyph emissions (custom encodings) almost always
-                // change the glyph HEIGHTS, so the height check is tight.
-                // The width check is deliberately loose: character spacing
-                // (Tc) is not re-emitted by the fission, so correctly mapped
-                // fragments may be narrower than the source run.
-                float tolH = std::max(2.0f, (frag.expT - frag.expB) * 0.10f);
-                float tolWL = std::max(2.0f, (frag.expR - frag.expL) * 0.10f);
-                float tolWR = std::max(3.0f, (frag.expR - frag.expL) * 0.40f);
-                if (std::abs(fl - frag.expL) > tolWL || std::abs(fr - frag.expR) > tolWR ||
-                    std::abs(fb - frag.expB) > tolH || std::abs(ft - frag.expT) > tolH) {
-                    FPDFPageObj_Destroy(fragObj);
-                    allOk = false;
-                    break;
-                }
-            }
-
-            FPDFTextObj_SetTextRenderMode(fragObj, plan.renderMode);
-
-            // Restore original text colors
-            FPDFPageObj_SetFillColor(fragObj, plan.fillR, plan.fillG, plan.fillB, plan.fillA);
-            if (plan.hasStroke) {
-                FPDFPageObj_SetStrokeColor(fragObj, plan.strokeR, plan.strokeG, plan.strokeB,
-                                           plan.strokeA);
-            }
-
             createdObjs.push_back(fragObj);
         }
 
@@ -2188,8 +2574,13 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
             for (auto* fo : createdObjs) {
                 FPDFPageObj_Destroy(fo);
             }
+            // Crop mode: a dropped original is visible content lost INSIDE the
+            // crop, which the outside-only audit cannot see; fail loudly.
+            if (cropRect && originalDropped) cropReplacementFailed = true;
         }
     }
+
+    const int32_t pendingError = cropReplacementFailed ? JPDFIUM_ERR_REDACT_INCOMPLETE : JPDFIUM_OK;
 
     // 8. Fallback: remove text objects that are >70% inside a match bbox but
     //    were NOT caught by the char-to-object mapping (e.g. chars with
@@ -2210,6 +2601,16 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
 
         float ol, ob, or_, ot;
         if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) continue;
+
+        if (cropRect) {
+            // Crop: unmapped TEXT fully outside the crop is unreachable
+            // content - remove it. Partial text objects are handled by
+            // fission; one that fission could not split is left in place
+            // (its visible part survives, the post-pass audit flags any
+            // glyph that still sticks out).
+            if (fullyOutsideCrop(ol, ob, or_, ot)) objsToDestroy.insert(obj);
+            continue;
+        }
 
         for (auto& m : matches) {
             if (isFullyContained(ol, ob, or_, ot, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
@@ -2265,7 +2666,7 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     //    matrix to page space and insert it at the top-level form's index.
     //    The parent's regenerated stream then no longer invokes the stale
     //    nested copy, and the promoted copy regenerates on the page.
-    std::set<FPDF_PAGEOBJECT> dirtyForms;
+    std::set<FPDF_PAGEOBJECT> dirtyForms(detachedFromForms.begin(), detachedFromForms.end());
     std::set<FPDF_PAGEOBJECT> reParentForms;
     for (FPDF_PAGEOBJECT obj : destroyList) {
         if (hasMarkedAncestor(obj)) continue;
@@ -2374,10 +2775,11 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     // Any content REMOVAL means an incremental save would keep the original,
     // un-redacted revision recoverable in the file body - record that so the
     // save APIs can refuse.
-    if ((!objsToDestroy.empty() || !reParentForms.empty()) && core) {
+    if ((!objsToDestroy.empty() || !reParentForms.empty() || inPlaceEdited || pixelsErased) &&
+        core) {
         core->contentRedacted = true;
     }
-    return JPDFIUM_OK;
+    return pendingError;
 }
 
 // PCRE2 matching layer (replaces std::wregex entirely).
@@ -3022,6 +3424,129 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
     }
 }
 
+// Crop fast-path test: every content-bearing leaf must lie inside the crop.
+// Form objects are never bound-tested (FPDFPageObj_GetBounds is unreliable
+// for them); their children are checked recursively instead.
+static bool pageContentInsideCrop(FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage, float l, float b,
+                                  float r, float t, int depth) {
+    if (!obj || depth > kMaxFormNesting) return false;
+    if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_FORM) {
+        int children = FPDFFormObj_CountObjects(obj);
+        if (children <= 0) return false;  // empty or unparsed: cannot verify
+        FS_MATRIX own;
+        if (!FPDFPageObj_GetMatrix(obj, &own)) return false;
+        FS_MATRIX childToPage = concatMatrix(own, toPage);
+        for (int i = 0; i < children; i++) {
+            if (!pageContentInsideCrop(FPDFFormObj_GetObject(obj, i), childToPage, l, b, r, t,
+                                       depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    float cl, cb, cr, ct;
+    if (!FPDFPageObj_GetBounds(obj, &cl, &cb, &cr, &ct)) return false;
+    const float corners[4][2] = {{cl, cb}, {cr, cb}, {cr, ct}, {cl, ct}};
+    float tl = std::numeric_limits<float>::max();
+    float tb = std::numeric_limits<float>::max();
+    float tr = std::numeric_limits<float>::lowest();
+    float tt = std::numeric_limits<float>::lowest();
+    for (const auto& c : corners) {
+        float tx = toPage.a * c[0] + toPage.c * c[1] + toPage.e;
+        float ty = toPage.b * c[0] + toPage.d * c[1] + toPage.f;
+        tl = std::min(tl, tx);
+        tb = std::min(tb, ty);
+        tr = std::max(tr, tx);
+        tt = std::max(tt, ty);
+    }
+    return isFullyContained(tl, tb, tr, tt, l, b, r, t);
+}
+
+// After the fission pass nothing may remain fully outside the crop: checks
+// every non-generated char origin and every content-bearing object (clip
+// paths exempt). A false result is a loud REDACT_INCOMPLETE at the call site.
+static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& crop,
+                                      FPDF_TEXTPAGE textPage) {
+    // 1. Characters: every real (non-generated) char origin must be inside the crop.
+    if (textPage) {
+        int n = FPDFText_CountChars(textPage);
+        for (int ci = 0; ci < n; ci++) {
+            if (FPDFText_IsGenerated(textPage, ci) == 1) continue;
+            double ox, oy;
+            if (!FPDFText_GetCharOrigin(textPage, ci, &ox, &oy)) continue;
+            if (ox < crop.left || ox > crop.right || oy < crop.bottom || oy > crop.top) {
+                return false;
+            }
+        }
+    }
+
+    // 2. Objects: every content-bearing object must intersect the crop
+    //    (pixel-erased images keep their bounds).
+    //    A generic recursive lambda (not std::function) keeps this allocation
+    //    free, matching the rest of the crop hot path.
+    auto walk = [&](auto& self, FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage, int depth) -> bool {
+        if (depth > kMaxFormNesting) return true;
+        int type = FPDFPageObj_GetType(obj);
+        if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE && type != FPDF_PAGEOBJ_PATH &&
+            type != FPDF_PAGEOBJ_SHADING && type != FPDF_PAGEOBJ_FORM) {
+            return true;
+        }
+        if (type == FPDF_PAGEOBJ_PATH) {
+            int fillMode = 0;
+            FPDF_BOOL stroke = 0;
+            if (FPDFPath_GetDrawMode(obj, &fillMode, &stroke) && fillMode == FPDF_FILLMODE_NONE &&
+                !stroke) {
+                return true;  // clip path: paints nothing
+            }
+        }
+        if (type == FPDF_PAGEOBJ_FORM) {
+            // FPDFPageObj_GetBounds is unreliable for form objects (it can
+            // return a degenerate box), so the form's own bbox is not
+            // audited; every content-bearing child is checked recursively
+            // with its reliable bounds instead.
+            int childCount = FPDFFormObj_CountObjects(obj);
+            FS_MATRIX childToPage = toPage;
+            FS_MATRIX own;
+            if (FPDFPageObj_GetMatrix(obj, &own)) childToPage = concatMatrix(own, toPage);
+            for (int ci = 0; ci < childCount; ci++) {
+                FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(obj, ci);
+                if (!child) continue;
+                if (!self(self, child, childToPage, depth + 1)) return false;
+            }
+            return true;
+        }
+        float l, b, r, t;
+        if (FPDFPageObj_GetBounds(obj, &l, &b, &r, &t) && !((r - l) <= 0.01f && (t - b) <= 0.01f)) {
+            const float corners[4][2] = {{l, b}, {r, b}, {r, t}, {l, t}};
+            float tMinX = std::numeric_limits<float>::max();
+            float tMinY = std::numeric_limits<float>::max();
+            float tMaxX = std::numeric_limits<float>::lowest();
+            float tMaxY = std::numeric_limits<float>::lowest();
+            for (const auto& c : corners) {
+                float tx = toPage.a * c[0] + toPage.c * c[1] + toPage.e;
+                float ty = toPage.b * c[0] + toPage.d * c[1] + toPage.f;
+                if (tx < tMinX) tMinX = tx;
+                if (ty < tMinY) tMinY = ty;
+                if (tx > tMaxX) tMaxX = tx;
+                if (ty > tMaxY) tMaxY = ty;
+            }
+            if (!rectsOverlap(tMinX, tMinY, tMaxX, tMaxY, crop.left, crop.bottom, crop.right,
+                              crop.top)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    int objCount = FPDFPage_CountObjects(page);
+    for (int i = 0; i < objCount; i++) {
+        FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+        if (!obj) continue;
+        if (!walk(walk, obj, kIdentityMatrix, 0)) return false;
+    }
+    return true;
+}
+
 int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
@@ -3031,23 +3556,21 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
 
     try {
         const float cL = x, cB = y, cR = x + w, cT = y + h;
+        const FS_RECTF cropRect = makePageRect(cL, cB, cR, cT);
 
         const int fastObjCount = FPDFPage_CountObjects(pw->page);
         bool allInside = true;
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
-            float ol, ob, or_, ot;
-            if (!FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot) ||
-                !isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT)) {
+            if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
                 allInside = false;
                 break;
             }
         }
         if (allInside) return JPDFIUM_OK;
-
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
-        if (!tp) return JPDFIUM_ERR_NATIVE;
+        if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
         // Compute aggregate bounding box covering all page objects and standard page size
         float pageMinX = 0.0f, pageMinY = 0.0f;
@@ -3074,33 +3597,41 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         pageMaxX += 100.0f;
         pageMaxY += 100.0f;
 
-        // Define 4 outer margin bounding boxes around the crop rect
+        // Define the 4 outer margin bounding boxes around the crop rect. They
+        // partition everything outside the crop, so they also double as the
+        // erase regions for partially visible images.
         struct MarginBox {
             float l, b, r, t;
         };
-        std::vector<MarginBox> margins;
-        if (cL > pageMinX) margins.push_back({pageMinX, pageMinY, cL, pageMaxY});
-        if (cR < pageMaxX) margins.push_back({cR, pageMinY, pageMaxX, pageMaxY});
-        if (cB > pageMinY) margins.push_back({cL, pageMinY, cR, cB});
-        if (cT < pageMaxY) margins.push_back({cL, cT, cR, pageMaxY});
+        MarginBox margins[4];
+        int marginCount = 0;
+        if (cL > pageMinX) margins[marginCount++] = {pageMinX, pageMinY, cL, pageMaxY};
+        if (cR < pageMaxX) margins[marginCount++] = {cR, pageMinY, pageMaxX, pageMaxY};
+        if (cB > pageMinY) margins[marginCount++] = {cL, pageMinY, cR, cB};
+        if (cT < pageMaxY) margins[marginCount++] = {cL, cT, cR, pageMaxY};
 
-        std::vector<TextMatch> matches;
+        // One pass: a char is removed when its origin is outside the crop.
         const int count = FPDFText_CountChars(tp);
-
-        for (const auto& mb : margins) {
+        std::vector<TextMatch> matches;
+        matches.reserve(static_cast<size_t>(marginCount));
+        for (int mi = 0; mi < marginCount; mi++) {
             TextMatch m;
-            m.bboxL = mb.l;
-            m.bboxB = mb.b;
-            m.bboxR = mb.r;
-            m.bboxT = mb.t;
-            for (int i = 0; i < count; ++i) {
-                double ox, oy;
-                if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
+            m.bboxL = margins[mi].l;
+            m.bboxB = margins[mi].b;
+            m.bboxR = margins[mi].r;
+            m.bboxT = margins[mi].t;
+            matches.push_back(std::move(m));
+        }
+        for (int i = 0; i < count; ++i) {
+            double ox, oy;
+            if (!FPDFText_GetCharOrigin(tp, i, &ox, &oy)) continue;
+            for (int mi = 0; mi < marginCount; mi++) {
+                const MarginBox& mb = margins[mi];
                 if (ox >= mb.l && ox <= mb.r && oy >= mb.b && oy <= mb.t) {
-                    m.charIndices.push_back(i);
+                    matches[mi].charIndices.push_back(i);
+                    break;
                 }
             }
-            matches.push_back(std::move(m));
         }
 
         bool anythingToRemove = false;
@@ -3128,11 +3659,18 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             FPDFText_ClosePage(tp);
             return JPDFIUM_OK;
         }
-
-        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core);
-
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, 0x00000000, pw->core,
+                                         nullptr, &cropRect);
         FPDFText_ClosePage(tp);
-        return rc;
+        if (rc != JPDFIUM_OK) return rc;
+
+        // Audit that nothing content-bearing remains fully outside the crop.
+        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
+        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit);
+        FPDFText_ClosePage(audit);
+        if (!auditOk) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

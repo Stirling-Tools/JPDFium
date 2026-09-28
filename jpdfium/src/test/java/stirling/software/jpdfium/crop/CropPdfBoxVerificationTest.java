@@ -126,6 +126,41 @@ class CropPdfBoxVerificationTest {
         }
     }
 
+    @Test
+    void formChildTextRemovalLeavesNoStaleStream() throws Exception {
+        // Single survivor run ("KEEP"): a stale form stream would leave
+        // "SECRETKEEP" extractable.
+        byte[] output = cropFirstPage(CropTestPdfGenerator.formNestedSingleWordPdf(),
+                new Rect(155, 0, 457, 792));
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            String text = new PDFTextStripper().getText(doc);
+            assertFalse(text.contains("SECRET"),
+                    "removed form text survived the in-place edit: " + text);
+            assertTrue(text.contains("KEEP"),
+                    "surviving form text lost in the in-place edit: " + text);
+            // Text extraction only sees referenced content: decode every stream,
+            // including unreferenced ones, so a stale form stream cannot hide.
+            for (var key : doc.getDocument().getXrefTable().keySet()) {
+                COSBase base;
+                try {
+                    base = doc.getDocument().getObjectFromPool(key).getObject();
+                } catch (Exception _) {
+                    continue;
+                }
+                if (!(base instanceof org.apache.pdfbox.cos.COSStream stream)) continue;
+                byte[] decoded;
+                try (var in = stream.createInputStream()) {
+                    decoded = in.readAllBytes();
+                } catch (Exception _) {
+                    continue;  // undecodable stream cannot carry the text
+                }
+                String body = new String(decoded, java.nio.charset.StandardCharsets.ISO_8859_1);
+                assertFalse(body.contains("SECRET"),
+                        "stream " + key + " still contains removed text");
+            }
+        }
+    }
+
     // boxes
 
     @Test
