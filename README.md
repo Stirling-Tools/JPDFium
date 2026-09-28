@@ -14,9 +14,8 @@ Requires the JVM flag `--enable-native-access=ALL-UNNAMED`.
 ```java
 try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
     try (var page = doc.page(0)) {
-        // PDF -> image bytes through the active codec (libvips when present)
-        Files.write(Path.of("page0.png"),
-                PdfImageConverter.pageToBytes(doc, 0, 150, ImageFormat.PNG));
+        // Render page to image via active codec (libvips when present)
+        page.renderTo(Path.of("page0.png"), 150);
         page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
         page.flatten();
     }
@@ -28,7 +27,19 @@ More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/`
 
 ## Image I/O
 
-Add `stirling.software.jpdfium:jpdfium-vips` (+ a `jpdfium-natives-vips-<platform>` jar) and its libvips-backed `ImageCodec` registers through the service loader as the default for `PdfImageConverter`, `SvgConverter`, `Watermark`, and `ExtractedImage`: more formats (HEIC/HEIF/AVIF/JXL/JPEG2000) and WebP writes without ImageIO plugins. Without the module, `javax.imageio` is used. `-Djpdfium.renderer=agg|skia|auto` (or `JPDFIUM_RENDERER`) selects the renderer; Skia is the default.
+JPDFium provides familiar PDFBox-style and ImageIO-style APIs:
+
+```java
+// PDFBox-style rendering:
+var renderer = new PdfRenderer(doc);
+BufferedImage image = renderer.renderImageWithDPI(0, 150);
+
+// ImageIO-style read/write (backed by libvips when present, else ImageIO):
+PdfImageIO.write(image, "PNG", Path.of("page0.png"));
+BufferedImage photo = PdfImageIO.read(Path.of("photo.heic"));
+```
+
+Add `stirling.software.jpdfium:jpdfium-vips` (+ a `jpdfium-natives-vips-<platform>` jar) and its libvips-backed `ImageCodec` registers through the service loader as the default for `PdfImageIO`, `PdfRenderer`, `PdfImageConverter`, `SvgConverter`, `Watermark`, and `ExtractedImage`: more formats (HEIC/HEIF/AVIF/JXL/JPEG2000) and WebP writes without ImageIO plugins. Without the module, `javax.imageio` is used. `-Djpdfium.renderer=agg|skia|auto` (or `JPDFIUM_RENDERER`) selects the renderer; Skia is the default.
 
 ## Native Loading
 

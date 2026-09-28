@@ -83,11 +83,17 @@ public final class VipsImageCodec implements ImageCodec {
     }
 
     private static VipsFormat toVips(ImageFormat format) {
+        if (format == null) return null;
         return switch (format) {
             case PNG -> VipsFormat.PNG;
             case JPEG -> VipsFormat.JPEG;
             case TIFF -> VipsFormat.TIFF;
             case WEBP -> VipsFormat.WEBP;
+            case HEIC -> VipsFormat.HEIC;
+            case HEIF -> VipsFormat.HEIF;
+            case AVIF -> VipsFormat.AVIF;
+            case JXL -> VipsFormat.JXL;
+            case JPEG2000 -> VipsFormat.JPEG2000;
             default -> null;
         };
     }

@@ -42,10 +42,34 @@ public final class VipsImageConverter {
     /** @return encoded page bytes; {@code quality} is the codec quality (1-100). */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi,
                                      VipsFormat format, int quality) {
-        try (PdfPage page = doc.page(pageIndex);
-             RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            return pageToBytes(page, dpi, format, quality);
+        }
+    }
+
+    /** @return raw bytes of an open {@link PdfPage} rendered at {@code dpi} and encoded to {@code format}. */
+    public static byte[] pageToBytes(PdfPage page, int dpi, VipsFormat format) {
+        return pageToBytes(page, dpi, format, 75);
+    }
+
+    /** @return raw bytes of an open {@link PdfPage} rendered at {@code dpi} and encoded with custom quality. */
+    public static byte[] pageToBytes(PdfPage page, int dpi, VipsFormat format, int quality) {
+        try (RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
             VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).quality(quality).build();
             return VipsEncoder.encodeToBytes(view, encodeOptions);
+        }
+    }
+
+    /** Render a page directly to an image file via libvips. */
+    public static void pageToFile(PdfPage page, int dpi, Path outputPath, VipsFormat format) throws IOException {
+        byte[] bytes = pageToBytes(page, dpi, format);
+        Files.write(outputPath, bytes);
+    }
+
+    /** Render a document page directly to an image file via libvips. */
+    public static void pageToFile(PdfDocument doc, int pageIndex, int dpi, Path outputPath, VipsFormat format) throws IOException {
+        try (PdfPage page = doc.page(pageIndex)) {
+            pageToFile(page, dpi, outputPath, format);
         }
     }
 

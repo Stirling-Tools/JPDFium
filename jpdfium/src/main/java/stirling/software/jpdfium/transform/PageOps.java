@@ -38,20 +38,44 @@ public final class PageOps {
      * @param pageIndex zero-based page index
      */
     public static void flatten(PdfDocument doc, int pageIndex) {
-        try (PdfPage page = doc.page(pageIndex)) {
-            page.flatten();
-        }
+        doc.flattenPage(pageIndex);
     }
 
     /**
-     * Flatten all pages in the document.
+     * Flatten a specific page using the specified mode with default DPI (150).
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, stirling.software.jpdfium.model.FlattenMode mode) {
+        doc.flattenPage(pageIndex, mode);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode.
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, stirling.software.jpdfium.model.FlattenMode mode, int dpi) {
+        doc.flattenPage(pageIndex, mode, dpi);
+    }
+
+    /**
+     * Flatten all pages in the document (annotations).
      *
      * @param doc open PDF document
      */
     public static void flattenAll(PdfDocument doc) {
-        for (int i = 0; i < doc.pageCount(); i++) {
-            flatten(doc, i);
-        }
+        doc.flatten();
+    }
+
+    /**
+     * Flatten all pages in the document using the specified mode with default DPI (150).
+     */
+    public static void flattenAll(PdfDocument doc, stirling.software.jpdfium.model.FlattenMode mode) {
+        doc.flatten(mode);
+    }
+
+    /**
+     * Flatten all pages in the document using the specified mode.
+     */
+    public static void flattenAll(PdfDocument doc, stirling.software.jpdfium.model.FlattenMode mode, int dpi) {
+        doc.flatten(mode, dpi);
     }
 
     /**

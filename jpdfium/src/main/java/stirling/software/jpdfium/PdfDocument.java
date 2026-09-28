@@ -12,6 +12,7 @@ import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.DocBindings;
@@ -162,6 +163,78 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Create a PDF document containing a single image.
+     *
+     * @param imagePath path to image file
+     * @return new PDF document
+     * @throws IOException if reading or decoding fails
+     */
+    public static PdfDocument fromImage(Path imagePath) throws IOException {
+        return PdfImageConverter.imageToPdf(imagePath, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document containing a single image with custom options.
+     */
+    public static PdfDocument fromImage(Path imagePath, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imageToPdf(imagePath, options);
+    }
+
+    /**
+     * Create a PDF document containing a single image file.
+     */
+    public static PdfDocument fromImage(File imageFile) throws IOException {
+        if (imageFile == null) throw new IllegalArgumentException("imageFile must not be null");
+        return fromImage(imageFile.toPath());
+    }
+
+    /**
+     * Create a PDF document containing a single image file with custom options.
+     */
+    public static PdfDocument fromImage(File imageFile, ImageToPdfOptions options) throws IOException {
+        if (imageFile == null) throw new IllegalArgumentException("imageFile must not be null");
+        return fromImage(imageFile.toPath(), options);
+    }
+
+    /**
+     * Create a PDF document containing a single BufferedImage.
+     */
+    public static PdfDocument fromImage(BufferedImage image) {
+        return fromImages(List.of(image));
+    }
+
+    /**
+     * Create a PDF document containing a single BufferedImage with custom options.
+     */
+    public static PdfDocument fromImage(BufferedImage image, ImageToPdfOptions options) {
+        return fromImages(List.of(image), options);
+    }
+
+    /**
+     * Create a PDF document from multiple image paths.
+     */
+    public static PdfDocument fromImages(Path... imagePaths) throws IOException {
+        if (imagePaths == null || imagePaths.length == 0) {
+            throw new IllegalArgumentException("At least one image path is required");
+        }
+        return PdfImageConverter.imagesToPdf(List.of(imagePaths), ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image paths.
+     */
+    public static PdfDocument fromImagePaths(List<Path> imagePaths) throws IOException {
+        return PdfImageConverter.imagesToPdf(imagePaths, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image paths with custom options.
+     */
+    public static PdfDocument fromImagePaths(List<Path> imagePaths, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdf(imagePaths, options);
+    }
+
+    /**
      * Create a new, empty document.
      *
      * <p>This is the recommended base for page-import operations
@@ -252,6 +325,95 @@ public final class PdfDocument implements AutoCloseable {
     public PdfPage page(int index) {
         ensureOpen();
         return PdfPage.open(handle, index);
+    }
+
+    /**
+     * Creates a new {@link PdfRenderer} for this document.
+     */
+    public PdfRenderer renderer() {
+        ensureOpen();
+        return new PdfRenderer(this);
+    }
+
+    /**
+     * Render the page at the given index to a {@link BufferedImage} at 72 DPI.
+     */
+    public BufferedImage renderImage(int pageIndex) {
+        return renderer().renderImage(pageIndex);
+    }
+
+    /**
+     * Render the page at the given index to a {@link BufferedImage} at the specified DPI.
+     */
+    public BufferedImage renderImage(int pageIndex, int dpi) {
+        return renderer().renderImageWithDPI(pageIndex, dpi);
+    }
+
+    /**
+     * Render the page at the given index to encoded image bytes.
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, ImageFormat format) throws IOException {
+        return renderer().renderToBytes(pageIndex, dpi, format);
+    }
+
+    /**
+     * Render the page at the given index to encoded image bytes using the format name.
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, String formatName) throws IOException {
+        return renderer().renderToBytes(pageIndex, dpi, formatName);
+    }
+
+    /**
+     * Render the page at the given index directly to an image file.
+     */
+    public void renderToFile(int pageIndex, Path outputPath, int dpi) throws IOException {
+        renderer().renderToFile(pageIndex, outputPath, dpi);
+    }
+
+    /**
+     * Render the page at the given index directly to an image file at default 150 DPI.
+     */
+    public void renderToFile(int pageIndex, Path outputPath) throws IOException {
+        renderer().renderToFile(pageIndex, outputPath);
+    }
+
+    /**
+     * Flatten annotations and form fields on all pages into static page content.
+     * Shortcut for {@code flatten(FlattenMode.ANNOTATIONS)}.
+     */
+    public void flatten() {
+        flatten(FlattenMode.ANNOTATIONS, 150);
+    }
+
+    /**
+     * Flatten annotations and form fields on a specific page.
+     * Shortcut for {@code flattenPage(pageIndex, FlattenMode.ANNOTATIONS)}.
+     */
+    public void flattenPage(int pageIndex) {
+        flattenPage(pageIndex, FlattenMode.ANNOTATIONS, 150);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode with default DPI (150).
+     */
+    public void flattenPage(int pageIndex, FlattenMode mode) {
+        flattenPage(pageIndex, mode, 150);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode.
+     */
+    public void flattenPage(int pageIndex, FlattenMode mode, int dpi) {
+        ensureOpen();
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
+        switch (mode) {
+            case ANNOTATIONS -> {
+                try (PdfPage page = page(pageIndex)) {
+                    page.flatten();
+                }
+            }
+            case FULL -> convertPageToImage(pageIndex, dpi);
+        }
     }
 
     /**
