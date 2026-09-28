@@ -8,7 +8,10 @@ import stirling.software.jpdfium.transform.PageOps;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FlattenApiTest {
 
@@ -36,7 +39,13 @@ class FlattenApiTest {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF);
              PdfPage page = doc.page(0)) {
             assertDoesNotThrow(() -> page.flatten(FlattenMode.FULL, 100));
+            assertTrue(page.isClosed());
+            assertThrows(IllegalStateException.class, page::size);
             doc.save(out);
+            try (PdfPage reopened = doc.page(0)) {
+                assertFalse(reopened.isClosed());
+                assertTrue(reopened.size().width() > 0);
+            }
         }
         assertTrue(Files.exists(out));
         assertTrue(Files.size(out) > 0);

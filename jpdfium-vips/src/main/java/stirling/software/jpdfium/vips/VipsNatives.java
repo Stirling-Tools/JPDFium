@@ -321,6 +321,8 @@ public final class VipsNatives {
             return stream
                     .filter(p -> {
                         String name = p.getFileName().toString();
+                        if (name.startsWith("libvips-cpp") || name.startsWith("vips-cpp")) return false;
+                        if (name.contains("vips-modules") || name.contains("vips-plugins")) return false;
                         return name.startsWith(prefix)
                                 && (name.contains(ext1) || name.contains(ext2) || name.contains(ext3));
                     })

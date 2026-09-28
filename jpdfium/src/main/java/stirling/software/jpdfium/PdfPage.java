@@ -81,8 +81,12 @@ public final class PdfPage implements AutoCloseable {
     }
 
     public RenderResult renderAt(int dpi) {
+        return renderAt(dpi, false);
+    }
+
+    public RenderResult renderAt(int dpi, boolean transparent) {
         ensureOpen();
-        return JpdfiumLib.renderPage(handle, dpi);
+        return JpdfiumLib.renderPage(handle, dpi, transparent);
     }
 
     /**
@@ -113,7 +117,7 @@ public final class PdfPage implements AutoCloseable {
      */
     public BufferedImage renderImage(int dpi, boolean transparent) {
         ensureOpen();
-        RenderResult result = renderAt(dpi);
+        RenderResult result = renderAt(dpi, transparent);
         return result.toBufferedImage(transparent);
     }
 
@@ -126,7 +130,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public BufferedImage renderImage(int dpi, ColorType colorType) {
         ensureOpen();
-        RenderResult result = renderAt(dpi);
+        boolean transparent = (colorType == ColorType.ARGB);
+        RenderResult result = renderAt(dpi, transparent);
         return result.toBufferedImage(colorType);
     }
 
@@ -155,11 +160,32 @@ public final class PdfPage implements AutoCloseable {
     public byte[] renderToBytes(int dpi, ImageFormat format, int quality, boolean transparent) throws IOException {
         ensureOpen();
         if (ImageCodecs.canEncode(format)) {
-            RenderResult result = renderAt(dpi);
-            byte[] frame = result.toFrame();
+            boolean keepAlpha = transparent && format.supportsTransparency();
+            RenderResult result = renderAt(dpi, keepAlpha);
+            byte[] frame = result.toFrame(keepAlpha);
             return ImageCodecs.encodeFrame(frame, format, quality);
         }
         BufferedImage image = renderImage(dpi, transparent);
+        return PdfImageIO.writeToBytes(image, format, quality);
+    }
+
+    /**
+     * Render the page to encoded image bytes with the specified color type.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, ColorType colorType) throws IOException {
+        return renderToBytes(dpi, format, 90, colorType);
+    }
+
+    /**
+     * Render the page to encoded image bytes with fine-grained encoding control and color type.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
+        ensureOpen();
+        if (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB) {
+            boolean transparent = (colorType == ColorType.ARGB);
+            return renderToBytes(dpi, format, quality, transparent);
+        }
+        BufferedImage image = renderImage(dpi, colorType);
         return PdfImageIO.writeToBytes(image, format, quality);
     }
 
@@ -618,7 +644,9 @@ public final class PdfPage implements AutoCloseable {
      *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into the
      *       page content stream. Text remains selectable.</li>
      *   <li>{@link FlattenMode#FULL} - rasterizes the page into an image-based page
-     *       at the given DPI.</li>
+     *       at the given DPI. Invalidates this {@link PdfPage} instance because the native
+     *       page is deleted and replaced; callers must reopen the page via
+     *       {@link PdfDocument#page(int)} for subsequent operations.</li>
      * </ul>
      */
     public void flatten(FlattenMode mode, int dpi) {
@@ -626,7 +654,11 @@ public final class PdfPage implements AutoCloseable {
         if (mode == null) throw new IllegalArgumentException("mode must not be null");
         switch (mode) {
             case ANNOTATIONS -> flatten();
-            case FULL -> JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
+            case FULL -> {
+                if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                close();
+                JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
+            }
         }
     }
 
@@ -839,6 +871,13 @@ public final class PdfPage implements AutoCloseable {
     public long nativeHandle() {
         ensureOpen();
         return handle;
+    }
+
+    /**
+     * Returns true if this page has been closed or invalidated.
+     */
+    public boolean isClosed() {
+        return closed.get();
     }
 
     private void ensureOpen() {

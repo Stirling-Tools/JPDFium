@@ -4,6 +4,7 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.awt.image.SinglePixelPackedSampleModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -224,6 +225,12 @@ public final class ImageCodecs {
                         param.setProgressiveMode(ImageWriteParam.MODE_DISABLED);
                     }
                 }
+                if (quality >= 0.0f && quality <= 1.0f) {
+                    try {
+                        param.setCompressionQuality(quality);
+                    } catch (UnsupportedOperationException _) {
+                    }
+                }
             }
             writer.prepareWriteSequence(null);
             for (BufferedImage image : images) {
@@ -238,10 +245,8 @@ public final class ImageCodecs {
     /** True when {@code format} can be encoded by the codec or ImageIO. */
     public static boolean canEncode(ImageFormat format) {
         ImageCodec codec = Holder.CODEC;
-        if (codec != null && codec.canEncode(format)) {
-            return true;
-        }
-        return ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
+        return (codec != null && codec.canEncode(format))
+                || ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
     }
 
     /** Direct RGBA frame encoding (codec first, ImageIO fallback). */
@@ -310,24 +315,34 @@ public final class ImageCodecs {
     public static byte[] frameFromImage(BufferedImage img) {
         int w = img.getWidth();
         int h = img.getHeight();
+        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
+                || (long) w * h > MAX_IMAGE_PIXELS || 8L + (long) w * h * 4L > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Image too large: " + w + "x" + h);
+        }
         byte[] rgba = new byte[8 + w * h * 4];
         writeLeInt32(rgba, 0, w);
         writeLeInt32(rgba, 4, h);
 
-        if (img.getType() == BufferedImage.TYPE_INT_ARGB || img.getType() == BufferedImage.TYPE_INT_RGB) {
-            if (img.getRaster().getDataBuffer() instanceof DataBufferInt dbi) {
-                int[] pixels = dbi.getData();
-                boolean hasAlpha = (img.getType() == BufferedImage.TYPE_INT_ARGB);
-                for (int i = 0; i < pixels.length; i++) {
-                    int p = pixels[i];
-                    int off = 8 + i * 4;
-                    rgba[off] = (byte) ((p >> 16) & 0xFF);
-                    rgba[off + 1] = (byte) ((p >> 8) & 0xFF);
-                    rgba[off + 2] = (byte) (p & 0xFF);
-                    rgba[off + 3] = hasAlpha ? (byte) ((p >> 24) & 0xFF) : (byte) 0xFF;
-                }
-                return rgba;
+        if ((img.getType() == BufferedImage.TYPE_INT_ARGB || img.getType() == BufferedImage.TYPE_INT_RGB)
+                && img.getRaster().getSampleModel() instanceof SinglePixelPackedSampleModel sppsm
+                && sppsm.getScanlineStride() == w
+                && img.getRaster().getDataBuffer() instanceof DataBufferInt dbi
+                && dbi.getOffset() == 0
+                && img.getRaster().getMinX() == 0
+                && img.getRaster().getMinY() == 0
+                && dbi.getData().length >= w * h) {
+            int[] pixels = dbi.getData();
+            boolean hasAlpha = (img.getType() == BufferedImage.TYPE_INT_ARGB);
+            int totalPixels = w * h;
+            for (int i = 0; i < totalPixels; i++) {
+                int p = pixels[i];
+                int off = 8 + i * 4;
+                rgba[off] = (byte) ((p >> 16) & 0xFF);
+                rgba[off + 1] = (byte) ((p >> 8) & 0xFF);
+                rgba[off + 2] = (byte) (p & 0xFF);
+                rgba[off + 3] = hasAlpha ? (byte) ((p >> 24) & 0xFF) : (byte) 0xFF;
             }
+            return rgba;
         }
 
         int[] rowPixels = new int[w];

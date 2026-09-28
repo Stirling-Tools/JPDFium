@@ -2,14 +2,21 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.model.ColorType;
+import stirling.software.jpdfium.model.ImageFormat;
+import stirling.software.jpdfium.model.ImageToPdfOptions;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageToPdfApiTest {
 
@@ -109,19 +116,19 @@ class ImageToPdfApiTest {
         Path img1 = createTestImage(tempDir, "p1.png");
         Path img2 = createTestImage(tempDir, "p2.png");
 
-        stirling.software.jpdfium.model.ImageToPdfOptions fitOptions =
-                stirling.software.jpdfium.model.ImageToPdfOptions.builder()
+        ImageToPdfOptions fitOptions =
+                ImageToPdfOptions.builder()
                         .fitToImage()
                         .build();
 
-        try (PdfDocument doc = PdfDocument.fromImagePaths(java.util.List.of(img1, img2), fitOptions)) {
+        try (PdfDocument doc = PdfDocument.fromImagePaths(List.of(img1, img2), fitOptions)) {
             assertEquals(2, doc.pageCount());
 
             // Convert to single stitched PNG bytes at 72 DPI (1:1 with 72pt fitToImage)
             byte[] stitchedPng = PdfImageConverter.convertFromPdf(
                     doc,
-                    stirling.software.jpdfium.model.ImageFormat.PNG,
-                    stirling.software.jpdfium.model.ColorType.RGB,
+                    ImageFormat.PNG,
+                    ColorType.RGB,
                     true,
                     72);
             assertNotNull(stitchedPng);
@@ -135,13 +142,56 @@ class ImageToPdfApiTest {
             // Convert to multi-page TIFF bytes
             byte[] multiTiff = PdfImageConverter.convertFromPdf(
                     doc,
-                    stirling.software.jpdfium.model.ImageFormat.TIFF,
-                    stirling.software.jpdfium.model.ColorType.RGB,
+                    ImageFormat.TIFF,
+                    ColorType.RGB,
                     true,
                     100);
             assertNotNull(multiTiff);
-            java.util.List<BufferedImage> tiffFrames = PdfImageIO.readAllFrames(multiTiff);
+            List<BufferedImage> tiffFrames = PdfImageIO.readAllFrames(multiTiff);
             assertEquals(2, tiffFrames.size());
+
+            // Convert single page with ColorType.GRAY
+            byte[] grayPng = PdfImageConverter.convertFromPdf(
+                    doc,
+                    ImageFormat.PNG,
+                    ColorType.GRAY,
+                    false,
+                    72);
+            assertNotNull(grayPng);
+            BufferedImage grayImg = PdfImageIO.read(grayPng);
+            assertNotNull(grayImg);
+
+            // Test thumbnail clamped to maxSize
+            byte[] thumbPng = PdfImageConverter.thumbnail(doc, 0, 50, ImageFormat.PNG);
+            assertNotNull(thumbPng);
+            BufferedImage thumbImg = PdfImageIO.read(thumbPng);
+            assertNotNull(thumbImg);
+            assertTrue(thumbImg.getWidth() <= 50);
+            assertTrue(thumbImg.getHeight() <= 50);
+        }
+    }
+
+    @Test
+    void embedRgbaImagesDoesNotMutateCallerBuffer() {
+        int w = 2;
+        int h = 2;
+        byte[] frame = new byte[8 + w * h * 4];
+        frame[0] = (byte) w;
+        frame[4] = (byte) h;
+        for (int i = 0; i < 4; i++) {
+            frame[8 + i * 4] = (byte) 200;
+            frame[8 + i * 4 + 1] = (byte) 100;
+            frame[8 + i * 4 + 2] = (byte) 50;
+            frame[8 + i * 4 + 3] = (byte) 255;
+        }
+        byte[] originalCopy = frame.clone();
+        ImageToPdfOptions options = ImageToPdfOptions.builder()
+                .colorType(ColorType.GRAY)
+                .build();
+        try (PdfDocument doc = PdfImageConverter.embedRgbaImages(List.of(frame), options)) {
+            assertNotNull(doc);
+            assertEquals(1, doc.pageCount());
+            assertArrayEquals(originalCopy, frame, "embedRgbaImages must not mutate caller frame");
         }
     }
 }

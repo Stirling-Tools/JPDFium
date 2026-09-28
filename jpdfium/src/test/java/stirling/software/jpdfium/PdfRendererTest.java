@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 
 import java.awt.image.BufferedImage;
@@ -11,7 +12,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PdfRendererTest {
 
@@ -177,7 +181,7 @@ class PdfRendererTest {
             assertNotNull(gray);
             assertEquals(BufferedImage.TYPE_BYTE_GRAY, gray.getType());
 
-            BufferedImage bw = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.BINARY);
+            BufferedImage bw = renderer.renderImageWithDPI(0, 100, ColorType.BINARY);
             assertNotNull(bw);
             assertEquals(BufferedImage.TYPE_BYTE_BINARY, bw.getType());
         }
@@ -226,6 +230,23 @@ class PdfRendererTest {
             assertTrue(tiffBytes.length > 0);
             List<BufferedImage> framesFromBytes = PdfImageIO.readAllFrames(tiffBytes);
             assertEquals(doc.pageCount(), framesFromBytes.size());
+        }
+    }
+    @Test
+    void renderImageWithTransparentBackground() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            PdfRenderer renderer = doc.renderer();
+            BufferedImage transparent = renderer.renderImageWithDPI(0, 72, true);
+            assertNotNull(transparent);
+            assertTrue(transparent.getColorModel().hasAlpha());
+            assertEquals(0, (transparent.getRGB(transparent.getWidth() - 1, transparent.getHeight() - 1) >>> 24) & 0xFF);
+
+            byte[] pngBytes = renderer.renderToBytes(0, 72, ImageFormat.PNG, ColorType.ARGB);
+            assertNotNull(pngBytes);
+            BufferedImage decoded = PdfImageIO.read(pngBytes);
+            assertNotNull(decoded);
+            assertTrue(decoded.getColorModel().hasAlpha());
+            assertEquals(0, (decoded.getRGB(decoded.getWidth() - 1, decoded.getHeight() - 1) >>> 24) & 0xFF);
         }
     }
 }
