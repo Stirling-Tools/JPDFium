@@ -40,11 +40,47 @@ public final class SvgConverter {
         return JpdfiumLib.svgToRgba(svg, width, height);
     }
 
-    /** Rasterize and encode with ImageIO (PNG/JPEG/GIF/BMP/TIFF/WEBP). */
+    /** Rasterize to BufferedImage at natural size. */
+    public static java.awt.image.BufferedImage toBufferedImage(byte[] svg) {
+        return toRgba(svg, 0, 0).toBufferedImage();
+    }
+
+    /** Rasterize to BufferedImage to fit the given box. */
+    public static java.awt.image.BufferedImage toBufferedImage(byte[] svg, int width, int height) {
+        return toRgba(svg, width, height).toBufferedImage();
+    }
+
+    /** Rasterize at natural size and encode to the specified image format. */
+    public static byte[] toImage(byte[] svg, ImageFormat format) throws IOException {
+        return toImage(svg, 0, 0, format);
+    }
+
+    /** Rasterize at natural size and encode to the specified format name. */
+    public static byte[] toImage(byte[] svg, String formatName) throws IOException {
+        return toImage(svg, 0, 0, ImageFormat.fromExtension(formatName));
+    }
+
+    /** Rasterize and encode with the active codec (PNG/JPEG/BMP/TIFF/WEBP/HEIC/AVIF/etc.). */
     public static byte[] toImage(byte[] svg, int width, int height, ImageFormat format)
             throws IOException {
         return PdfImageConverter.imageToBytes(
                 toRgba(svg, width, height).toBufferedImage(), format, 90);
+    }
+
+    /** Rasterize and encode with the active codec using a format name. */
+    public static byte[] toImage(byte[] svg, int width, int height, String formatName)
+            throws IOException {
+        return toImage(svg, width, height, ImageFormat.fromExtension(formatName));
+    }
+
+    /** Rasterize at natural size and embed as a new one-page PDF document with default options. */
+    public static PdfDocument toPdf(byte[] svg) {
+        return toPdf(svg, 0, 0, ImageToPdfOptions.builder().build());
+    }
+
+    /** Rasterize at natural size and embed as a new one-page PDF document with options. */
+    public static PdfDocument toPdf(byte[] svg, ImageToPdfOptions options) {
+        return toPdf(svg, 0, 0, options);
     }
 
     /** Rasterize and embed as a new one-page PDF document. */

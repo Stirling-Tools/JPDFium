@@ -11,6 +11,8 @@ import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
@@ -22,11 +24,16 @@ import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,13 +46,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class PdfPage implements AutoCloseable {
 
+    private final long docHandle;
     private final long handle;
     private final int pageIndex;
     private final MemorySegment rawPageSegment;
     private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    private PdfPage(long handle, int pageIndex) {
+    private PdfPage(long docHandle, long handle, int pageIndex) {
+        this.docHandle = docHandle;
         this.handle = handle;
         this.pageIndex = pageIndex;
         this.rawPageSegment = JpdfiumLib.pageRawHandle(handle);
@@ -53,7 +62,7 @@ public final class PdfPage implements AutoCloseable {
     }
 
     static PdfPage open(long docHandle, int index) {
-        return new PdfPage(JpdfiumLib.pageOpen(docHandle, index), index);
+        return new PdfPage(docHandle, JpdfiumLib.pageOpen(docHandle, index), index);
     }
 
     /**
@@ -72,6 +81,115 @@ public final class PdfPage implements AutoCloseable {
     public RenderResult renderAt(int dpi) {
         ensureOpen();
         return JpdfiumLib.renderPage(handle, dpi);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at 72 DPI.
+     *
+     * @return rendered image
+     */
+    public BufferedImage renderImage() {
+        return renderImage(72, false);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI.
+     *
+     * @param dpi render resolution in DPI
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi) {
+        return renderImage(dpi, false);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with optional transparency.
+     *
+     * @param dpi         render resolution in DPI
+     * @param transparent true for ARGB with transparent background, false for RGB over white
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, boolean transparent) {
+        ensureOpen();
+        RenderResult result = renderAt(dpi);
+        return result.toBufferedImage(transparent);
+    }
+
+    /**
+     * Render the page to encoded image bytes in the specified format using the active codec.
+     *
+     * @param dpi    render resolution in DPI
+     * @param format output format
+     * @return image bytes
+     * @throws IOException if encoding fails
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format) throws IOException {
+        return renderToBytes(dpi, format, 90, false);
+    }
+
+    /**
+     * Render the page to encoded image bytes using the specified format name.
+     */
+    public byte[] renderToBytes(int dpi, String formatName) throws IOException {
+        return renderToBytes(dpi, ImageFormat.fromExtension(formatName), 90, false);
+    }
+
+    /**
+     * Render the page to encoded image bytes with fine-grained encoding control.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, int quality, boolean transparent) throws IOException {
+        ensureOpen();
+        BufferedImage image = renderImage(dpi, transparent);
+        return PdfImageIO.writeToBytes(image, format, quality);
+    }
+
+    /**
+     * Render the page directly to a file at the specified DPI. Format is inferred from the path extension.
+     */
+    public void renderTo(Path outputPath, int dpi) throws IOException {
+        if (outputPath == null) throw new IllegalArgumentException("outputPath must not be null");
+        ImageFormat format = ImageFormat.fromPath(outputPath);
+        byte[] bytes = renderToBytes(dpi, format);
+        Files.write(outputPath, bytes);
+    }
+
+    /**
+     * Render the page directly to a file at default 150 DPI.
+     */
+    public void renderTo(Path outputPath) throws IOException {
+        renderTo(outputPath, 150);
+    }
+
+    /**
+     * Render the page directly to a file at the specified DPI.
+     */
+    public void renderTo(File outputFile, int dpi) throws IOException {
+        if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
+        renderTo(outputFile.toPath(), dpi);
+    }
+
+    /**
+     * Render the page directly to a file at default 150 DPI.
+     */
+    public void renderTo(File outputFile) throws IOException {
+        if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
+        renderTo(outputFile.toPath(), 150);
+    }
+
+    /**
+     * Render the page directly to an OutputStream.
+     */
+    public void renderTo(OutputStream output, int dpi, ImageFormat format) throws IOException {
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        byte[] bytes = renderToBytes(dpi, format);
+        output.write(bytes);
+    }
+
+    /**
+     * Render the page directly to an OutputStream.
+     */
+    public void renderTo(OutputStream output, int dpi, String formatName) throws IOException {
+        renderTo(output, dpi, ImageFormat.fromExtension(formatName));
     }
 
     /**
@@ -464,6 +582,32 @@ public final class PdfPage implements AutoCloseable {
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+    }
+
+    /**
+     * Flatten this page using the specified mode with default DPI (150).
+     */
+    public void flatten(FlattenMode mode) {
+        flatten(mode, 150);
+    }
+
+    /**
+     * Flatten this page using the specified mode.
+     *
+     * <ul>
+     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into the
+     *       page content stream. Text remains selectable.</li>
+     *   <li>{@link FlattenMode#FULL} - rasterizes the page into an image-based page
+     *       at the given DPI.</li>
+     * </ul>
+     */
+    public void flatten(FlattenMode mode, int dpi) {
+        ensureOpen();
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
+        switch (mode) {
+            case ANNOTATIONS -> flatten();
+            case FULL -> JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
+        }
     }
 
     /**

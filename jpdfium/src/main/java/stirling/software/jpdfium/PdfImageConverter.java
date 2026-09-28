@@ -14,6 +14,7 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -125,17 +126,40 @@ public final class PdfImageConverter {
      */
     public static BufferedImage pageToImage(PdfDocument doc, int pageIndex, int dpi, boolean transparent) {
         try (PdfPage page = doc.page(pageIndex)) {
-            PageSize sz = page.size();
-            int effectiveDpi = dpi;
-            if (sz.width() > 0 && sz.height() > 0) {
-                int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-                int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-                effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
-                if (effectiveDpi < 1) effectiveDpi = 1;
-            }
-            RenderResult result = page.renderAt(effectiveDpi);
-            return result.toBufferedImage(transparent);
+            return pageToImage(page, dpi, transparent);
         }
+    }
+
+    /**
+     * Convert an open PDF page to a BufferedImage.
+     *
+     * @param page open PDF page
+     * @param dpi  render DPI
+     * @return rendered image
+     */
+    public static BufferedImage pageToImage(PdfPage page, int dpi) {
+        return pageToImage(page, dpi, false);
+    }
+
+    /**
+     * Convert an open PDF page to a BufferedImage.
+     *
+     * @param page        open PDF page
+     * @param dpi         render DPI
+     * @param transparent transparent background (for PNG/WEBP)
+     * @return rendered image
+     */
+    public static BufferedImage pageToImage(PdfPage page, int dpi, boolean transparent) {
+        PageSize sz = page.size();
+        int effectiveDpi = dpi;
+        if (sz.width() > 0 && sz.height() > 0) {
+            int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
+            int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
+            effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
+            if (effectiveDpi < 1) effectiveDpi = 1;
+        }
+        RenderResult result = page.renderAt(effectiveDpi);
+        return result.toBufferedImage(transparent);
     }
 
     /**
@@ -166,7 +190,24 @@ public final class PdfImageConverter {
      */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi, ImageFormat format,
                                       int quality, boolean transparent) throws IOException {
-        BufferedImage image = pageToImage(doc, pageIndex, dpi, transparent);
+        try (PdfPage page = doc.page(pageIndex)) {
+            return pageToBytes(page, dpi, format, quality, transparent);
+        }
+    }
+
+    /**
+     * Convert an open PDF page to bytes in the specified format.
+     */
+    public static byte[] pageToBytes(PdfPage page, int dpi, ImageFormat format) throws IOException {
+        return pageToBytes(page, dpi, format, 90, false);
+    }
+
+    /**
+     * Convert an open PDF page to bytes in the specified format with custom quality and transparency.
+     */
+    public static byte[] pageToBytes(PdfPage page, int dpi, ImageFormat format,
+                                      int quality, boolean transparent) throws IOException {
+        BufferedImage image = pageToImage(page, dpi, transparent);
         return imageToBytes(image, format, quality);
     }
 
@@ -410,5 +451,54 @@ public final class PdfImageConverter {
 
     public static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
         return ImageCodecs.encode(image, format, quality);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, String formatName, Path output) throws IOException {
+        return PdfImageIO.write(im, formatName, output);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, String formatName, File output) throws IOException {
+        return PdfImageIO.write(im, formatName, output);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, ImageFormat format, Path output) throws IOException {
+        return PdfImageIO.write(im, format, output);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, ImageFormat format, File output) throws IOException {
+        return PdfImageIO.write(im, format, output);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(Path input) throws IOException {
+        return PdfImageIO.read(input);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(File input) throws IOException {
+        return PdfImageIO.read(input);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(byte[] data) throws IOException {
+        return PdfImageIO.read(data);
     }
 }
