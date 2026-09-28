@@ -33,6 +33,7 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -59,10 +60,19 @@ public final class PdfDocument implements AutoCloseable {
     private final long handle;
     private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Temp file owned by this document, deleted on close; null otherwise. */
+    private final Path ownedTempPath;
+    private final boolean ownedTemp;
 
     PdfDocument(long handle) {
+        this(handle, null, false);
+    }
+
+    PdfDocument(long handle, Path ownedTempPath, boolean ownedTemp) {
         this.handle = handle;
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        this.ownedTempPath = ownedTempPath;
+        this.ownedTemp = ownedTemp;
     }
 
     /**
@@ -705,11 +715,27 @@ public final class PdfDocument implements AutoCloseable {
         if (closed.get()) throw new IllegalStateException("PdfDocument is already closed");
     }
 
+    /**
+     * Open a temp file as a document that deletes the file on close.
+     * Used by file-backed merge/split so large results never sit on the heap.
+     */
+    static PdfDocument openTemp(Path tmp) {
+        Path abs = tmp.toAbsolutePath();
+        return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs, true);
+    }
+
     @Override
     public void close() {
         // compareAndSet, not check-then-set: a lost race here frees the same
         // native document twice and corrupts the heap.
         if (!closed.compareAndSet(false, true)) return;
         JpdfiumLib.docClose(handle);
+        if (ownedTemp && ownedTempPath != null) {
+            try {
+                Files.deleteIfExists(ownedTempPath);
+            } catch (Exception _) {
+                ownedTempPath.toFile().deleteOnExit();
+            }
+        }
     }
 }
