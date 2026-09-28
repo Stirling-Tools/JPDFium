@@ -2,7 +2,10 @@ package stirling.software.jpdfium;
 
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
+import stirling.software.jpdfium.model.PageSize;
 
+import java.awt.Color;
+import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -210,8 +213,42 @@ public final class PdfRenderer {
      * @return combined stitched image
      */
     public BufferedImage renderCombinedImage(float dpi, ColorType colorType) {
-        List<BufferedImage> pages = renderImages(dpi, colorType);
-        return PdfImageIO.combineVertically(pages, colorType, colorType == ColorType.ARGB);
+        int count = document.pageCount();
+        if (count == 0) {
+            throw new IllegalArgumentException("Document contains no pages");
+        }
+        int maxW = 0;
+        int totalH = 0;
+        for (int i = 0; i < count; i++) {
+            try (PdfPage p = document.page(i)) {
+                PageSize sz = p.size();
+                int w = Math.max(1, Math.round(sz.width() * dpi / 72.0f));
+                int h = Math.max(1, Math.round(sz.height() * dpi / 72.0f));
+                maxW = Math.max(maxW, w);
+                totalH += h;
+            }
+        }
+        boolean transparent = (colorType == ColorType.ARGB);
+        int targetType = (colorType != null) ? colorType.bufferedImageType()
+                : (transparent ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+        BufferedImage combined = new BufferedImage(maxW, totalH, targetType);
+        Graphics2D g = combined.createGraphics();
+        try {
+            if (!transparent && targetType != BufferedImage.TYPE_INT_ARGB) {
+                g.setColor(Color.WHITE);
+                g.fillRect(0, 0, maxW, totalH);
+            }
+            int currentY = 0;
+            for (int i = 0; i < count; i++) {
+                BufferedImage pageImg = renderImageWithDPI(i, dpi, colorType);
+                int x = (maxW - pageImg.getWidth()) / 2;
+                g.drawImage(pageImg, x, currentY, null);
+                currentY += pageImg.getHeight();
+            }
+        } finally {
+            g.dispose();
+        }
+        return combined;
     }
 
     /**

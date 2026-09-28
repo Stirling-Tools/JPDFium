@@ -305,14 +305,34 @@ public final class ImageCodecs {
         writeLeInt32(rgba, 0, w);
         writeLeInt32(rgba, 4, h);
 
-        int[] pixels = new int[w * h];
-        img.getRGB(0, 0, w, h, pixels, 0, w);
-        for (int i = 0; i < pixels.length; i++) {
-            int p = pixels[i];
-            rgba[8 + i * 4] = (byte) ((p >> 16) & 0xFF);
-            rgba[8 + i * 4 + 1] = (byte) ((p >> 8) & 0xFF);
-            rgba[8 + i * 4 + 2] = (byte) (p & 0xFF);
-            rgba[8 + i * 4 + 3] = (byte) ((p >> 24) & 0xFF);
+        if (img.getType() == BufferedImage.TYPE_INT_ARGB || img.getType() == BufferedImage.TYPE_INT_RGB) {
+            if (img.getRaster().getDataBuffer() instanceof DataBufferInt dbi) {
+                int[] pixels = dbi.getData();
+                boolean hasAlpha = (img.getType() == BufferedImage.TYPE_INT_ARGB);
+                for (int i = 0; i < pixels.length; i++) {
+                    int p = pixels[i];
+                    int off = 8 + i * 4;
+                    rgba[off] = (byte) ((p >> 16) & 0xFF);
+                    rgba[off + 1] = (byte) ((p >> 8) & 0xFF);
+                    rgba[off + 2] = (byte) (p & 0xFF);
+                    rgba[off + 3] = hasAlpha ? (byte) ((p >> 24) & 0xFF) : (byte) 0xFF;
+                }
+                return rgba;
+            }
+        }
+
+        int[] rowPixels = new int[w];
+        for (int y = 0; y < h; y++) {
+            img.getRGB(0, y, w, 1, rowPixels, 0, w);
+            int rowOffset = 8 + y * w * 4;
+            for (int x = 0; x < w; x++) {
+                int p = rowPixels[x];
+                int off = rowOffset + x * 4;
+                rgba[off] = (byte) ((p >> 16) & 0xFF);
+                rgba[off + 1] = (byte) ((p >> 8) & 0xFF);
+                rgba[off + 2] = (byte) (p & 0xFF);
+                rgba[off + 3] = (byte) ((p >> 24) & 0xFF);
+            }
         }
         return rgba;
     }

@@ -40,6 +40,7 @@ public final class FastLinks {
     public static final MethodHandle PCRE2_FREE;
     public static final MethodHandle FLASHTEXT_FREE;
     public static final MethodHandle FONT_FREE_INFO;
+    public static final MethodHandle PAGE_FLATTEN;
 
     static {
         DOC_PAGE_COUNT  = link("jpdfium_doc_page_count", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
@@ -52,6 +53,7 @@ public final class FastLinks {
         PCRE2_FREE      = link("jpdfium_pcre2_free", FunctionDescriptor.ofVoid(JAVA_LONG));
         FLASHTEXT_FREE  = link("jpdfium_flashtext_free", FunctionDescriptor.ofVoid(JAVA_LONG));
         FONT_FREE_INFO  = link("jpdfium_font_free_info", FunctionDescriptor.ofVoid(ADDRESS));
+        PAGE_FLATTEN    = link("jpdfium_page_flatten", FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
     }
 
     private static MethodHandle link(String name, FunctionDescriptor desc) {

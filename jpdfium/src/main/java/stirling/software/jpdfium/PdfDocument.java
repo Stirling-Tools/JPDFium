@@ -571,12 +571,24 @@ public final class PdfDocument implements AutoCloseable {
         renderer().renderToFile(pageIndex, outputPath);
     }
 
+    private static final int DEFAULT_FLATTEN_DPI = Integer.getInteger("jpdfium.flatten.dpi", 150);
+
     /**
      * Flatten annotations and form fields on all pages into static page content.
      * Shortcut for {@code flatten(FlattenMode.ANNOTATIONS)}.
      */
     public void flatten() {
-        flatten(FlattenMode.ANNOTATIONS, 150);
+        flatten(FlattenMode.ANNOTATIONS, DEFAULT_FLATTEN_DPI);
+    }
+
+    /**
+     * Flatten all pages by rasterizing them as images at the specified resolution in DPI.
+     * Shortcut for {@code flatten(FlattenMode.FULL, dpi)}.
+     *
+     * @param dpi render resolution in DPI
+     */
+    public void flatten(int dpi) {
+        flatten(FlattenMode.FULL, dpi);
     }
 
     /**
@@ -584,14 +596,25 @@ public final class PdfDocument implements AutoCloseable {
      * Shortcut for {@code flattenPage(pageIndex, FlattenMode.ANNOTATIONS)}.
      */
     public void flattenPage(int pageIndex) {
-        flattenPage(pageIndex, FlattenMode.ANNOTATIONS, 150);
+        flattenPage(pageIndex, FlattenMode.ANNOTATIONS, DEFAULT_FLATTEN_DPI);
     }
 
     /**
-     * Flatten a specific page using the specified mode with default DPI (150).
+     * Flatten a specific page by rasterizing it as an image at the specified resolution in DPI.
+     * Shortcut for {@code flattenPage(pageIndex, FlattenMode.FULL, dpi)}.
+     *
+     * @param pageIndex zero-based page index
+     * @param dpi       render resolution in DPI
+     */
+    public void flattenPage(int pageIndex, int dpi) {
+        flattenPage(pageIndex, FlattenMode.FULL, dpi);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode with default DPI.
      */
     public void flattenPage(int pageIndex, FlattenMode mode) {
-        flattenPage(pageIndex, mode, 150);
+        flattenPage(pageIndex, mode, DEFAULT_FLATTEN_DPI);
     }
 
     /**
@@ -602,8 +625,11 @@ public final class PdfDocument implements AutoCloseable {
         if (mode == null) throw new IllegalArgumentException("mode must not be null");
         switch (mode) {
             case ANNOTATIONS -> {
-                try (PdfPage page = page(pageIndex)) {
-                    page.flatten();
+                long pageHandle = JpdfiumLib.pageOpen(handle, pageIndex);
+                try {
+                    JpdfiumLib.pageFlatten(pageHandle);
+                } finally {
+                    JpdfiumLib.pageClose(pageHandle);
                 }
             }
             case FULL -> convertPageToImage(pageIndex, dpi);
@@ -611,28 +637,28 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Flatten all pages using the specified mode with default DPI (150).
+     * Flatten all pages using the specified mode with default DPI.
      *
-     * @param mode what to flatten - see {@link FlattenMode}
+     * @param mode what to flatten (see {@link FlattenMode})
      * @see #flatten(FlattenMode, int)
      */
     public void flatten(FlattenMode mode) {
-        flatten(mode, 150);
+        flatten(mode, DEFAULT_FLATTEN_DPI);
     }
 
     /**
      * Flatten all pages using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into
+     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
      *       the content stream. Text remains selectable. Uses native PDFium
      *       {@code jpdfium_page_flatten}.</li>
-     *   <li>{@link FlattenMode#FULL} - rasterizes each page at the given DPI,
+     *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
      *       replacing all content with an image. Nothing is selectable. Uses native
      *       PDFium {@code jpdfium_page_to_image}.</li>
      * </ul>
      *
-     * @param mode what to flatten - see {@link FlattenMode}
+     * @param mode what to flatten (see {@link FlattenMode})
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
     public void flatten(FlattenMode mode, int dpi) {
@@ -641,8 +667,11 @@ public final class PdfDocument implements AutoCloseable {
         for (int i = 0; i < count; i++) {
             switch (mode) {
                 case ANNOTATIONS -> {
-                    try (PdfPage page = page(i)) {
-                        page.flatten();
+                    long pageHandle = JpdfiumLib.pageOpen(handle, i);
+                    try {
+                        JpdfiumLib.pageFlatten(pageHandle);
+                    } finally {
+                        JpdfiumLib.pageClose(pageHandle);
                     }
                 }
                 case FULL -> convertPageToImage(i, dpi);
