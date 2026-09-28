@@ -43,6 +43,6 @@ Java deps (not bundled, resolved from Maven Central):
 - org.junit (test only) - EPL-2.0
 - com.twelvemonkeys.imageio (test only) - BSD-3-Clause
 
-Rust helper (optional, static-linked into libjpdfium):
+Rust helper (static-linked into libjpdfium):
 - lopdf - MIT
-- zopfli / oxipng / flate2 - Apache-2.0 / MIT
+- zopfli / oxipng / flate2 / fast_image_resize / usvg / resvg - Apache-2.0 / MIT / MPL-2.0

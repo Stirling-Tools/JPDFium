@@ -20,13 +20,12 @@ timeframe proportional to the severity.
 
 In scope:
 - The JPDFium Java library (`jpdfium`, `jpdfium-spring`, `jpdfium-vips`)
-- The native bridge (`native/`) - PDFium interaction, memory handling
+- The native bridge (`native/`): PDFium interaction, memory safety, and downcalls
 - CI / build / release pipelines (`.github/`, Gradle wrapper, publishing)
 
 Out of scope:
-- PDFium itself (upstream issue tracker) - however, a JPDFium integration
-  bug that misuses PDFium is in scope
-- Third-party tooling invoked by the library (qpdf, Ghostscript, Rust crates)
+- PDFium itself (report to upstream Chromium PDFium issue tracker; integration bugs in JPDFium remain in scope)
+- Third-party system packages invoked by external tooling (qpdf, Ghostscript)
 
 ## Supported Versions
 

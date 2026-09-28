@@ -125,4 +125,4 @@ HTML reports are written to `samples-output/`.
 
 ## License
 
-MIT. PDFium, and bundled natives carry their own licenses, see NOTICE and `native/licenses/`.
+MIT. PDFium and bundled natives carry their own licenses; see NOTICE and `native/licenses/`.

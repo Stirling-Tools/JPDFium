@@ -46,7 +46,7 @@ tasks.register<Exec>("buildPdfium") {
     commandLine("bash", scriptPath.absolutePath)
 }
 
-// Task to run all 50 samples (full application test)
+// Task to run all samples (full application test)
 tasks.register<JavaExec>("runAllSamples") {
     group = "application"
     description = "Run all samples to test the complete application"
@@ -167,10 +167,14 @@ tasks.register<JavaExec>("runSample") {
         "85" to "S85_AnnotStats",
         "86" to "S86_PosterizeSizes",
         "87" to "S87_AutoCropMargins",
+        "88" to "S88_StreamingParallel",
         "89" to "S89_StructureEditor",
         "90" to "S90_Layers",
         "91" to "S91_AnnotationExchange",
-        "92" to "S92_RustCompress"
+        "92" to "S92_RustCompress",
+        "93" to "S93_CropRemoveContent",
+        "94" to "S94_CropPerf",
+        "95" to "S95_RedactPipelinePerf"
     )
 
     val sampleClass = "stirling.software.jpdfium.samples." +
@@ -212,7 +216,7 @@ tasks.register("fullBuildAndTest") {
         println("  - Real native bridge built")
         println("  - Unit tests passed")
         println("  - Integration tests passed")
-        println("  - All 50 samples executed")
+        println("  - All samples executed")
         println("  - Output: samples-output/")
         println("========================================")
     }
