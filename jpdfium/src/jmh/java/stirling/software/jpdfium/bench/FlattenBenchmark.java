@@ -19,7 +19,8 @@ import stirling.software.jpdfium.model.ImageFormat;
 
 import java.awt.image.BufferedImage;
 import java.io.InputStream;
-import java.util.Objects;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -44,12 +45,34 @@ public class FlattenBenchmark {
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
-        try (InputStream in = FlattenBenchmark.class.getResourceAsStream("/pdfs/general/minimal.pdf")) {
-            minimalPdfBytes = Objects.requireNonNull(in).readAllBytes();
+        InputStream in = FlattenBenchmark.class.getResourceAsStream("/pdfs/general/minimal.pdf");
+        if (in != null) {
+            try (in) {
+                minimalPdfBytes = in.readAllBytes();
+            }
+        } else {
+            Path diskPath = Path.of("jpdfium/src/test/resources/pdfs/general/minimal.pdf");
+            if (!Files.exists(diskPath)) {
+                diskPath = Path.of("src/test/resources/pdfs/general/minimal.pdf");
+            }
+            if (Files.exists(diskPath)) {
+                minimalPdfBytes = Files.readAllBytes(diskPath);
+            } else {
+                throw new IllegalStateException("Missing required benchmark fixture: /pdfs/general/minimal.pdf");
+            }
         }
-        try (InputStream in = FlattenBenchmark.class.getResourceAsStream("/pdfs/redact/redact-test-100pages.pdf")) {
-            if (in != null) {
-                multiPagePdfBytes = in.readAllBytes();
+        InputStream inMulti = FlattenBenchmark.class.getResourceAsStream("/pdfs/redact/redact-test-100pages.pdf");
+        if (inMulti != null) {
+            try (inMulti) {
+                multiPagePdfBytes = inMulti.readAllBytes();
+            }
+        } else {
+            Path diskPath = Path.of("jpdfium/src/test/resources/pdfs/redact/redact-test-100pages.pdf");
+            if (!Files.exists(diskPath)) {
+                diskPath = Path.of("src/test/resources/pdfs/redact/redact-test-100pages.pdf");
+            }
+            if (Files.exists(diskPath)) {
+                multiPagePdfBytes = Files.readAllBytes(diskPath);
             } else {
                 multiPagePdfBytes = minimalPdfBytes;
             }

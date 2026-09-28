@@ -62,6 +62,14 @@ public enum ImageFormat {
         };
     }
 
+    /** Whether this format supports an alpha channel for transparency. */
+    public boolean supportsTransparency() {
+        return switch (this) {
+            case PNG, WEBP, TIFF, AVIF, JXL, HEIC, HEIF -> true;
+            case JPEG, BMP, JPEG2000 -> false;
+        };
+    }
+
     /**
      * Resolves an {@link ImageFormat} from a file extension or format name.
      *

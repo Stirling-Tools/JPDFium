@@ -75,6 +75,13 @@ public record RenderResult(int width, int height, byte[] rgba) {
      * Converts to an 8-byte LE header + RGBA byte array for direct codec encoding.
      */
     public byte[] toFrame() {
+        return toFrame(true);
+    }
+
+    /**
+     * Converts to an 8-byte LE header + RGBA byte array, optionally flattening over white.
+     */
+    public byte[] toFrame(boolean hasAlpha) {
         byte[] frame = new byte[8 + rgba.length];
         frame[0] = (byte) (width & 0xFF);
         frame[1] = (byte) ((width >> 8) & 0xFF);
@@ -84,7 +91,35 @@ public record RenderResult(int width, int height, byte[] rgba) {
         frame[5] = (byte) ((height >> 8) & 0xFF);
         frame[6] = (byte) ((height >> 16) & 0xFF);
         frame[7] = (byte) ((height >> 24) & 0xFF);
-        System.arraycopy(rgba, 0, frame, 8, rgba.length);
+        if (hasAlpha) {
+            System.arraycopy(rgba, 0, frame, 8, rgba.length);
+        } else {
+            int len = width * height;
+            for (int i = 0; i < len; i++) {
+                int srcOff = i * 4;
+                int dstOff = 8 + srcOff;
+                int r = rgba[srcOff] & 0xFF;
+                int g = rgba[srcOff + 1] & 0xFF;
+                int b = rgba[srcOff + 2] & 0xFF;
+                int a = rgba[srcOff + 3] & 0xFF;
+                if (a == 255) {
+                    frame[dstOff] = (byte) r;
+                    frame[dstOff + 1] = (byte) g;
+                    frame[dstOff + 2] = (byte) b;
+                    frame[dstOff + 3] = (byte) 255;
+                } else if (a == 0) {
+                    frame[dstOff] = (byte) 255;
+                    frame[dstOff + 1] = (byte) 255;
+                    frame[dstOff + 2] = (byte) 255;
+                    frame[dstOff + 3] = (byte) 255;
+                } else {
+                    frame[dstOff] = (byte) ((r * a + 255 * (255 - a)) / 255);
+                    frame[dstOff + 1] = (byte) ((g * a + 255 * (255 - a)) / 255);
+                    frame[dstOff + 2] = (byte) ((b * a + 255 * (255 - a)) / 255);
+                    frame[dstOff + 3] = (byte) 255;
+                }
+            }
+        }
         return frame;
     }
 }

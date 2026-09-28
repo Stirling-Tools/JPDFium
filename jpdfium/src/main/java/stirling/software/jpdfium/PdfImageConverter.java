@@ -94,7 +94,8 @@ public final class PdfImageConverter {
         if (options.singleImage()) {
             List<BufferedImage> rendered = new ArrayList<>();
             for (int i : pages) {
-                rendered.add(renderPageToImage(doc, i, options.dpi(), options.transparent()));
+                BufferedImage img = renderPageToImage(doc, i, options.dpi(), options.transparent());
+                rendered.add(applyColorType(img, options.colorType()));
             }
             if (options.format() == ImageFormat.TIFF) {
                 Path outputFile = outputDir.resolve("document.tiff");
@@ -243,6 +244,7 @@ public final class PdfImageConverter {
             float longer = Math.max(size.width(), size.height());
             int dpi = (int) Math.max(1.0, Math.round(72.0 * maxSize / Math.max(1.0f, longer)));
             BufferedImage img = pageToImage(page, dpi, false);
+            img = resizeToFit(img, maxSize, maxSize);
             return imageToBytes(img, format, 85);
         }
     }
@@ -277,7 +279,7 @@ public final class PdfImageConverter {
                 return renderer.renderCombinedToBytes(dpi, format, colorType);
             }
         }
-        return renderer.renderToBytes(0, dpi, format);
+        return renderer.renderToBytes(0, dpi, format, colorType);
     }
 
     /**
@@ -430,6 +432,7 @@ public final class PdfImageConverter {
                 }
 
                 if (options.colorType() == ColorType.GRAY || options.colorType() == ColorType.BINARY) {
+                    rgba = rgba.clone();
                     applyColorType(rgba, w, h, options.colorType());
                 }
 
@@ -452,6 +455,20 @@ public final class PdfImageConverter {
         } catch (Exception e) {
             throw new UncheckedIOException("Failed to create PDF from images", new IOException(e));
         }
+    }
+
+    private static BufferedImage applyColorType(BufferedImage img, ColorType colorType) {
+        if (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB) {
+            return img;
+        }
+        BufferedImage converted = new BufferedImage(img.getWidth(), img.getHeight(), colorType.bufferedImageType());
+        Graphics2D g = converted.createGraphics();
+        try {
+            g.drawImage(img, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return converted;
     }
 
     private static void applyColorType(byte[] rgba, int w, int h, ColorType colorType) {
@@ -503,14 +520,7 @@ public final class PdfImageConverter {
                 if (effectiveDpi < 1) effectiveDpi = 1;
             }
 
-            RenderResult result = page.renderAt(effectiveDpi);
-            BufferedImage img = result.toBufferedImage();
-
-            if (!transparent) {
-                img = createWhiteBackground(img);
-            }
-
-            return img;
+            return page.renderImage(effectiveDpi, transparent);
         }
     }
 

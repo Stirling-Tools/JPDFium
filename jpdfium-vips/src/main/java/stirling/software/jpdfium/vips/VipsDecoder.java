@@ -20,8 +20,20 @@ public final class VipsDecoder {
 
     public static final long MAX_IMAGE_PIXELS = Long.getLong("jpdfium.image.max_pixels", 100_000_000L);
     public static final int MAX_IMAGE_DIMENSION = Integer.getInteger("jpdfium.image.max_dimension", 30_000);
+    public static final int MAX_FRAMES = 1024;
+    public static final long MAX_AGGREGATE_PIXELS = 100_000_000L;
 
     private VipsDecoder() {}
+
+    private static void checkDimensions(VImage image) {
+        int w = image.getWidth();
+        int h = image.getHeight();
+        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
+                || (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException(
+                    "Image dimensions " + w + "x" + h + " exceed safe limit (decompression bomb protection)");
+        }
+    }
 
     /**
      * Decodes the first frame of {@code imageBytes} to RGBA.
@@ -38,6 +50,7 @@ public final class VipsDecoder {
         Vips.run((Arena arena) -> {
             VImage image = VImage.newFromBytes(arena, imageBytes,
                     VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            checkDimensions(image);
             Integer interlaced = image.getInt("interlaced");
             if (interlaced != null && interlaced != 0) {
                 image = image.copyMemory();
@@ -62,6 +75,7 @@ public final class VipsDecoder {
         Vips.run((Arena arena) -> {
             VImage image = VImage.newFromFile(arena, path.toAbsolutePath().toString(),
                     VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+            checkDimensions(image);
             Integer interlaced = image.getInt("interlaced");
             if (interlaced != null && interlaced != 0) {
                 image = image.copyMemory();
@@ -89,16 +103,26 @@ public final class VipsDecoder {
                     VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
             Integer nPages = probe.getInt("n-pages");
             if (nPages == null || nPages <= 1) {
+                checkDimensions(probe);
                 Integer interlaced = probe.getInt("interlaced");
                 if (interlaced != null && interlaced != 0) {
                     probe = probe.copyMemory();
                 }
                 frames.add(toRgbaFrame(probe));
             } else {
+                if (nPages > MAX_FRAMES) {
+                    throw new IllegalArgumentException("Frame count " + nPages + " exceeds limit (" + MAX_FRAMES + ")");
+                }
+                long totalPixels = 0;
                 for (int i = 0; i < nPages; i++) {
                     VImage pageImg = VImage.newFromFile(arena, p,
                             VipsOption.Int("page", i),
                             VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+                    checkDimensions(pageImg);
+                    totalPixels += (long) pageImg.getWidth() * pageImg.getHeight();
+                    if (totalPixels > MAX_AGGREGATE_PIXELS) {
+                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels + " exceeds safe limit");
+                    }
                     Integer interlaced = pageImg.getInt("interlaced");
                     if (interlaced != null && interlaced != 0) {
                         pageImg = pageImg.copyMemory();
@@ -127,16 +151,26 @@ public final class VipsDecoder {
                     VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
             Integer nPages = probe.getInt("n-pages");
             if (nPages == null || nPages <= 1) {
+                checkDimensions(probe);
                 Integer interlaced = probe.getInt("interlaced");
                 if (interlaced != null && interlaced != 0) {
                     probe = probe.copyMemory();
                 }
                 frames.add(toRgbaFrame(probe));
             } else {
+                if (nPages > MAX_FRAMES) {
+                    throw new IllegalArgumentException("Frame count " + nPages + " exceeds limit (" + MAX_FRAMES + ")");
+                }
+                long totalPixels = 0;
                 for (int i = 0; i < nPages; i++) {
                     VImage pageImg = VImage.newFromBytes(arena, imageBytes,
                             VipsOption.Int("page", i),
                             VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
+                    checkDimensions(pageImg);
+                    totalPixels += (long) pageImg.getWidth() * pageImg.getHeight();
+                    if (totalPixels > MAX_AGGREGATE_PIXELS) {
+                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels + " exceeds safe limit");
+                    }
                     Integer interlaced = pageImg.getInt("interlaced");
                     if (interlaced != null && interlaced != 0) {
                         pageImg = pageImg.copyMemory();

@@ -359,6 +359,31 @@ public final class PdfRenderer {
     }
 
     /**
+     * Renders a page directly to encoded image bytes with the specified color type.
+     *
+     * @param pageIndex 0-based page index
+     * @param dpi       render resolution
+     * @param format    target image format
+     * @param colorType color type (RGB, ARGB, GRAY, BINARY)
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, ImageFormat format, ColorType colorType) throws IOException {
+        try (PdfPage page = document.page(pageIndex)) {
+            return page.renderToBytes(dpi, format, colorType);
+        }
+    }
+
+    /**
+     * Renders a page directly to encoded image bytes with fine-grained encoding control and color type.
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
+        try (PdfPage page = document.page(pageIndex)) {
+            return page.renderToBytes(dpi, format, quality, colorType);
+        }
+    }
+
+    /**
      * Renders a page directly to encoded image bytes using the active codec.
      *
      * @param pageIndex  0-based page index

@@ -8,6 +8,7 @@ import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;

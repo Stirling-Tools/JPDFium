@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 
@@ -15,7 +16,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PdfImageIOTest {
 
@@ -165,5 +169,14 @@ class PdfImageIOTest {
         assertNotNull(thumb);
         assertEquals(50, thumb.getWidth());
         assertEquals(40, thumb.getHeight());
+    }
+
+    @Test
+    void frameFromSubImage() {
+        BufferedImage parent = new BufferedImage(100, 100, BufferedImage.TYPE_INT_ARGB);
+        BufferedImage sub = parent.getSubimage(10, 10, 40, 30);
+        byte[] frame = ImageCodecs.frameFromImage(sub);
+        assertNotNull(frame);
+        assertEquals(8 + 40 * 30 * 4, frame.length);
     }
 }
