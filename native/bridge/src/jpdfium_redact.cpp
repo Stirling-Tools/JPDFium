@@ -423,9 +423,9 @@ static float overlapRatio(float al, float ab, float ar, float at, float bl, floa
 // match text whose extraction produces ligature codepoints. Case semantics
 // are intentionally NOT touched here (the regex engine's icase flag keeps
 // its existing behavior).
-static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
-                                          std::vector<int>& normIdxMap) {
-    std::u32string norm;
+static void buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
+                                std::vector<int>& normIdxMap, std::u32string& norm) {
+    norm.clear();
     normIdxMap.clear();
 #ifdef JPDFIUM_HAS_ICU
     static thread_local std::unordered_map<uint32_t, std::u32string> cache;
@@ -447,7 +447,7 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
             norm += static_cast<char32_t>(uni);
             normIdxMap.push_back(i);
         }
-        return norm;
+        return;
     }
 
     norm.reserve(static_cast<size_t>(count) + 16);
@@ -483,7 +483,7 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
             normIdxMap.push_back(i);
         }
     }
-    return norm;
+    return;
 #else
     norm.reserve(static_cast<size_t>(count) + 16);
     normIdxMap.reserve(static_cast<size_t>(count));
@@ -496,8 +496,15 @@ static std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
         norm += static_cast<char32_t>(uni);
         normIdxMap.push_back(i);
     }
-    return norm;
+    return;
 #endif
+}
+
+static inline std::u32string buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
+                                                 std::vector<int>& normIdxMap) {
+    std::u32string norm;
+    buildNormalizedText(textPage, count, normIdxMap, norm);
+    return norm;
 }
 
 // Codepoint fingerprint of the page's printable (non-space, non-U+FFFE)
@@ -2380,41 +2387,194 @@ static int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTP
     return JPDFIUM_OK;
 }
 
+struct RedactScratch {
+    std::vector<int> idxMap;
+    std::u32string wtext;
+    std::vector<TextMatch> matches;
+    std::vector<uint32_t> unicodeSeq;
+    std::vector<char> redactSet;
+    std::vector<FS_RECTF> appliedRects;
+    std::vector<TextMatch> sortedMatches;
+    std::vector<int> auditIdxMap;
+    std::u32string auditWtext;
+    std::vector<TextMatch> auditRemaining;
+
+    static constexpr size_t kMaxRetainedCapacity = 65536;
+
+    void clear() {
+        idxMap.clear();
+        wtext.clear();
+        matches.clear();
+        unicodeSeq.clear();
+        redactSet.clear();
+        appliedRects.clear();
+        sortedMatches.clear();
+        auditIdxMap.clear();
+        auditWtext.clear();
+        auditRemaining.clear();
+    }
+
+    void trimOversized() {
+        auto trimVec = [](auto& vec) {
+            if (vec.capacity() > kMaxRetainedCapacity) {
+                vec.shrink_to_fit();
+            }
+        };
+        trimVec(idxMap);
+        if (wtext.capacity() > kMaxRetainedCapacity) wtext.shrink_to_fit();
+        trimVec(matches);
+        trimVec(unicodeSeq);
+        trimVec(redactSet);
+        trimVec(appliedRects);
+        trimVec(sortedMatches);
+        trimVec(auditIdxMap);
+        if (auditWtext.capacity() > kMaxRetainedCapacity) auditWtext.shrink_to_fit();
+        trimVec(auditRemaining);
+    }
+};
+
+static thread_local RedactScratch t_redactScratch;
+
+struct ScratchGuard {
+    ~ScratchGuard() {
+        t_redactScratch.trimOversized();
+    }
+};
+
 // PCRE2 matching layer (replaces std::wregex entirely).
 //
-// ReDoS hardening: match_limit caps backtracking work (default 1M), depth_limit
-// caps recursion depth (default 1000), and JIT matching enforces the limits
-// via the match context. PCRE2_UTF|PCRE2_UCP make \w/\d/\b Unicode-correct
-// (fixes e.g. "Müller" whole-word false-positives).
+// Limits cap backtracking work and recursion depth; PCRE2_UTF|PCRE2_UCP
+// keep \w/\d/\b correct on non-ASCII text.
 #ifdef JPDFIUM_HAS_PCRE2
 struct Pcre2Pattern {
     pcre2_code* code = nullptr;
     pcre2_match_data* md = nullptr;
     pcre2_match_context* mctx = nullptr;
     pcre2_jit_stack* jst = nullptr;
+    bool ownsCode = true;
 
     Pcre2Pattern() = default;
     Pcre2Pattern(const Pcre2Pattern&) = delete;
     Pcre2Pattern& operator=(const Pcre2Pattern&) = delete;
-    Pcre2Pattern(Pcre2Pattern&& o) noexcept : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst) {
+    Pcre2Pattern(Pcre2Pattern&& o) noexcept
+        : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst), ownsCode(o.ownsCode) {
         o.code = nullptr;
         o.md = nullptr;
         o.mctx = nullptr;
         o.jst = nullptr;
+        o.ownsCode = false;
     }
     ~Pcre2Pattern() {
-        if (jst) pcre2_jit_stack_free(jst);
         if (mctx) pcre2_match_context_free(mctx);
         if (md) pcre2_match_data_free(md);
-        if (code) pcre2_code_free(code);
+        if (ownsCode) {
+            if (jst) pcre2_jit_stack_free(jst);
+            if (code) pcre2_code_free(code);
+        }
     }
     bool valid() const {
         return code && md && mctx;
     }
 };
 
+struct CachedPcre2Pattern {
+    uint64_t signature = 0;
+    std::string canonicalKey;
+    std::vector<pcre2_code*> codes;
+    pcre2_jit_stack* jst = nullptr;
+
+    ~CachedPcre2Pattern() {
+        if (jst) pcre2_jit_stack_free(jst);
+        for (pcre2_code* c : codes) {
+            if (c) pcre2_code_free(c);
+        }
+    }
+};
+
+struct PatternCache {
+    static constexpr size_t kMaxEntries = 32;
+    std::vector<std::unique_ptr<CachedPcre2Pattern>> entries;
+
+    CachedPcre2Pattern* find(uint64_t sig, std::string_view key) {
+        for (auto& entry : entries) {
+            if (entry->signature == sig && entry->canonicalKey == key) {
+                return entry.get();
+            }
+        }
+        return nullptr;
+    }
+
+    void put(std::unique_ptr<CachedPcre2Pattern> entry) {
+        if (entries.size() >= kMaxEntries) {
+            entries.erase(entries.begin());
+        }
+        entries.push_back(std::move(entry));
+    }
+};
+
+static void deletePatternCache(void* p) {
+    delete reinterpret_cast<PatternCache*>(p);
+}
+
+static std::string buildCanonicalKey(const char** words, int32_t wordCount,
+                                     bool wholeWord, bool caseSensitive, bool useRegex) {
+    std::string key;
+    key.reserve(static_cast<size_t>(wordCount) * 16 + 16);
+    key += (wholeWord ? "W1:" : "W0:");
+    key += (caseSensitive ? "C1:" : "C0:");
+    key += (useRegex ? "R1:" : "R0:");
+    for (int32_t i = 0; i < wordCount; ++i) {
+        if (words[i]) {
+            key += words[i];
+            key += '\0';
+        }
+    }
+    return key;
+}
+
+static uint64_t computePatternSignature(const char** words, int32_t wordCount,
+                                        bool wholeWord, bool caseSensitive, bool useRegex) {
+    uint64_t h = 14695981039346656037ULL;
+    auto hashU64 = [&](uint64_t val) {
+        h ^= val;
+        h *= 1099511628211ULL;
+    };
+    hashU64(static_cast<uint64_t>(wordCount));
+    hashU64(wholeWord ? 1 : 0);
+    hashU64(caseSensitive ? 1 : 0);
+    hashU64(useRegex ? 1 : 0);
+    for (int32_t i = 0; i < wordCount; ++i) {
+        if (!words[i]) continue;
+        for (const char* p = words[i]; *p; ++p) {
+            h ^= static_cast<uint8_t>(*p);
+            h *= 1099511628211ULL;
+        }
+    }
+    return h;
+}
+
 static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
 static constexpr uint32_t kPcre2DepthLimit = 1'000u;
+
+static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst, Pcre2Pattern& out) {
+    if (!code) return false;
+    pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
+    if (!md) return false;
+    pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+    if (!mctx) {
+        pcre2_match_data_free(md);
+        return false;
+    }
+    pcre2_set_match_limit(mctx, kPcre2MatchLimit);
+    pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+    if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
+    out.code = code;
+    out.md = md;
+    out.mctx = mctx;
+    out.jst = jst;
+    out.ownsCode = false;
+    return true;
+}
 
 // Compile a u32 pattern. caseless==true adds PCRE2_CASELESS. JIT-compiles the
 // complete match. Returns false (and fills err) on compile failure.
@@ -2457,6 +2617,7 @@ static bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Patt
     out.md = md;
     out.mctx = mctx;
     out.jst = jst;
+    out.ownsCode = true;
     return true;
 }
 #endif
@@ -2559,38 +2720,19 @@ static std::u32string escapeLiteral(const std::u32string& raw) {
     return out;
 }
 
-// Build ONE combined alternation for a literal word list, using capturing
-// groups so the matched alternative is recoverable from the ovector.
-// groupToWord maps group numbers (1-based) to word indices. Returns false if
-// no literal could be embedded.
-// Decimal digits of |v| as u32 chars (std::to_wstring is wchar_t-based and
-// platform-width dependent).
-static std::u32string u32Digits(uint32_t v) {
-    if (v == 0) return U"0";
-    std::u32string out;
-    while (v > 0) {
-        out.insert(out.begin(), static_cast<char32_t>(U'0' + (v % 10)));
-        v /= 10;
-    }
-    return out;
-}
-
 static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool wholeWord,
-                                    std::u32string& pattern, std::vector<int>& groupToWord) {
+                                    std::u32string& pattern) {
     std::u32string body;
-    groupToWord.clear();
+    int count = 0;
     for (int32_t wi = 0; wi < wordCount; wi++) {
         if (!words[wi]) continue;
         std::u32string esc = escapeLiteral(utf8_to_u32(words[wi]));
         if (esc.empty()) continue;
-        body += U"(?<w";
-        body += u32Digits(static_cast<uint32_t>(wi));
-        body += U">";
         body += esc;
-        body += U")|";
-        groupToWord.push_back(wi);
+        body += U"|";
+        count++;
     }
-    if (groupToWord.empty()) return false;
+    if (count == 0) return false;
     body.pop_back();  // trailing '|'
     pattern.clear();
     if (wholeWord) pattern += U"\\b";
@@ -2599,6 +2741,121 @@ static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool 
     pattern += U")";
     if (wholeWord) pattern += U"\\b";
     return true;
+}
+
+
+static void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
+                             const std::vector<int>& idxMap, const char** words, int32_t wordCount,
+                             bool wholeWord, bool caseSensitive, bool useRegex, float padding,
+                             std::vector<TextMatch>& matches,
+                             std::vector<Pcre2Pattern>* outCompiledPatterns,
+                             int& rejectedPatterns, int& compiledCount) {
+    uint64_t sig = computePatternSignature(words, wordCount, wholeWord, caseSensitive, useRegex);
+    std::string key = buildCanonicalKey(words, wordCount, wholeWord, caseSensitive, useRegex);
+    if (core && !core->redactPatternCache) {
+        core->redactPatternCache = new PatternCache();
+        core->redactPatternDeleter = deletePatternCache;
+    }
+    auto* cache = core ? reinterpret_cast<PatternCache*>(core->redactPatternCache) : nullptr;
+    CachedPcre2Pattern* cached = cache ? cache->find(sig, key) : nullptr;
+    if (!useRegex) {
+        Pcre2Pattern pc;
+        bool patternReady = false;
+        if (cached && !cached->codes.empty()) {
+            patternReady = createPatternFromCode(cached->codes[0], cached->jst, pc);
+        }
+        if (!patternReady) {
+            std::u32string combined;
+            if (buildLiteralAlternation(words, wordCount, wholeWord, combined)) {
+                std::string err;
+                if (compilePcre2(combined, !caseSensitive, pc, err)) {
+                    patternReady = true;
+                    if (cache) {
+                        auto nc = std::make_unique<CachedPcre2Pattern>();
+                        nc->signature = sig;
+                        nc->canonicalKey = std::move(key);
+                        nc->codes.push_back(pc.code);
+                        nc->jst = pc.jst;
+                        cache->put(std::move(nc));
+                        pc.ownsCode = false;
+                    }
+                } else {
+                    rejectedPatterns += wordCount;
+                }
+            } else {
+                rejectedPatterns += wordCount;
+            }
+        }
+        if (patternReady) {
+            compiledCount = 1;
+            size_t offset = 0;
+            while (offset <= wtext.size()) {
+                int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
+                                     wtext.size(), offset, 0, pc.md, pc.mctx);
+                if (rc == PCRE2_ERROR_NOMATCH) break;
+                if (rc < 0) break;
+                PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
+                PCRE2_SIZE start = ov[0];
+                PCRE2_SIZE end = ov[1];
+                if (end <= start) {
+                    offset = start + 1;
+                    continue;
+                }
+                appendMatchChars(tp, idxMap, static_cast<int>(start),
+                                 static_cast<int>(end - start), padding, matches);
+                offset = end;
+            }
+            if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
+        }
+    } else {
+        bool cacheHit = (cached && cached->codes.size() == static_cast<size_t>(wordCount));
+        if (cacheHit) {
+            for (size_t wi = 0; wi < cached->codes.size(); ++wi) {
+                if (!cached->codes[wi]) continue;
+                Pcre2Pattern pc;
+                if (createPatternFromCode(cached->codes[wi], cached->jst, pc)) {
+                    compiledCount++;
+                    collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                    if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
+                }
+            }
+        } else {
+            std::vector<pcre2_code*> newCodes;
+            pcre2_jit_stack* sharedJst = nullptr;
+            for (int32_t wi = 0; wi < wordCount; ++wi) {
+                if (!words[wi]) {
+                    newCodes.push_back(nullptr);
+                    continue;
+                }
+                std::u32string wpattern = utf8_to_u32(words[wi]);
+                if (wholeWord) {
+                    wpattern.insert(0, U"\\b");
+                    wpattern += U"\\b";
+                }
+                Pcre2Pattern pc;
+                std::string err;
+                if (!compilePcre2(wpattern, !caseSensitive, pc, err)) {
+                    ++rejectedPatterns;
+                    newCodes.push_back(nullptr);
+                    continue;
+                }
+                compiledCount++;
+                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                newCodes.push_back(pc.code);
+                if (!sharedJst && pc.jst) sharedJst = pc.jst;
+                pc.ownsCode = false;
+                if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
+            }
+            if (cache && compiledCount > 0) {
+                auto nc = std::make_unique<CachedPcre2Pattern>();
+                nc->signature = sig;
+                nc->canonicalKey = std::move(key);
+                nc->codes = std::move(newCodes);
+                nc->jst = sharedJst;
+                cache->put(std::move(nc));
+            }
+        }
+    }
 }
 #endif
 
@@ -3345,89 +3602,34 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
     }
 
     try {
+        ScratchGuard scratchGuard;
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
         int count = FPDFText_CountChars(tp);
 
-        // Build the search buffer: NFKC-normalized text with an index map.
-        std::vector<int> idxMap;
-        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
+        t_redactScratch.clear();
+        std::vector<int>& idxMap = t_redactScratch.idxMap;
+        std::u32string& wtext = t_redactScratch.wtext;
+        buildNormalizedText(tp, count, idxMap, wtext);
 
-        std::vector<TextMatch> matches;
+        std::vector<TextMatch>& matches = t_redactScratch.matches;
 #ifdef JPDFIUM_HAS_PCRE2
         std::vector<Pcre2Pattern> compiledPatterns;
 #endif
         int rejectedPatterns = 0;
         int compiledCount = 0;
 
-        // Literal word lists compile into ONE combined alternation
-        // (group->word map) so the page text is scanned once; regex mode
-        // patterns compile individually (combining arbitrary regexes would
-        // change anchor semantics).
         for (int32_t wi = 0; wi < wordCount; ++wi) {
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
-        if (!useRegex) {
 #ifdef JPDFIUM_HAS_PCRE2
-            std::u32string combined;
-            std::vector<int> groupToWord;
-            if (buildLiteralAlternation(words, wordCount, wholeWord != 0, combined, groupToWord)) {
-                Pcre2Pattern pc;
-                std::string err;
-                if (compilePcre2(combined, caseSensitive == 0, pc, err)) {
-                    compiledCount = 1;
-                    size_t offset = 0;
-                    while (offset <= wtext.size()) {
-                        int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
-                                             wtext.size(), offset, 0, pc.md, pc.mctx);
-                        if (rc == PCRE2_ERROR_NOMATCH) break;
-                        if (rc < 0) break;
-                        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
-                        PCRE2_SIZE start = ov[0];
-                        PCRE2_SIZE end = ov[1];
-                        if (end <= start) {
-                            offset = start + 1;
-                            continue;
-                        }
-                        appendMatchChars(tp, idxMap, static_cast<int>(start),
-                                         static_cast<int>(end - start), padding, matches);
-                        offset = end;
-                    }
-                    compiledPatterns.push_back(std::move(pc));
-                } else {
-                    rejectedPatterns += wordCount;
-                }
-            } else {
-                rejectedPatterns += wordCount;
-            }
+        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount,
+                         wholeWord != 0, caseSensitive != 0, useRegex != 0, padding,
+                         matches, &compiledPatterns, rejectedPatterns, compiledCount);
 #endif
-        } else {
-            for (int32_t wi = 0; wi < wordCount; ++wi) {
-                if (!words[wi]) continue;
-                std::u32string wpattern = utf8_to_u32(words[wi]);
-                if (wholeWord) {
-                    wpattern.insert(0, U"\\b");
-                    wpattern += U"\\b";
-                }
-#ifdef JPDFIUM_HAS_PCRE2
-                Pcre2Pattern pc;
-                std::string err;
-                if (!compilePcre2(wpattern, caseSensitive == 0, pc, err)) {
-                    ++rejectedPatterns;
-                    continue;
-                }
-                compiledCount++;
-                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
-                compiledPatterns.push_back(std::move(pc));
-#endif
-            }
-        }
         if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
 
-        // Every supplied pattern failed to compile: the caller believes the
-        // redaction ran, but nothing was even searched for.
-        // cppcheck-suppress incorrectLogicOperator
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
@@ -3438,31 +3640,23 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             return JPDFIUM_OK;
         }
 
-        // Grapheme alignment needs the raw char sequence. Build it only when
-        // matches exist; zero-match pages skip this second per-char pass.
-        std::vector<uint32_t> unicodeSeq;
+        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
             unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
         }
         alignMatchesToGraphemes(tp, unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
-        // Snap every span to shaped-cluster boundaries (ligature safety):
-        // a cut inside a shaped cluster would leave the survivor
-        // unrenderable, so the span grows to the whole cluster.
         alignMatchesToShapedClusters(tp, matches);
 #endif
-        std::vector<char> redactSet(count, 0);
+        std::vector<char>& redactSet = t_redactScratch.redactSet;
+        redactSet.assign(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
         std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
-        // Best case scenario: Wrap EmbedPDF core engine (EPDFAnnot_ApplyRedaction)
-        // High-fidelity native in-place redaction via EmbedPDF core engine.
-        // We apply annotations one by one in reverse reading order (bottom-to-top, right-to-left).
-        // This ensures that trailing/middle text in shared text objects is removed BEFORE any
-        // leading text, avoiding premature text matrix shifting in PDFium's redactor.
-        std::vector<TextMatch> sortedMatches = matches;
+        std::vector<TextMatch>& sortedMatches = t_redactScratch.sortedMatches;
+        sortedMatches = matches;
         std::sort(sortedMatches.begin(), sortedMatches.end(),
                   [](const TextMatch& a, const TextMatch& b) {
                       if (std::abs(a.bboxB - b.bboxB) > 2.0f) {
@@ -3471,7 +3665,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                       return a.bboxL > b.bboxL;
                   });
 
-        std::vector<FS_RECTF> appliedRects;
+        std::vector<FS_RECTF>& appliedRects = t_redactScratch.appliedRects;
         appliedRects.reserve(sortedMatches.size());
         bool epdfOk = true;
         for (const auto& m : sortedMatches) {
@@ -3525,32 +3719,27 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                 }
             }
         } else {
-            // Fallback: Object Fission engine if EPDFAnnot_ApplyRedaction is unavailable
             int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) return rc;
         }
 
-        // Audit loop: after content removal, re-extract the page text and
-        // verify none of the patterns still match (strategy-fallback-preserved
-        // originals, missed form text and offset OCR overlays all surface
-        // here as a distinct error instead of a silent leak). An audit that
-        // cannot run is a loud unverifiable error. Re-matching uses padding 0
-        // (the padded bboxes only governed cover painting / geometric rules).
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        std::vector<int> idxMap2;
+        std::vector<int>& idxMap2 = t_redactScratch.auditIdxMap;
         int n2 = FPDFText_CountChars(audit);
-        std::u32string wtext2 = buildNormalizedText(audit, n2, idxMap2);
+        std::u32string& wtext2 = t_redactScratch.auditWtext;
+        buildNormalizedText(audit, n2, idxMap2, wtext2);
         std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
         if (actualFp != expectedFp) {
             FPDFText_ClosePage(audit);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 #ifdef JPDFIUM_HAS_PCRE2
+        std::vector<TextMatch>& remaining = t_redactScratch.auditRemaining;
         for (const auto& pc : compiledPatterns) {
-            std::vector<TextMatch> remaining;
+            remaining.clear();
             collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
             if (!remaining.empty()) {
                 FPDFText_ClosePage(audit);
@@ -3710,70 +3899,33 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
     }
 
     try {
+        ScratchGuard scratchGuard;
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp);
 
-        // Build the search buffer: NFKC-normalized text with an index map,
-        // plus the raw unicode sequence for grapheme boundary alignment.
-        std::vector<int> idxMap;
-        std::u32string wtext = buildNormalizedText(tp, count, idxMap);
-        std::vector<uint32_t> unicodeSeq;
+        t_redactScratch.clear();
+        std::vector<int>& idxMap = t_redactScratch.idxMap;
+        std::u32string& wtext = t_redactScratch.wtext;
+        buildNormalizedText(tp, count, idxMap, wtext);
+
+        std::vector<uint32_t>& unicodeSeq = t_redactScratch.unicodeSeq;
         unicodeSeq.reserve(static_cast<size_t>(count));
         for (int i = 0; i < count; ++i) {
             unicodeSeq.push_back(FPDFText_GetUnicode(tp, i));
         }
 
-        std::vector<TextMatch> matches;
-        // Mark-phase bookkeeping: the literals only become sanitize-relevant
-        // once committed, but recording now keeps one code path.
+        std::vector<TextMatch>& matches = t_redactScratch.matches;
         for (int32_t wi = 0; wi < wordCount; ++wi) {
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
 #ifdef JPDFIUM_HAS_PCRE2
-        if (!useRegex) {
-            std::u32string combined;
-            std::vector<int> groupToWord;
-            if (buildLiteralAlternation(words, wordCount, wholeWord != 0, combined, groupToWord)) {
-                Pcre2Pattern pc;
-                std::string err;
-                if (compilePcre2(combined, caseSensitive == 0, pc, err)) {
-                    size_t offset = 0;
-                    while (offset <= wtext.size()) {
-                        int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
-                                             wtext.size(), offset, 0, pc.md, pc.mctx);
-                        if (rc == PCRE2_ERROR_NOMATCH) break;
-                        if (rc < 0) break;
-                        PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
-                        PCRE2_SIZE start = ov[0];
-                        PCRE2_SIZE end = ov[1];
-                        if (end <= start) {
-                            offset = start + 1;
-                            continue;
-                        }
-                        appendMatchChars(tp, idxMap, static_cast<int>(start),
-                                         static_cast<int>(end - start), padding, matches);
-                        offset = end;
-                    }
-                }
-            }
-        } else {
-            for (int32_t wi = 0; wi < wordCount; ++wi) {
-                if (!words[wi]) continue;
-                std::u32string wpattern = utf8_to_u32(words[wi]);
-                if (wholeWord) {
-                    wpattern.insert(0, U"\\b");
-                    wpattern += U"\\b";
-                }
-                Pcre2Pattern pc;
-                std::string err;
-                if (!compilePcre2(wpattern, caseSensitive == 0, pc, err)) continue;
-                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
-            }
-        }
-#else
-        (void)wtext;
+        int rejectedPatterns = 0;
+        int compiledCount = 0;
+        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount,
+                         wholeWord != 0, caseSensitive != 0, useRegex != 0, padding,
+                         matches, nullptr, rejectedPatterns, compiledCount);
 #endif
         alignMatchesToGraphemes(tp, unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
