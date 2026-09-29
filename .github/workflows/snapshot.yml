@@ -764,13 +764,11 @@ jobs:
       # dylibs on PRs can't load on arm64 macOS).
       - name: Vips smoke test (render PDF -> all major formats)
         if: (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success') && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
-        continue-on-error: ${{ startsWith(matrix.platform, 'windows-') }}
         run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} -Pjpdfium.testVipsNatives=vips-${{ matrix.platform }} --no-daemon --stacktrace
         timeout-minutes: 60
 
       - name: Verify vips smoke actually ran
         if: always() && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success') && (github.event_name != 'pull_request' || matrix.platform != 'darwin-arm64')
-        continue-on-error: ${{ startsWith(matrix.platform, 'windows-') }}
         run: bash native/ci/check-smoke-ran.sh jpdfium-vips/build/test-results/vipsSmokeTest
 
       - name: Upload hs_err logs (vips smoke crash diagnostics)

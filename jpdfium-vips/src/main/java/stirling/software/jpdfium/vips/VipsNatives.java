@@ -73,12 +73,6 @@ public final class VipsNatives {
                     gobject = out.toString();
                 }
             }
-            if (!extracted.isEmpty()
-                    && System.getProperty("os.name", "").toLowerCase().contains("win")) {
-                addWindowsDllDirectory(dir);
-                preloadWindows(extracted);
-                loadVipsPlugins(dir, extracted);
-            }
             if (vips != null) {
                 System.setProperty("vipsffm.libpath.vips.override", vips);
             }
@@ -90,6 +84,12 @@ public final class VipsNatives {
             }
             // Point VIPS_MODULE_PATH to the extracted directory so dynamic plugins (vips-heif, vips-jxl, etc.) are loaded
             System.setProperty("vipsffm.modulepath.override", dir.toAbsolutePath().toString());
+            if (!extracted.isEmpty()
+                    && System.getProperty("os.name", "").toLowerCase().contains("win")) {
+                addWindowsDllDirectory(dir);
+                preloadWindows(extracted);
+                loadVipsPlugins(dir, extracted);
+            }
         } catch (IOException e) {
             // Extraction failed - leave vips-ffm to its defaults (system libvips)
         } finally {
@@ -186,9 +186,13 @@ public final class VipsNatives {
     private static void loadVipsPlugins(Path dir, List<Path> extracted) {
         List<Path> plugins = new ArrayList<>();
         for (Path lib : extracted) {
-            String n = lib.getFileName().toString().toLowerCase();
-            if (n.startsWith("vips-")
-                    && (n.endsWith(".dll") || n.endsWith(".so") || n.endsWith(".dylib"))) {
+            String n = lib.getFileName().toString();
+            if (isVipsLib(n) || isGlibLib(n) || isGobjectLib(n)) {
+                continue;
+            }
+            String lower = n.toLowerCase();
+            if (lower.startsWith("vips-")
+                    && (lower.endsWith(".dll") || lower.endsWith(".so") || lower.endsWith(".dylib"))) {
                 plugins.add(lib);
             }
         }
@@ -242,16 +246,33 @@ public final class VipsNatives {
     }
 
     /** Core libvips (excludes the C++ wrapper libvips-cpp and codec plugins). */
-    private static boolean isVipsLib(String n) {
-        return "vips.dll".equals(n) || n.startsWith("libvips.") || n.startsWith("libvips-42");
+    static boolean isVipsLib(String n) {
+        String lower = n.toLowerCase();
+        if (lower.startsWith("libvips-cpp")
+                || lower.startsWith("vips-cpp")
+                || lower.startsWith("vips-jxl")
+                || lower.startsWith("vips-heif")
+                || lower.startsWith("vips-magick")
+                || lower.startsWith("vips-poppler")
+                || lower.startsWith("vips-modules")
+                || lower.startsWith("vips-plugins")) {
+            return false;
+        }
+        return lower.equals("vips.dll")
+                || lower.startsWith("vips-42")
+                || lower.startsWith("vips.")
+                || lower.startsWith("libvips.")
+                || lower.startsWith("libvips-42");
     }
 
-    private static boolean isGlibLib(String n) {
-        return n.startsWith("libglib-2.0") || n.startsWith("glib-2.0");
+    static boolean isGlibLib(String n) {
+        String lower = n.toLowerCase();
+        return lower.startsWith("libglib-2.0") || lower.startsWith("glib-2.0");
     }
 
-    private static boolean isGobjectLib(String n) {
-        return n.startsWith("libgobject-2.0") || n.startsWith("gobject-2.0");
+    static boolean isGobjectLib(String n) {
+        String lower = n.toLowerCase();
+        return lower.startsWith("libgobject-2.0") || lower.startsWith("gobject-2.0");
     }
 
     private static void discoverSystemLibs() {
@@ -284,13 +305,22 @@ public final class VipsNatives {
         searchDirs.add(Path.of("/lib/aarch64-linux-gnu"));
 
         Path vips = findFirstLib(searchDirs, "libvips", ".dylib", ".so", ".dll");
+        if (vips == null) {
+            vips = findFirstLib(searchDirs, "vips", ".dylib", ".so", ".dll");
+        }
         if (vips != null) {
             System.setProperty("vipsffm.libpath.vips.override", vips.toAbsolutePath().toString());
             Path glib = findFirstLib(searchDirs, "libglib-2.0", ".dylib", ".so", ".dll");
+            if (glib == null) {
+                glib = findFirstLib(searchDirs, "glib-2.0", ".dylib", ".so", ".dll");
+            }
             if (glib != null) {
                 System.setProperty("vipsffm.libpath.glib.override", glib.toAbsolutePath().toString());
             }
             Path gobject = findFirstLib(searchDirs, "libgobject-2.0", ".dylib", ".so", ".dll");
+            if (gobject == null) {
+                gobject = findFirstLib(searchDirs, "gobject-2.0", ".dylib", ".so", ".dll");
+            }
             if (gobject != null) {
                 System.setProperty("vipsffm.libpath.gobject.override", gobject.toAbsolutePath().toString());
             }
@@ -320,7 +350,7 @@ public final class VipsNatives {
         try (Stream<Path> stream = Files.list(dir)) {
             return stream
                     .filter(p -> {
-                        String name = p.getFileName().toString();
+                        String name = p.getFileName().toString().toLowerCase();
                         if (name.startsWith("libvips-cpp") || name.startsWith("vips-cpp")) return false;
                         if (name.contains("vips-modules") || name.contains("vips-plugins")) return false;
                         return name.startsWith(prefix)
