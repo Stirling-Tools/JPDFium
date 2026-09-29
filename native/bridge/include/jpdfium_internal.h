@@ -9,9 +9,24 @@
 #include <cstring>
 #include <memory>
 #include <memory_resource>
-#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+struct TransparentStringHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
+struct TransparentStringEqual {
+    using is_transparent = void;
+    bool operator()(std::string_view a, std::string_view b) const noexcept {
+        return a == b;
+    }
+};
 
 #define JPDFIUM_OK (0)
 #define JPDFIUM_ERR_INVALID (-1)
@@ -53,11 +68,27 @@ struct DocCore {
     bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
 
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual> redactedLiteralsSet{};
     std::vector<std::string> redactedLiterals{};
     std::vector<RedactZone> redactZones{};
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual> touchedFontsSet{};
     std::vector<std::string> touchedFontNames{};
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
+
+    void* redactPatternCache = nullptr;
+    void (*redactPatternDeleter)(void*) = nullptr;
+
+    ~DocCore() {
+        clearRedactPatternCache();
+    }
+
+    void clearRedactPatternCache() {
+        if (redactPatternCache && redactPatternDeleter) {
+            redactPatternDeleter(redactPatternCache);
+            redactPatternCache = nullptr;
+        }
+    }
 
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
@@ -65,9 +96,10 @@ struct DocCore {
 
     void addRedactLiteral(const char* s) {
         if (!s || !*s) return;
+        std::string_view sv(s);
+        if (redactedLiteralsSet.find(sv) != redactedLiteralsSet.end()) return;
         std::string lit(s);
-        for (const auto& e : redactedLiterals)
-            if (e == lit) return;
+        redactedLiteralsSet.insert(lit);
         redactedLiterals.push_back(std::move(lit));
     }
     void addRedactZone(int32_t pageIndex, float l, float b, float r, float t) {
@@ -75,9 +107,10 @@ struct DocCore {
     }
     void addTouchedFont(const char* name) {
         if (!name || !*name) return;
+        std::string_view sv(name);
+        if (touchedFontsSet.find(sv) != touchedFontsSet.end()) return;
         std::string fn(name);
-        for (const auto& e : touchedFontNames)
-            if (e == fn) return;
+        touchedFontsSet.insert(fn);
         touchedFontNames.push_back(std::move(fn));
     }
 

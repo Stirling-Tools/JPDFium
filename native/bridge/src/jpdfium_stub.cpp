@@ -83,7 +83,7 @@ static FilePtr safe_fopen_write(const char* path) {
     return static_cast<uint8_t*>(std::calloc(len, 1));
 }
 
-// JsonBuf - minimal, allocation-cheap JSON writer.
+// JsonBuf
 //
 // Backed by std::string with std::to_chars for numerics: no iostream, no
 // locale, no format-string parsing. Numbers render shortest-round-trip; the
