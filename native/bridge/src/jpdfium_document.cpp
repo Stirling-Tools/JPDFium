@@ -285,6 +285,12 @@ int32_t jpdfium_page_height(int64_t page, float* height) {
 }
 
 void jpdfium_page_close(int64_t page) {
+    if (PageWrapper* pw = decodePage(page); pw && pw->page) {
+        // A pending progressive render holds this raw page identity in its
+        // map; abandon it before the page itself is freed so a later session
+        // step or close can never operate on the freed identity.
+        jpdfium_render_abandon_progressive(pw->page);
+    }
     delete decodePage(page);
 }
 

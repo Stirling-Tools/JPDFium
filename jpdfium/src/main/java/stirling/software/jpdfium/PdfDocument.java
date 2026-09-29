@@ -73,8 +73,12 @@ public final class PdfDocument implements AutoCloseable {
 
     /**
      * Re-queries the raw FPDF_DOCUMENT handle from the native bridge.
-     * Called when native operations (such as QPDF metadata or font stripping)
-     * reload the underlying document.
+     *
+     * <p><strong>Internal use only.</strong> Must be called after any native operation
+     * (QPDF metadata, font stripping) that replaces the underlying {@code FPDF_DOCUMENT}
+     * pointer, so that EmbedPDF direct bindings pick up the new address.
+     * External callers must not invoke this; the invariant is maintained automatically
+     * by every library operation that reloads the document.
      */
     public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
@@ -134,9 +138,11 @@ public final class PdfDocument implements AutoCloseable {
             // View, don't copy: the bridge copies synchronously inside the downcall,
             // so peak heap cost is zero instead of one full-document byte[] transient.
             // Heap buffers still copy once via docOpenBytes (jextract downcalls reject them).
+            int remaining = buffer.remaining();
             MemorySegment seg = MemorySegment.ofBuffer(buffer.duplicate());
             long handle = JpdfiumLib.docOpenSegment(seg, seg.byteSize());
-            buffer.position(buffer.limit());
+            // Advance position to match the heap path (buffer.get(bytes) does the same).
+            buffer.position(buffer.position() + remaining);
             return new PdfDocument(handle);
         }
         byte[] bytes = new byte[buffer.remaining()];
@@ -370,11 +376,12 @@ public final class PdfDocument implements AutoCloseable {
      * Uses QPDF when available with fallback to safe PDFium page import.
      *
      * @param inputs list of PDF byte arrays
-     * @return merged PDF bytes, or {@code null} on failure
+     * @return merged PDF bytes
+     * @throws IllegalArgumentException if {@code inputs} is null or empty
      */
     public static byte[] mergeBytes(List<byte[]> inputs) {
         if (inputs == null || inputs.isEmpty()) {
-            return null;
+            throw new IllegalArgumentException("inputs must not be null or empty");
         }
         if (PdfMerger.isSupported()) {
             byte[] result = PdfMerger.mergeBytes(inputs);
@@ -736,7 +743,11 @@ public final class PdfDocument implements AutoCloseable {
                 Optional<Rect> trimBox = queryBoxByIndex(getBox, pageIndex, 3, rectBuf);
                 Optional<Rect> artBox = queryBoxByIndex(getBox, pageIndex, 4, rectBuf);
                 return new PageBoxes(mediaBox, cropBox, bleedBox, trimBox, artBox);
-            } catch (Throwable _) {}
+            } catch (Throwable t) {
+                // Rethrow JVM-fatal errors (OOM, StackOverflow, etc.) - only native
+                // MethodHandle dispatch failures are swallowed to trigger the fallback.
+                NativeRuntime.rethrowFatal(t);
+            }
         }
         try (PdfPage p = page(pageIndex)) {
             return p.boxes();
@@ -1079,8 +1090,12 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Returns the native document handle for use by internal library code.
-     * External callers should not use this; it bypasses the safety checks in this class.
+     * Returns the raw bridge document handle.
+     *
+     * <p><strong>Internal use only.</strong> This handle is an opaque token understood
+     * only by {@link stirling.software.jpdfium.panama.JpdfiumLib} and its companions.
+     * External callers bypassing this method bypass all closed-document checks and
+     * thread-safety contracts enforced by this class.
      */
     public long nativeHandle() {
         ensureOpen();

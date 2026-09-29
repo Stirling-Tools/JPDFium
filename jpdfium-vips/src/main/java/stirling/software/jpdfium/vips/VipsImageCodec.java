@@ -25,8 +25,6 @@ import stirling.software.jpdfium.spi.ImageCodec;
  */
 public final class VipsImageCodec implements ImageCodec {
 
-    public VipsImageCodec() {}
-
     @Override
     public String name() {
         return "libvips";

@@ -285,7 +285,7 @@ public final class EmbedPdfAnnotations {
      */
     public static void flatten(MemorySegment page, int index) {
         if (EmbedPdfAnnotationBindings.EPDFAnnot_Flatten == null) {
-            return;
+            throw new UnsupportedOperationException("EPDFAnnot_Flatten is not supported by this PDFium build");
         }
         MemorySegment annot = openAnnot(page, index);
         try {

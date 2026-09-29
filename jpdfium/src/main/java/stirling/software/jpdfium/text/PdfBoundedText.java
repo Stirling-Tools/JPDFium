@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.text;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.TextPageBindings;
 
@@ -38,7 +39,7 @@ public final class PdfBoundedText {
             return extractFromTextPage(textPage, left, top, right, bottom);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 
@@ -89,7 +90,7 @@ public final class PdfBoundedText {
             return FfmHelper.fromWideString(buf, (long) written * 2);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 }

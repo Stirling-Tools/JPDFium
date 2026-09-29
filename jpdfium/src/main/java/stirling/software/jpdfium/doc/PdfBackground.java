@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -109,7 +110,7 @@ public final class PdfBackground {
                 if (obj != null && !obj.equals(MemorySegment.NULL)) {
                     try {
                         PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, obj);
-                    } catch (Throwable _) {}
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                 }
             }
 

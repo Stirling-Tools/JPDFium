@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -214,7 +215,7 @@ public final class PdfPageSplitter {
                 return minCol * (72.0f / dpi);
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
     }

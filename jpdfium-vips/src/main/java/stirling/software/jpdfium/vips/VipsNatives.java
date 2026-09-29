@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
 import stirling.software.jpdfium.panama.NativeLoader;
@@ -85,7 +86,7 @@ public final class VipsNatives {
             // Point VIPS_MODULE_PATH to the extracted directory so dynamic plugins (vips-heif, vips-jxl, etc.) are loaded
             System.setProperty("vipsffm.modulepath.override", dir.toAbsolutePath().toString());
             if (!extracted.isEmpty()
-                    && System.getProperty("os.name", "").toLowerCase().contains("win")) {
+                    && System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
                 addWindowsDllDirectory(dir);
                 preloadWindows(extracted);
                 loadVipsPlugins(dir, extracted);
@@ -190,7 +191,7 @@ public final class VipsNatives {
             if (isVipsLib(n) || isGlibLib(n) || isGobjectLib(n)) {
                 continue;
             }
-            String lower = n.toLowerCase();
+            String lower = n.toLowerCase(Locale.ROOT);
             if (lower.startsWith("vips-")
                     && (lower.endsWith(".dll") || lower.endsWith(".so") || lower.endsWith(".dylib"))) {
                 plugins.add(lib);
@@ -247,7 +248,7 @@ public final class VipsNatives {
 
     /** Core libvips (excludes the C++ wrapper libvips-cpp and codec plugins). */
     static boolean isVipsLib(String n) {
-        String lower = n.toLowerCase();
+        String lower = n.toLowerCase(Locale.ROOT);
         if (lower.startsWith("libvips-cpp")
                 || lower.startsWith("vips-cpp")
                 || lower.startsWith("vips-jxl")
@@ -258,7 +259,7 @@ public final class VipsNatives {
                 || lower.startsWith("vips-plugins")) {
             return false;
         }
-        return lower.equals("vips.dll")
+        return "vips.dll".equals(lower)
                 || lower.startsWith("vips-42")
                 || lower.startsWith("vips.")
                 || lower.startsWith("libvips.")
@@ -266,12 +267,12 @@ public final class VipsNatives {
     }
 
     static boolean isGlibLib(String n) {
-        String lower = n.toLowerCase();
+        String lower = n.toLowerCase(Locale.ROOT);
         return lower.startsWith("libglib-2.0") || lower.startsWith("glib-2.0");
     }
 
     static boolean isGobjectLib(String n) {
-        String lower = n.toLowerCase();
+        String lower = n.toLowerCase(Locale.ROOT);
         return lower.startsWith("libgobject-2.0") || lower.startsWith("gobject-2.0");
     }
 
@@ -350,7 +351,7 @@ public final class VipsNatives {
         try (Stream<Path> stream = Files.list(dir)) {
             return stream
                     .filter(p -> {
-                        String name = p.getFileName().toString().toLowerCase();
+                        String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
                         if (name.startsWith("libvips-cpp") || name.startsWith("vips-cpp")) return false;
                         if (name.contains("vips-modules") || name.contains("vips-plugins")) return false;
                         return name.startsWith(prefix)

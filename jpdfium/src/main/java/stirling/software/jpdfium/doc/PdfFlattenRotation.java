@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -76,25 +77,25 @@ public final class PdfFlattenRotation {
                 if (!obj.equals(MemorySegment.NULL)) {
                     PageEditBindings.FPDFPageObj_Transform.invokeExact(obj, a, b, c, d, e, f);
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
 
         // Swap MediaBox dimensions for 90 degrees and 270 degrees
         if (rotation == 1 || rotation == 3) {
             try {
                 PageEditBindings.FPDFPage_SetMediaBox.invokeExact(rawPage, 0f, 0f, height, width);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
 
         // Reset rotation to 0
         try {
             PageEditBindings.FPDFPage_SetRotation.invokeExact(rawPage, 0);
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
         // Regenerate content
         try {
             int gcok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
         return degrees;
     }

@@ -58,6 +58,7 @@ public final class PdfPage implements AutoCloseable {
     private final MemorySegment rawPageSegment;
     private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean progressiveActive = new AtomicBoolean(false);
 
     private PdfPage(long docHandle, long handle, int pageIndex) {
         this.docHandle = docHandle;
@@ -320,59 +321,141 @@ public final class PdfPage implements AutoCloseable {
         return startProgressiveRender(targetBitmap, width, height, flags);
     }
 
+    /**
+     * Start a progressive render into a caller-owned bitmap.
+     *
+     * <p>The native layer retains the {@code targetBitmap} pointer across
+     * {@link ProgressiveSession#step()} calls. The caller must keep the
+     * segment's arena alive until the session closes, and must not close this
+     * page before the session completes. Only one session may be active per
+     * page at a time.
+     */
     public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, int flags) {
         ensureOpen();
-        return new ProgressiveSession(rawPageSegment, targetBitmap, width, height, width * 4, flags);
+        if (targetBitmap == null) {
+            throw new IllegalArgumentException("targetBitmap must not be null");
+        }
+        if (width <= 0 || height <= 0) {
+            throw new IllegalArgumentException("width and height must be > 0");
+        }
+        int stride = Math.multiplyExact(width, 4);
+        long requiredSize = (long) stride * height;
+        if (targetBitmap.byteSize() < requiredSize) {
+            throw new IllegalArgumentException("targetBitmap too small: need " + requiredSize + " bytes");
+        }
+        // PDFium keeps a single progressive context per page; a second pending
+        // session would alias the first session's native state. Require callers
+        // to close the active session before starting another. Synchronized
+        // with close() so the page cannot be freed mid-start.
+        synchronized (this) {
+            ensureOpen();
+            if (!progressiveActive.compareAndSet(false, true)) {
+                throw new IllegalStateException("A progressive render session is already active on this page");
+            }
+            boolean started = false;
+            try {
+                ProgressiveSession session = new ProgressiveSession(
+                        this, rawPageSegment, targetBitmap, width, height, stride, flags);
+                started = true;
+                return session;
+            } finally {
+                if (!started) {
+                    progressiveActive.set(false);
+                }
+            }
+        }
+    }
+
+    void releaseProgressive() {
+        progressiveActive.set(false);
     }
 
     public static final class ProgressiveSession implements AutoCloseable {
+        private final PdfPage owner;
         private final MemorySegment rawPage;
         private final Arena cancelArena;
         private final MemorySegment cancelFlag;
-        private boolean closed = false;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
 
-        ProgressiveSession(MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags) {
+        ProgressiveSession(PdfPage owner, MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags) {
+            this.owner = owner;
             this.rawPage = rawPage;
-            this.cancelArena = Arena.ofConfined();
+            this.cancelArena = Arena.ofShared();
             this.cancelFlag = cancelArena.allocate(ValueLayout.JAVA_INT);
             this.cancelFlag.set(ValueLayout.JAVA_INT, 0, 0);
-            int status = JpdfiumLib.renderPageProgressiveStart(rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+            int status;
+            try {
+                status = JpdfiumLib.renderPageProgressiveStart(
+                        rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+            } catch (Throwable t) {
+                closed.set(true);
+                cancelArena.close();
+                throw t;
+            }
             if (status == ProgressiveStatus.DONE.code()) {
-                closed = true;
+                closed.set(true);
                 cancelArena.close();
-            } else if (status == ProgressiveStatus.FAILED.code()) {
-                closed = true;
+                owner.releaseProgressive();
+            } else if (status != ProgressiveStatus.TO_BE_CONTINUED.code()) {
+                closed.set(true);
                 cancelArena.close();
-                throw new JPDFiumException("Progressive render start failed");
+                owner.releaseProgressive();
+                throw new JPDFiumException("Progressive render start failed: " + status);
             }
         }
 
         public void cancel() {
-            if (!closed) {
+            if (closed.get()) {
+                return;
+            }
+            try {
                 cancelFlag.set(ValueLayout.JAVA_INT, 0, 1);
+            } catch (IllegalStateException alreadyClosed) {
+                // Session finished concurrently; cancellation is moot.
             }
         }
 
         public ProgressiveStatus step() {
-            if (closed) {
+            if (closed.get()) {
                 return ProgressiveStatus.DONE;
             }
-            int code = JpdfiumLib.renderPageProgressiveContinue(rawPage, cancelFlag);
-            ProgressiveStatus status = ProgressiveStatus.fromCode(code);
-            if (status != ProgressiveStatus.TO_BE_CONTINUED) {
-                close();
+            // Synchronized with PdfPage.close() on the owner monitor so the
+            // page cannot be freed between the isClosed check and the native
+            // continue call. Lock order is always owner -> NativeGuard.
+            synchronized (owner) {
+                if (closed.get()) {
+                    return ProgressiveStatus.DONE;
+                }
+                if (owner.isClosed()) {
+                    close();
+                    throw new IllegalStateException(
+                            "Owning PdfPage was closed before ProgressiveSession completed");
+                }
+                int code = JpdfiumLib.renderPageProgressiveContinue(rawPage, cancelFlag);
+                ProgressiveStatus status = ProgressiveStatus.fromCode(code);
+                if (status != ProgressiveStatus.TO_BE_CONTINUED) {
+                    close();
+                }
+                return status;
             }
-            return status;
         }
 
         @Override
         public void close() {
-            if (!closed) {
-                closed = true;
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            synchronized (owner) {
                 try {
-                    JpdfiumLib.renderPageProgressiveClose(rawPage);
+                    if (!owner.isClosed()) {
+                        JpdfiumLib.renderPageProgressiveClose(rawPage);
+                    }
                 } finally {
-                    cancelArena.close();
+                    try {
+                        cancelArena.close();
+                    } finally {
+                        owner.releaseProgressive();
+                    }
                 }
             }
         }
@@ -970,8 +1053,12 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Returns the native page handle for use by internal library code.
-     * External callers should not use this; it bypasses the safety checks in this class.
+     * Returns the raw bridge page handle.
+     *
+     * <p><strong>Internal use only.</strong> This handle is an opaque token understood
+     * only by {@link stirling.software.jpdfium.panama.JpdfiumLib} and its companions.
+     * External callers bypassing this method bypass all closed-page checks and
+     * thread-safety contracts enforced by this class.
      */
     public long nativeHandle() {
         ensureOpen();
@@ -992,8 +1079,13 @@ public final class PdfPage implements AutoCloseable {
     @Override
     public void close() {
         // compareAndSet, not check-then-set: a lost race here closes the same
-        // native page twice and corrupts the heap.
-        if (!closed.compareAndSet(false, true)) return;
-        JpdfiumLib.pageClose(handle);
+        // native page twice and corrupts the heap. Synchronized with
+        // ProgressiveSession step/close on this monitor so an in-flight
+        // continue cannot race native page cleanup (the native layer also
+        // abandons pending progressive state on page close as a backstop).
+        synchronized (this) {
+            if (!closed.compareAndSet(false, true)) return;
+            JpdfiumLib.pageClose(handle);
+        }
     }
 }

@@ -256,7 +256,35 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     *handle = g_next_doc++;
     StubDoc doc;
     doc.bytes.assign(data, data + len);
-    g_docs[*handle] = std::move(doc);
+
+    // Sniff page count if present in PDF (/Count N or /Type /Page)
+    std::string_view sv(reinterpret_cast<const char*>(data), static_cast<std::size_t>(len));
+    if (sv.find("/Type /Pages") != std::string_view::npos) {
+        auto countPos = sv.find("/Count ");
+        if (countPos != std::string_view::npos) {
+            int parsedCount = 0;
+            const char* p = sv.data() + countPos + 7;
+            while (p < sv.data() + sv.size() && *p >= '0' && *p <= '9') {
+                parsedCount = parsedCount * 10 + (*p - '0');
+                ++p;
+            }
+            if (parsedCount > 0) doc.pageCount = parsedCount;
+        }
+    }
+    int64_t newHandle = *handle;
+    g_docs[newHandle] = std::move(doc);
+    // Empty-page shortcut: a single empty stream must not mark a multi-page
+    // document empty (populated pages would report zero chars). Only apply
+    // when the fixture shows no text content at all (no BT/Tj operators).
+    bool hasEmptyStream = sv.find("stream\nendstream") != std::string_view::npos ||
+                          sv.find("stream\r\nendstream") != std::string_view::npos ||
+                          sv.find("/Length 0") != std::string_view::npos;
+    bool hasTextOps = sv.find("BT") != std::string_view::npos ||
+                      sv.find("Tj") != std::string_view::npos ||
+                      sv.find("TJ") != std::string_view::npos;
+    if (hasEmptyStream && !hasTextOps) {
+        g_page_text[newHandle] = "";
+    }
     return JPDFIUM_OK;
 }
 
@@ -374,6 +402,9 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
         if (pit != dit->second.pagePendingMarks.end()) {
             g_page_annots[*handle] = pit->second;
         }
+    }
+    if (auto tit = g_page_text.find(doc); tit != g_page_text.end()) {
+        g_page_text[*handle] = tit->second;
     }
     return JPDFIUM_OK;
 }
@@ -963,14 +994,13 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
 }
 
 static uint64_t g_stub_raw_doc = 0;
-static uint64_t g_stub_raw_page = 0;
 
 int64_t jpdfium_doc_raw_handle(int64_t) {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
-int64_t jpdfium_page_raw_handle(int64_t) {
-    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_page));
+int64_t jpdfium_page_raw_handle(int64_t page) {
+    return page;
 }
 
 int64_t jpdfium_page_doc_raw_handle(int64_t) {
@@ -1219,4 +1249,44 @@ int32_t jpdfium_import_n_pages_to_one(void*, float, float, int32_t, int32_t, uin
     *outputLen = static_cast<int64_t>(stub.size());
     *output = dup_bytes(stub.data(), stub.size());
     return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+// PDFium FPDFText_* stub symbols for unit tests running against stub bridge
+extern "C" {
+
+JPDFIUM_EXPORT void* FPDFText_LoadPage(void* page) {
+    return page;
+}
+
+JPDFIUM_EXPORT void FPDFText_ClosePage(void*) {}
+
+JPDFIUM_EXPORT int FPDFText_CountChars(void* page) {
+    if (page) {
+        int64_t handle = static_cast<int64_t>(reinterpret_cast<uintptr_t>(page));
+        if (auto it = g_page_text.find(handle); it != g_page_text.end()) {
+            return static_cast<int>(it->second.size());
+        }
+    }
+    return static_cast<int>(STUB_TEXT.size());
+}
+
+JPDFIUM_EXPORT int FPDFText_GetText(void* page, int start_index, int count,
+                                    unsigned short* result) {
+    if (!result || start_index < 0 || count < 0) return 0;
+    std::string_view text = STUB_TEXT;
+    if (page) {
+        int64_t handle = static_cast<int64_t>(reinterpret_cast<uintptr_t>(page));
+        if (auto it = g_page_text.find(handle); it != g_page_text.end()) {
+            text = it->second;
+        }
+    }
+    int len = static_cast<int>(text.size());
+    if (start_index >= len) return 0;
+    int to_copy = std::min(count, len - start_index);
+    for (int i = 0; i < to_copy; ++i) {
+        result[i] = static_cast<unsigned short>(static_cast<unsigned char>(text[start_index + i]));
+    }
+    result[to_copy] = 0;
+    return to_copy + 1;
+}
 }

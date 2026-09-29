@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.ProcessingMode;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
@@ -120,7 +121,7 @@ public final class RenderOptions {
                     return new RenderedPageView(w, h, stride, 4, PixelFormat.RGBA_STRAIGHT,
                             capturedPixels, () -> {
                                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                                catch (Throwable _) {
+                                catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                                     // Bitmap cleanup best effort
                                 }
                             });
@@ -140,12 +141,15 @@ public final class RenderOptions {
                             owned.reinterpret(len), () -> {});
                 }
             } catch (Throwable t) {
-                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); } catch (Throwable _) {
+                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); } catch (Throwable cleanupEx) { NativeRuntime.rethrowFatal(cleanupEx);
                     // Bitmap cleanup on exception
                 }
                 throw t;
             }
-        } catch (Throwable t) { throw new JPDFiumException("Render failed", t); }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("Render failed", t);
+        }
     }
 
     private static RenderedPageView emptyView() {
