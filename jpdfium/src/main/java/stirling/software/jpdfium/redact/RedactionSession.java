@@ -7,10 +7,13 @@ import stirling.software.jpdfium.model.Rect;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * EmbedPDF-style two-phase redaction session.
@@ -155,8 +158,55 @@ public final class RedactionSession implements AutoCloseable {
     public int markWords(String[] words, int argbColor, float padding,
                           boolean wholeWord, boolean useRegex, boolean caseSensitive) {
         ensureOpen();
+        if (words == null || words.length == 0) return 0;
         int total = 0;
         int pageCount = document.pageCount();
+
+        if (!useRegex && words.length > 10) {
+            FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
+            Set<String> pageMatches = new HashSet<>();
+            try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+                for (int i = 0; i < pageCount; i++) {
+                    int charCount;
+                    try (PdfPage page = document.page(i)) {
+                        charCount = scratch.extractChars(page.rawHandle());
+                    }
+                    if (charCount < 0) {
+                        int count;
+                        try (PdfPage page = document.page(i)) {
+                            count = page.markRedactWords(words, argbColor, padding,
+                                    wholeWord, useRegex, caseSensitive);
+                        }
+                        if (count > 0) {
+                            pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                    .add(new WordMark(words, argbColor, padding,
+                                            wholeWord, useRegex, caseSensitive, count));
+                            total += count;
+                        }
+                        continue;
+                    }
+                    if (charCount == 0) continue;
+                    pageMatches.clear();
+                    kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
+                    if (pageMatches.isEmpty()) continue;
+
+                    String[] matchedWords = pageMatches.toArray(String[]::new);
+                    int count;
+                    try (PdfPage page = document.page(i)) {
+                        count = page.markRedactWords(matchedWords, argbColor, padding,
+                                wholeWord, useRegex, caseSensitive);
+                    }
+                    if (count > 0) {
+                        pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                .add(new WordMark(matchedWords, argbColor, padding,
+                                        wholeWord, useRegex, caseSensitive, count));
+                        total += count;
+                    }
+                }
+            }
+            return total;
+        }
+
         for (int i = 0; i < pageCount; i++) {
             int count = markWordsOnPage(i, words, argbColor, padding,
                     wholeWord, useRegex, caseSensitive);

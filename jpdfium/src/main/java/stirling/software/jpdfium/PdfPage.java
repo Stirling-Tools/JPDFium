@@ -527,24 +527,9 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * True text redaction using the Object Fission Algorithm.
-     *
-     * <p>Unlike {@link #redactWords}, this method uses character-level precision
-     * to surgically remove only the targeted text from the PDF content stream.
-     * Partially overlapping text objects are split into prefix and suffix fragments
-     * that are repositioned using the original font, transformation matrix, and
-     * render mode - ensuring zero typographical degradation.
-     *
-     * <p>Key improvements:
-     * <ul>
-     *   <li><strong>No over-removal</strong> - only matched characters are destroyed</li>
-     *   <li><strong>Font-safe</strong> - reuses the original font handle (no subsetting issues)</li>
-     *   <li><strong>Reflow-proof</strong> - surviving text is pinned to absolute coordinates
-     *       via {@code FPDFText_GetCharOrigin}</li>
-     *   <li><strong>Single pass</strong> - all matches processed in one
-     *       {@code FPDFPage_GenerateContent} call</li>
-     *   <li><strong>Returns match count</strong> for statistics and validation</li>
-     * </ul>
+     * True text redaction: removes only matched characters from the content
+     * stream, splitting overlapping text objects so the rest keeps its
+     * position, font and render mode.
      *
      * @param words         list of words or regex patterns to redact
      * @param argbColor     fill color (0xAARRGGBB)
@@ -561,6 +546,15 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         return JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
+                wholeWord, useRegex, true, caseSensitive);
+    }
+
+    public int redactWordsEx(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
+                              boolean wholeWord, boolean useRegex, boolean removeContent,
+                              boolean caseSensitive) {
+        ensureOpen();
+        requireContentRemoval(removeContent);
+        return JpdfiumLib.redactWordsEx(handle, wordsPtrs, wordCount, argbColor, padding,
                 wholeWord, useRegex, true, caseSensitive);
     }
 
@@ -611,6 +605,14 @@ public final class PdfPage implements AutoCloseable {
                                 boolean caseSensitive) {
         ensureOpen();
         return JpdfiumLib.redactMarkWords(handle, words, padding,
+                wholeWord, useRegex, caseSensitive, argbColor);
+    }
+
+    public int markRedactWords(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
+                                boolean wholeWord, boolean useRegex,
+                                boolean caseSensitive) {
+        ensureOpen();
+        return JpdfiumLib.redactMarkWords(handle, wordsPtrs, wordCount, padding,
                 wholeWord, useRegex, caseSensitive, argbColor);
     }
 
@@ -815,7 +817,6 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setCropBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setCropBox(rawPageSegment, box);
     }
 
@@ -833,7 +834,6 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setMediaBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setMediaBox(rawPageSegment, box);
     }
 
@@ -850,7 +850,6 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setBleedBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setBleedBox(rawPageSegment, box);
     }
 
@@ -867,7 +866,6 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setTrimBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setTrimBox(rawPageSegment, box);
     }
 
@@ -884,7 +882,6 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setArtBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setArtBox(rawPageSegment, box);
     }
 
