@@ -9,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -68,10 +69,12 @@ struct DocCore {
     bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
 
-    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual> redactedLiteralsSet{};
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>
+        redactedLiteralsSet{};
     std::vector<std::string> redactedLiterals{};
     std::vector<RedactZone> redactZones{};
-    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual> touchedFontsSet{};
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>
+        touchedFontsSet{};
     std::vector<std::string> touchedFontNames{};
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
@@ -185,6 +188,11 @@ void jpdfium_ensure_library();
 // Returns 0 and fills out/reportJson on success; -1 on failure.
 int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,
                         std::vector<uint8_t>& out, std::string& reportJson);
+
+// Abandon a pending progressive render for a raw FPDF_PAGE without reporting
+// (jpdfium_render.cpp). Called when the owning page is closed while a session
+// is still pending so the map never retains a dangling page identity.
+void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept;
 
 // Encode heap pointers as int64_t handles for the Java-visible ABI.
 // The pointer stays alive until the matching close function deletes it.

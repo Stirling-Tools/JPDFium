@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
@@ -26,7 +27,7 @@ public final class PdfPageObjects {
         int count;
         try {
             count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-        } catch (Throwable _) { return Collections.emptyList(); }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return Collections.emptyList(); }
 
         List<PageObject> result = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -170,7 +171,7 @@ public final class PdfPageObjects {
     private static List<String> getMarks(MemorySegment obj) {
         int markCount;
         try { markCount = (int) PageEditBindings.FPDFPageObj_CountMarks.invokeExact(obj); }
-        catch (Throwable _) { return Collections.emptyList(); }
+        catch (Throwable t) { NativeRuntime.rethrowFatal(t); return Collections.emptyList(); }
 
         List<String> marks = new ArrayList<>(markCount);
         for (int i = 0; i < markCount; i++) {
@@ -182,7 +183,7 @@ public final class PdfPageObjects {
                 if (ok != 0) {
                     marks.add(FfmHelper.fromByteString(buf, 256));
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
         return marks;
     }

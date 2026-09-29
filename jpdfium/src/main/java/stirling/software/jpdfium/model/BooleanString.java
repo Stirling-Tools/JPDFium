@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.model;
 
+import java.util.Locale;
 /**
  * Represents string values that are interpreted as boolean states.
  * <p>
@@ -28,7 +29,7 @@ public enum BooleanString {
      */
     public static boolean parse(String value) {
         if (value == null) return false;
-        String normalized = value.toLowerCase().trim();
+        String normalized = value.toLowerCase(Locale.ROOT).trim();
         for (BooleanString bs : values()) {
             if (bs.value.equals(normalized)) return true;
         }

@@ -179,7 +179,7 @@ public final class RedactionSession implements AutoCloseable {
                         }
                         if (count > 0) {
                             pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
-                                    .add(new WordMark(words, argbColor, padding,
+                                    .add(new WordMark(words.clone(), argbColor, padding,
                                             wholeWord, useRegex, caseSensitive, count));
                             total += count;
                         }

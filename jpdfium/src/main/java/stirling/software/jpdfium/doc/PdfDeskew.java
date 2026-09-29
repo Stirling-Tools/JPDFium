@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -81,24 +82,24 @@ public final class PdfDeskew {
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
-            } catch (Throwable _) { return new DeskewResult(0, 0, false); }
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return new DeskewResult(0, 0, false); }
             if (bitmap.equals(MemorySegment.NULL)) return new DeskewResult(0, 0, false);
 
             try {
                 try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, bmpW, bmpH, 0xFFFFFFFFL); }
-                catch (Throwable _) { return new DeskewResult(0, 0, false); }
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); return new DeskewResult(0, 0, false); }
 
                 try { RenderBindings.FPDF_RenderPageBitmap.invokeExact(
                         bitmap, rawPage, 0, 0, bmpW, bmpH, 0, RenderBindings.FPDF_PRINTING); }
-                catch (Throwable _) { return new DeskewResult(0, 0, false); }
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); return new DeskewResult(0, 0, false); }
 
                 MemorySegment bufferPtr;
                 try { bufferPtr = (MemorySegment) PageEditBindings.FPDFBitmap_GetBuffer.invokeExact(bitmap); }
-                catch (Throwable _) { return new DeskewResult(0, 0, false); }
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); return new DeskewResult(0, 0, false); }
 
                 int stride;
                 try { stride = (int) PageEditBindings.FPDFBitmap_GetStride.invokeExact(bitmap); }
-                catch (Throwable _) { return new DeskewResult(0, 0, false); }
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); return new DeskewResult(0, 0, false); }
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 
@@ -118,7 +119,7 @@ public final class PdfDeskew {
                 return findSkewAngle(binary, bmpW, bmpH, maxAngle, accuracy);
             } finally {
                 try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
     }
@@ -269,19 +270,19 @@ public final class PdfDeskew {
             int objCount;
             try {
                 objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-            } catch (Throwable _) { return; }
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return; }
 
             for (int i = 0; i < objCount; i++) {
                 MemorySegment obj;
                 try {
                     obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                } catch (Throwable _) { continue; }
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
                 if (obj.equals(MemorySegment.NULL)) continue;
 
                 try {
                     PageEditBindings.FPDFPageObj_Transform.invokeExact(
                             obj, cos, sin, -sin, cos, e, f);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
 
             // Regenerate content
@@ -290,7 +291,7 @@ public final class PdfDeskew {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPage_GenerateContent failed");
             }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 }

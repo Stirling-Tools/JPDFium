@@ -1,5 +1,7 @@
 package stirling.software.jpdfium;
 
+import java.util.Locale;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.doc.CompressOptions;
 import stirling.software.jpdfium.doc.CompressPreset;
 import stirling.software.jpdfium.doc.MetadataTag;
@@ -170,7 +172,7 @@ public final class JpdfiumCli {
                 return def;
             }
             try {
-                return valueOf.apply(raw.trim().toUpperCase());
+                return valueOf.apply(raw.trim().toUpperCase(Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new UsageError(opName + ": invalid value for --" + name + ": '" + raw + "'");
             }
@@ -559,7 +561,7 @@ public final class JpdfiumCli {
     }
 
     private static int opScale(Args a) throws Exception {
-        PaperSize paper = switch (a.str("paper", "a4").toUpperCase()) {
+        PaperSize paper = switch (a.str("paper", "a4").toUpperCase(Locale.ROOT)) {
             case "A3" -> PaperSize.A3;
             case "LETTER" -> PaperSize.LETTER;
             case "A4" -> PaperSize.A4;
@@ -899,7 +901,7 @@ public final class JpdfiumCli {
                     return p;
                 }
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         try {
             var src = JpdfiumCli.class.getProtectionDomain().getCodeSource();
             if (src != null && src.getLocation() != null) {
@@ -908,7 +910,7 @@ public final class JpdfiumCli {
                     return p;
                 }
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         return null;
     }
 

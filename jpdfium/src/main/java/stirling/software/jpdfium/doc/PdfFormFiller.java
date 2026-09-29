@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.FormFillException;
@@ -289,6 +290,7 @@ public final class PdfFormFiller {
             } catch (FormFillException ffe) {
                 throw ffe;
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new FormFillException("Error filling page " + pageIdx, t);
             }
         }
@@ -418,7 +420,7 @@ public final class PdfFormFiller {
                 setAnnotString(arena, annot, AnnotationKeys.AS, targetValue);
                 return true;
             }
-        } catch (Throwable _) { return false; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return false; }
     }
 
     private boolean handleCombo(MemorySegment formHandle, MemorySegment rawPage, MemorySegment annot,
@@ -519,7 +521,7 @@ public final class PdfFormFiller {
                                 setAnnotString(arena, annot, AnnotationKeys.AS, "Off");
                             }
                         }
-                    } catch (Throwable _) {} finally {
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); } finally {
                         safeSilent0(AnnotationBindings.FPDFPage_CloseAnnot, annot);
                     }
                 }
@@ -528,7 +530,7 @@ public final class PdfFormFiller {
                     pagesToFlatten.add(pageIdx);
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formHandle);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
         return anyFilled;
     }

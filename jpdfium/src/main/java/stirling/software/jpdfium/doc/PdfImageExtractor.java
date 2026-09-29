@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.ColorSpaceType;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.ImageObjBindings;
@@ -94,7 +95,7 @@ public final class PdfImageExtractor {
                 long rawSize = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(
                         obj, MemorySegment.NULL, 0L);
                 totalRawBytes += rawSize;
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
 
         return new ImageStats(total, totalRawBytes, Collections.unmodifiableMap(formats));
@@ -130,7 +131,7 @@ public final class PdfImageExtractor {
                         PageEditBindings.FPDFBitmap_Destroy.invokeExact(bmp);
                     }
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             // If rendered bitmap failed, try metadata + raw data
             if (width == 0 || decodedBytes == null) {
@@ -163,7 +164,7 @@ public final class PdfImageExtractor {
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
                         rawBytes = rawBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
                     }
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                 // Decoded data (pixels)
                 try {
@@ -174,7 +175,7 @@ public final class PdfImageExtractor {
                         long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
                         decodedBytes = decBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
                     }
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
 
             // Bounds (if not already retrieved)
@@ -190,7 +191,10 @@ public final class PdfImageExtractor {
 
             return new ExtractedImage(imgIndex, pageIndex, objIndex, width, height, bpp,
                     colorSpace, filter, bounds, rawBytes, decodedBytes);
-        } catch (Throwable t) { return null; }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return null;
+        }
     }
 
     private static Rect getObjBounds(MemorySegment obj) {

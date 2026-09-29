@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Locale;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 
@@ -56,7 +57,7 @@ public final class PdfSelectiveRasterize {
         List<Integer> pagesToRasterize = new ArrayList<>();
         for (int i = 0; i < doc.pageCount(); i++) {
             String text = PdfTextExtractor.extractPage(doc, i).plainText();
-            if (text.toLowerCase().contains(keyword.toLowerCase())) {
+            if (text.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) {
                 pagesToRasterize.add(i);
             }
         }

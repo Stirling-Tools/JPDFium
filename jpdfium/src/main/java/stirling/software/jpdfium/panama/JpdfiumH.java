@@ -1367,37 +1367,57 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_render_page_flags").orElse(null);
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_flags");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t **rgba, int32_t *width, int32_t *height)
+     * }
+     */
     public static FunctionDescriptor jpdfium_render_page_flags$descriptor() {
         return jpdfium_render_page_flags.DESC;
     }
 
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t **rgba, int32_t *width, int32_t *height)
+     * }
+     */
     public static MethodHandle jpdfium_render_page_flags$handle() {
         return jpdfium_render_page_flags.HANDLE;
     }
 
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t **rgba, int32_t *width, int32_t *height)
+     * }
+     */
     public static MemorySegment jpdfium_render_page_flags$address() {
         return jpdfium_render_page_flags.ADDR;
     }
 
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t **rgba, int32_t *width, int32_t *height)
+     * }
+     */
     public static int jpdfium_render_page_flags(long page, int dpi, int flags, MemorySegment rgba, MemorySegment width, MemorySegment height) {
         var mh$ = jpdfium_render_page_flags.HANDLE;
-        if (mh$ == null) {
-            return jpdfium_render_page(page, dpi, rgba, width, height);
-        }
         try {
             if (TRACE_DOWNCALLS) {
                 traceDowncall("jpdfium_render_page_flags", page, dpi, flags, rgba, width, height);
             }
-            return (int) mh$.invokeExact(page, dpi, flags, rgba, width, height);
+            return (int)mh$.invokeExact(page, dpi, flags, rgba, width, height);
         } catch (Error | RuntimeException ex) {
-            throw ex;
+           throw ex;
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
@@ -1544,25 +1564,57 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_render_page_progressive_start").orElse(null);
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_start");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
-    public static int jpdfium_render_page_progressive_start(MemorySegment page, MemorySegment target, int width, int height, int stride, int flags, MemorySegment cancelFlag) {
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_start(void *fpdf_page, uint8_t *target, int32_t width, int32_t height, int32_t stride, int32_t flags, void *cancel_flag)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_render_page_progressive_start$descriptor() {
+        return jpdfium_render_page_progressive_start.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_start(void *fpdf_page, uint8_t *target, int32_t width, int32_t height, int32_t stride, int32_t flags, void *cancel_flag)
+     * }
+     */
+    public static MethodHandle jpdfium_render_page_progressive_start$handle() {
+        return jpdfium_render_page_progressive_start.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_start(void *fpdf_page, uint8_t *target, int32_t width, int32_t height, int32_t stride, int32_t flags, void *cancel_flag)
+     * }
+     */
+    public static MemorySegment jpdfium_render_page_progressive_start$address() {
+        return jpdfium_render_page_progressive_start.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_start(void *fpdf_page, uint8_t *target, int32_t width, int32_t height, int32_t stride, int32_t flags, void *cancel_flag)
+     * }
+     */
+    public static int jpdfium_render_page_progressive_start(MemorySegment fpdf_page, MemorySegment target, int width, int height, int stride, int flags, MemorySegment cancel_flag) {
         var mh$ = jpdfium_render_page_progressive_start.HANDLE;
-        if (mh$ == null) {
-            return -1;
-        }
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("jpdfium_render_page_progressive_start", page, target, width, height, stride, flags, cancelFlag);
+                traceDowncall("jpdfium_render_page_progressive_start", fpdf_page, target, width, height, stride, flags, cancel_flag);
             }
-            return (int) mh$.invokeExact(page, target, width, height, stride, flags, cancelFlag);
+            return (int)mh$.invokeExact(fpdf_page, target, width, height, stride, flags, cancel_flag);
         } catch (Error | RuntimeException ex) {
-            throw ex;
+           throw ex;
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
@@ -1573,25 +1625,57 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_render_page_progressive_continue").orElse(null);
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_continue");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
-    public static int jpdfium_render_page_progressive_continue(MemorySegment page, MemorySegment cancelFlag) {
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_continue(void *fpdf_page, void *cancel_flag)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_render_page_progressive_continue$descriptor() {
+        return jpdfium_render_page_progressive_continue.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_continue(void *fpdf_page, void *cancel_flag)
+     * }
+     */
+    public static MethodHandle jpdfium_render_page_progressive_continue$handle() {
+        return jpdfium_render_page_progressive_continue.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_continue(void *fpdf_page, void *cancel_flag)
+     * }
+     */
+    public static MemorySegment jpdfium_render_page_progressive_continue$address() {
+        return jpdfium_render_page_progressive_continue.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_render_page_progressive_continue(void *fpdf_page, void *cancel_flag)
+     * }
+     */
+    public static int jpdfium_render_page_progressive_continue(MemorySegment fpdf_page, MemorySegment cancel_flag) {
         var mh$ = jpdfium_render_page_progressive_continue.HANDLE;
-        if (mh$ == null) {
-            return -1;
-        }
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("jpdfium_render_page_progressive_continue", page, cancelFlag);
+                traceDowncall("jpdfium_render_page_progressive_continue", fpdf_page, cancel_flag);
             }
-            return (int) mh$.invokeExact(page, cancelFlag);
+            return (int)mh$.invokeExact(fpdf_page, cancel_flag);
         } catch (Error | RuntimeException ex) {
-            throw ex;
+           throw ex;
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 
@@ -1600,25 +1684,57 @@ public class JpdfiumH extends JpdfiumH$shared {
             JpdfiumH.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_render_page_progressive_close").orElse(null);
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_render_page_progressive_close");
 
-        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
 
-    public static void jpdfium_render_page_progressive_close(MemorySegment page) {
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * void jpdfium_render_page_progressive_close(void *fpdf_page)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_render_page_progressive_close$descriptor() {
+        return jpdfium_render_page_progressive_close.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * void jpdfium_render_page_progressive_close(void *fpdf_page)
+     * }
+     */
+    public static MethodHandle jpdfium_render_page_progressive_close$handle() {
+        return jpdfium_render_page_progressive_close.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * void jpdfium_render_page_progressive_close(void *fpdf_page)
+     * }
+     */
+    public static MemorySegment jpdfium_render_page_progressive_close$address() {
+        return jpdfium_render_page_progressive_close.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * void jpdfium_render_page_progressive_close(void *fpdf_page)
+     * }
+     */
+    public static void jpdfium_render_page_progressive_close(MemorySegment fpdf_page) {
         var mh$ = jpdfium_render_page_progressive_close.HANDLE;
-        if (mh$ == null) {
-            return;
-        }
         try {
             if (TRACE_DOWNCALLS) {
-                traceDowncall("jpdfium_render_page_progressive_close", page);
+                traceDowncall("jpdfium_render_page_progressive_close", fpdf_page);
             }
-            mh$.invokeExact(page);
+            mh$.invokeExact(fpdf_page);
         } catch (Error | RuntimeException ex) {
-            throw ex;
+           throw ex;
         } catch (Throwable ex$) {
-            throw new AssertionError("should not reach here", ex$);
+           throw new AssertionError("should not reach here", ex$);
         }
     }
 

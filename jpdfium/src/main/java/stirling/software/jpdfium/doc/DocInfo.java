@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PageSize;
@@ -83,7 +84,7 @@ public final class DocInfo {
         // Tagged
         try {
             b.tagged = (int) DocBindings.FPDFCatalog_IsTagged.invokeExact(rawDoc) != 0;
-        } catch (Throwable _) { b.tagged = false; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); b.tagged = false; }
 
         // Encrypted
         PdfMetadata meta = PdfMetadata.of(rawDoc);
@@ -123,7 +124,7 @@ public final class DocInfo {
                             if (type == 3) imgCount++; // IMAGE
                         }
                     }
-                } catch (Throwable _) {
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                     // Page object enumeration optional
                 }
 
@@ -150,7 +151,7 @@ public final class DocInfo {
         try {
             b.javaScriptCount = (int) JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
             b.hasJavaScript = b.javaScriptCount > 0;
-        } catch (Throwable _) { b.hasJavaScript = false; b.javaScriptCount = 0; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); b.hasJavaScript = false; b.javaScriptCount = 0; }
 
         // Signatures
         b.signatureCount = PdfSignatures.count(rawDoc);
@@ -178,7 +179,7 @@ public final class DocInfo {
                 int v = versionSeg.get(ValueLayout.JAVA_INT, 0);
                 return PdfVersion.fromCode(v).toString();
             }
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         return PdfVersion.V1_7.toString();
     }
 

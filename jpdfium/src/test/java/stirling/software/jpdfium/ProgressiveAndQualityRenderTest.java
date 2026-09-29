@@ -111,7 +111,10 @@ class ProgressiveAndQualityRenderTest {
             try (PdfPage.ProgressiveSession session = page.startProgressiveRender(buf, w, h, RenderQuality.SCREEN)) {
                 session.cancel();
                 ProgressiveStatus status = session.step();
-                assertTrue(status == ProgressiveStatus.TO_BE_CONTINUED || status == ProgressiveStatus.DONE);
+                // Cancellation is terminal: the native layer tears down the
+                // render and reports FAILED so callers never spin on
+                // TO_BE_CONTINUED forever.
+                assertTrue(status == ProgressiveStatus.FAILED || status == ProgressiveStatus.DONE);
             }
         }
     }

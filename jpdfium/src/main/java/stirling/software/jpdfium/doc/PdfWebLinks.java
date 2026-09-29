@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
@@ -73,12 +74,12 @@ public final class PdfWebLinks {
             } finally {
                 try {
                     WebLinkBindings.FPDFLink_CloseWebLinks.invokeExact(webLinks);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         } finally {
             try {
                 TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 
@@ -157,17 +158,17 @@ public final class PdfWebLinks {
                 if (subtype == AnnotationType.LINK.code()) {
                     try {
                         AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-                    } catch (Throwable _) {}
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     int ok = (int) AnnotationBindings.FPDFPage_RemoveAnnot.invokeExact(rawPage, i);
                     if (ok != 0)
                         removed++;
                     continue; // annot already closed
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             try {
                 AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
         return removed;
     }
@@ -201,10 +202,10 @@ public final class PdfWebLinks {
                 int subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
                 if (subtype == AnnotationType.LINK.code())
                     linkCount++;
-            } catch (Throwable _) {} finally {
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); } finally {
                 try {
                     AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
         return linkCount;
@@ -265,7 +266,7 @@ public final class PdfWebLinks {
                     float t = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
                     rects.add(new Rect(l, b, ri - l, t - b));
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
         return rects;
     }

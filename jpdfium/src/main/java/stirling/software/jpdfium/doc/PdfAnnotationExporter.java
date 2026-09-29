@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.AnnotationBindings;
@@ -66,7 +67,7 @@ public final class PdfAnnotationExporter {
                         if (data != null) result.add(data);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
             }
@@ -134,7 +135,7 @@ public final class PdfAnnotationExporter {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFAnnot_SetRect failed");
             }
-                        } catch (Throwable _) {}
+                        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
 
                     // Set color
@@ -144,12 +145,12 @@ public final class PdfAnnotationExporter {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFAnnot_SetColor failed");
             }
-                    } catch (Throwable _) {}
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                     created++;
                 } finally {
                     try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                    catch (Throwable _) {}
+                    catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                 }
             }
         }
@@ -193,7 +194,7 @@ public final class PdfAnnotationExporter {
                     bi = b.get(ValueLayout.JAVA_INT, 0);
                     ai = a.get(ValueLayout.JAVA_INT, 0);
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             return new AnnotationData(pageIndex, typeName, left, bottom, right, top,
                     null, ri, gi, bi, ai);

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.redact.pii;
 
+import java.util.Locale;
 import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
@@ -53,12 +54,12 @@ public enum PiiCategory {
 
     /** Lowercase key used in serialization and PCRE2 named capture groups. */
     public String key() {
-        return name().toLowerCase();
+        return name().toLowerCase(Locale.ROOT);
     }
 
     /** Look up a category by its lowercase key. */
     public static PiiCategory fromKey(String key) {
-        return valueOf(key.toUpperCase());
+        return valueOf(key.toUpperCase(Locale.ROOT));
     }
 
     /** All categories as a category-to-regex map. */

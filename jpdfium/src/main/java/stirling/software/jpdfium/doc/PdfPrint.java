@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PageSize;
@@ -126,7 +127,7 @@ public final class PdfPrint {
             } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GenerateContent failed", t); }
 
             try { PageEditBindings.FPDF_ClosePage.invokeExact(newPage); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
 
         return result;
@@ -146,7 +147,7 @@ public final class PdfPrint {
         int beforeCount;
         try {
             beforeCount = (int) DocBindings.FPDF_GetPageCount.invokeExact(rawDest);
-        } catch (Throwable _) { return; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return; }
 
         PdfPageImporter.importPagesByIndex(rawDest, rawSrc, new int[]{srcPageIndex}, beforeCount);
     }

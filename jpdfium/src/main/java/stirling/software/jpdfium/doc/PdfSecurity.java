@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -403,29 +404,29 @@ public final class PdfSecurity {
     private static int removeHiddenTextObjects(MemorySegment rawPage) {
         int count;
         try { count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage); }
-        catch (Throwable _) { return 0; }
+        catch (Throwable t) { NativeRuntime.rethrowFatal(t); return 0; }
 
         int removed = 0;
         for (int i = count - 1; i >= 0; i--) {
             MemorySegment obj;
             try { obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (obj.equals(MemorySegment.NULL)) continue;
 
             int type;
             try { type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (type != 1) continue; // TEXT only
 
             int renderMode;
             try { renderMode = (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (renderMode == 3) { // invisible
                 try { int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPage_RemoveObject failed");
             } removed++; }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
         if (removed > 0) {

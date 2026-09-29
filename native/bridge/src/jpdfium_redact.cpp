@@ -423,8 +423,8 @@ static float overlapRatio(float al, float ab, float ar, float at, float bl, floa
 // match text whose extraction produces ligature codepoints. Case semantics
 // are intentionally NOT touched here (the regex engine's icase flag keeps
 // its existing behavior).
-static void buildNormalizedText(FPDF_TEXTPAGE textPage, int count,
-                                std::vector<int>& normIdxMap, std::u32string& norm) {
+static void buildNormalizedText(FPDF_TEXTPAGE textPage, int count, std::vector<int>& normIdxMap,
+                                std::u32string& norm) {
     norm.clear();
     normIdxMap.clear();
 #ifdef JPDFIUM_HAS_ICU
@@ -2516,8 +2516,8 @@ static void deletePatternCache(void* p) {
     delete reinterpret_cast<PatternCache*>(p);
 }
 
-static std::string buildCanonicalKey(const char** words, int32_t wordCount,
-                                     bool wholeWord, bool caseSensitive, bool useRegex) {
+static std::string buildCanonicalKey(const char** words, int32_t wordCount, bool wholeWord,
+                                     bool caseSensitive, bool useRegex) {
     std::string key;
     key.reserve(static_cast<size_t>(wordCount) * 16 + 16);
     key += (wholeWord ? "W1:" : "W0:");
@@ -2532,8 +2532,8 @@ static std::string buildCanonicalKey(const char** words, int32_t wordCount,
     return key;
 }
 
-static uint64_t computePatternSignature(const char** words, int32_t wordCount,
-                                        bool wholeWord, bool caseSensitive, bool useRegex) {
+static uint64_t computePatternSignature(const char** words, int32_t wordCount, bool wholeWord,
+                                        bool caseSensitive, bool useRegex) {
     uint64_t h = 14695981039346656037ULL;
     auto hashU64 = [&](uint64_t val) {
         h ^= val;
@@ -2743,13 +2743,12 @@ static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool 
     return true;
 }
 
-
 static void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
                              const std::vector<int>& idxMap, const char** words, int32_t wordCount,
                              bool wholeWord, bool caseSensitive, bool useRegex, float padding,
                              std::vector<TextMatch>& matches,
-                             std::vector<Pcre2Pattern>* outCompiledPatterns,
-                             int& rejectedPatterns, int& compiledCount) {
+                             std::vector<Pcre2Pattern>* outCompiledPatterns, int& rejectedPatterns,
+                             int& compiledCount) {
     uint64_t sig = computePatternSignature(words, wordCount, wholeWord, caseSensitive, useRegex);
     std::string key = buildCanonicalKey(words, wordCount, wholeWord, caseSensitive, useRegex);
     if (core && !core->redactPatternCache) {
@@ -2801,8 +2800,8 @@ static void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32stri
                     offset = start + 1;
                     continue;
                 }
-                appendMatchChars(tp, idxMap, static_cast<int>(start),
-                                 static_cast<int>(end - start), padding, matches);
+                appendMatchChars(tp, idxMap, static_cast<int>(start), static_cast<int>(end - start),
+                                 padding, matches);
                 offset = end;
             }
             if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
@@ -2817,6 +2816,11 @@ static void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32stri
                     compiledCount++;
                     collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
                     if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
+                } else {
+                    // Wrapper allocation (match data/context) failed under
+                    // memory pressure: record it so an entirely failed search
+                    // is reported loudly instead of succeeding with no matches.
+                    ++rejectedPatterns;
                 }
             }
         } else {
@@ -2840,10 +2844,17 @@ static void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32stri
                     continue;
                 }
                 compiledCount++;
+                if (sharedJst && pc.jst && pc.jst != sharedJst) {
+                    pcre2_jit_stack_free(pc.jst);
+                    pc.jst = sharedJst;
+                    pcre2_jit_stack_assign(pc.mctx, nullptr, sharedJst);
+                }
                 collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
-                newCodes.push_back(pc.code);
-                if (!sharedJst && pc.jst) sharedJst = pc.jst;
-                pc.ownsCode = false;
+                if (cache) {
+                    newCodes.push_back(pc.code);
+                    if (!sharedJst && pc.jst) sharedJst = pc.jst;
+                    pc.ownsCode = false;
+                }
                 if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
             }
             if (cache && compiledCount > 0) {
@@ -3624,9 +3635,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
 #ifdef JPDFIUM_HAS_PCRE2
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount,
-                         wholeWord != 0, caseSensitive != 0, useRegex != 0, padding,
-                         matches, &compiledPatterns, rejectedPatterns, compiledCount);
+        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+                         caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
+                         rejectedPatterns, compiledCount);
 #endif
         if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
 
@@ -3923,9 +3934,9 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 #ifdef JPDFIUM_HAS_PCRE2
         int rejectedPatterns = 0;
         int compiledCount = 0;
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount,
-                         wholeWord != 0, caseSensitive != 0, useRegex != 0, padding,
-                         matches, nullptr, rejectedPatterns, compiledCount);
+        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+                         caseSensitive != 0, useRegex != 0, padding, matches, nullptr,
+                         rejectedPatterns, compiledCount);
 #endif
         alignMatchesToGraphemes(tp, unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ

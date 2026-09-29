@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.model;
 
+import java.util.Locale;
 /**
  * Supported image formats for PDF export and import.
  */
@@ -83,7 +84,7 @@ public enum ImageFormat {
         if (extension == null || extension.isBlank()) {
             throw new IllegalArgumentException("Image format extension must not be null or blank");
         }
-        String s = extension.trim().toLowerCase();
+        String s = extension.trim().toLowerCase(Locale.ROOT);
         if (s.startsWith(".")) {
             s = s.substring(1);
         }

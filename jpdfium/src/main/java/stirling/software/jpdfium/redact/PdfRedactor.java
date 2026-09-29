@@ -10,7 +10,6 @@ import stirling.software.jpdfium.redact.pii.EntityRedactor;
 import stirling.software.jpdfium.redact.pii.GlyphRedactor;
 import stirling.software.jpdfium.redact.pii.PatternEngine;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
-import stirling.software.jpdfium.text.PdfBoundedText;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -223,7 +222,11 @@ public final class PdfRedactor {
             MemorySegment premarshaledRegexes = null;
             int regexWordCount = 0;
             if (options.useRegex() && !options.words().isEmpty()) {
-                String[] allWords = options.words().toArray(String[]::new);
+                // Distinct count: the page sets are HashSets, so duplicates in
+                // the configured list must not inflate the count used to prove
+                // a page holds no extra PII/entity entries.
+                String[] allWords =
+                        new java.util.LinkedHashSet<>(options.words()).toArray(String[]::new);
                 regexWordCount = allWords.length;
                 premarshaledRegexes = JpdfiumLib.marshalWordPointers(regexArena, allWords);
             }
@@ -299,6 +302,7 @@ public final class PdfRedactor {
             }
         }
 
+        long outputStart = System.nanoTime();
         int metadataRedacted = 0;
         if (options.stripAllMetadata()) {
             XmpRedactor.stripAll(doc);
@@ -309,6 +313,12 @@ public final class PdfRedactor {
 
         long durationMs = (System.nanoTime() - t0) / 1_000_000;
         if (profiler != null) {
+            profiler.recordOutput(System.nanoTime() - outputStart);
+            long estimatedMemory = 0;
+            for (int charCount : pageCharCounts) {
+                estimatedMemory += (long) Math.max(0, charCount) * 2L;
+            }
+            profiler.recordMemory(estimatedMemory);
             profiler.recordTotalWall(System.nanoTime() - t0);
         }
         return new RedactResult(doc, pageResults, durationMs, options.incrementalSave(),
@@ -415,6 +425,9 @@ public final class PdfRedactor {
             int charCount;
             try (PdfPage page = doc.page(pageIndex)) {
                 charCount = scratch.extractChars(page.rawHandle());
+            }
+            if (charCount < 0) {
+                throw new JPDFiumException("Text extraction failed on page " + pageIndex);
             }
             text = scratch.createString(charCount);
             pageTexts[pageIndex] = text;

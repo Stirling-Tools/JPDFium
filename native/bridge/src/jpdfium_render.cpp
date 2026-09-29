@@ -5,6 +5,7 @@
 #include <fpdfview.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -52,7 +53,7 @@ consteval auto generateUnpremulTable() {
 }
 static constexpr auto kUnpremulTable = generateUnpremulTable();
 
-inline void bgraToRgbaInPlace(uint8_t* __restrict__ buf, int w, int h, int stride) {
+inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride) {
     if (stride == w * 4) {
         int total = w * h;
         int i = 0;
@@ -72,33 +73,34 @@ inline void bgraToRgbaInPlace(uint8_t* __restrict__ buf, int w, int h, int strid
             _mm_storeu_si128(reinterpret_cast<__m128i*>(buf + i * 4), p);
         }
 #endif
-        auto* __restrict__ p32 = reinterpret_cast<uint32_t*>(buf);
-#pragma clang loop vectorize(enable) interleave(enable)
-#pragma GCC ivdep
+        // Unaligned-safe: caller buffers only guarantee byte alignment.
         for (; i < total; ++i) {
-            uint32_t px = p32[i];
-            p32[i] = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+            uint32_t px = 0;
+            std::memcpy(&px, buf + i * 4, sizeof(px));
+            uint32_t swapped =
+                (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+            std::memcpy(buf + i * 4, &swapped, sizeof(swapped));
         }
         return;
     }
 
     for (int row = 0; row < h; ++row) {
         uint8_t* r = buf + static_cast<std::ptrdiff_t>(row) * stride;
-        auto* __restrict__ p32 = reinterpret_cast<uint32_t*>(r);
-#pragma clang loop vectorize(enable) interleave(enable)
-#pragma GCC ivdep
         for (int col = 0; col < w; ++col) {
-            uint32_t px = p32[col];
-            p32[col] = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+            uint32_t px = 0;
+            std::memcpy(&px, r + col * 4, sizeof(px));
+            uint32_t swapped =
+                (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+            std::memcpy(r + col * 4, &swapped, sizeof(swapped));
         }
     }
 }
 
-inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict__ buf, int w, int h, int stride,
+inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict buf, int w, int h, int stride,
                                        bool reverse_byte_order) {
     if (stride == w * 4) {
         int total = w * h;
-        uint8_t* __restrict__ r = buf;
+        uint8_t* __restrict r = buf;
         for (int i = 0; i < total; ++i, r += 4) {
             uint8_t a = r[3];
             if (a == 255) {
@@ -133,7 +135,7 @@ inline void unpremulAndSwapBgraInPlace(uint8_t* __restrict__ buf, int w, int h, 
     }
 
     for (int row = 0; row < h; ++row) {
-        uint8_t* __restrict__ r = buf + static_cast<std::ptrdiff_t>(row) * stride;
+        uint8_t* __restrict r = buf + static_cast<std::ptrdiff_t>(row) * stride;
         for (int col = 0; col < w; ++col, r += 4) {
             uint8_t a = r[3];
             if (a == 255) {
@@ -178,10 +180,23 @@ struct ProgressiveState {
     IFSDK_PAUSE pause{};
 };
 
+// Per-continue time budget so progressive rendering yields chunks instead of
+// completing in a single Start call. The deadline is armed before each
+// Start/Continue; the callback pauses once the budget is exceeded. A set
+// cancel flag pauses immediately so cancellation is observed promptly.
+static thread_local std::chrono::steady_clock::time_point g_pauseDeadline{};
+static constexpr std::chrono::milliseconds kProgressiveSliceBudget{8};
+
 static FPDF_BOOL NeedToPauseNowCallback(IFSDK_PAUSE* pause) {
     if (!pause || !pause->user) return 0;
     const auto* cancel = static_cast<const int32_t*>(pause->user);
-    return *cancel != 0 ? 1 : 0;
+    if (*cancel != 0) return 1;
+    return std::chrono::steady_clock::now() >= g_pauseDeadline ? 1 : 0;
+}
+
+static bool isCancelRequested(const void* cancel_flag) {
+    if (!cancel_flag) return false;
+    return *static_cast<const volatile int32_t*>(cancel_flag) != 0;
 }
 
 static std::mutex g_progLock;
@@ -341,6 +356,26 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, 
     FPDF_BITMAP bmp = FPDFBitmap_CreateEx(width, height, fmt, target, stride);
     if (!bmp) return JPDFIUM_ERR_NATIVE;
 
+    // PDFium keeps a single progressive context per FPDF_PAGE. Tear down any
+    // stale entry BEFORE installing the new context: closing after Start
+    // would destroy the render that was just begun. This runs ahead of the
+    // pre-cancelled path too, so a cancelled restart cannot leave the old
+    // entry behind to resume into a freed caller buffer later.
+    {
+        std::lock_guard<std::mutex> lock(g_progLock);
+        auto existing = g_progMap.find(fpdf_page);
+        if (existing != g_progMap.end()) {
+            FPDF_RenderPage_Close(page);
+            if (existing->second.bmp) FPDFBitmap_Destroy(existing->second.bmp);
+            g_progMap.erase(existing);
+        }
+    }
+
+    if (isCancelRequested(cancel_flag)) {
+        FPDFBitmap_Destroy(bmp);
+        return JPDFIUM_RENDER_FAILED;
+    }
+
     ProgressiveState state;
     state.bmp = bmp;
     state.target = target;
@@ -352,6 +387,7 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, 
     state.pause.NeedToPauseNow = NeedToPauseNowCallback;
     state.pause.user = cancel_flag;
 
+    g_pauseDeadline = std::chrono::steady_clock::now() + kProgressiveSliceBudget;
     int status =
         FPDF_RenderPageBitmap_Start(bmp, page, 0, 0, width, height, 0, pdfium_flags, &state.pause);
     if (status == FPDF_RENDER_TOBECONTINUED || status == FPDF_RENDER_READY) {
@@ -364,8 +400,8 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, 
     FPDFBitmap_Destroy(bmp);
     if (status == FPDF_RENDER_DONE) {
 #ifdef JPDFIUM_HAS_SKIA
-        if (g_jpdfiumUseSkia && reverse_byte_order) {
-            unpremulAndSwapBgraInPlace(target, width, height, stride, true);
+        if (g_jpdfiumUseSkia) {
+            unpremulAndSwapBgraInPlace(target, width, height, stride, reverse_byte_order);
         }
 #endif
         return JPDFIUM_RENDER_DONE;
@@ -384,8 +420,21 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
         if (it == g_progMap.end()) return JPDFIUM_ERR_NOT_FOUND;
         state = it->second;
     }
+    // Cancellation is terminal: tear down the render so callers looping on
+    // TO_BE_CONTINUED always terminate instead of spinning forever.
+    if (isCancelRequested(cancel_flag)) {
+        {
+            std::lock_guard<std::mutex> lock(g_progLock);
+            g_progMap.erase(fpdf_page);
+        }
+        FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
+        FPDF_RenderPage_Close(page);
+        if (state.bmp) FPDFBitmap_Destroy(state.bmp);
+        return JPDFIUM_RENDER_FAILED;
+    }
     state.pause.user = cancel_flag;
     FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
+    g_pauseDeadline = std::chrono::steady_clock::now() + kProgressiveSliceBudget;
     int status = FPDF_RenderPage_Continue(page, &state.pause);
     if (status == FPDF_RENDER_TOBECONTINUED || status == FPDF_RENDER_READY) {
         return JPDFIUM_RENDER_TOBECONTINUED;
@@ -399,8 +448,9 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
     FPDFBitmap_Destroy(state.bmp);
     if (status == FPDF_RENDER_DONE) {
 #ifdef JPDFIUM_HAS_SKIA
-        if (g_jpdfiumUseSkia && state.reverse_byte_order) {
-            unpremulAndSwapBgraInPlace(state.target, state.width, state.height, state.stride, true);
+        if (g_jpdfiumUseSkia) {
+            unpremulAndSwapBgraInPlace(state.target, state.width, state.height, state.stride,
+                                       state.reverse_byte_order);
         }
 #endif
         return JPDFIUM_RENDER_DONE;
@@ -427,6 +477,10 @@ void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT {
         FPDF_RenderPage_Close(page);
         if (state.bmp) FPDFBitmap_Destroy(state.bmp);
     }
+}
+
+void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept {
+    jpdfium_render_page_progressive_close(fpdf_page);
 }
 
 void jpdfium_free_buffer(uint8_t* buffer) {

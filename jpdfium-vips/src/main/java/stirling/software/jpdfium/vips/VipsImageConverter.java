@@ -149,6 +149,7 @@ public final class VipsImageConverter {
      */
     public static byte[] thumbnail(PdfDocument doc, int pageIndex, int maxDimPx, VipsFormat format) {
         PageSize size = doc.page(pageIndex).size();
+        @SuppressWarnings("PMD.UnnecessaryCast") // PageSize.width/height() return float; cast is required
         int longer = (int) Math.max(size.width(), size.height());
         int dpi = (int) Math.max(72.0, Math.round(72.0 * maxDimPx / longer));
         try (PdfPage page = doc.page(pageIndex);

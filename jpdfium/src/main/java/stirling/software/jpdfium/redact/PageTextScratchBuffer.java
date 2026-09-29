@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.redact;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.TextPageBindings;
 
 import java.lang.foreign.Arena;
@@ -10,8 +11,10 @@ import java.nio.ByteOrder;
 // Document-scoped off-heap buffer for text extraction.
 final class PageTextScratchBuffer implements AutoCloseable {
 
+    // FPDFText_GetText always returns UTF-16LE; decode with a fixed
+    // little-endian layout so big-endian hosts cannot byte-swap every unit.
     private static final ValueLayout.OfChar NATIVE_CHAR =
-            ValueLayout.JAVA_CHAR_UNALIGNED.withOrder(ByteOrder.nativeOrder());
+            ValueLayout.JAVA_CHAR_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
     private Arena arena;
     private MemorySegment nativeBuf;
@@ -33,7 +36,7 @@ final class PageTextScratchBuffer implements AutoCloseable {
         MemorySegment textPage;
         try {
             textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
-        } catch (Throwable _) {
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
             return -1;
         }
         if (textPage.equals(MemorySegment.NULL)) {
@@ -44,7 +47,7 @@ final class PageTextScratchBuffer implements AutoCloseable {
             int charCount;
             try {
                 charCount = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
-            } catch (Throwable _) {
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                 return -1;
             }
             if (charCount <= 0) {
@@ -54,7 +57,14 @@ final class PageTextScratchBuffer implements AutoCloseable {
             long requiredBytes = (long) (charCount + 1) * 2;
             if (requiredBytes > nativeBufCapacity) {
                 nativeBufCapacity = Math.max(requiredBytes, nativeBufCapacity * 2);
-                nativeBuf = arena.allocate(nativeBufCapacity);
+                // Grow in a fresh arena and release the previous one: a
+                // confined arena frees only on close, so re-allocating inside
+                // it would retain every superseded buffer until close().
+                Arena grown = Arena.ofConfined();
+                MemorySegment replacement = grown.allocate(nativeBufCapacity);
+                arena.close();
+                arena = grown;
+                nativeBuf = replacement;
             }
 
             if (charCount > charBuf.length) {
@@ -65,7 +75,7 @@ final class PageTextScratchBuffer implements AutoCloseable {
             try {
                 written = (int) TextPageBindings.FPDFText_GetText.invokeExact(
                         textPage, 0, charCount, nativeBuf);
-            } catch (Throwable _) {
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                 return -1;
             }
             if (written <= 0) {
@@ -78,7 +88,7 @@ final class PageTextScratchBuffer implements AutoCloseable {
         } finally {
             try {
                 TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
-            } catch (Throwable _) {
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                 // Best-effort close on failed text page.
             }
         }
