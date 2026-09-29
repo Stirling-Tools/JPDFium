@@ -5,12 +5,15 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.panama.FlashTextLib;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.redact.pii.EntityRedactor;
 import stirling.software.jpdfium.redact.pii.GlyphRedactor;
 import stirling.software.jpdfium.redact.pii.PatternEngine;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 import stirling.software.jpdfium.text.PdfBoundedText;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -108,10 +111,16 @@ public final class PdfRedactor {
      * @return result with statistics (same document reference)
      */
     public static RedactResult redact(PdfDocument doc, RedactOptions options) {
+        return redact(doc, options, null);
+    }
+
+    static RedactResult redact(PdfDocument doc, RedactOptions options,
+                               RedactionPipelineProfiler profiler) {
         long t0 = System.nanoTime();
         int totalPages = doc.pageCount();
         doc.setSanitizeOnSave(options.sanitizeStructure());
 
+        long setupStart = System.nanoTime();
         FontNormalizer.Result fontResult = null;
         if (options.normalizeFonts()) {
             fontResult = runFontNormalization(doc, options);
@@ -122,94 +131,172 @@ public final class PdfRedactor {
         List<EntityRedactor.RedactionTarget> allSemanticTargets = new ArrayList<>();
 
         Map<Integer, Set<String>> pageRedactionWords = new LinkedHashMap<>();
-        for (int i = 0; i < totalPages; i++) {
-            pageRedactionWords.put(i, new HashSet<>(options.words()));
+        String[] pageTexts = new String[totalPages];
+        boolean needPageTexts = !options.piiPatterns().isEmpty() || !options.entities().isEmpty() || options.semanticRedact();
+
+        FastKeywordIndex kwIndex = null;
+        if (!options.words().isEmpty() && !options.useRegex()) {
+            kwIndex = FastKeywordIndex.create(options.words(), options.caseSensitive());
+        }
+        if (profiler != null) {
+            profiler.recordSetup(System.nanoTime() - setupStart);
         }
 
-        if (!options.piiPatterns().isEmpty()) {
-            try (PatternEngine engine = PatternEngine.create(options.piiPatterns())) {
-                for (int i = 0; i < totalPages; i++) {
-                    String text = extractPageText(doc, i);
-                    if (text.isEmpty()) continue;
+        long[] pageTextAcqNs = new long[totalPages];
+        long[] pagePrefilterNs = new long[totalPages];
+        int[] pageCharCounts = new int[totalPages];
 
-                    List<PatternEngine.Match> matches = engine.findAll(text);
-                    allPatternMatches.addAll(matches);
+        try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+            if (!options.words().isEmpty()) {
+                if (options.useRegex()) {
+                    for (int i = 0; i < totalPages; i++) {
+                        pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>()).addAll(options.words());
+                    }
+                } else if (kwIndex != null) {
+                    Set<String> scratchMatches = new HashSet<>();
+                    for (int i = 0; i < totalPages; i++) {
+                        long tAcqStart = System.nanoTime();
+                        int charCount;
+                        try (PdfPage page = doc.page(i)) {
+                            charCount = scratch.extractChars(page.rawHandle());
+                        }
+                        pageTextAcqNs[i] = System.nanoTime() - tAcqStart;
+                        pageCharCounts[i] = Math.max(0, charCount);
+                        if (charCount < 0) {
+                            pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>()).addAll(options.words());
+                            continue;
+                        }
+                        if (charCount == 0) continue;
 
-                    Set<String> words = pageRedactionWords.get(i);
-                    for (PatternEngine.Match m : matches) {
-                        words.add(escapeForRedact(m.text(), options.useRegex()));
+                        long tPrefilterStart = System.nanoTime();
+                        scratchMatches.clear();
+                        kwIndex.findMatches(scratch.charBuffer(), charCount, options.wholeWord(), scratchMatches);
+                        pagePrefilterNs[i] = System.nanoTime() - tPrefilterStart;
+
+                        if (!scratchMatches.isEmpty()) {
+                            pageRedactionWords.put(i, new HashSet<>(scratchMatches));
+                            if (needPageTexts) {
+                                pageTexts[i] = scratch.createString(charCount);
+                            }
+                        }
                     }
                 }
             }
-        }
 
-        if (options.semanticRedact() && !options.entities().isEmpty()) {
-            EntityRedactor.Result semanticResult = runSemanticAnalysis(doc, options);
-            allEntityMatches.addAll(semanticResult.entities());
-            allSemanticTargets.addAll(semanticResult.redactionTargets());
+            if (!options.piiPatterns().isEmpty()) {
+                try (PatternEngine engine = PatternEngine.create(options.piiPatterns())) {
+                    for (int i = 0; i < totalPages; i++) {
+                        String text = getOrExtractPageText(doc, pageTexts, scratch, i);
+                        if (text.isEmpty()) continue;
 
-            for (EntityRedactor.RedactionTarget target : semanticResult.redactionTargets()) {
-                Set<String> words = pageRedactionWords.get(target.pageIndex());
-                if (words != null) {
-                    words.add(escapeForRedact(target.text(), options.useRegex()));
+                        List<PatternEngine.Match> matches = engine.findAll(text);
+                        allPatternMatches.addAll(matches);
+
+                        if (!matches.isEmpty()) {
+                            Set<String> words = pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>());
+                            for (PatternEngine.Match m : matches) {
+                                words.add(escapeForRedact(m.text(), options.useRegex()));
+                            }
+                        }
+                    }
                 }
             }
-        } else if (!options.entities().isEmpty()) {
-            runNerOnly(doc, options, totalPages, allEntityMatches, pageRedactionWords);
+
+            if (options.semanticRedact() && !options.entities().isEmpty()) {
+                EntityRedactor.Result semanticResult = runSemanticAnalysis(doc, options);
+                allEntityMatches.addAll(semanticResult.entities());
+                allSemanticTargets.addAll(semanticResult.redactionTargets());
+
+                for (EntityRedactor.RedactionTarget target : semanticResult.redactionTargets()) {
+                    Set<String> words = pageRedactionWords.computeIfAbsent(target.pageIndex(), k -> new HashSet<>());
+                    words.add(escapeForRedact(target.text(), options.useRegex()));
+                }
+            } else if (!options.entities().isEmpty()) {
+                runNerOnly(doc, options, totalPages, pageTexts, scratch, allEntityMatches, pageRedactionWords);
+            }
         }
 
         int totalGlyphMatches = 0;
         List<RedactResult.PageResult> pageResults = new ArrayList<>();
 
-        for (int i = 0; i < totalPages; i++) {
-            Set<String> words = pageRedactionWords.get(i);
+        try (Arena regexArena = Arena.ofConfined()) {
+            MemorySegment premarshaledRegexes = null;
+            int regexWordCount = 0;
+            if (options.useRegex() && !options.words().isEmpty()) {
+                String[] allWords = options.words().toArray(String[]::new);
+                regexWordCount = allWords.length;
+                premarshaledRegexes = JpdfiumLib.marshalWordPointers(regexArena, allWords);
+            }
 
-            int matchesOnPage = 0;
-            try (PdfPage page = doc.page(i)) {
-                if (options.glyphAware() && !words.isEmpty()) {
-                    GlyphRedactor.Result glyphResult = GlyphRedactor.redact(page,
-                            List.copyOf(words),
-                            GlyphRedactor.Options.builder()
-                                    .color(options.boxColor())
-                                    .padding(options.padding())
-                                    .ligatureAware(options.ligatureAware())
-                                    .bidiAware(options.bidiAware())
-                                    .graphemeSafe(options.graphemeSafe())
-                                    .removeStream(options.removeContent())
-                                    .build());
-                    totalGlyphMatches += glyphResult.matchCount();
-                }
+            for (int i = 0; i < totalPages; i++) {
+                Set<String> words = pageRedactionWords.get(i);
+                int wordsSearched = options.words().size();
+                int matchesOnPage = 0;
+                long tMutateStart = System.nanoTime();
 
-                if (!words.isEmpty()) {
-                    String[] wordArray = words.toArray(String[]::new);
-                    try {
-                        matchesOnPage = page.redactWordsEx(
-                                wordArray, options.boxColor(), options.padding(),
-                                options.wholeWord(), options.useRegex(),
-                                options.removeContent(), options.caseSensitive());
-                    } catch (JPDFiumException e) {
-                        if (e.isRedactIncomplete()) {
-                            // The post-redaction audit found content that
-                            // could not be removed (e.g. fonts without a
-                            // usable Unicode mapping). The page keeps its
-                            // original content and the caller is told.
-                            matchesOnPage = -1;
-                        } else {
-                            throw e;
+                if (words != null && !words.isEmpty()) {
+                    try (PdfPage page = doc.page(i)) {
+                        if (options.glyphAware()) {
+                            GlyphRedactor.Result glyphResult = GlyphRedactor.redact(page,
+                                    List.copyOf(words),
+                                    GlyphRedactor.Options.builder()
+                                            .color(options.boxColor())
+                                            .padding(options.padding())
+                                            .ligatureAware(options.ligatureAware())
+                                            .bidiAware(options.bidiAware())
+                                            .graphemeSafe(options.graphemeSafe())
+                                            .removeStream(options.removeContent())
+                                            .build());
+                            totalGlyphMatches += glyphResult.matchCount();
                         }
+
+                        try {
+                            if (options.useRegex() && premarshaledRegexes != null && words.size() == regexWordCount) {
+                                matchesOnPage = page.redactWordsEx(
+                                        premarshaledRegexes, regexWordCount, options.boxColor(),
+                                        options.padding(), options.wholeWord(), true,
+                                        options.removeContent(), options.caseSensitive());
+                            } else {
+                                String[] wordArray = words.toArray(String[]::new);
+                                matchesOnPage = page.redactWordsEx(
+                                        wordArray, options.boxColor(), options.padding(),
+                                        options.wholeWord(), options.useRegex(),
+                                        options.removeContent(), options.caseSensitive());
+                            }
+                        } catch (JPDFiumException e) {
+                            if (e.isRedactIncomplete()) {
+                                matchesOnPage = -1;
+                            } else {
+                                throw e;
+                            }
+                        }
+
+                        if (options.flatten()) {
+                            page.flatten();
+                        }
+                    }
+                } else if (options.flatten()) {
+                    try (PdfPage page = doc.page(i)) {
+                        page.flatten();
                     }
                 }
 
-                if (options.flatten()) {
-                    page.flatten();
+                if (options.convertToImage()) {
+                    doc.convertPageToImage(i, options.imageDpi());
+                }
+
+                long tMutate = System.nanoTime() - tMutateStart;
+                pageResults.add(new RedactResult.PageResult(i, wordsSearched, matchesOnPage));
+
+                if (profiler != null) {
+                    boolean isDirty = words != null && !words.isEmpty();
+                    int candidateCount = words != null ? words.size() : 0;
+                    profiler.addPageTiming(new RedactionPipelineProfiler.PageTiming(
+                            i, pageCharCounts[i], isDirty, candidateCount,
+                            candidateCount, matchesOnPage, pageTextAcqNs[i], pagePrefilterNs[i],
+                            tMutate, 0));
                 }
             }
-
-            if (options.convertToImage()) {
-                doc.convertPageToImage(i, options.imageDpi());
-            }
-
-            pageResults.add(new RedactResult.PageResult(i, words.size(), matchesOnPage));
         }
 
         int metadataRedacted = 0;
@@ -221,6 +308,9 @@ public final class PdfRedactor {
         }
 
         long durationMs = (System.nanoTime() - t0) / 1_000_000;
+        if (profiler != null) {
+            profiler.recordTotalWall(System.nanoTime() - t0);
+        }
         return new RedactResult(doc, pageResults, durationMs, options.incrementalSave(),
                 fontResult, allPatternMatches, allEntityMatches,
                 totalGlyphMatches, metadataRedacted, allSemanticTargets);
@@ -268,7 +358,8 @@ public final class PdfRedactor {
     }
 
     private static void runNerOnly(PdfDocument doc, RedactOptions options,
-                                    int totalPages,
+                                    int totalPages, String[] pageTexts,
+                                    PageTextScratchBuffer scratch,
                                     List<EntityRedactor.EntityMatch> allEntityMatches,
                                     Map<Integer, Set<String>> pageRedactionWords) {
         long handle = FlashTextLib.create();
@@ -278,16 +369,18 @@ public final class PdfRedactor {
             }
 
             for (int i = 0; i < totalPages; i++) {
-                String text = extractPageText(doc, i);
+                String text = getOrExtractPageText(doc, pageTexts, scratch, i);
                 if (text.isEmpty()) continue;
 
                 String json = FlashTextLib.find(handle, text);
                 List<EntityRedactor.EntityMatch> entities = EntityRedactor.parseEntityJson(json, i);
                 allEntityMatches.addAll(entities);
 
-                Set<String> words = pageRedactionWords.get(i);
-                for (EntityRedactor.EntityMatch em : entities) {
-                    words.add(escapeForRedact(em.text(), options.useRegex()));
+                if (!entities.isEmpty()) {
+                    Set<String> words = pageRedactionWords.computeIfAbsent(i, k -> new HashSet<>());
+                    for (EntityRedactor.EntityMatch em : entities) {
+                        words.add(escapeForRedact(em.text(), options.useRegex()));
+                    }
                 }
             }
         } finally {
@@ -315,18 +408,18 @@ public final class PdfRedactor {
         return total;
     }
 
-    /**
-     * Raw page text from one FPDFText_GetText dump.
-     *
-     * <p>The PII/NER prescan only needs the character stream. Building the
-     * structured char/line/word model (per-char JSON round-trip plus geometry
-     * parsing) is wasted work here. The native redaction pass scans the same
-     * unnormalized stream, so matches found here match what it verifies.
-     */
-    private static String extractPageText(PdfDocument doc, int pageIndex) {
-        try (PdfPage page = doc.page(pageIndex)) {
-            return PdfBoundedText.extractAll(page.rawHandle());
+    private static String getOrExtractPageText(PdfDocument doc, String[] pageTexts,
+                                               PageTextScratchBuffer scratch, int pageIndex) {
+        String text = pageTexts[pageIndex];
+        if (text == null) {
+            int charCount;
+            try (PdfPage page = doc.page(pageIndex)) {
+                charCount = scratch.extractChars(page.rawHandle());
+            }
+            text = scratch.createString(charCount);
+            pageTexts[pageIndex] = text;
         }
+        return text;
     }
 
     private static String escapeForRedact(String text, boolean regexMode) {

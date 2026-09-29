@@ -808,25 +808,38 @@ public final class JpdfiumLib {
         }
     }
 
+    public static MemorySegment marshalWordPointers(Arena arena, String[] words) {
+        if (words == null || words.length == 0) return MemorySegment.NULL;
+        MemorySegment ptrs = arena.allocate(ADDRESS, words.length);
+        for (int i = 0; i < words.length; i++) {
+            ptrs.setAtIndex(ADDRESS, i, arena.allocateFrom(words[i]));
+        }
+        return ptrs;
+    }
+
+    public static int redactWordsEx(long page, MemorySegment wordsPtrs, int wordCount, int argb, float padding,
+                                     boolean wholeWord, boolean useRegex, boolean removeContent,
+                                     boolean caseSensitive) {
+        if (wordsPtrs == null || wordsPtrs.equals(MemorySegment.NULL) || wordCount <= 0) return 0;
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_redact_words_ex(page, wordsPtrs, wordCount, argb, padding,
+                    wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
+                    caseSensitive ? 1 : 0, INT_SCRATCH), "redactWordsEx");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static int redactWordsEx(long page, String[] words, int argb, float padding,
                                      boolean wholeWord, boolean useRegex, boolean removeContent,
                                      boolean caseSensitive) {
         if (words == null || words.length == 0) return 0;
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                MemorySegment s = a.allocateFrom(words[i]);
-                ptrs.setAtIndex(ADDRESS, i, s);
-            }
-            NativeGuard.acquire();
-            try {
-                check(JpdfiumH.jpdfium_redact_words_ex(page, ptrs, words.length, argb, padding,
-                        wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
-                        caseSensitive ? 1 : 0, INT_SCRATCH), "redactWordsEx");
-                return INT_SCRATCH.get(JAVA_INT, 0);
-            } finally {
-                NativeGuard.release();
-            }
+            MemorySegment ptrs = marshalWordPointers(a, words);
+            return redactWordsEx(page, ptrs, words.length, argb, padding,
+                    wholeWord, useRegex, removeContent, caseSensitive);
         }
     }
 
@@ -892,24 +905,29 @@ public final class JpdfiumLib {
      *
      * @return the number of REDACT annotations created
      */
+    public static int redactMarkWords(long page, MemorySegment wordsPtrs, int wordCount,
+                                       float padding, boolean wholeWord, boolean useRegex,
+                                       boolean caseSensitive, int argb) {
+        if (wordsPtrs == null || wordsPtrs.equals(MemorySegment.NULL) || wordCount <= 0) return 0;
+        NativeGuard.acquire();
+        try {
+            check(JpdfiumH.jpdfium_redact_mark_words(page, wordsPtrs, wordCount, padding,
+                    wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
+                    argb, INT_SCRATCH), "redactMarkWords");
+            return INT_SCRATCH.get(JAVA_INT, 0);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
     public static int redactMarkWords(long page, String[] words, float padding,
                                        boolean wholeWord, boolean useRegex,
                                        boolean caseSensitive, int argb) {
         if (words == null || words.length == 0) return 0;
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment ptrs = a.allocate(ADDRESS, words.length);
-            for (int i = 0; i < words.length; i++) {
-                ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(words[i]));
-            }
-            NativeGuard.acquire();
-            try {
-                check(JpdfiumH.jpdfium_redact_mark_words(page, ptrs, words.length, padding,
-                        wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
-                        argb, INT_SCRATCH), "redactMarkWords");
-                return INT_SCRATCH.get(JAVA_INT, 0);
-            } finally {
-                NativeGuard.release();
-            }
+            MemorySegment ptrs = marshalWordPointers(a, words);
+            return redactMarkWords(page, ptrs, words.length, padding,
+                    wholeWord, useRegex, caseSensitive, argb);
         }
     }
 

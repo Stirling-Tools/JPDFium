@@ -4,6 +4,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -70,6 +71,9 @@ public final class FfmHelper {
         return encodedSegment;
     }
 
+    private static final ValueLayout.OfChar UTF16LE_CHAR =
+            ValueLayout.JAVA_CHAR_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+
     /**
      * Decode a UTF-16LE buffer returned by PDFium into a Java String.
      *
@@ -79,8 +83,10 @@ public final class FfmHelper {
      */
     public static String fromWideString(MemorySegment sourceSegment, long byteLen) {
         if (byteLen <= 2) return "";
-        byte[] data = sourceSegment.asSlice(0, byteLen - 2).toArray(ValueLayout.JAVA_BYTE);
-        return new String(data, StandardCharsets.UTF_16LE);
+        int charLen = (int) ((byteLen - 2) / 2);
+        char[] chars = new char[charLen];
+        MemorySegment.copy(sourceSegment, UTF16LE_CHAR, 0, chars, 0, charLen);
+        return new String(chars);
     }
 
     /**
