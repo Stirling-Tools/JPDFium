@@ -537,6 +537,34 @@ else()
             -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
             -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
         COMMENT "Generated native-libs.txt for stub")
+
+    # The loader fails closed when the manifest is absent, so the stub has to
+    # ship the same integrity manifest the real natives bundle does.
+    add_custom_command(TARGET jpdfium_stub POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${NATIVES_RESOURCES}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-sha256.cmake
+        COMMENT "Generated native-libs.sha256 for stub")
+
+    # Also stage into native/dist/<platform>, which is where the Gradle natives
+    # conventions read from. processResources lists the staged dir first with
+    # DuplicatesStrategy.EXCLUDE, so an empty staged manifest would otherwise
+    # shadow the generated one above and the loader would refuse to start.
+    add_custom_command(TARGET jpdfium_stub POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:jpdfium_stub>
+            ${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}/${JPDFIUM_LIB_NAME}${JPDFIUM_LIB_EXTENSION}
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-sha256.cmake
+        COMMENT "Staged stub ${JPDFIUM_PLATFORM} into native/dist for Gradle")
 endif()
 
 if(JPDFIUM_USE_PDFIUM)
@@ -595,8 +623,9 @@ if(JPDFIUM_BUILD_FUZZERS)
     endif()
     add_executable(jpdfium_fuzz bridge/fuzz/jpdfium_fuzz.cpp)
     target_include_directories(jpdfium_fuzz PRIVATE bridge/include)
-    target_compile_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address -fno-omit-frame-pointer -g)
-    target_link_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address)
+    target_compile_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address,undefined
+                           -fno-omit-frame-pointer -g)
+    target_link_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
     if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium_fuzz PRIVATE jpdfium)
         if(PDFIUM_LINK_MODE STREQUAL "component")
@@ -604,6 +633,20 @@ if(JPDFIUM_BUILD_FUZZERS)
         endif()
     else()
         target_link_libraries(jpdfium_fuzz PRIVATE jpdfium_stub)
+    endif()
+
+    add_executable(jpdfium_lifecycle_fuzz bridge/fuzz/jpdfium_lifecycle_fuzz.cpp)
+    target_include_directories(jpdfium_lifecycle_fuzz PRIVATE bridge/include)
+    target_compile_options(jpdfium_lifecycle_fuzz PRIVATE -fsanitize=fuzzer,address,undefined
+                           -fno-omit-frame-pointer -g)
+    target_link_options(jpdfium_lifecycle_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(jpdfium_lifecycle_fuzz PRIVATE jpdfium)
+        if(PDFIUM_LINK_MODE STREQUAL "component")
+            target_link_options(jpdfium_lifecycle_fuzz PRIVATE "-Wl,-rpath,${PDFIUM_LIB_DIR}")
+        endif()
+    else()
+        target_link_libraries(jpdfium_lifecycle_fuzz PRIVATE jpdfium_stub)
     endif()
 endif()
 

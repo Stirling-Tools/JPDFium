@@ -1,9 +1,15 @@
 package stirling.software.jpdfium;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.NativeGuard;
 
 import java.io.IOException;
 import java.net.URL;
@@ -312,18 +318,24 @@ class PdfDocumentTest {
     @Test
     void saveToChannelAndStream() throws Exception {
         try (var doc = PdfDocument.open(pdfPath())) {
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
             doc.save(baos);
             byte[] fromStream = baos.toByteArray();
             assertTrue(fromStream.length > 0);
 
-            java.nio.file.Path tempFile = java.nio.file.Files.createTempFile("jpdfium-test", ".pdf");
-            try (java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(
-                    tempFile, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.WRITE)) {
-                doc.save(fc);
+            Path tempFile = Files.createTempFile("jpdfium-test", ".pdf");
+            byte[] fromChannel;
+            try {
+                try (FileChannel fc = FileChannel.open(
+                        tempFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                    doc.save(fc);
+                }
+                fromChannel = Files.readAllBytes(tempFile);
+            } finally {
+                // Runs even when save() or readAllBytes throws, so a failing test
+                // does not leave a stray file in the temp directory.
+                Files.deleteIfExists(tempFile);
             }
-            byte[] fromChannel = java.nio.file.Files.readAllBytes(tempFile);
-            java.nio.file.Files.deleteIfExists(tempFile);
             assertEquals(fromStream.length, fromChannel.length);
         }
     }
@@ -334,7 +346,7 @@ class PdfDocumentTest {
              var page = doc.page(0)) {
             int width = 595;
             int height = 842;
-            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocateDirect(width * height * 4);
+            ByteBuffer buffer = ByteBuffer.allocateDirect(width * height * 4);
             page.renderInto(buffer, width, height);
             assertEquals(width * height * 4, buffer.capacity());
         }
@@ -342,7 +354,7 @@ class PdfDocumentTest {
 
     @Test
     void nativeGuardBatch() throws Exception {
-        int pages = stirling.software.jpdfium.panama.NativeGuard.callBatch(() -> {
+        int pages = NativeGuard.callBatch(() -> {
             try (var doc = PdfDocument.open(pdfPath())) {
                 return doc.pageCount();
             } catch (Exception e) {

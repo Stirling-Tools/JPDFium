@@ -46,6 +46,12 @@ public final class FastLinks {
     public static final MethodHandle FONT_FREE_INFO;
     public static final MethodHandle PAGE_FLATTEN;
 
+    // Critical-suitability audit: critical downcalls must be short in all cases
+    // and never call back into Java, lock, or run variable-length PDFium work.
+    // Eligible here are trivial getters (page count/dimensions), plain free()s,
+    // and small fixed-struct releases. Rendering, parsing, saving, redaction,
+    // text extraction, flattening, and all cleanup that walks heap state stay
+    // plain - they go through the guarded JpdfiumH bindings, never this table.
     static {
         DOC_PAGE_COUNT  = link("jpdfium_doc_page_count", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
         PAGE_WIDTH      = link("jpdfium_page_width", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.awt.image.BufferedImage;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.RenderResult;
@@ -41,12 +42,12 @@ public final class SvgConverter {
     }
 
     /** Rasterize to BufferedImage at natural size. */
-    public static java.awt.image.BufferedImage toBufferedImage(byte[] svg) {
+    public static BufferedImage toBufferedImage(byte[] svg) {
         return toRgba(svg, 0, 0).toBufferedImage();
     }
 
     /** Rasterize to BufferedImage to fit the given box. */
-    public static java.awt.image.BufferedImage toBufferedImage(byte[] svg, int width, int height) {
+    public static BufferedImage toBufferedImage(byte[] svg, int width, int height) {
         return toRgba(svg, width, height).toBufferedImage();
     }
 

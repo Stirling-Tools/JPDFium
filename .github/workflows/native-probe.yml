@@ -90,7 +90,12 @@ jobs:
       - name: Functional smoke test (load native)
         # darwin-x64 runs natively on macos-15-intel, so its x64 JVM loads the
         # x64 dylib; every probe leg gets the same load smoke.
-        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+        # This job builds the stub bridge only, so the natives jar it stages has
+        # no integrity manifest. Opt out of the production fail-closed guard here
+        # and nowhere else - a real natives artifact must still refuse to load.
+        run: >-
+          ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }}
+          -Djpdfium.natives.allowUnsigned=true --no-daemon --stacktrace
 
       - name: Symbol export check
         run: |

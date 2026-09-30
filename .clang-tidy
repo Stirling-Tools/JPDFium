@@ -2,7 +2,6 @@ Checks: >-
   clang-analyzer-*,
   bugprone-*,
   -bugprone-easily-swappable-parameters,
-  -bugprone-exception-escape,
   -bugprone-signed-bitwise,
   modernize-use-nullptr,
   modernize-use-override,

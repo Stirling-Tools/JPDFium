@@ -79,7 +79,7 @@ jpdfium-bom/            Maven BOM for dependency management
 - Java 25, https://jdk.java.net/25/
 - C++23 compiler (`gcc-c++` / `g++` / Xcode CLT / MSVC)
 - CMake 3.20+
-- Gradle 9.7 (via wrapper)
+- Gradle 9.8 (via wrapper)
 - jextract 25 (optional, to regenerate FFM bindings)
 
 ### Build via Gradle

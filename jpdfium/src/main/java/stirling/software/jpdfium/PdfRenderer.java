@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PageSize;
@@ -12,6 +13,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import stirling.software.jpdfium.panama.JpdfiumLib;
+
 import java.util.List;
 
 /**
@@ -213,12 +216,15 @@ public final class PdfRenderer {
      * @return combined stitched image
      */
     public BufferedImage renderCombinedImage(float dpi, ColorType colorType) {
+        if (!(dpi > 0) || Float.isNaN(dpi) || Float.isInfinite(dpi)) {
+            throw new IllegalArgumentException("dpi must be a positive finite value");
+        }
         int count = document.pageCount();
         if (count == 0) {
             throw new IllegalArgumentException("Document contains no pages");
         }
         int maxW = 0;
-        int totalH = 0;
+        long totalH = 0;
         for (int i = 0; i < count; i++) {
             try (PdfPage p = document.page(i)) {
                 PageSize sz = p.size();
@@ -228,15 +234,29 @@ public final class PdfRenderer {
                 totalH += h;
             }
         }
+        // Same budget as single-page renders; fail loudly instead of OOM in allocation.
+        long maxPixels = JpdfiumLib.maxRenderPixels();
+        long totalPixels = maxW * totalH;
+        if (maxPixels > 0 && totalPixels > maxPixels) {
+            throw new JPDFiumException(String.format(
+                    "refusing to stitch %dx%d pixels - exceeds jpdfium.maxRenderPixels=%d. "
+                            + "Reduce the DPI or raise -Djpdfium.maxRenderPixels (0 disables the bound)",
+                    maxW, totalH, maxPixels));
+        }
+        if (totalH > Integer.MAX_VALUE) {
+            throw new JPDFiumException(
+                    "stitched image height exceeds supported dimensions");
+        }
         boolean transparent = (colorType == ColorType.ARGB);
         int targetType = (colorType != null) ? colorType.bufferedImageType()
                 : (transparent ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
-        BufferedImage combined = new BufferedImage(maxW, totalH, targetType);
+        int totalHeight = (int) totalH;
+        BufferedImage combined = new BufferedImage(maxW, totalHeight, targetType);
         Graphics2D g = combined.createGraphics();
         try {
             if (!transparent && targetType != BufferedImage.TYPE_INT_ARGB) {
                 g.setColor(Color.WHITE);
-                g.fillRect(0, 0, maxW, totalH);
+                g.fillRect(0, 0, maxW, totalHeight);
             }
             int currentY = 0;
             for (int i = 0; i < count; i++) {

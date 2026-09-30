@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact;
 
 import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
@@ -21,7 +22,7 @@ final class FastKeywordIndex {
         // share one key (NFKC variants like ﬁle/file, folding equivalents
         // like istanbul/İstanbul); keeping only the last would send a
         // non-matching spelling to native and miss the other (CWE-212).
-        java.util.List<String> keywords;
+        List<String> keywords;
         boolean keywordStartsWithWordChar;
         boolean keywordEndsWithWordChar;
         TrieNode firstChild;
@@ -66,7 +67,7 @@ final class FastKeywordIndex {
         this.caseSensitive = caseSensitive;
         int count = 0;
         boolean supplementary = false;
-        java.util.ArrayList<String> kept = new java.util.ArrayList<>();
+        List<String> kept = new ArrayList<>();
         for (String word : words) {
             if (word == null || word.isEmpty()) {
                 continue;
@@ -153,7 +154,7 @@ final class FastKeywordIndex {
             curr = curr.getOrCreateChild(key.charAt(i));
         }
         if (curr.keywords == null) {
-            curr.keywords = new java.util.ArrayList<>(1);
+            curr.keywords = new ArrayList<>(1);
         }
         curr.keywords.add(word);
         // Whole-word boundaries mirror PCRE2 \b: each side is enforced only

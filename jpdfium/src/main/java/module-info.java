@@ -1,3 +1,4 @@
+import stirling.software.jpdfium.spi.ImageCodec;
 /**
  * JPDFium - Java 25 FFM bindings for Google PDFium.
  *
@@ -27,7 +28,7 @@ module stirling.software.jpdfium {
     // Image codec SPI: jpdfium-vips registers a libvips-backed implementation
     exports stirling.software.jpdfium.spi;
 
-    uses stirling.software.jpdfium.spi.ImageCodec;
+    uses ImageCodec;
 
     // Standard library requirements
     requires transitive java.desktop;      // java.awt.image.BufferedImage surfaces in the public API

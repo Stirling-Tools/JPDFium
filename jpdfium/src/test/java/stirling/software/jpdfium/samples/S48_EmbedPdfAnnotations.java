@@ -87,9 +87,13 @@ public class S48_EmbedPdfAnnotations {
 
                 // 5. Flatten the square annotation to page content
                 int beforeCount = PdfAnnotations.count(rawPage);
-                EmbedPdfAnnotations.flatten(rawPage, idx3);
-                int afterCount = PdfAnnotations.count(rawPage);
-                System.out.printf("  flatten: annotations %d -> %d%n", beforeCount, afterCount);
+                try {
+                    EmbedPdfAnnotations.flatten(rawPage, idx3);
+                    int afterCount = PdfAnnotations.count(rawPage);
+                    System.out.printf("  flatten: annotations %d -> %d%n", beforeCount, afterCount);
+                } catch (UnsupportedOperationException skipped) {
+                    System.out.printf("  flatten: SKIPPED (%s)%n", skipped.getMessage());
+                }
             }
 
             // Save annotated PDF

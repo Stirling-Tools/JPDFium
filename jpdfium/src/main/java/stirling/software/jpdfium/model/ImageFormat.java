@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.model;
 
+import java.io.File;
+import java.nio.file.Path;
 import java.util.Locale;
 /**
  * Supported image formats for PDF export and import.
@@ -110,11 +112,11 @@ public enum ImageFormat {
      * @return matching ImageFormat
      * @throws IllegalArgumentException if path has no file extension or is unsupported
      */
-    public static ImageFormat fromPath(java.nio.file.Path path) {
+    public static ImageFormat fromPath(Path path) {
         if (path == null) {
             throw new IllegalArgumentException("path must not be null");
         }
-        java.nio.file.Path filename = path.getFileName();
+        Path filename = path.getFileName();
         if (filename == null) {
             throw new IllegalArgumentException("path has no filename: " + path);
         }
@@ -132,7 +134,7 @@ public enum ImageFormat {
      * @param file file
      * @return matching ImageFormat
      */
-    public static ImageFormat fromFile(java.io.File file) {
+    public static ImageFormat fromFile(File file) {
         if (file == null) {
             throw new IllegalArgumentException("file must not be null");
         }

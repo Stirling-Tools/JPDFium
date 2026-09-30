@@ -120,11 +120,11 @@ jobs:
           docker run --rm -i -v "$PWD":/src -w /src eclipse-temurin:25-jdk-alpine sh -s <<'INNER'
           set -e
           mkdir -p /tmp/m
+          # Compile the whole main source tree: NativeLoader calls
+          # JpdfiumLib.checkAbiCompatible(), so a hand-picked file list breaks
+          # the moment the loader gains another intra-module reference.
           javac -d /tmp/m \
-            jpdfium/src/main/java/stirling/software/jpdfium/panama/NativeLoader.java \
-            jpdfium/src/main/java/stirling/software/jpdfium/panama/NativeCache.java \
-            jpdfium/src/main/java/stirling/software/jpdfium/panama/Architecture.java \
-            jpdfium/src/main/java/stirling/software/jpdfium/exception/*.java
+            $(find jpdfium/src/main/java -name '*.java')
           OUT=$(echo 'System.out.println(stirling.software.jpdfium.panama.NativeLoader.detectPlatform());' \
             | jshell -q --class-path /tmp/m -)
           echo "detectPlatform() on Alpine => $OUT"

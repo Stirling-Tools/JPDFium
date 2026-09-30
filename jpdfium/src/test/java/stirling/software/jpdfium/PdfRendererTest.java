@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.model.ColorType;
@@ -139,7 +140,7 @@ class PdfRendererTest {
             assertTrue(pageCount >= 2);
 
             // forEachPage consumer
-            java.util.concurrent.atomic.AtomicInteger visited = new java.util.concurrent.atomic.AtomicInteger();
+            AtomicInteger visited = new AtomicInteger();
             doc.forEachPage(page -> {
                 assertNotNull(page);
                 visited.incrementAndGet();
@@ -169,15 +170,15 @@ class PdfRendererTest {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             PdfRenderer renderer = doc.renderer();
 
-            BufferedImage rgb = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.RGB);
+            BufferedImage rgb = renderer.renderImageWithDPI(0, 100, ColorType.RGB);
             assertNotNull(rgb);
             assertFalse(rgb.getColorModel().hasAlpha());
 
-            BufferedImage argb = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.ARGB);
+            BufferedImage argb = renderer.renderImageWithDPI(0, 100, ColorType.ARGB);
             assertNotNull(argb);
             assertTrue(argb.getColorModel().hasAlpha());
 
-            BufferedImage gray = renderer.renderImageWithDPI(0, 100, stirling.software.jpdfium.model.ColorType.GRAY);
+            BufferedImage gray = renderer.renderImageWithDPI(0, 100, ColorType.GRAY);
             assertNotNull(gray);
             assertEquals(BufferedImage.TYPE_BYTE_GRAY, gray.getType());
 

@@ -74,6 +74,50 @@ When introducing a new native feature, follow this checklist:
 6. **Testing**: Add unit tests in `jpdfium/src/test/java/` and verify with `./gradlew test`.
 7. **Benchmarks**: If performance-critical, measure with JMH (`./gradlew :jpdfium:jmh`).
 
+## Ownership, Mutation, and Security Contracts
+
+PDFium calls are serialized by a process-wide guard, but Java objects can outlive
+the native state behind them. Keep this answer true for every change: **what prevents
+this handle, buffer, or security operation from becoming unsafe when surrounding state changes?**
+
+- **Identity vs state**: a `PdfDocument`/`PdfPage` is an identity; structural operations
+  (metadata/font strip, page rasterization) free and replace native state. Such operations
+  bump the document epoch and invalidate previously opened pages, which then fail loudly
+  (`IllegalStateException`) instead of touching freed memory. Never silently retarget a page.
+- **Mutation policy is invalidate, not reject or snapshot**: callers reopen pages after
+  structural operations. Do not mix policies within one operation.
+- **Buffers**: every native output buffer validates null, writability, scope, dimensions
+  (overflow-safe), pixel budget, and byte capacity on the Java side, plus independent
+  dimension checks natively. Render ABIs carry an explicit byte capacity.
+- **Redaction**: content removal is mandatory (visual-only covers are refused in Java
+  and rejected by the bridge). Sanitization on save is opt-in (`setSanitizeOnSave`).
+- **Threads**:   handles are confined to one thread at a time; only `close()` is safe
+  cross-thread. Do not add per-object monitors, use the existing global guard boundary.
+- **Memory**: do not replace shared scratch or add pools without measurements (heap,
+  retained native bytes, guard hold time) proving the benefit. Native tests that change
+  bridge behavior must run against real natives, not just the stub.
+
+## Performance Contributions
+
+Every optimization must state its workload, measured benefit, bounded-memory policy,
+and correctness regression. Optimize in this order: lifetime/capacity correctness,
+PDFium-call count, crossing count, copies/peak bytes, guard hold time, allocation
+rate/retention, native loops, and only then instruction-level tuning.
+
+- Measure with JMH (micro), component drivers, and end-to-end runs; record heap
+  bytes/op (`-prof gc`), peak RSS, guard wait/hold time (`NativeGuard.stats()`),
+  calls/op, and budgets. Report intervals across forks, not single fastest runs.
+- Prefer fewer calls and fewer copies over hotter leaves: batch repetitive tiny FFM
+  calls, move detached I/O outside the guard, and validate buffer capacity in both
+  Java and native code. Never mark rendering, parsing, saving, redaction, or text
+  extraction as `critical` downcalls.
+- Keep `Arena.ofConfined()` for single-call temporaries and `Arena.ofShared()` for
+  cross-thread memory; never use `ofAuto()` or `global()` for bounded paths.
+- Budgets: `jpdfium.maxRenderPixels`, `jpdfium.maxSaveResultBytes` (opt-in),
+  and the caller-supplied bound in `PdfDocument.open(InputStream, long)`.
+  Stream opens have **no** default cap - consumers opt in. Checked arithmetic
+  everywhere.
+
 ## Code Standards and Style
 
 - **Modern Java 25**: Use modern language features (records, pattern matching, switch expressions). Avoid Lombok.
@@ -82,7 +126,10 @@ When introducing a new native feature, follow this checklist:
 - **Formatting**:
   - Java: Enforced via Spotless (`./gradlew spotlessApply` and `./gradlew spotlessCheck`).
   - C++: Enforced via `.clang-format` and verified via `.clang-tidy`.
-- **Commits**: Use standard, everyday conventional commit messages (e.g. `feat: add direct stream rasterization`, `fix: handle empty page boxes`).
+- **Commits**: Use standard, everyday commit messages with only a title and no body
+  (e.g. `Add direct stream rasterization`, `Fix empty page boxes`). No `feat:`/`fix:`
+  prefixes. Keep one concern per commit and fold import-only churn into the commit
+  that needs it instead of a separate style commit.
 
 ## Running Samples and Benchmarks
 

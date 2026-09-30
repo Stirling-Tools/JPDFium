@@ -9,9 +9,12 @@ GitHub runners:
   (score + scoreError) by more than MAX_REGRESSION_PCT. Within-run JMH noise
   can therefore never trip the gate.
 * Benchmarks whose baseline score is below NOISE_FLOOR_MS are exempt from the
-  gate: on shared runners, sub-microsecond measurements are dominated by
-  scheduler jitter and CPU frequency scaling, so a percentage change there is
-  runner noise, not a signal. They are reported but can never fail the job.
+  gate: on shared runners, very short measurements are dominated by scheduler
+  jitter and CPU frequency scaling, so a percentage change there is runner noise,
+  not a signal. They are reported but can never fail the job. The floor sits where
+  a GitHub-hosted runner stops producing repeatable numbers (see NOISE_FLOOR_MS
+  below) rather than at an arbitrary small value: too low a floor gates
+  single-digit-microsecond no-ops on numbers no runner can reproduce.
 * The caller (ci.yml) re-runs the suite once when this script fails, to rule
   out transient host noise, before failing the job.
 
@@ -22,7 +25,15 @@ import json
 import sys
 
 MAX_REGRESSION_PCT = 15.0
-NOISE_FLOOR_MS = 0.001
+# Baselines below this are reported but never gated.
+#
+# A GitHub-hosted runner cannot resolve differences reliably below roughly 50us:
+# it shares the vCPU with other jobs, and repeated runs of the same unchanged
+# benchmark drift by tens of microseconds at that scale. With a 1us floor, two
+# runs of identical code disagreed by +65% and -39% on the same operation within
+# one job. Once baselines reflect real (non-stub) natives these benchmarks land
+# well above the floor and are gated normally.
+NOISE_FLOOR_MS = 0.05
 
 
 def load(path: str) -> dict:

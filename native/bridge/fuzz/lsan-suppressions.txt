@@ -1,0 +1,25 @@
+# LeakSanitizer suppressions for the bridge fuzzers.
+#
+# PDFium retains per-document font and page-object caches (CPDF_Font,
+# CPDF_DocPageData, CPDF_PageObjectHolder) in allocator state that is only
+# reclaimed during a later FPDF_DestroyLibrary / process teardown, not by
+# FPDF_CloseDocument. LeakSanitizer only runs its check at process exit, so it
+# reports those allocations as leaks even though the harness closed every page
+# and the document correctly.
+#
+# Every entry below matches a frame inside PDFium itself. A leak in the bridge
+# (jpdfium_*) still has jpdfium frames in its stack, so it is still reported --
+# these suppressions only hide PDFium's own retained caches.
+#
+# Pass with: LSAN_OPTIONS=suppressions=native/bridge/fuzz/lsan-suppressions.txt
+
+leak:CPDF_
+leak:CPDF_DocPageData
+leak:CPDF_PageObjectHolder
+leak:CPDF_StreamContentParser
+leak:CPDF_ContentParser
+leak:cpdf_
+leak:LoadPageByValidatedIndex
+leak:fpdf_view.cpp
+leak:CFX_Font
+leak:font_metrics

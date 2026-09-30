@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.io.InputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.model.ColorType;
@@ -80,9 +81,9 @@ class ImageToPdfApiTest {
             assertEquals(2, doc.pageCount());
         }
 
-        try (java.io.InputStream in1 = Files.newInputStream(img1);
-             java.io.InputStream in2 = Files.newInputStream(img2);
-             PdfDocument doc = PdfDocument.fromImageStreams(java.util.List.of(in1, in2))) {
+        try (InputStream in1 = Files.newInputStream(img1);
+             InputStream in2 = Files.newInputStream(img2);
+             PdfDocument doc = PdfDocument.fromImageStreams(List.of(in1, in2))) {
             assertNotNull(doc);
             assertEquals(2, doc.pageCount());
         }
@@ -95,7 +96,7 @@ class ImageToPdfApiTest {
         BufferedImage frame3 = new BufferedImage(140, 100, BufferedImage.TYPE_INT_RGB);
 
         Path tiffPath = tempDir.resolve("three-frames.tiff");
-        PdfImageIO.writeMultiPageTiff(java.util.List.of(frame1, frame2, frame3), tiffPath);
+        PdfImageIO.writeMultiPageTiff(List.of(frame1, frame2, frame3), tiffPath);
 
         // A single multi-page TIFF should produce a PDF with 3 pages
         try (PdfDocument doc = PdfDocument.fromImage(tiffPath)) {

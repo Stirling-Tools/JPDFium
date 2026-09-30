@@ -4,11 +4,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.ServiceLoader;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ImageFormat;
 
 /**
- * Pluggable image codec discovered through {@link java.util.ServiceLoader}.
+ * Pluggable image codec discovered through {@link ServiceLoader}.
  *
  * <p>When an implementation is on the classpath it becomes the default codec
  * for image decoding and encoding; {@code javax.imageio} stays available as the

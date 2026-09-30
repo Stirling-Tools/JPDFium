@@ -3,6 +3,7 @@ package stirling.software.jpdfium.fonts;
 import java.io.File;
 import java.nio.file.Files;
 import java.util.List;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
@@ -93,7 +94,7 @@ class TextShapeTest {
                 () -> FontLib.shapeText(bytes, "x", Integer.MAX_VALUE));
         // Garbage bytes: an empty HarfBuzz face must be rejected, not shaped
         // into a list of .notdef glyphs.
-        assertThrows(stirling.software.jpdfium.exception.JPDFiumException.class,
+        assertThrows(JPDFiumException.class,
                 () -> FontLib.shapeText(new byte[] {1, 2, 3, 4, 5, 6, 7, 8}, "x", 12f));
     }
 }
