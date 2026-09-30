@@ -144,27 +144,32 @@ extern "C" {
 
 JPDFIUM_EXPORT int32_t jpdfium_repair_pdf(const uint8_t* input, int64_t inputLen, uint8_t** output,
                                           int64_t* outputLen, int32_t flags) {
-    if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
+    try {
+        if (!input || inputLen <= 0 || !output || !outputLen) return JPDFIUM_REPAIR_FAILED;
 
-    // Stage 1: Direct qpdf recovery (handles most xref, trailer, stream issues)
-    std::string errorMsg;
-    int result = try_qpdf_repair(input, inputLen, output, outputLen, flags, errorMsg);
-    if (result != JPDFIUM_REPAIR_FAILED) return result;
+        // Stage 1: Direct qpdf recovery (handles most xref, trailer, stream issues)
+        std::string errorMsg;
+        int result = try_qpdf_repair(input, inputLen, output, outputLen, flags, errorMsg);
+        if (result != JPDFIUM_REPAIR_FAILED) return result;
 
-    // Stage 2: startxref offset brute-force (if enabled)
-    if (flags & JPDFIUM_REPAIR_FIX_STARTXREF) {
-        static const int deltas[] = {1, -1, 2, -2, 3, -3, 4, -4, 8, -8, 16, -16};
-        for (int delta : deltas) {
-            std::vector<uint8_t> patched(input, input + inputLen);
-            if (try_fix_startxref(patched, delta)) {
-                result = try_qpdf_repair(patched.data(), static_cast<int64_t>(patched.size()),
-                                         output, outputLen, flags, errorMsg);
-                if (result != JPDFIUM_REPAIR_FAILED) return result;
+        // Stage 2: startxref offset brute-force (if enabled)
+        if (flags & JPDFIUM_REPAIR_FIX_STARTXREF) {
+            static const int deltas[] = {1, -1, 2, -2, 3, -3, 4, -4, 8, -8, 16, -16};
+            for (int delta : deltas) {
+                std::vector<uint8_t> patched(input, input + inputLen);
+                if (try_fix_startxref(patched, delta)) {
+                    result = try_qpdf_repair(patched.data(), static_cast<int64_t>(patched.size()),
+                                             output, outputLen, flags, errorMsg);
+                    if (result != JPDFIUM_REPAIR_FAILED) return result;
+                }
             }
         }
-    }
 
-    return JPDFIUM_REPAIR_FAILED;
+        return JPDFIUM_REPAIR_FAILED;
+
+    } catch (...) {
+        return JPDFIUM_REPAIR_FAILED;
+    }
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inputLen,

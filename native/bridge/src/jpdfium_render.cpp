@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -205,9 +206,30 @@ static std::unordered_map<void*, ProgressiveState> g_progMap;
 // Render a page (plus optional form widgets) into a caller-provided buffer.
 // Shared by the zero-allocation FFM render paths so the Skia premultiply/
 // matrix handling lives in one place.
-int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target, int32_t width,
-                         int32_t height, int32_t stride, int32_t flags) {
-    if (!page || !target || width <= 0 || height <= 0 || stride < width * 4)
+//
+// The caller contract requires capacity for all padded rows (stride * height).
+// Java validates the full contract (null, read-only, scope, budget, capacity)
+// before the downcall; the checks below independently reject malformed
+// dimensions with overflow-safe 64-bit math so raw bridge callers cannot
+// smuggle a wrapped stride past the native write paths.
+static bool renderIntoArgsValid(uint64_t target_capacity, int32_t width, int32_t height,
+                                int32_t stride) {
+    if (width <= 0 || height <= 0 || stride <= 0) return false;
+    int64_t minStride = static_cast<int64_t>(width) * 4;
+    if (minStride > INT32_MAX) return false;
+    if (static_cast<int64_t>(stride) < minStride) return false;
+    // Capacity must cover all padded rows, not just the last pixel: every
+    // native write path (bitmap creation, background fill, conversion) walks
+    // full stride * height bytes.
+    uint64_t required =
+        static_cast<uint64_t>(static_cast<int64_t>(stride)) * static_cast<uint64_t>(height);
+    return target_capacity >= required;
+}
+
+int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target,
+                         uint64_t target_capacity, int32_t width, int32_t height, int32_t stride,
+                         int32_t flags) {
+    if (!page || !target || !renderIntoArgsValid(target_capacity, width, height, stride))
         return JPDFIUM_ERR_INVALID;
 
     int pdfium_flags = flags;
@@ -227,7 +249,7 @@ int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target, 
     if (g_jpdfiumUseSkia) {
         double w_pt = FPDF_GetPageWidth(page);
         double h_pt = FPDF_GetPageHeight(page);
-        if (w_pt <= 0 || h_pt <= 0) {
+        if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0 || h_pt <= 0) {
             FPDFBitmap_Destroy(bmp);
             return JPDFIUM_ERR_INVALID;
         }
@@ -272,10 +294,14 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
 
     double w_pt = FPDF_GetPageWidth(pw->page);
     double h_pt = FPDF_GetPageHeight(pw->page);
-    double w_px_d = w_pt * dpi / 72.0 + 0.5;
-    double h_px_d = h_pt * dpi / 72.0 + 0.5;
-    if (w_px_d <= 0 || h_px_d <= 0 || w_px_d > INT32_MAX || h_px_d > INT32_MAX ||
-        w_px_d * h_px_d > kMaxRenderPixels)
+    // NaN-safe: a comparison against NaN is false, so finiteness must be checked
+    // explicitly before the floating-point to integer conversion below.
+    if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0)
+        return JPDFIUM_ERR_INVALID;
+    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0 + 0.5;
+    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0 + 0.5;
+    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d < 1.0 || h_px_d < 1.0 ||
+        w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels)
         return JPDFIUM_ERR_INVALID;
     int w_px = static_cast<int>(w_px_d);
     int h_px = static_cast<int>(h_px_d);
@@ -294,6 +320,13 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
     int render_flags = flags != 0 ? flags : (transparent ? FPDF_ANNOT : renderFlagsForScreen());
 #ifdef JPDFIUM_HAS_SKIA
     if (g_jpdfiumUseSkia) {
+        // Skia renders premultiplied and the channel swap happens in software
+        // below, so FPDF_REVERSE_BYTE_ORDER must not reach PDFium: honouring it
+        // there swaps the premultiplied bytes and the software pass swaps them
+        // again, swapping the channels twice. Strip it exactly as
+        // renderIntoBuffer does, so callers that pass the bit get the same
+        // straight RGBA output on both renderers.
+        render_flags &= ~FPDF_REVERSE_BYTE_ORDER;
         FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
                             static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
         FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
@@ -321,25 +354,43 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
 
 int32_t jpdfium_render_page(int64_t page, int32_t dpi, uint8_t** rgba, int32_t* width,
                             int32_t* height) {
-    return jpdfium_render_page_flags(page, dpi, 0, rgba, width, height);
+    try {
+        return jpdfium_render_page_flags(page, dpi, 0, rgba, width, height);
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
-int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target, int32_t width, int32_t height,
-                                 int32_t stride, int32_t flags) {
-    return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page), nullptr, target, width, height,
-                            stride, flags);
+int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target, uint64_t target_capacity,
+                                 int32_t width, int32_t height, int32_t stride, int32_t flags) {
+    try {
+        return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page), nullptr, target, target_capacity,
+                                width, height, stride, flags);
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
-int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target, int32_t width,
-                                      int32_t height, int32_t stride, int32_t flags) {
-    return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page), static_cast<FPDF_FORMHANDLE>(form),
-                            target, width, height, stride, flags);
+int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target,
+                                      uint64_t target_capacity, int32_t width, int32_t height,
+                                      int32_t stride, int32_t flags) {
+    try {
+        return renderIntoBuffer(static_cast<FPDF_PAGE>(fpdf_page),
+                                static_cast<FPDF_FORMHANDLE>(form), target, target_capacity, width,
+                                height, stride, flags);
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
-int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, int32_t width,
+int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target,
+                                              uint64_t target_capacity, int32_t width,
                                               int32_t height, int32_t stride, int32_t flags,
                                               void* cancel_flag) JPDFIUM_NOEXCEPT {
-    if (!fpdf_page || !target || width <= 0 || height <= 0 || stride < width * 4)
+    if (!fpdf_page || !target || !renderIntoArgsValid(target_capacity, width, height, stride))
         return JPDFIUM_ERR_INVALID;
 
     FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
@@ -361,14 +412,22 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, 
     // would destroy the render that was just begun. This runs ahead of the
     // pre-cancelled path too, so a cancelled restart cannot leave the old
     // entry behind to resume into a freed caller buffer later.
-    {
-        std::lock_guard<std::mutex> lock(g_progLock);
-        auto existing = g_progMap.find(fpdf_page);
-        if (existing != g_progMap.end()) {
-            FPDF_RenderPage_Close(page);
-            if (existing->second.bmp) FPDFBitmap_Destroy(existing->second.bmp);
-            g_progMap.erase(existing);
+    //
+    // Map operations can throw (allocation failure); this function is noexcept,
+    // so translate any C++ exception to an error instead of terminating.
+    try {
+        {
+            std::lock_guard<std::mutex> lock(g_progLock);
+            auto existing = g_progMap.find(fpdf_page);
+            if (existing != g_progMap.end()) {
+                FPDF_RenderPage_Close(page);
+                if (existing->second.bmp) FPDFBitmap_Destroy(existing->second.bmp);
+                g_progMap.erase(existing);
+            }
         }
+    } catch (...) {
+        FPDFBitmap_Destroy(bmp);
+        return JPDFIUM_ERR_NATIVE;
     }
 
     if (isCancelRequested(cancel_flag)) {
@@ -391,8 +450,14 @@ int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target, 
     int status =
         FPDF_RenderPageBitmap_Start(bmp, page, 0, 0, width, height, 0, pdfium_flags, &state.pause);
     if (status == FPDF_RENDER_TOBECONTINUED || status == FPDF_RENDER_READY) {
-        std::lock_guard<std::mutex> lock(g_progLock);
-        g_progMap[fpdf_page] = state;
+        try {
+            std::lock_guard<std::mutex> lock(g_progLock);
+            g_progMap[fpdf_page] = state;
+        } catch (...) {
+            FPDF_RenderPage_Close(page);
+            FPDFBitmap_Destroy(bmp);
+            return JPDFIUM_ERR_NATIVE;
+        }
         return JPDFIUM_RENDER_TOBECONTINUED;
     }
 
@@ -413,19 +478,24 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
                                                  void* cancel_flag) JPDFIUM_NOEXCEPT {
     if (!fpdf_page) return JPDFIUM_ERR_INVALID;
 
+    // noexcept boundary: map operations may throw on allocation failure.
     ProgressiveState state;
-    {
+    try {
         std::lock_guard<std::mutex> lock(g_progLock);
         auto it = g_progMap.find(fpdf_page);
         if (it == g_progMap.end()) return JPDFIUM_ERR_NOT_FOUND;
         state = it->second;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
     // Cancellation is terminal: tear down the render so callers looping on
     // TO_BE_CONTINUED always terminate instead of spinning forever.
     if (isCancelRequested(cancel_flag)) {
-        {
+        try {
             std::lock_guard<std::mutex> lock(g_progLock);
             g_progMap.erase(fpdf_page);
+        } catch (...) {
+            // Map erase cannot usefully fail here; teardown continues below.
         }
         FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
         FPDF_RenderPage_Close(page);
@@ -440,9 +510,11 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
         return JPDFIUM_RENDER_TOBECONTINUED;
     }
 
-    {
+    try {
         std::lock_guard<std::mutex> lock(g_progLock);
         g_progMap.erase(fpdf_page);
+    } catch (...) {
+        // Best-effort erase on the terminal path; Close/Destroy still run.
     }
     FPDF_RenderPage_Close(page);
     FPDFBitmap_Destroy(state.bmp);
@@ -463,7 +535,7 @@ void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT {
 
     ProgressiveState state;
     bool found = false;
-    {
+    try {
         std::lock_guard<std::mutex> lock(g_progLock);
         auto it = g_progMap.find(fpdf_page);
         if (it != g_progMap.end()) {
@@ -471,6 +543,9 @@ void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT {
             g_progMap.erase(it);
             found = true;
         }
+    } catch (...) {
+        // Lookup-only failure in a void closer; nothing to report or clean.
+        return;
     }
     if (found) {
         FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
@@ -483,84 +558,106 @@ void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept {
     jpdfium_render_page_progressive_close(fpdf_page);
 }
 
-void jpdfium_free_buffer(uint8_t* buffer) {
+void jpdfium_free_buffer(uint8_t* buffer) noexcept {
     free(buffer);
 }
 
 int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi) {
-    DocWrapper* dw = decodeDoc(docHandle);
-    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
-    FPDF_PAGE page = FPDF_LoadPage(dw->core->doc, pageIndex);
-    if (!page) return JPDFIUM_ERR_NOT_FOUND;
+        UniquePage page(FPDF_LoadPage(dw->core->doc, pageIndex));
+        if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-    double w_pt = FPDF_GetPageWidth(page);
-    double h_pt = FPDF_GetPageHeight(page);
-    double w_px_d = w_pt * dpi / 72.0 + 0.5;
-    double h_px_d = h_pt * dpi / 72.0 + 0.5;
-    if (w_px_d <= 0 || h_px_d <= 0 || w_px_d > INT32_MAX || h_px_d > INT32_MAX ||
-        w_px_d * h_px_d > kMaxRenderPixels) {
-        FPDF_ClosePage(page);
-        return JPDFIUM_ERR_INVALID;
-    }
-    int w_px = static_cast<int>(w_px_d);
-    int h_px = static_cast<int>(h_px_d);
+        double w_pt = FPDF_GetPageWidth(page.get());
+        double h_pt = FPDF_GetPageHeight(page.get());
+        // Reject non-finite geometry explicitly: every comparison against NaN is
+        // false, so a NaN page size or dpi would otherwise reach the
+        // floating-point to integer conversion below, which is undefined.
+        if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0 ||
+            dpi <= 0) {
+            return JPDFIUM_ERR_INVALID;
+        }
+        const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0 + 0.5;
+        const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0 + 0.5;
+        if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d < 1.0 || h_px_d < 1.0 ||
+            w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels) {
+            return JPDFIUM_ERR_INVALID;
+        }
+        int w_px = static_cast<int>(w_px_d);
+        int h_px = static_cast<int>(h_px_d);
 
-    FPDF_BITMAP bmp = FPDFBitmap_Create(w_px, h_px, 0 /*no alpha*/);
-    if (!bmp) {
-        FPDF_ClosePage(page);
-        return JPDFIUM_ERR_NATIVE;
-    }
-    FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
+        // Own the bitmap immediately: for a large page this is megabytes, and
+        // every later failure path must release it.
+        UniqueBitmap bmp(FPDFBitmap_Create(w_px, h_px, 0 /*no alpha*/));
+        if (!bmp) return JPDFIUM_ERR_NATIVE;
+        FPDFBitmap_FillRect(bmp.get(), 0, 0, w_px, h_px, 0xFFFFFFFF);
 #ifdef JPDFIUM_HAS_SKIA
-    if (g_jpdfiumUseSkia) {
-        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
-                            static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
-        FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
-        FPDF_RenderPageBitmapWithMatrix(bmp, page, &matrix, &clip, FPDF_ANNOT | FPDF_PRINTING);
-    } else {
-        FPDF_RenderPageBitmap(bmp, page, 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
-    }
+        if (g_jpdfiumUseSkia) {
+            FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
+                                static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
+            FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
+            FPDF_RenderPageBitmapWithMatrix(bmp.get(), page.get(), &matrix, &clip,
+                                            FPDF_ANNOT | FPDF_PRINTING);
+        } else {
+            FPDF_RenderPageBitmap(bmp.get(), page.get(), 0, 0, w_px, h_px, 0,
+                                  FPDF_ANNOT | FPDF_PRINTING);
+        }
 #else
-    FPDF_RenderPageBitmap(bmp, page, 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
+        FPDF_RenderPageBitmap(bmp.get(), page.get(), 0, 0, w_px, h_px, 0,
+                              FPDF_ANNOT | FPDF_PRINTING);
 #endif
 
-    FPDF_ClosePage(page);
+        page.reset();  // done with the source page before restructuring the document
 
-    FPDF_PAGE newPage = FPDFPage_New(dw->core->doc, pageIndex + 1, w_pt, h_pt);
-    if (!newPage) {
-        FPDFBitmap_Destroy(bmp);
+        // Replacement page is created at pageIndex + 1; the original stays at
+        // pageIndex until the replacement is fully generated, so any failure
+        // here leaves the document exactly as it was.
+        //
+        // Rollback: closing the replacement handle must happen BEFORE deleting
+        // the page object, which is the order FPDFPage_New requires. The guard
+        // exists so an exception mid-way performs the same ordered cleanup as
+        // the explicit failure branches below.
+        UniquePage newPage(FPDFPage_New(dw->core->doc, pageIndex + 1, w_pt, h_pt));
+        if (!newPage) return JPDFIUM_ERR_NATIVE;
+
+        struct ReplacementPageRollback {
+            DocWrapper* dw;
+            int index;
+            UniquePage* page;
+            ~ReplacementPageRollback() {
+                if (!page) return;
+                (*page).reset();                        // close the loaded page
+                FPDFPage_Delete(dw->core->doc, index);  // then delete the page
+            }
+        } rollback{dw, pageIndex + 1, &newPage};
+
+        // Own the image object until it is inserted; the page takes ownership at
+        // FPDFPage_InsertObject.
+        UniquePageObject imgObj(FPDFPageObj_NewImageObj(dw->core->doc));
+        if (!imgObj) return JPDFIUM_ERR_NATIVE;
+
+        // SetBitmap copies the pixels into the object, so the bitmap is no longer
+        // needed afterwards and is released with bmp.
+        if (!FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp.get())) return JPDFIUM_ERR_NATIVE;
+
+        FS_MATRIX matrix = {static_cast<float>(w_pt), 0, 0, static_cast<float>(h_pt), 0, 0};
+        FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
+
+        FPDFPage_InsertObject(newPage.get(), imgObj.get());
+        imgObj.release();  // the page owns it now
+        if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
+
+        // Commit: close the replacement page handle, then delete the ORIGINAL
+        // page at pageIndex (the replacement now occupies that slot).
+        newPage.reset();
+        FPDFPage_Delete(dw->core->doc, pageIndex);
+        rollback.page = nullptr;
+        ++dw->core->generation;
+        return JPDFIUM_OK;
+
+    } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
-
-    FPDF_PAGEOBJECT imgObj = FPDFPageObj_NewImageObj(dw->core->doc);
-    if (!imgObj) {
-        FPDFBitmap_Destroy(bmp);
-        FPDF_ClosePage(newPage);
-        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
-        return JPDFIUM_ERR_NATIVE;
-    }
-
-    FPDF_BOOL ok = FPDFImageObj_SetBitmap(nullptr, 0, imgObj, bmp);
-    FPDFBitmap_Destroy(bmp);
-    if (!ok) {
-        FPDFPageObj_Destroy(imgObj);
-        FPDF_ClosePage(newPage);
-        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
-        return JPDFIUM_ERR_NATIVE;
-    }
-
-    FS_MATRIX matrix = {static_cast<float>(w_pt), 0, 0, static_cast<float>(h_pt), 0, 0};
-    FPDFPageObj_SetMatrix(imgObj, &matrix);
-
-    FPDFPage_InsertObject(newPage, imgObj);
-    if (!FPDFPage_GenerateContent(newPage)) {
-        FPDF_ClosePage(newPage);
-        FPDFPage_Delete(dw->core->doc, pageIndex + 1);
-        return JPDFIUM_ERR_NATIVE;
-    }
-
-    FPDF_ClosePage(newPage);
-    FPDFPage_Delete(dw->core->doc, pageIndex);
-    return JPDFIUM_OK;
 }
