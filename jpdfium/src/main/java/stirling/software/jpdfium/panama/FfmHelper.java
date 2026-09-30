@@ -5,7 +5,9 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.nio.ByteOrder;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Utility methods for Foreign Function &amp; Memory interop with PDFium.
@@ -51,9 +53,9 @@ public final class FfmHelper {
      * @param charset charset for decoding
      * @return decoded string
      */
-    public static String readNativeString(MemorySegment strPtr, java.nio.charset.Charset charset) {
+    public static String readNativeString(MemorySegment strPtr, Charset charset) {
         if (strPtr == null || strPtr.equals(MemorySegment.NULL)) {
-            throw new stirling.software.jpdfium.exception.JPDFiumException("native string pointer is NULL");
+            throw new JPDFiumException("native string pointer is NULL");
         }
         return strPtr.reinterpret(MAX_NATIVE_STRING_BYTES).getString(0, charset);
     }

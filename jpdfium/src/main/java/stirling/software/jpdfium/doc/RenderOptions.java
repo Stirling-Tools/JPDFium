@@ -90,6 +90,9 @@ public final class RenderOptions {
             if (bitmap.equals(MemorySegment.NULL)) {
                 throw new JPDFiumException("FPDFBitmap_Create failed for " + w + "x" + h);
             }
+            // Tracks whether the bitmap handle was already destroyed, so the
+            // failure path below cannot destroy the same handle twice.
+            boolean bitmapDestroyed = false;
             try {
                 RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0, w, h, (background & 0xFFFFFFFFL));
                 if (colorScheme != null) {
@@ -131,18 +134,25 @@ public final class RenderOptions {
                 for (int row = 0; row < h; row++) {
                     System.arraycopy(tight, row * stride, packed, row * w * 4, w * 4);
                 }
+                bitmapDestroyed = true;
                 PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap);
-                try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment heapSeg = arena.allocateFrom(ValueLayout.JAVA_BYTE, packed);
-                    long len = packed.length;
-                    MemorySegment owned = Arena.ofAuto().allocate(len);
-                    MemorySegment.copy(heapSeg, 0, owned, 0, len);
+                // Shared arena owned by the view: deterministic close, single copy.
+                Arena owned = Arena.ofShared();
+                try {
+                    MemorySegment packedView = owned.allocateFrom(ValueLayout.JAVA_BYTE, packed);
                     return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
-                            owned.reinterpret(len), () -> {});
+                            packedView, owned::close);
+                } catch (Throwable t) {
+                    owned.close();
+                    throw t;
                 }
             } catch (Throwable t) {
-                try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); } catch (Throwable cleanupEx) { NativeRuntime.rethrowFatal(cleanupEx);
-                    // Bitmap cleanup on exception
+                // Skip when the bitmap was already released above, otherwise a
+                // failure in allocateFrom would destroy the same handle twice.
+                if (!bitmapDestroyed) {
+                    try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); } catch (Throwable cleanupEx) { NativeRuntime.rethrowFatal(cleanupEx);
+                        // Bitmap cleanup on exception
+                    }
                 }
                 throw t;
             }

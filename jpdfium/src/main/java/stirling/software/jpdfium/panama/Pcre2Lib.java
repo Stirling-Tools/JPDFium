@@ -25,10 +25,32 @@ public final class Pcre2Lib {
     private Pcre2Lib() {}
 
     /**
-     * Check if PCRE2 support is compiled and available in the native library.
+     * Whether this native build can actually compile patterns.
+     *
+     * <p>The bridge exports {@code jpdfium_pcre2_compile} in every build, but a
+     * build without PCRE2 linked makes it return {@code JPDFIUM_ERR_NOT_FOUND},
+     * so the symbol alone proves nothing. Probe the real capability instead.
      */
     public static boolean isSupported() {
-        return JpdfiumH.jpdfium_pcre2_compile$address() != null;
+        NativeGuard.acquire();
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment handleOut = a.allocate(JAVA_LONG);
+            if (JpdfiumH.jpdfium_pcre2_compile(a.allocateFrom("a"), 0, handleOut) != JpdfiumLib.OK) {
+                return false;
+            }
+            // The probe really compiled a pattern, so free it - the arena only
+            // released the out-slot, not the native allocation behind it.
+            long handle = handleOut.get(JAVA_LONG, 0);
+            if (handle != 0) {
+                JpdfiumH.jpdfium_pcre2_free(handle);
+            }
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        } finally {
+            NativeGuard.release();
+        }
     }
 
     public static long compile(String pattern, int flags) {
