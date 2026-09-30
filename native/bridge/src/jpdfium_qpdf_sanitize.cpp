@@ -138,25 +138,30 @@ extern "C" {
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t inputLen,
                                              uint8_t** output, int64_t* outputLen, int32_t flags) {
-    if (!input || inputLen <= 0 || !output || !outputLen) return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = sanitize({input, static_cast<size_t>(inputLen)}, flags);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf sanitize: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!input || inputLen <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
         *outputLen = 0;
-        return -1;
+
+        auto result = sanitize({input, static_cast<size_t>(inputLen)}, flags);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf sanitize: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
 }
 
 }  // extern "C"

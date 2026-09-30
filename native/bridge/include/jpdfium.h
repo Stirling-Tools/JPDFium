@@ -11,12 +11,22 @@
 extern "C" {
 #endif
 
-// The exported C ABI is exception-free: every entry point is wrapped in
-// jpdfium_guarded (jpdfium_internal.h) and cannot throw. We still declare the
-// functions noexcept when compiled as C++ (lets the compiler assume no throw
-// across the bridge), but jextract parses this header as C where `noexcept`
-// is not valid syntax, so it must expand to nothing there. This mirrors the
-// extern "C" guard above.
+// The exported C ABI must never let a C++ exception unwind into the FFM
+// downcall stub: that is undefined behaviour and, in practice, terminates the
+// JVM. Two mechanisms enforce it, and every entry point relies on at least one:
+//   1. Entry points declared JPDFIUM_NOEXCEPT below are noexcept, so any
+//      escaping exception calls std::terminate at the throw site rather than
+//      crossing the boundary.
+//   2. Entry points that cannot be noexcept (they return through a callback the
+//      compiler cannot see, or they are declared so jextract can parse them on
+//      every platform) wrap their whole body in jpdfium_guarded
+//      (jpdfium_internal.h) or an equivalent try/catch(...).
+// Adding an entry point: prefer JPDFIUM_NOEXCEPT, and when that is impossible
+// wrap the body. bugprone-exception-escape is enabled in .clang-tidy to keep
+// new exceptions from escaping.
+//
+// JPDFIUM_NOEXCEPT also expands to nothing when jextract parses this header as
+// C, where `noexcept` is not valid syntax. That mirrors the extern "C" guard.
 #ifdef __cplusplus
 #define JPDFIUM_NOEXCEPT noexcept
 #else
@@ -29,11 +39,24 @@ extern "C" {
 #define JPDFIUM_ERR_IO (-2)
 #define JPDFIUM_ERR_PASSWORD (-3)
 #define JPDFIUM_ERR_NOT_FOUND (-4)
-#define JPDFIUM_ERR_REDACTED_SAVE (-5)
-#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)
-#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)
-#define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)
+#define JPDFIUM_ERR_REDACTED_SAVE (-5)        // incremental save refused after redaction
+#define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
+#define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
+#define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_NATIVE (-99)
+
+// Bridge ABI version and layout probe surface. Packaged Java/native
+// combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
+// layout facts (pointer width, PDFium struct geometry) instead of trusting
+// handwritten FFM patches. Bump the version on any ABI-breaking change.
+#define JPDFIUM_ABI_VERSION (1)
+
+// Query ids for jpdfium_abi_query. Unknown ids return -1.
+#define JPDFIUM_ABI_QUERY_PTR_SIZE (0)
+#define JPDFIUM_ABI_QUERY_RECTF_SIZE (1)
+#define JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET (2)
+JPDFIUM_EXPORT uint32_t jpdfium_abi_version(void) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT;
 
 // PDF Repair pipeline status codes
 #define JPDFIUM_REPAIR_CLEAN 0      // No repairs needed; document was valid
@@ -57,7 +80,7 @@ extern "C" {
 #define JPDFIUM_POSITION_BOTTOM_CENTER 7
 #define JPDFIUM_POSITION_BOTTOM_RIGHT 8
 
-JPDFIUM_EXPORT int32_t jpdfium_init(void);
+JPDFIUM_EXPORT int32_t jpdfium_init(void) JPDFIUM_NOEXCEPT;
 
 // Renderer selection for jpdfium_init_ex().
 // AUTO prefers Skia when the build includes it, else AGG.
@@ -69,17 +92,17 @@ JPDFIUM_EXPORT int32_t jpdfium_init(void);
 // the default when present; pass AGG to force the legacy backend. Returns
 // JPDFIUM_ERR_INVALID when SKIA is requested from a build without it.
 // Must be called before any other bridge function.
-JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer);
+JPDFIUM_EXPORT int32_t jpdfium_init_ex(int32_t renderer) JPDFIUM_NOEXCEPT;
 
 // Active renderer after init: JPDFIUM_RENDERER_AGG or JPDFIUM_RENDERER_SKIA.
-JPDFIUM_EXPORT int32_t jpdfium_active_renderer(void);
-JPDFIUM_EXPORT void jpdfium_destroy(void);
+JPDFIUM_EXPORT int32_t jpdfium_active_renderer(void) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT void jpdfium_destroy(void) JPDFIUM_NOEXCEPT;
 
 // Raw handle extraction - allows direct FFM calls to PDFium functions.
 // These return the raw FPDF_DOCUMENT / FPDF_PAGE pointers as int64_t values.
-JPDFIUM_EXPORT int64_t jpdfium_doc_raw_handle(int64_t doc);
-JPDFIUM_EXPORT int64_t jpdfium_page_raw_handle(int64_t page);
-JPDFIUM_EXPORT int64_t jpdfium_page_doc_raw_handle(int64_t page);
+JPDFIUM_EXPORT int64_t jpdfium_doc_raw_handle(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int64_t jpdfium_page_raw_handle(int64_t page) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int64_t jpdfium_page_doc_raw_handle(int64_t page) JPDFIUM_NOEXCEPT;
 
 // Create a new, empty document. Caller owns the returned handle
 // (jpdfium_doc_close). Unlike merging into a document opened from an
@@ -99,12 +122,12 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save(int64_t doc, const char* path);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
-JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc);
+JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
 
 JPDFIUM_EXPORT int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_page_width(int64_t page, float* width);
 JPDFIUM_EXPORT int32_t jpdfium_page_height(int64_t page, float* height);
-JPDFIUM_EXPORT void jpdfium_page_close(int64_t page);
+JPDFIUM_EXPORT void jpdfium_page_close(int64_t page) JPDFIUM_NOEXCEPT;
 
 // Negative dpi renders with transparent background (alpha = 0) at resolution abs(dpi).
 // Positive dpi renders over opaque white (0xFFFFFFFF) at resolution dpi.
@@ -118,13 +141,14 @@ JPDFIUM_EXPORT int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int3
 // FPDF_RenderPageBitmapWithMatrix into FPDFBitmap_BGRA_Premul and the result
 // is unpremultiplied, so callers always receive straight pixels (AGG renders
 // straight directly). FPDF_REVERSE_BYTE_ORDER is honored on both renderers.
-JPDFIUM_EXPORT int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target, int32_t width,
+JPDFIUM_EXPORT int32_t jpdfium_render_page_into(void* fpdf_page, uint8_t* target,
+                                                uint64_t target_capacity, int32_t width,
                                                 int32_t height, int32_t stride, int32_t flags);
 // Same as jpdfium_render_page_into plus FPDF_FFLDraw for the given form
 // environment (widget appearances). form may be NULL.
 JPDFIUM_EXPORT int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form, uint8_t* target,
-                                                     int32_t width, int32_t height, int32_t stride,
-                                                     int32_t flags);
+                                                     uint64_t target_capacity, int32_t width,
+                                                     int32_t height, int32_t stride, int32_t flags);
 
 // Progressive rendering status (matches FPDF_RENDER_* values)
 #define JPDFIUM_RENDER_READY 0
@@ -133,6 +157,7 @@ JPDFIUM_EXPORT int32_t jpdfium_render_page_form_into(void* fpdf_page, void* form
 #define JPDFIUM_RENDER_FAILED 3
 
 JPDFIUM_EXPORT int32_t jpdfium_render_page_progressive_start(void* fpdf_page, uint8_t* target,
+                                                             uint64_t target_capacity,
                                                              int32_t width, int32_t height,
                                                              int32_t stride, int32_t flags,
                                                              void* cancel_flag) JPDFIUM_NOEXCEPT;
@@ -142,13 +167,13 @@ JPDFIUM_EXPORT int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
 
 JPDFIUM_EXPORT void jpdfium_render_page_progressive_close(void* fpdf_page) JPDFIUM_NOEXCEPT;
 
-JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer);
+JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer) JPDFIUM_NOEXCEPT;
 
 // Returns per-character data as a compact JSON array: [{i,u,x,y,w,h,font,size}, ...]
 // The caller owns the returned string and must free it with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_chars(int64_t page, char** json);
 JPDFIUM_EXPORT int32_t jpdfium_text_find(int64_t page, const char* query, char** json);
-JPDFIUM_EXPORT void jpdfium_free_string(char* str);
+JPDFIUM_EXPORT void jpdfium_free_string(char* str) JPDFIUM_NOEXCEPT;
 
 JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
                                              uint32_t argb,
@@ -257,7 +282,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const cha
                                                char** json_result);
 
 // Free a compiled PCRE2 pattern.
-JPDFIUM_EXPORT void jpdfium_pcre2_free(int64_t pattern_handle);
+JPDFIUM_EXPORT void jpdfium_pcre2_free(int64_t pattern_handle) JPDFIUM_NOEXCEPT;
 
 // Validate a string as a credit card number using the Luhn algorithm.
 // Strips spaces/dashes before validation. Returns 1 if valid, 0 if invalid.
@@ -283,7 +308,7 @@ JPDFIUM_EXPORT int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const
 JPDFIUM_EXPORT int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_result);
 
 // Free the keyword processor and all associated memory.
-JPDFIUM_EXPORT void jpdfium_flashtext_free(int64_t handle);
+JPDFIUM_EXPORT void jpdfium_flashtext_free(int64_t handle) JPDFIUM_NOEXCEPT;
 
 // Font Normalization Pipeline (FreeType + HarfBuzz hb-subset)
 //
@@ -483,12 +508,26 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t input
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens,
                                           int32_t count, uint8_t** output, int64_t* outputLen);
 
+// QPDF File-Backed Document Merging
+// Same as jpdfium_qpdf_merge but reads inputs from disk and writes the result
+// straight to out_path. No document bytes cross the FFI boundary, so merging
+// multi-gigabyte inputs needs only native-side memory. Returns 0 on success.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count,
+                                                const char* out_path);
+
 // QPDF In-Process Page Extraction
 // Losslessly extracts the specified zero-based pages into a new document.
 // Returns extracted PDF bytes via *output. Caller frees with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen);
+
+// QPDF File-Backed Page Extraction
+// Same as jpdfium_qpdf_extract_pages but reads from in_path and writes
+// straight to out_path. Returns 0 on success.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
+                                                       const int32_t* pageIndices,
+                                                       int32_t pageCount, const char* out_path);
 
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004

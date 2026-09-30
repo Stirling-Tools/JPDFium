@@ -406,6 +406,27 @@ static bool rectsOverlap(float al, float ab, float ar, float at, float bl, float
     return !(ar < bl || al > br || at < bb || ab > bt);
 }
 
+// Mark every character of `textPage` whose page-space box touches any rectangle
+// in `rects`. FPDFText_GetCharBox reports PDF user-space points with y up - the
+// same space the redaction rectangles use. Used by the redaction survivor audit
+// to separate the redaction footprint from text that must survive untouched.
+static void markTouchedByRects(FPDF_TEXTPAGE textPage, int count,
+                               const std::vector<FS_RECTF>& rects, std::vector<char>& out) {
+    out.assign(static_cast<size_t>(count), 0);
+    if (rects.empty()) return;
+    for (int ci = 0; ci < count; ++ci) {
+        double l = 0, r = 0, b = 0, t = 0;
+        if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;
+        for (const FS_RECTF& rc : rects) {
+            if (rectsOverlap(static_cast<float>(l), static_cast<float>(b), static_cast<float>(r),
+                             static_cast<float>(t), rc.left, rc.bottom, rc.right, rc.top)) {
+                out[static_cast<size_t>(ci)] = 1;
+                break;
+            }
+        }
+    }
+}
+
 // Compute intersection area ratio (of object) for partial-overlap decisions
 static float overlapRatio(float al, float ab, float ar, float at, float bl, float bb, float br,
                           float bt) {
@@ -2398,6 +2419,9 @@ struct RedactScratch {
     std::vector<int> auditIdxMap;
     std::u32string auditWtext;
     std::vector<TextMatch> auditRemaining;
+    std::vector<FS_RECTF> auditRects;
+    std::vector<char> auditTouched;
+    std::vector<char> auditTouched2;
 
     static constexpr size_t kMaxRetainedCapacity = 65536;
 
@@ -2412,24 +2436,34 @@ struct RedactScratch {
         auditIdxMap.clear();
         auditWtext.clear();
         auditRemaining.clear();
+        auditRects.clear();
+        auditTouched.clear();
+        auditTouched2.clear();
     }
 
     void trimOversized() {
+        // Swap with an empty vector instead of shrink_to_fit(): this vector is
+        // about to be reused for the next job, so retaining elements only pays for
+        // a reallocation-and-copy. Swapping releases the pages back immediately.
         auto trimVec = [](auto& vec) {
             if (vec.capacity() > kMaxRetainedCapacity) {
-                vec.shrink_to_fit();
+                std::decay_t<decltype(vec)>().swap(vec);
             }
         };
         trimVec(idxMap);
-        if (wtext.capacity() > kMaxRetainedCapacity) wtext.shrink_to_fit();
+        if (wtext.capacity() > kMaxRetainedCapacity) std::decay_t<decltype(wtext)>().swap(wtext);
         trimVec(matches);
         trimVec(unicodeSeq);
         trimVec(redactSet);
         trimVec(appliedRects);
         trimVec(sortedMatches);
         trimVec(auditIdxMap);
-        if (auditWtext.capacity() > kMaxRetainedCapacity) auditWtext.shrink_to_fit();
+        if (auditWtext.capacity() > kMaxRetainedCapacity)
+            std::decay_t<decltype(auditWtext)>().swap(auditWtext);
         trimVec(auditRemaining);
+        trimVec(auditRects);
+        trimVec(auditTouched);
+        trimVec(auditTouched2);
     }
 };
 
@@ -2722,17 +2756,32 @@ static std::u32string escapeLiteral(const std::u32string& raw) {
 
 static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool wholeWord,
                                     std::u32string& pattern) {
-    std::u32string body;
-    int count = 0;
+    // Collect, deduplicate, then sort by descending length so that PCRE2 leftmost-first
+    // alternation tries longer literals first (e.g. "foobar" before "foo").
+    // Lexicographic ascending order breaks ties deterministically.
+    std::vector<std::u32string> escaped;
+    escaped.reserve(static_cast<std::size_t>(wordCount));
     for (int32_t wi = 0; wi < wordCount; wi++) {
         if (!words[wi]) continue;
         std::u32string esc = escapeLiteral(utf8_to_u32(words[wi]));
         if (esc.empty()) continue;
+        escaped.push_back(std::move(esc));
+    }
+    if (escaped.empty()) return false;
+    // Deduplicate
+    std::sort(escaped.begin(), escaped.end());
+    escaped.erase(std::unique(escaped.begin(), escaped.end()), escaped.end());
+    // Sort descending by length, ascending lexicographically for equal lengths.
+    std::stable_sort(escaped.begin(), escaped.end(),
+                     [](const std::u32string& a, const std::u32string& b) {
+                         if (a.size() != b.size()) return a.size() > b.size();
+                         return a < b;
+                     });
+    std::u32string body;
+    for (const auto& esc : escaped) {
         body += esc;
         body += U"|";
-        count++;
     }
-    if (count == 0) return false;
     body.pop_back();  // trailing '|'
     pattern.clear();
     if (wholeWord) pattern += U"\\b";
@@ -3664,7 +3713,27 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         redactSet.assign(count, 0);
         for (auto& m : matches)
             for (int ci : m.charIndices) redactSet[ci] = 1;
-        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
+
+        std::vector<FS_RECTF>& auditRects = t_redactScratch.auditRects;
+        auditRects.clear();
+        auditRects.reserve(matches.size());
+        for (const auto& m : matches) {
+            FS_RECTF r;
+            r.left = m.bboxL;
+            r.bottom = m.bboxB;
+            r.right = m.bboxR;
+            r.top = m.bboxT;
+            auditRects.push_back(r);
+        }
+        // Damage check baseline: fingerprint only the text that lies OUTSIDE
+        // every redaction box. A box is axis-aligned while the text under it may
+        // be rotated, skewed or overlapping, so which exact neighbours get
+        // clipped is implementation detail; glyphs the box touches are excluded
+        // from both sides of the comparison. Text outside every box must
+        // survive untouched, so fission damage there is still detected.
+        std::vector<char>& touched = t_redactScratch.auditTouched;
+        markTouchedByRects(tp, count, auditRects, touched);
+        std::u32string expectedFp = survivingFingerprint(wtext, idxMap, touched);
 
         std::vector<TextMatch>& sortedMatches = t_redactScratch.sortedMatches;
         sortedMatches = matches;
@@ -3742,7 +3811,16 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         int n2 = FPDFText_CountChars(audit);
         std::u32string& wtext2 = t_redactScratch.auditWtext;
         buildNormalizedText(audit, n2, idxMap2, wtext2);
-        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
+        // Survivor audit. Two orthogonal checks, each exactly as strong as it
+        // can be without false alarms:
+        //   1. (below) no redaction pattern still matches the extracted text -
+        //      checks that no target pattern remains in the audited extraction;
+        //      it does not prove absence from every representation in the file;
+        //   2. text outside every redaction box is unchanged - catches fission
+        //      damage to surviving fragments, which is silent data loss.
+        std::vector<char>& touched2 = t_redactScratch.auditTouched2;
+        markTouchedByRects(audit, n2, auditRects, touched2);
+        std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, touched2);
         if (actualFp != expectedFp) {
             FPDFText_ClosePage(audit);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;

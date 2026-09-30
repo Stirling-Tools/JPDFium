@@ -224,16 +224,35 @@ int64_t g_next_flash = 88001;
 
 // Core Document Functions
 
-int32_t jpdfium_init_ex(int32_t) {
+int32_t jpdfium_init_ex(int32_t) noexcept {
     return 0;
 }
-int32_t jpdfium_active_renderer() {
+
+uint32_t jpdfium_abi_version() JPDFIUM_NOEXCEPT {
+    return JPDFIUM_ABI_VERSION;
+}
+
+int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
+    // The stub links no PDFium headers; these mirror FS_RECTF
+    // {float left, top, right, bottom} exactly.
+    switch (query) {
+        case JPDFIUM_ABI_QUERY_PTR_SIZE:
+            return static_cast<int64_t>(sizeof(void*));
+        case JPDFIUM_ABI_QUERY_RECTF_SIZE:
+            return 16;
+        case JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET:
+            return 8;
+        default:
+            return -1;
+    }
+}
+int32_t jpdfium_active_renderer() noexcept {
     return 0;
 }
-int32_t jpdfium_init() {
+int32_t jpdfium_init() noexcept {
     return JPDFIUM_OK;
 }
-void jpdfium_destroy() {}
+void jpdfium_destroy() noexcept {}
 
 int32_t jpdfium_doc_create(int64_t* handle) {
     if (!handle) return JPDFIUM_ERR_INVALID;
@@ -386,7 +405,7 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     return return_stub();
 }
 
-void jpdfium_doc_close(int64_t handle) {
+void jpdfium_doc_close(int64_t handle) noexcept {
     g_docs.erase(handle);
 }
 
@@ -418,11 +437,19 @@ int32_t jpdfium_page_height(int64_t, float* h) {
     return JPDFIUM_OK;
 }
 
-void jpdfium_page_close(int64_t handle) {
+void jpdfium_page_close(int64_t handle) noexcept {
     if (auto dit = g_page_doc.find(handle); dit != g_page_doc.end()) {
         if (auto pit = g_page_idx.find(handle); pit != g_page_idx.end()) {
             if (auto ait = g_page_annots.find(handle); ait != g_page_annots.end()) {
-                g_docs[dit->second].pagePendingMarks[pit->second] = ait->second;
+                // find(), not operator[]: this close path is noexcept, and
+                // inserting into a map could throw and terminate the process.
+                auto docIt = g_docs.find(dit->second);
+                if (docIt != g_docs.end()) {
+                    auto pendingIt = docIt->second.pagePendingMarks.find(pit->second);
+                    if (pendingIt != docIt->second.pagePendingMarks.end()) {
+                        pendingIt->second = ait->second;
+                    }
+                }
             }
         }
     }
@@ -452,23 +479,39 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t /*flags*/, 
     return jpdfium_render_page(page, dpi, rgba, w, h);
 }
 
-int32_t jpdfium_render_page_into(void*, uint8_t* target, int32_t width, int32_t height,
-                                 int32_t stride, int32_t) {
-    if (!target || width <= 0 || height <= 0 || stride < width * 4) return JPDFIUM_ERR_INVALID;
-    std::memset(target, 0xFF, static_cast<std::size_t>(stride) * static_cast<std::size_t>(height));
+static bool stubRenderArgsValid(uint8_t* target, uint64_t target_capacity, int32_t width,
+                                int32_t height, int32_t stride, uint64_t* requiredOut) {
+    if (!target || width <= 0 || height <= 0 || stride <= 0) return false;
+    int64_t minStride = static_cast<int64_t>(width) * 4;
+    if (minStride > INT32_MAX || static_cast<int64_t>(stride) < minStride) return false;
+    uint64_t required =
+        static_cast<uint64_t>(static_cast<int64_t>(stride)) * static_cast<uint64_t>(height);
+    if (requiredOut) *requiredOut = required;
+    return target_capacity >= required;
+}
+
+int32_t jpdfium_render_page_into(void*, uint8_t* target, uint64_t target_capacity, int32_t width,
+                                 int32_t height, int32_t stride, int32_t) {
+    uint64_t required = 0;
+    if (!stubRenderArgsValid(target, target_capacity, width, height, stride, &required))
+        return JPDFIUM_ERR_INVALID;
+    std::memset(target, 0xFF, static_cast<std::size_t>(required));
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_render_page_form_into(void* page, void*, uint8_t* target, int32_t width,
-                                      int32_t height, int32_t stride, int32_t flags) {
-    return jpdfium_render_page_into(page, target, width, height, stride, flags);
+int32_t jpdfium_render_page_form_into(void* page, void*, uint8_t* target, uint64_t target_capacity,
+                                      int32_t width, int32_t height, int32_t stride,
+                                      int32_t flags) {
+    return jpdfium_render_page_into(page, target, target_capacity, width, height, stride, flags);
 }
 
-int32_t jpdfium_render_page_progressive_start(void*, uint8_t* target, int32_t width, int32_t height,
-                                              int32_t stride, int32_t,
-                                              void* cancel_flag) JPDFIUM_NOEXCEPT {
-    if (!target || width <= 0 || height <= 0 || stride < width * 4) return JPDFIUM_ERR_INVALID;
-    std::memset(target, 0xFF, static_cast<std::size_t>(stride) * static_cast<std::size_t>(height));
+int32_t jpdfium_render_page_progressive_start(void*, uint8_t* target, uint64_t target_capacity,
+                                              int32_t width, int32_t height, int32_t stride,
+                                              int32_t, void* cancel_flag) JPDFIUM_NOEXCEPT {
+    uint64_t required = 0;
+    if (!stubRenderArgsValid(target, target_capacity, width, height, stride, &required))
+        return JPDFIUM_ERR_INVALID;
+    std::memset(target, 0xFF, static_cast<std::size_t>(required));
     if (cancel_flag && *static_cast<const int32_t*>(cancel_flag) != 0) {
         return JPDFIUM_RENDER_TOBECONTINUED;
     }
@@ -484,7 +527,7 @@ int32_t jpdfium_render_page_progressive_continue(void*, void* cancel_flag) JPDFI
 
 void jpdfium_render_page_progressive_close(void*) JPDFIUM_NOEXCEPT {}
 
-void jpdfium_free_buffer(uint8_t* buf) {
+void jpdfium_free_buffer(uint8_t* buf) noexcept {
     std::free(buf);
 }
 
@@ -537,7 +580,7 @@ int32_t jpdfium_text_find(int64_t, const char*, char** json) {
     return JPDFIUM_OK;
 }
 
-void jpdfium_free_string(char* s) {
+void jpdfium_free_string(char* s) noexcept {
     std::free(s);
 }
 
@@ -666,7 +709,7 @@ int32_t jpdfium_pcre2_match_all(int64_t handle, const char* text, char** json_re
     return JPDFIUM_OK;
 }
 
-void jpdfium_pcre2_free(int64_t handle) {
+void jpdfium_pcre2_free(int64_t handle) noexcept {
     g_pcre.erase(handle);
 }
 
@@ -741,7 +784,7 @@ int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_res
     return JPDFIUM_OK;
 }
 
-void jpdfium_flashtext_free(int64_t handle) {
+void jpdfium_flashtext_free(int64_t handle) noexcept {
     g_flash.erase(handle);
 }
 
@@ -995,15 +1038,15 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
 
 static uint64_t g_stub_raw_doc = 0;
 
-int64_t jpdfium_doc_raw_handle(int64_t) {
+int64_t jpdfium_doc_raw_handle(int64_t) noexcept {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
-int64_t jpdfium_page_raw_handle(int64_t page) {
+int64_t jpdfium_page_raw_handle(int64_t page) noexcept {
     return page;
 }
 
-int64_t jpdfium_page_doc_raw_handle(int64_t) {
+int64_t jpdfium_page_doc_raw_handle(int64_t) noexcept {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
