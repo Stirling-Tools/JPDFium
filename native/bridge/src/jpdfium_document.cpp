@@ -6,6 +6,7 @@
 #include <fpdf_save.h>
 #include <fpdfview.h>
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -71,101 +72,148 @@ void jpdfium_ensure_library() {
     }
 }
 
-int32_t jpdfium_init() {
+int32_t jpdfium_init() noexcept {
     return jpdfium_init_library(JPDFIUM_RENDERER_AUTO);
 }
 
-int32_t jpdfium_init_ex(int32_t renderer) {
+uint32_t jpdfium_abi_version() JPDFIUM_NOEXCEPT {
+    return JPDFIUM_ABI_VERSION;
+}
+
+int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
+    switch (query) {
+        case JPDFIUM_ABI_QUERY_PTR_SIZE:
+            return static_cast<int64_t>(sizeof(void*));
+        case JPDFIUM_ABI_QUERY_RECTF_SIZE:
+            return static_cast<int64_t>(sizeof(FS_RECTF));
+        case JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET:
+            return static_cast<int64_t>(offsetof(FS_RECTF, right));
+        default:
+            return -1;
+    }
+}
+
+int32_t jpdfium_init_ex(int32_t renderer) noexcept {
     return jpdfium_init_library(renderer);
 }
 
-int32_t jpdfium_active_renderer() {
+int32_t jpdfium_active_renderer() noexcept {
     return g_jpdfiumUseSkia ? JPDFIUM_RENDERER_SKIA : JPDFIUM_RENDERER_AGG;
 }
 
-void jpdfium_destroy() {
+void jpdfium_destroy() noexcept {
     FPDF_DestroyLibrary();
     g_libraryInitialized = false;
     g_jpdfiumUseSkia = false;
 }
 
 int32_t jpdfium_doc_create(int64_t* handle) {
-    if (!handle) return JPDFIUM_ERR_INVALID;
-    FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
-    if (!doc) return JPDFIUM_ERR_NATIVE;
+    try {
+        if (!handle) return JPDFIUM_ERR_INVALID;
+        FPDF_DOCUMENT doc = FPDF_CreateNewDocument();
+        if (!doc) return JPDFIUM_ERR_NATIVE;
 
-    auto* w = new DocWrapper();
-    w->core = makeDocCore(doc);
-    *handle = encodeHandle(w);
-    return JPDFIUM_OK;
+        auto w = std::make_unique<DocWrapper>();
+        w->core = makeDocCore(doc);
+        *handle = encodeHandle(w.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
-    if (!path || !handle) return JPDFIUM_ERR_INVALID;
-    FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
-    if (!doc) return translatePdfiumError();
+    try {
+        if (!path || !handle) return JPDFIUM_ERR_INVALID;
+        FPDF_DOCUMENT doc = FPDF_LoadDocument(path, nullptr);
+        if (!doc) return translatePdfiumError();
 
-    auto* w = new DocWrapper();
-    w->core = makeDocCore(doc);
-    *handle = encodeHandle(w);
-    return JPDFIUM_OK;
+        auto w = std::make_unique<DocWrapper>();
+        w->core = makeDocCore(doc);
+        *handle = encodeHandle(w.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
-    // FPDF_LoadMemDocument takes a 32-bit int length; reject negative lengths
-    // and documents larger than PDFium's API can address before copying.
-    if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
-    uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
-    if (!copy) return JPDFIUM_ERR_NATIVE;
-    memcpy(copy, data, static_cast<size_t>(len));
+    try {
+        // FPDF_LoadMemDocument takes a 32-bit int length; reject negative lengths
+        // and documents larger than PDFium's API can address before copying.
+        if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
+        uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
+        if (!copy) return JPDFIUM_ERR_NATIVE;
+        memcpy(copy, data, static_cast<size_t>(len));
 
-    FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), nullptr);
-    if (!doc) {
-        free(copy);
-        return translatePdfiumError();
+        FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), nullptr);
+        if (!doc) {
+            free(copy);
+            return translatePdfiumError();
+        }
+
+        auto w = std::make_unique<DocWrapper>();
+        w->core = makeDocCore(doc, copy, len);
+        *handle = encodeHandle(w.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-
-    auto* w = new DocWrapper();
-    w->core = makeDocCore(doc, copy, len);
-    *handle = encodeHandle(w);
-    return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const char* password,
                                          int64_t* handle) {
-    if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
-    uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
-    if (!copy) return JPDFIUM_ERR_NATIVE;
-    memcpy(copy, data, static_cast<size_t>(len));
+    try {
+        if (!data || !handle || len <= 0 || len > INT32_MAX) return JPDFIUM_ERR_INVALID;
+        uint8_t* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
+        if (!copy) return JPDFIUM_ERR_NATIVE;
+        memcpy(copy, data, static_cast<size_t>(len));
 
-    FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), password);
-    if (!doc) {
-        free(copy);
-        return translatePdfiumError();
+        FPDF_DOCUMENT doc = FPDF_LoadMemDocument(copy, static_cast<int>(len), password);
+        if (!doc) {
+            free(copy);
+            return translatePdfiumError();
+        }
+
+        auto w = std::make_unique<DocWrapper>();
+        w->core = makeDocCore(doc, copy, len);
+        *handle = encodeHandle(w.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-
-    auto* w = new DocWrapper();
-    w->core = makeDocCore(doc, copy, len);
-    *handle = encodeHandle(w);
-    return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64_t* handle) {
-    if (!path || !handle) return JPDFIUM_ERR_INVALID;
-    FPDF_DOCUMENT doc = FPDF_LoadDocument(path, password);
-    if (!doc) return translatePdfiumError();
+    try {
+        if (!path || !handle) return JPDFIUM_ERR_INVALID;
+        FPDF_DOCUMENT doc = FPDF_LoadDocument(path, password);
+        if (!doc) return translatePdfiumError();
 
-    auto* w = new DocWrapper();
-    w->core = makeDocCore(doc);
-    *handle = encodeHandle(w);
-    return JPDFIUM_OK;
+        auto w = std::make_unique<DocWrapper>();
+        w->core = makeDocCore(doc);
+        *handle = encodeHandle(w.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count) {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    *count = FPDF_GetPageCount(w->core->doc);
-    return JPDFIUM_OK;
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        *count = FPDF_GetPageCount(w->core->doc);
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 namespace {
@@ -247,51 +295,72 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
 
     size_t sz = bw.buf.size();
-    uint8_t* out = static_cast<uint8_t*>(malloc(sz));
+    // malloc(0) is permitted to return NULL, which is indistinguishable from an
+    // allocation failure; an empty save result is legitimate, so allocate one
+    // byte for it.
+    uint8_t* out = static_cast<uint8_t*>(malloc(sz ? sz : 1));
     if (!out) return JPDFIUM_ERR_NATIVE;
-    memcpy(out, bw.buf.data(), sz);
+    if (sz) memcpy(out, bw.buf.data(), sz);
     *data = out;
     *len = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
 
-void jpdfium_doc_close(int64_t doc) {
+void jpdfium_doc_close(int64_t doc) noexcept {
     delete decodeDoc(doc);
 }
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
 
-    FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
-    if (!page) return JPDFIUM_ERR_NOT_FOUND;
+        FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
+        if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-    *handle = encodeHandle(new PageWrapper(page, w->core->doc, idx, w->core));
-    return JPDFIUM_OK;
+        *handle = encodeHandle(new PageWrapper(page, w->core->doc, idx, w->core));
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_page_width(int64_t page, float* width) {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    *width = static_cast<float>(FPDF_GetPageWidth(pw->page));
-    return JPDFIUM_OK;
+    try {
+        PageWrapper* pw = decodePage(page);
+        if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+        *width = static_cast<float>(FPDF_GetPageWidth(pw->page));
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_page_height(int64_t page, float* height) {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    *height = static_cast<float>(FPDF_GetPageHeight(pw->page));
-    return JPDFIUM_OK;
+    try {
+        PageWrapper* pw = decodePage(page);
+        if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
+        *height = static_cast<float>(FPDF_GetPageHeight(pw->page));
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
-void jpdfium_page_close(int64_t page) {
-    if (PageWrapper* pw = decodePage(page); pw && pw->page) {
+void jpdfium_page_close(int64_t page) noexcept {
+    // Decode the raw pointer directly: decodePage() rejects a stale handle, and
+    // close must still free the wrapper of a page whose document was replaced.
+    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(page));
+    if (pw && pw->page && !pw->stale()) {
         // A pending progressive render holds this raw page identity in its
         // map; abandon it before the page itself is freed so a later session
         // step or close can never operate on the freed identity.
         jpdfium_render_abandon_progressive(pw->page);
     }
-    delete decodePage(page);
+    delete pw;
 }
 
 // JSON report of the last sanitize stage ("" when none has run).
@@ -314,19 +383,19 @@ int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_t enable) noexcept {
     return JPDFIUM_OK;
 }
 
-int64_t jpdfium_doc_raw_handle(int64_t doc) {
+int64_t jpdfium_doc_raw_handle(int64_t doc) noexcept {
     DocWrapper* w = decodeDoc(doc);
     return w && w->core && w->core->doc
                ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(w->core->doc))
                : 0;
 }
 
-int64_t jpdfium_page_raw_handle(int64_t page) {
+int64_t jpdfium_page_raw_handle(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     return pw && pw->page ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->page)) : 0;
 }
 
-int64_t jpdfium_page_doc_raw_handle(int64_t page) {
+int64_t jpdfium_page_doc_raw_handle(int64_t page) noexcept {
     PageWrapper* pw = decodePage(page);
     return pw && pw->doc ? static_cast<int64_t>(reinterpret_cast<uintptr_t>(pw->doc)) : 0;
 }
@@ -364,9 +433,9 @@ int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth, float out
     if (!ok) return JPDFIUM_ERR_IO;
 
     size_t sz = bw.buf.size();
-    uint8_t* out = static_cast<uint8_t*>(malloc(sz));
+    uint8_t* out = static_cast<uint8_t*>(malloc(sz ? sz : 1));
     if (!out) return JPDFIUM_ERR_NATIVE;
-    memcpy(out, bw.buf.data(), sz);
+    if (sz) memcpy(out, bw.buf.data(), sz);
     *output = out;
     *outputLen = static_cast<int64_t>(sz);
     return JPDFIUM_OK;

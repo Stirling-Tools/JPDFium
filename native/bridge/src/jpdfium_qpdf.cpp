@@ -12,6 +12,11 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include "jpdfium.h"
 
 #ifdef JPDFIUM_HAS_QPDF
@@ -25,6 +30,20 @@
 #include <qpdf/QPDFWriter.hh>
 
 namespace {
+
+// Create the output with owner-only permissions on POSIX (CodeQL
+// cpp/world-writable-file-creation); Windows has no mode argument here.
+static FILE* createOutputFile(const char* path) {
+#ifdef _WIN32
+    return std::fopen(path, "wb");
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return nullptr;
+    FILE* file = ::fdopen(fd, "wb");
+    if (!file) ::close(fd);
+    return file;
+#endif
+}
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -209,124 +228,257 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
                                              uint8_t** output, int64_t* outputLen, int32_t flags,
                                              int32_t /*compressionLevel*/, int32_t objectStreamMode,
                                              int32_t streamDataMode, int32_t decodeLevel) {
-    if (!input || inputLen <= 0 || !output || !outputLen) return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = optimize({input, static_cast<size_t>(inputLen)}, flags, objectStreamMode,
-                           streamDataMode, decodeLevel);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf optimize: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!input || inputLen <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
         *outputLen = 0;
-        return -1;
+
+        auto result = optimize({input, static_cast<size_t>(inputLen)}, flags, objectStreamMode,
+                               streamDataMode, decodeLevel);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf optimize: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens,
                                           int32_t count, uint8_t** output, int64_t* outputLen) {
-    if (!inputs || !inputLens || count <= 0 || !output || !outputLen) return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = mergePdfs(inputs, inputLens, count);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf merge: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!inputs || !inputLens || count <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
         *outputLen = 0;
+
+        auto result = mergePdfs(inputs, inputLens, count);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf merge: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count,
+                                                const char* out_path) {
+    if (!paths || count <= 0 || !out_path) return -1;
+    try {
+        auto dest = QPDF::create();
+        dest->emptyPDF();
+        QPDFPageDocumentHelper dest_pdh{*dest};
+
+        std::vector<std::shared_ptr<QPDF>> sources;
+        sources.reserve(static_cast<size_t>(count));
+
+        for (int32_t i = 0; i < count; ++i) {
+            const char* path = paths[i];
+            if (!path || !*path) continue;
+
+            auto src = QPDF::create();
+            src->processFile(path);
+            sources.push_back(src);
+            QPDFPageDocumentHelper src_pdh{*src};
+            for (auto& page : src_pdh.getAllPages()) {
+                dest_pdh.addPage(page, false);
+            }
+        }
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) {
+            std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+            return -1;
+        }
+        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
+        // returns; if the constructor or setOutputFile throws first, close it
+        // here so a failed write does not leak the descriptor.
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter w{*dest};
+            w.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            w.setObjectStreamMode(qpdf_o_generate);
+            w.setCompressStreams(true);
+            w.write();
+            return 0;
+        } catch (...) {
+            if (!writerOwnsFile) std::fclose(out);
+            throw;
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf merge files: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        // Never let a non-std exception escape an extern "C" boundary.
+        std::fprintf(stderr, "jpdfium qpdf merge files: unknown error\n");
         return -1;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
+                                                       const int32_t* pageIndices,
+                                                       int32_t pageCount, const char* out_path) {
+    if (!in_path || !pageIndices || pageCount <= 0 || !out_path) return -1;
+    try {
+        auto src = QPDF::create();
+        src->processFile(in_path);
+        QPDFPageDocumentHelper src_pdh{*src};
+        auto allPages = src_pdh.getAllPages();
+        int32_t totalPages = static_cast<int32_t>(allPages.size());
+
+        auto dest = QPDF::create();
+        dest->emptyPDF();
+        QPDFPageDocumentHelper dest_pdh{*dest};
+
+        for (int32_t i = 0; i < pageCount; ++i) {
+            int32_t idx = pageIndices[i];
+            if (idx >= 0 && idx < totalPages) {
+                dest_pdh.addPage(allPages[idx], false);
+            }
+        }
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) {
+            std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
+            return -1;
+        }
+        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
+        // returns; if the constructor or setOutputFile throws first, close it
+        // here so a failed write does not leak the descriptor.
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter w{*dest};
+            w.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            w.setObjectStreamMode(qpdf_o_generate);
+            w.setCompressStreams(true);
+            w.write();
+            return 0;
+        } catch (...) {
+            if (!writerOwnsFile) std::fclose(out);
+            throw;
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf extract file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        // Never let a non-std exception escape an extern "C" boundary.
+        std::fprintf(stderr, "jpdfium qpdf extract file: unknown error\n");
+        return -1;
+    }
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen) {
-    if (!input || inputLen <= 0 || !pageIndices || pageCount <= 0 || !output || !outputLen)
-        return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = extractPages({input, static_cast<size_t>(inputLen)}, pageIndices, pageCount);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf extract: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!input || inputLen <= 0 || !pageIndices || pageCount <= 0 || !output || !outputLen)
+            return -1;
+        *output = nullptr;
         *outputLen = 0;
-        return -1;
+
+        auto result = extractPages({input, static_cast<size_t>(inputLen)}, pageIndices, pageCount);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf extract: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt(const uint8_t* input, int64_t inputLen,
                                             const char* userPassword, const char* ownerPassword,
                                             int32_t permissions, int32_t keyLength,
                                             uint8_t** output, int64_t* outputLen) {
-    if (!input || inputLen <= 0 || !output || !outputLen) return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = encryptPdf({input, static_cast<size_t>(inputLen)}, userPassword, ownerPassword,
-                             permissions, keyLength);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf encrypt: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!input || inputLen <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
         *outputLen = 0;
-        return -1;
+
+        auto result = encryptPdf({input, static_cast<size_t>(inputLen)}, userPassword,
+                                 ownerPassword, permissions, keyLength);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf encrypt: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t* input, int64_t inputLen,
                                             const char* password, uint8_t** output,
                                             int64_t* outputLen) {
-    if (!input || inputLen <= 0 || !output || !outputLen) return -1;
-    *output = nullptr;
-    *outputLen = 0;
-
-    auto result = decryptPdf({input, static_cast<size_t>(inputLen)}, password);
-    if (!result.ok()) {
-        std::fprintf(stderr, "jpdfium qpdf decrypt: %s\n", result.error.c_str());
-        return -1;
-    }
-
-    auto& buf = result.buffer;
-    *outputLen = static_cast<int64_t>(buf->getSize());
-    *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
-    if (!*output) {
+    try {
+        if (!input || inputLen <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
         *outputLen = 0;
-        return -1;
+
+        auto result = decryptPdf({input, static_cast<size_t>(inputLen)}, password);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf decrypt: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-    std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
-    return 0;
 }
 
 }  // extern "C"
@@ -361,6 +513,15 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t*, int64_t, const
                                                   uint8_t** output, int64_t* outputLen) {
     if (output) *output = nullptr;
     if (outputLen) *outputLen = 0;
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const*, int32_t, const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char*, const int32_t*, int32_t,
+                                                       const char*) {
     return -1;
 }
 

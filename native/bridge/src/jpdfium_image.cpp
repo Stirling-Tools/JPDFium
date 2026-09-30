@@ -240,32 +240,37 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
                                             float page_width, float page_height, float margin,
                                             int32_t position, int32_t image_format,
                                             int64_t* doc_handle) {
-    if (!image_data || image_len <= 0 || !doc_handle) {
-        return JPDFIUM_ERR_INVALID;
-    }
+    try {
+        if (!image_data || image_len <= 0 || !doc_handle) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
-    // Initialize PDFium if needed, keeping the renderer chosen at startup.
-    jpdfium_ensure_library();
+        // Initialize PDFium if needed, keeping the renderer chosen at startup.
+        jpdfium_ensure_library();
 
-    // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.)
-    auto* dw = new DocWrapper();
-    dw->core = makeDocCore(FPDF_CreateNewDocument());
-    if (!dw->core->doc) {
-        delete dw;
+        // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.).
+        // unique_ptr owns it until the raw handle is published, so a throw from
+        // makeDocCore or create_page_with_image cannot leak the wrapper.
+        auto dw = std::make_unique<DocWrapper>();
+        dw->core = makeDocCore(FPDF_CreateNewDocument());
+        if (!dw->core->doc) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+
+        int32_t result = create_page_with_image(
+            encodeHandle(dw.get()), image_data, static_cast<size_t>(image_len), page_width,
+            page_height, margin, static_cast<Position>(position), image_format, 0);
+
+        if (result != JPDFIUM_OK) {
+            return result;
+        }
+
+        *doc_handle = encodeHandle(dw.release());
+        return JPDFIUM_OK;
+
+    } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
-
-    int32_t result = create_page_with_image(
-        encodeHandle(dw), image_data, static_cast<size_t>(image_len), page_width, page_height,
-        margin, static_cast<Position>(position), image_format, 0);
-
-    if (result != JPDFIUM_OK) {
-        delete dw;
-        return result;
-    }
-
-    *doc_handle = encodeHandle(dw);
-    return JPDFIUM_OK;
 }
 
 // Add an image page to an existing document.
@@ -273,13 +278,18 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
                                                   int64_t image_len, float page_width,
                                                   float page_height, float margin, int32_t position,
                                                   int32_t image_format, int32_t insert_at_index) {
-    if (!image_data || image_len <= 0) {
-        return JPDFIUM_ERR_INVALID;
-    }
+    try {
+        if (!image_data || image_len <= 0) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
-    return create_page_with_image(doc_handle, image_data, static_cast<size_t>(image_len),
-                                  page_width, page_height, margin, static_cast<Position>(position),
-                                  image_format, insert_at_index);
+        return create_page_with_image(
+            doc_handle, image_data, static_cast<size_t>(image_len), page_width, page_height, margin,
+            static_cast<Position>(position), image_format, insert_at_index);
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 // Direct JPEG embedding (no decoding/re-encoding).
