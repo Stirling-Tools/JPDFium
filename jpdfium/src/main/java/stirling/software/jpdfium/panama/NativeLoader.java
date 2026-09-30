@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.foreign.SymbolLookup;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +19,9 @@ import java.util.Map;
 public final class NativeLoader {
 
     private static volatile boolean loaded = false;
+
+    /** Re-entry guard for the ABI handshake; see verifyBridgeAbi(). */
+    private static boolean verifyingBridgeAbi;
     private static volatile Throwable loadError = null;
     private static volatile Boolean muslLibc = null;
 
@@ -34,6 +38,7 @@ public final class NativeLoader {
         } catch (NativeNotFoundException classpathMiss) {
             try {
                 System.loadLibrary("jpdfium");
+                verifyBridgeAbi();
                 loaded = true;
             } catch (UnsatisfiedLinkError e) {
                 loadError = classpathMiss;
@@ -44,6 +49,33 @@ public final class NativeLoader {
             loadError = t;
             throw (t instanceof NativeLoadException nle) ? nle
                     : new NativeLoadException("Failed to load native library", t);
+        }
+    }
+
+    /**
+     * Handshakes the freshly loaded bridge: version, pointer width, and struct
+     * geometry must match this Java artifact. Bridges predating the probe
+     * surface skip verification; mismatched bridges fail the load loudly.
+     */
+    private static void verifyBridgeAbi() {
+        if (SymbolLookup.loaderLookup()
+                .find("jpdfium_abi_version")
+                .isEmpty()) {
+            return;
+        }
+        // checkAbiCompatible() initializes JpdfiumLib, whose static initializer
+        // calls back into ensureLoaded(). Without this guard that re-enters
+        // tryLoadFromClasspath() and repeats extraction and System.load. `loaded`
+        // stays false until the handshake succeeds, so an ABI mismatch still
+        // leaves the loader correctly marked as not loaded.
+        if (verifyingBridgeAbi) {
+            return;
+        }
+        verifyingBridgeAbi = true;
+        try {
+            JpdfiumLib.checkAbiCompatible();
+        } finally {
+            verifyingBridgeAbi = false;
         }
     }
 
@@ -72,6 +104,13 @@ public final class NativeLoader {
                                 "incomplete native checksum manifest for " + platform);
                     }
                 }
+            } else if (!libs.isEmpty()) {
+                // Fail closed: a manifest listing libraries without hashes would
+                // otherwise be extracted and loaded without verification.
+                // (A missing manifest detects corruption or cache substitution
+                // relative to the published artifact; it cannot attest a
+                // wholly substituted artifact whose hashes were replaced too.)
+                failClosedOnMissingChecksums(platform);
             }
             if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.SWEEP_PROPERTY))) {
                 NativeCache.sweepTempDirs(Path.of(System.getProperty("java.io.tmpdir")),
@@ -96,6 +135,7 @@ public final class NativeLoader {
 
                 // If no manifest was found, fall back to extracting just libpdfium
                 if (libs.isEmpty()) {
+                    failClosedOnMissingChecksums(platform);
                     extractToDir(resourceBase + pdfiumName, tmpDir, null);
                 }
             }
@@ -132,6 +172,7 @@ public final class NativeLoader {
                 bridge = extractLib(resourceBase + bridgeName, tmpDir, bridgeName);
             }
             System.load(bridge.toAbsolutePath().toString());
+            verifyBridgeAbi();
         } catch (IOException e) {
             throw new NativeLoadException("Failed to extract native library", e);
         }
@@ -153,6 +194,22 @@ public final class NativeLoader {
             }
         }
         return result;
+    }
+
+    /**
+     * Fails closed when a natives jar ships libraries without an integrity manifest,
+     * unless the {@code jpdfium.natives.allowUnsigned} system property opts out
+     * (local development against hand-built jars only - never in production).
+     */
+    // Package-private so the fail-closed contract is directly testable.
+    static void failClosedOnMissingChecksums(String platform) {
+        if (Boolean.getBoolean("jpdfium.natives.allowUnsigned")) return;
+        throw new NativeLoadException(
+                "natives jar for "
+                        + platform
+                        + " ships no native-libs.sha256 integrity manifest; refusing to load "
+                        + "unverified native libraries. Use a current natives artifact or opt out "
+                        + "explicitly with -Djpdfium.natives.allowUnsigned=true");
     }
 
     private static Map<String, String> readChecksumIndex(String resource) throws IOException {

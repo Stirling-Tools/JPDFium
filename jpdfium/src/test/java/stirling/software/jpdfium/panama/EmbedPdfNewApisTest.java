@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.panama;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.PdfDocument;
@@ -92,7 +93,7 @@ class EmbedPdfNewApisTest {
                 if (EmbedPdfAnnotationBindings.EPDFAnnot_SetRect != null) {
                     EmbedPdfAnnotations.setRect(page.rawHandle(), idx, 50, h * 0.5f, 250, h * 0.5f + 25);
                 } else {
-                    org.junit.jupiter.api.Assertions.assertThrows(
+                    Assertions.assertThrows(
                             UnsupportedOperationException.class,
                             () -> EmbedPdfAnnotations.setRect(page.rawHandle(), idx, 50, h * 0.5f, 250, h * 0.5f + 25)
                     );
@@ -103,7 +104,7 @@ class EmbedPdfNewApisTest {
                     boolean removed = EmbedPdfAnnotations.removeKey(page.rawHandle(), idx, "NonExistentKey");
                     assertTrue(removed);
                 } else {
-                    org.junit.jupiter.api.Assertions.assertThrows(
+                    Assertions.assertThrows(
                             UnsupportedOperationException.class,
                             () -> EmbedPdfAnnotations.removeKey(page.rawHandle(), idx, "NonExistentKey")
                     );
