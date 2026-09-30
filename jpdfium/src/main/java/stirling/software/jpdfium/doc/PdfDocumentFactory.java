@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Set;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfImageConverter;
 import stirling.software.jpdfium.PdfMerge;
@@ -182,7 +183,7 @@ public final class PdfDocumentFactory {
     /**
      * Extract specific pages from a document by zero-based indices.
      */
-    public static PdfDocument extractPages(PdfDocument doc, java.util.Set<Integer> indices) {
+    public static PdfDocument extractPages(PdfDocument doc, Set<Integer> indices) {
         return PdfSplit.extractPages(doc, indices);
     }
 

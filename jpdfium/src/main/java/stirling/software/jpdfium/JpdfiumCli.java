@@ -1,7 +1,7 @@
 package stirling.software.jpdfium;
 
 import java.util.Locale;
-import stirling.software.jpdfium.panama.NativeRuntime;
+import java.util.zip.DeflaterOutputStream;
 import stirling.software.jpdfium.doc.CompressOptions;
 import stirling.software.jpdfium.doc.CompressPreset;
 import stirling.software.jpdfium.doc.MetadataTag;
@@ -9,14 +9,14 @@ import stirling.software.jpdfium.doc.NUpLayout;
 import stirling.software.jpdfium.doc.PdfAutoCrop;
 import stirling.software.jpdfium.doc.PdfBackground;
 import stirling.software.jpdfium.doc.PdfColorConverter;
-import stirling.software.jpdfium.doc.PdfCompressor;
 import stirling.software.jpdfium.doc.PdfCompressor.CompressResultWithBytes;
+import stirling.software.jpdfium.doc.PdfCompressor;
 import stirling.software.jpdfium.doc.PdfDeskew;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageMirror;
 import stirling.software.jpdfium.doc.PdfPageReorder;
-import stirling.software.jpdfium.doc.PdfPageScaler;
 import stirling.software.jpdfium.doc.PdfPageScaler.FitMode;
+import stirling.software.jpdfium.doc.PdfPageScaler;
 import stirling.software.jpdfium.doc.PdfPosterizer.PaperSize;
 import stirling.software.jpdfium.doc.PdfRepair;
 import stirling.software.jpdfium.doc.PdfSecurity;
@@ -26,6 +26,7 @@ import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.Pcre2Lib;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
@@ -869,10 +870,10 @@ public final class JpdfiumCli {
 
         System.out.printf("Document Pages:   %d pages%n", pageCount);
         System.out.printf("%-24s %12s %20s%n", "Benchmark Stage", "Avg Time", "Throughput");
-        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Open & Parse", avgOpenMs, String.format(java.util.Locale.US, "%.1f docs/s", 1000.0 / Math.max(0.001, avgOpenMs)));
-        System.out.printf("%-24s %10.2f ms %20s%n", "Text Extraction", avgTextMs, String.format(java.util.Locale.US, "%.1f p/s (%.0f c/s)", textPagesSec, textThroughputCharsSec));
-        System.out.printf("%-24s %10.2f ms %20s%n", "Page Render (" + dpi + " DPI)", avgRenderMs, String.format(java.util.Locale.US, "%.1f p/s (%.2f MP/s)", renderPagesSec, renderMegapixelsSec));
-        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Serialization", avgSaveMs, String.format(java.util.Locale.US, "%.1f MB/s", saveThroughputMBs));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Open & Parse", avgOpenMs, String.format(Locale.US, "%.1f docs/s", 1000.0 / Math.max(0.001, avgOpenMs)));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Text Extraction", avgTextMs, String.format(Locale.US, "%.1f p/s (%.0f c/s)", textPagesSec, textThroughputCharsSec));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Page Render (" + dpi + " DPI)", avgRenderMs, String.format(Locale.US, "%.1f p/s (%.2f MP/s)", renderPagesSec, renderMegapixelsSec));
+        System.out.printf("%-24s %10.2f ms %20s%n", "Doc Serialization", avgSaveMs, String.format(Locale.US, "%.1f MB/s", saveThroughputMBs));
         System.out.printf("%-24s %10.2f ms%n", "Total Pipeline Time", totalTimeMs);
         System.out.printf("Heap Memory Delta:       %s%n", formatMemorySize(memDelta));
         return 0;
@@ -880,16 +881,16 @@ public final class JpdfiumCli {
 
     private static String formatFileSize(long bytes) {
         if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.2f KB (%d bytes)", bytes / 1024.0, bytes);
-        if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.2f MB (%d bytes)", bytes / (1024.0 * 1024.0), bytes);
-        return String.format(java.util.Locale.US, "%.2f GB (%d bytes)", bytes / (1024.0 * 1024.0 * 1024.0), bytes);
+        if (bytes < 1024 * 1024) return String.format(Locale.US, "%.2f KB (%d bytes)", bytes / 1024.0, bytes);
+        if (bytes < 1024 * 1024 * 1024) return String.format(Locale.US, "%.2f MB (%d bytes)", bytes / (1024.0 * 1024.0), bytes);
+        return String.format(Locale.US, "%.2f GB (%d bytes)", bytes / (1024.0 * 1024.0 * 1024.0), bytes);
     }
 
     private static String formatMemorySize(long bytes) {
         if (bytes < 1024) return bytes + " B";
-        if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
-        if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
-        return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        if (bytes < 1024 * 1024) return String.format(Locale.US, "%.1f KB", bytes / 1024.0);
+        if (bytes < 1024 * 1024 * 1024) return String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+        return String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
     }
 
     private static Path getBinaryPath() {
@@ -1047,7 +1048,7 @@ public final class JpdfiumCli {
             int stride = width * 4;
             ByteArrayOutputStream b = new ByteArrayOutputStream(Math.max(1024, (stride * height) / 4));
             Deflater deflater = new Deflater(Deflater.DEFAULT_COMPRESSION);
-            try (java.util.zip.DeflaterOutputStream dos = new java.util.zip.DeflaterOutputStream(b, deflater)) {
+            try (DeflaterOutputStream dos = new DeflaterOutputStream(b, deflater)) {
                 for (int y = 0; y < height; y++) {
                     dos.write(0); // filter: none
                     dos.write(rgba, y * stride, stride);

@@ -16,6 +16,7 @@ import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -226,7 +227,7 @@ public final class PdfRedactor {
                 // the configured list must not inflate the count used to prove
                 // a page holds no extra PII/entity entries.
                 String[] allWords =
-                        new java.util.LinkedHashSet<>(options.words()).toArray(String[]::new);
+                        new LinkedHashSet<>(options.words()).toArray(String[]::new);
                 regexWordCount = allWords.length;
                 premarshaledRegexes = JpdfiumLib.marshalWordPointers(regexArena, allWords);
             }

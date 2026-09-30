@@ -11,7 +11,6 @@ jmh-plugin = "0.7.3"
 vips-ffm       = { module = "app.photofox.vips-ffm:vips-ffm-core",            version = "1.9.9" }
 junit-bom      = { module = "org.junit:junit-bom",                              version.ref = "junit" }
 junit-jupiter  = { module = "org.junit.jupiter:junit-jupiter",                  version.ref = "junit" }
-junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 pdfbox         = { module = "org.apache.pdfbox:pdfbox",                          version.ref = "pdfbox" }
 imageio-webp   = { module = "com.twelvemonkeys.imageio:imageio-webp",            version.ref = "twelvemonkeys" }
 imageio-tiff   = { module = "com.twelvemonkeys.imageio:imageio-tiff",            version.ref = "twelvemonkeys" }

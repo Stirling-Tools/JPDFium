@@ -3,6 +3,7 @@ package stirling.software.jpdfium.samples;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.RedactIncompleteException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
@@ -85,23 +86,40 @@ public class S08_FullPipeline {
             SampleBase.section("Step 3+4: Object Fission redact SSN + Flatten");
             Path redactedPdf = outDir.resolve(input.getFileName());
             int totalMatches = 0;
+            boolean auditHeld = false;
             try (PdfDocument doc = PdfDocument.open(input)) {
                 for (int i = 0; i < doc.pageCount(); i++) {
                     try (PdfPage page = doc.page(i)) {
-                        int matches = page.redactWordsEx(
-                                REDACT_WORDS,
-                                0xFF000000,
-                                0.0f,
-                                false,
-                                true,
-                                true,
-                                false);
+                        int matches;
+                        try {
+                            matches = page.redactWordsEx(
+                                    REDACT_WORDS,
+                                    0xFF000000,
+                                    0.0f,
+                                    false,
+                                    true,
+                                    true,
+                                    false);
+                        } catch (RedactIncompleteException _) {
+                            // Adversarial fixtures (overlapping matches) trip
+                            // the audit; emit nothing rather than ship a file
+                            // the engine says still contains the SSN.
+                            auditHeld = true;
+                            System.out.printf("  page %d: AUDIT HOLD, file skipped%n", i);
+                            break;
+                        }
                         page.flatten();
                         totalMatches += matches;
                         System.out.printf("  page %d: %d SSN match(es) redacted%n", i, matches);
                     }
                 }
-                doc.save(redactedPdf);
+                if (!auditHeld) {
+                    doc.save(redactedPdf);
+                }
+            }
+            if (auditHeld) {
+                System.out.printf("  SKIPPED %s (redaction audit failed)%n", input.getFileName());
+                continue;
             }
             System.out.printf("  total matches: %d  ->  %s%n", totalMatches, redactedPdf.getFileName());
             produced.add(redactedPdf);

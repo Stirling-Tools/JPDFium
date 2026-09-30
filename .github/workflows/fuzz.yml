@@ -31,6 +31,12 @@ jobs:
   native-fuzz:
     name: Native bridge libFuzzer (ASan/UBSan, real PDFium)
     runs-on: ubuntu-latest
+    env:
+      # PDFium keeps per-document font/page caches that are only reclaimed at
+      # FPDF_DestroyLibrary, so LeakSanitizer reports them at process exit even
+      # though the harness closed every page and document. Suppress PDFium's own
+      # frames; a leak in jpdfium_* still has jpdfium frames and is reported.
+      LSAN_OPTIONS: suppressions=native/bridge/fuzz/lsan-suppressions.txt:print_suppressions=0
     defaults:
       run:
         shell: bash
@@ -62,15 +68,20 @@ jobs:
             -DJPDFIUM_BUILD_FUZZERS=ON \
             -DJPDFIUM_SANITIZE=address,undefined \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          cmake --build native/build-fuzz --parallel --target jpdfium_fuzz
+          cmake --build native/build-fuzz --parallel --target jpdfium_fuzz jpdfium_lifecycle_fuzz
           test -x native/build-fuzz/jpdfium_fuzz || {
             echo "ERROR: jpdfium_fuzz binary was not produced"
+            exit 1
+          }
+          test -x native/build-fuzz/jpdfium_lifecycle_fuzz || {
+            echo "ERROR: jpdfium_lifecycle_fuzz binary was not produced"
             exit 1
           }
 
       - name: Seed corpus with real PDFs
         run: |
           mkdir -p native/build-fuzz/corpus native/build-fuzz/artifacts
+          mkdir -p native/build-fuzz/lifecycle-corpus
           # Seed with real-world PDFs so mutation explores valid structures
           # instead of starting from random bytes (which the parser mostly
           # rejects in the first instruction). Missing seeds = broken harness.
@@ -92,6 +103,34 @@ jobs:
             exit 1
           }
 
+          # The lifecycle harness needs JPLF-framed seeds
+          # (magic "JPLF" + u32LE pdf length + pdf bytes + opcode tail), not bare
+          # PDFs - an unframed seed is rejected by the harness in its first
+          # instruction, which would make the lifecycle target a no-op. Frame a
+          # deterministic spread of the same fixtures so the smoke gate actually
+          # exercises open/close/stale/invalidate operations. Opcodes are the
+          # fixed tail each step reads (open page, size, render, text, close).
+          LC=0
+          while IFS= read -r -d '' pdf; do
+            {
+              printf 'JPLF'
+              len=$(wc -c < "$pdf" | tr -d ' ')
+              # u32 little-endian, matching readU32LE() in the harness
+              printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+                "$(( len & 0xff ))" "$(( (len >> 8) & 0xff ))" \
+                "$(( (len >> 16) & 0xff ))" "$(( (len >> 24) & 0xff ))")"
+              cat "$pdf"
+              printf '\x01\x02\x03\x04\x05\x00\x06\x07\x00\x08\x00\x09\x00\x0a\x00'
+            } > "native/build-fuzz/lifecycle-corpus/$(printf '%04d' "$LC").jplf"
+            LC=$((LC + 1))
+            [ "$LC" -ge 40 ] && break
+          done < <(find jpdfium/src/test/resources/pdfs -name '*.pdf' -size -512k -print0 | sort -z)
+          echo "framed $LC lifecycle seeds"
+          [ "$LC" -gt 0 ] || {
+            echo "ERROR: no lifecycle seeds framed - the lifecycle fuzzer would be a no-op"
+            exit 1
+          }
+
       - name: Smoke - fuzzer must start and run the seed corpus
         run: |
           # Runs every seed PDF through the harness under ASan/UBSan. If the
@@ -107,6 +146,14 @@ jobs:
             exit 1
           fi
           tail -n 5 /tmp/fuzz-smoke.log
+          if ! native/build-fuzz/jpdfium_lifecycle_fuzz -runs=1 -print_final_stats=1 \
+                native/build-fuzz/lifecycle-corpus > /tmp/lifecycle-smoke.log 2>&1; then
+            echo "::error::lifecycle fuzzer failed (see log below)"
+            tail -n 40 /tmp/lifecycle-smoke.log
+            echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+            exit 1
+          fi
+          tail -n 5 /tmp/lifecycle-smoke.log
 
       - name: Run fuzzer
         env:
@@ -124,6 +171,14 @@ jobs:
             -print_final_stats=1 \
             -artifact_prefix=native/build-fuzz/artifacts/ \
             native/build-fuzz/corpus
+          native/build-fuzz/jpdfium_lifecycle_fuzz \
+            -max_total_time="$DURATION" \
+            -max_len=4194304 \
+            -timeout=25 \
+            -rss_limit_mb=2048 \
+            -print_final_stats=1 \
+            -artifact_prefix=native/build-fuzz/artifacts/ \
+            native/build-fuzz/lifecycle-corpus
 
       - name: Upload crash artifacts
         if: failure()

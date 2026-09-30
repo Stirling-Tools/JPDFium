@@ -1,5 +1,7 @@
 package stirling.software.jpdfium;
 
+import java.nio.file.Files;
+import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.FontName;
 import stirling.software.jpdfium.model.Position;
 
@@ -65,8 +67,8 @@ public final class Watermark {
     public static ImageBuilder image(Path imagePath) throws IOException {
         // Decode through the active codec (libvips when present).
         return new ImageBuilder(
-                stirling.software.jpdfium.internal.ImageCodecs.decodeImage(
-                        java.nio.file.Files.readAllBytes(imagePath)));
+                ImageCodecs.decodeImage(
+                        Files.readAllBytes(imagePath)));
     }
 
     /** Create an image watermark builder from a BufferedImage. */

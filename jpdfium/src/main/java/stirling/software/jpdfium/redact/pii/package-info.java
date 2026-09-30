@@ -3,8 +3,8 @@
  * XMP metadata redaction, and entity recognition.
  *
  * <p>These classes are used internally by
- * {@link stirling.software.jpdfium.redact.PdfRedactor} when PII-related
- * options are enabled in {@link stirling.software.jpdfium.redact.RedactOptions}.
+ * {@link PdfRedactor} when PII-related
+ * options are enabled in {@link RedactOptions}.
  *
  * <p><b>Key Classes</b></p>
  * <ul>
@@ -16,3 +16,6 @@
  * </ul>
  */
 package stirling.software.jpdfium.redact.pii;
+
+import stirling.software.jpdfium.redact.PdfRedactor;
+import stirling.software.jpdfium.redact.RedactOptions;

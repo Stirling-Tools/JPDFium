@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.corpus;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Tag;
@@ -130,7 +131,7 @@ class CorpusCropTest {
         }
     }
 
-    @org.junit.jupiter.api.AfterAll
+    @AfterAll
     static void writeReport() throws IOException {
         StringBuilder sb = new StringBuilder();
         for (String[] row : csvRows) {

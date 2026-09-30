@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import javax.imageio.ImageIO;
 import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -19,13 +20,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Unified image I/O facade providing familiar {@link javax.imageio.ImageIO}-style APIs
+ * Unified image I/O facade providing familiar {@link ImageIO}-style APIs
  * backed by the active codec engine.
  *
  * <p>When the optional {@code jpdfium-vips} module is on the classpath, operations
  * use libvips for high-speed encode/decode and support extended modern formats
  * (HEIC, HEIF, AVIF, JXL, WebP, JPEG2000, TIFF, PNG, JPEG).
- * When {@code jpdfium-vips} is absent, it falls back seamlessly to standard {@link javax.imageio.ImageIO}.
+ * When {@code jpdfium-vips} is absent, it falls back seamlessly to standard {@link ImageIO}.
  *
  * <p><b>Usage Examples:</b></p>
  * <pre>{@code
@@ -66,7 +67,7 @@ public final class PdfImageIO {
 
     /**
      * Writes an image to the given file using the format specified by name.
-     * Mirrors {@link javax.imageio.ImageIO#write(java.awt.image.RenderedImage, String, File)}.
+     * Mirrors {@link ImageIO#write(java.awt.image.RenderedImage, String, File)}.
      *
      * @param im         the image to be written
      * @param formatName a String containing the informal name of the format
@@ -81,7 +82,7 @@ public final class PdfImageIO {
 
     /**
      * Writes an image to an OutputStream using the format specified by name.
-     * Mirrors {@link javax.imageio.ImageIO#write(java.awt.image.RenderedImage, String, OutputStream)}.
+     * Mirrors {@link ImageIO#write(java.awt.image.RenderedImage, String, OutputStream)}.
      *
      * @param im         the image to be written
      * @param formatName a String containing the informal name of the format
@@ -170,7 +171,7 @@ public final class PdfImageIO {
 
     /**
      * Reads an image from the specified file using the active codec (libvips or ImageIO).
-     * Mirrors {@link javax.imageio.ImageIO#read(File)}.
+     * Mirrors {@link ImageIO#read(File)}.
      *
      * @param input image file
      * @return decoded BufferedImage
@@ -195,7 +196,7 @@ public final class PdfImageIO {
 
     /**
      * Reads an image from an InputStream using the active codec (libvips or ImageIO).
-     * Mirrors {@link javax.imageio.ImageIO#read(InputStream)}.
+     * Mirrors {@link ImageIO#read(InputStream)}.
      *
      * @param input image input stream
      * @return decoded BufferedImage

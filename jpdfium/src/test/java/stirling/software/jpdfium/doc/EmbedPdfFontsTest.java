@@ -1,8 +1,14 @@
 package stirling.software.jpdfium.doc;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
 
 import org.junit.jupiter.api.Test;
 
@@ -125,24 +131,24 @@ class EmbedPdfFontsTest {
         }
 
         // The appearance must actually use the registered family, not just exist.
-        String familyKey = family.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", "");
-        try (org.apache.pdfbox.pdmodel.PDDocument pd = org.apache.pdfbox.Loader.loadPDF(out)) {
+        String familyKey = family.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", "");
+        try (PDDocument pd = Loader.loadPDF(out)) {
             var ap = pd.getPage(0).getAnnotations().get(0).getNormalAppearanceStream();
             assertNotNull(ap, "FreeText must save an /AP /N stream");
             assertNotNull(ap.getResources(), "appearance must carry resources");
-            java.util.List<String> names = new java.util.ArrayList<>();
+            List<String> names = new ArrayList<>();
             for (var name : ap.getResources().getFontNames()) {
                 names.add(ap.getResources().getFont(name).getName());
             }
             assertFalse(names.isEmpty(), "appearance must reference a font");
             boolean matched = names.stream()
-                    .map(n -> n.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", ""))
+                    .map(n -> n.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""))
                     .anyMatch(n -> !familyKey.isEmpty()
                             && (n.contains(familyKey) || familyKey.contains(n)));
             assertTrue(matched,
                     "appearance font must be the registered family '" + family + "', got " + names);
             String content = new String(ap.getContentStream().toByteArray(),
-                    java.nio.charset.StandardCharsets.ISO_8859_1);
+                    StandardCharsets.ISO_8859_1);
             assertTrue(content.contains("Tf"), "appearance must select a font: " + content);
             assertTrue(content.contains("Tj") || content.contains("TJ"),
                     "appearance must draw text: " + content);

@@ -2,6 +2,7 @@ package stirling.software.jpdfium.crop;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import stirling.software.jpdfium.PdfVerifier;
 
 import java.net.URL;
 import java.nio.file.Path;
@@ -49,7 +50,7 @@ class CropApiVariantsTest {
             // Output stays valid after the multi-page crop.
             byte[] out = doc.saveBytes();
             assertEquals(doc.pageCount(),
-                    stirling.software.jpdfium.PdfVerifier.pageCount(out, "varargs crop"));
+                    PdfVerifier.pageCount(out, "varargs crop"));
         }
     }
 
@@ -66,7 +67,7 @@ class CropApiVariantsTest {
 
             byte[] out = doc.saveBytes();
             assertEquals(doc.pageCount(),
-                    stirling.software.jpdfium.PdfVerifier.pageCount(out, "range crop"));
+                    PdfVerifier.pageCount(out, "range crop"));
         }
     }
 
@@ -84,7 +85,7 @@ class CropApiVariantsTest {
 
             byte[] out = doc.saveBytes();
             assertEquals(doc.pageCount(),
-                    stirling.software.jpdfium.PdfVerifier.pageCount(out, "per-page crop"));
+                    PdfVerifier.pageCount(out, "per-page crop"));
         }
     }
 

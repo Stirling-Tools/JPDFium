@@ -106,9 +106,10 @@ tasks.matching { it.name.lowercase().contains("jmh") }.configureEach {
 
 dependencies {
     // JUnit lives in buildSrc convention plugins; version catalogs don't expose
-    // accessors to precompiled script plugins in Gradle 9, so these stay as
-    // literals aligned with the `junit` catalog version (see gradle/libs.versions.toml).
-    testImplementation(platform("org.junit:junit-bom:5.11.0"))
+    // accessors to precompiled script plugins in Gradle 9, so the coordinate
+    // stays a literal here. The version is the single source of truth in
+    // gradle/libs.versions.toml (`junit`) - keep the two in step.
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

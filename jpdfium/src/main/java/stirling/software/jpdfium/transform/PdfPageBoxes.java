@@ -2,6 +2,7 @@ package stirling.software.jpdfium.transform;
 
 import stirling.software.jpdfium.doc.PageBoxes;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -126,7 +127,7 @@ public final class PdfPageBoxes {
             float top = t.get(ValueLayout.JAVA_FLOAT, 0);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return Optional.empty();
         }
     }

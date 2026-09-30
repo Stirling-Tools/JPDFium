@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -65,7 +66,7 @@ public final class PdfVersionConverter {
                 return PdfVersion.fromCode(versionSeg.get(JAVA_INT, 0));
             }
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
         return PdfVersion.V1_7;
     }

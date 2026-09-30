@@ -2,6 +2,7 @@ package stirling.software.jpdfium.samples;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfImageConverter;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PdfToImageOptions;
 
@@ -77,6 +78,11 @@ public class S19_PdfToImages {
                         System.out.printf("  %-18s SKIPPED (no writer available)%n", label + ":");
                         continue;
                     }
+                    if (pages > 0 && exceedsFrameBudget(doc, 0, spec.dpi)) {
+                        System.out.printf("  %-18s SKIPPED (page exceeds encoder frame budget)%n",
+                                label + ":");
+                        continue;
+                    }
 
                     Path outDir = SampleBase.out("S19_pdf-to-images", input).resolve(label);
                     PdfToImageOptions opts = PdfToImageOptions.builder()
@@ -103,5 +109,14 @@ public class S19_PdfToImages {
         }
 
         SampleBase.done("S19_PdfToImages");
+    }
+
+    /** Frame encoders refuse dimensions over 30000px; skip such pages loudly. */
+    private static boolean exceedsFrameBudget(PdfDocument doc, int pageIndex, int dpi) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            long w = Math.max(1, Math.round(page.size().width() * dpi / 72.0));
+            long h = Math.max(1, Math.round(page.size().height() * dpi / 72.0));
+            return w > 30000 || h > 30000;
+        }
     }
 }

@@ -3,6 +3,7 @@ package stirling.software.jpdfium.vips;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.nio.charset.StandardCharsets;
 
 import app.photofox.vipsffm.VImage;
 import app.photofox.vipsffm.VipsOption;
@@ -104,7 +105,7 @@ class VipsSmokeTest {
         String svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"16\">"
                 + "<rect width=\"32\" height=\"16\" fill=\"#00ff00\"/></svg>";
         byte[] svgPng = VipsImageConverter.svgToBytes(
-                svg.getBytes(java.nio.charset.StandardCharsets.UTF_8), 32, 16, VipsFormat.PNG);
+                svg.getBytes(StandardCharsets.UTF_8), 32, 16, VipsFormat.PNG);
         assertTrue(svgPng.length > 8, "SVG -> vips encode produced no bytes");
         assertEquals((byte) 0x89, svgPng[0], "SVG output must be a PNG");
         System.out.println("SVG -> vips PNG bytes: " + svgPng.length);

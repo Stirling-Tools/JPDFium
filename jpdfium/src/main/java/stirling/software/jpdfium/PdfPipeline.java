@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.NativeGuard;
 
 /**
  * Orchestrates page-level operations with optional streaming (low-memory)
@@ -36,7 +37,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * <b>not thread-safe</b> - even across independent document instances. All
  * PDFium native calls must be serialized. Since 1.0.4 the library does this
  * for you: every native call goes through
- * {@link stirling.software.jpdfium.panama.NativeGuard}, so no caller-side
+ * {@link NativeGuard}, so no caller-side
  * locking is required anywhere.
  *
  * <p>Parallel speedup comes from overlapping Java-side work (hashing, NLP,
@@ -89,7 +90,7 @@ public final class PdfPipeline {
      *
      * @deprecated since 1.0.4 - callers no longer need this. Every native call
      *     is serialised internally by
-     *     {@link stirling.software.jpdfium.panama.NativeGuard}, so PDFium calls
+     *     {@link NativeGuard}, so PDFium calls
      *     are safe from any thread without caller-side locking. The field is
      *     retained so existing {@code synchronized(PDFIUM_LOCK)} blocks keep
      *     compiling; they are now redundant but harmless.
