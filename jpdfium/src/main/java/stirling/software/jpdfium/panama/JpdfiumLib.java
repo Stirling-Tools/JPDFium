@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.panama;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
@@ -118,6 +119,74 @@ public final class JpdfiumLib {
     /** Whether the Skia renderer is active for this JVM. */
     public static boolean isSkiaActive() {
         return activeRenderer() == 1;
+    }
+
+    /** Bridge ABI version the loaded native library speaks (must match Java's expectation). */
+    public static int abiVersion() {
+        NativeGuard.acquire();
+        try {
+            return JpdfiumH.jpdfium_abi_version();
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Native layout probe (pointer width, struct geometry); unknown ids return -1. */
+    public static long abiQuery(int query) {
+        NativeGuard.acquire();
+        try {
+            return JpdfiumH.jpdfium_abi_query(query);
+        } finally {
+            NativeGuard.release();
+        }
+    }
+
+    /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
+    public static final int EXPECTED_ABI_VERSION = 1;
+    /** Expected native pointer width: all supported targets are 64-bit. */
+    public static final long EXPECTED_PTR_SIZE = 8;
+    /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
+    public static final long EXPECTED_RECTF_SIZE = 16;
+    /** Expected {@code offsetof(FS_RECTF, right)}. */
+    public static final long EXPECTED_RECTF_RIGHT_OFFSET = 8;
+
+    /**
+     * Verifies the packaged Java/native combination against every exposed ABI
+     * probe: version, pointer width, and PDFium struct geometry.
+     *
+     * @throws JPDFiumException on any mismatch, naming the offending component
+     */
+    public static void checkAbiCompatible() {
+        checkAbiCompatible(abiVersion(), abiQuery(0), abiQuery(1), abiQuery(2));
+    }
+
+    /**
+     * Testable ABI verification over explicit actual values (no native call).
+     *
+     * @param version   native {@code jpdfium_abi_version()} result
+     * @param ptrSize   native pointer-width probe result
+     * @param rectfSize native {@code FS_RECTF} size probe result
+     * @param rightOff  native {@code FS_RECTF.right} offset probe result
+     * @throws JPDFiumException on any mismatch, naming the offending component
+     */
+    static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff) {
+        if (version != EXPECTED_ABI_VERSION) {
+            throw new JPDFiumException(
+                    "Unsupported native bridge ABI version " + version + " (expected "
+                            + EXPECTED_ABI_VERSION + " on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (ptrSize != EXPECTED_PTR_SIZE) {
+            throw new JPDFiumException("Unsupported native pointer width " + ptrSize + " (expected "
+                    + EXPECTED_PTR_SIZE + " on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (rectfSize != EXPECTED_RECTF_SIZE) {
+            throw new JPDFiumException("Unsupported FS_RECTF size " + rectfSize + " (expected "
+                    + EXPECTED_RECTF_SIZE + " on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (rightOff != EXPECTED_RECTF_RIGHT_OFFSET) {
+            throw new JPDFiumException("Unsupported FS_RECTF.right offset " + rightOff + " (expected "
+                    + EXPECTED_RECTF_RIGHT_OFFSET + " on " + NativeLoader.detectPlatform() + ")");
+        }
     }
 
     static void check(int rc, String ctx) {
@@ -299,9 +368,19 @@ public final class JpdfiumLib {
         try {
             check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            byte[] result = nativePtr.reinterpret(LONG_SCRATCH.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+            // Acquire the pointer in its own try-finally so the buffer is freed even when
+            // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
+            try {
+                long byteLen = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "docSaveBytes", true);
+                BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
+                try {
+                    return byteLen == 0 ? new byte[0] : nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
+                } finally {
+                    BridgeAlloc.freed(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
+                }
+            } finally {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+            }
         } finally {
             NativeGuard.release();
         }
@@ -309,23 +388,50 @@ public final class JpdfiumLib {
 
     /**
      * Streams saved document bytes directly to a channel without intermediate Java heap byte[] allocation.
+     *
+     * <p>The serialized bytes are produced under {@link NativeGuard} into a detached
+     * native allocation, then written <em>outside</em> the guard: a slow, throwing,
+     * or partially-writing channel must never stall unrelated PDFium work behind the
+     * process-wide lock. The buffer is independent document state (plain
+     * {@code malloc}), so releasing it needs no guard either. Outputs larger than
+     * {@link Integer#MAX_VALUE} are written in chunked slices because a single
+     * {@code ByteBuffer} view cannot span them.
      */
     public static void docSaveTo(long doc, WritableByteChannel channel) throws IOException {
+        final MemorySegment nativePtr;
+        final long rawLen;
+        final long len;
         NativeGuard.acquire();
         try {
             check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            try {
-                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
-                ByteBuffer bb = nativePtr.reinterpret(len).asByteBuffer();
-                while (bb.hasRemaining()) {
-                    channel.write(bb);
-                }
-            } finally {
-                JpdfiumH.jpdfium_free_buffer(nativePtr);
-            }
+            nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            // LONG_SCRATCH is process-wide and only the guard makes it readable, so
+            // the length has to be copied out before another thread can overwrite it.
+            rawLen = LONG_SCRATCH.get(JAVA_LONG, 0);
         } finally {
             NativeGuard.release();
+        }
+        // Acquire the pointer in its own try-finally so the buffer is freed even when
+        // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
+        try {
+            len = checkNativeBuffer(nativePtr, rawLen, "docSaveBytes", true);
+            MemorySegment bytes = nativePtr.reinterpret(len);
+            BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, len);
+            try {
+                long offset = 0;
+                while (offset < len) {
+                    long chunk = Math.min(len - offset, Integer.MAX_VALUE);
+                    ByteBuffer bb = bytes.asSlice(offset, chunk).asByteBuffer();
+                    while (bb.hasRemaining()) {
+                        channel.write(bb);
+                    }
+                    offset += chunk;
+                }
+            } finally {
+                BridgeAlloc.freed(BridgeAlloc.Tag.SAVE_OUTPUT, len);
+            }
+        } finally {
+            JpdfiumH.jpdfium_free_buffer(nativePtr);
         }
     }
 
@@ -391,10 +497,101 @@ public final class JpdfiumLib {
         }
     }
 
+    /**
+     * Validates the caller-owned render buffer contract (address, storage, scope,
+     * dimensions, overflow-safe math, pixel budget, padded-row capacity).
+     * Public so {@code PdfPage} shares this single enforcement point.
+     */
+    public static void checkRenderIntoArgs(MemorySegment targetBitmap, int width, int height) {
+        if (targetBitmap == null) {
+            throw new IllegalArgumentException("targetBitmap must not be null");
+        }
+        if (width <= 0 || height <= 0) {
+            throw new IllegalArgumentException("width and height must be > 0");
+        }
+        if (!targetBitmap.isNative()) {
+            throw new IllegalArgumentException("targetBitmap must be a native MemorySegment");
+        }
+        if (targetBitmap.isReadOnly()) {
+            throw new IllegalArgumentException("targetBitmap must be writable");
+        }
+        if (targetBitmap.address() == 0) {
+            throw new IllegalArgumentException("targetBitmap must have a nonzero native address");
+        }
+        if (!targetBitmap.scope().isAlive()
+                || !targetBitmap.isAccessibleBy(Thread.currentThread())) {
+            throw new IllegalStateException("targetBitmap scope is not alive/accessible on this thread");
+        }
+        int stride = checkedRgbaStride(width);
+        long requiredSize = (long) stride * height;
+        long maxPixels = maxRenderPixels();
+        if (maxPixels > 0 && (long) width * height > maxPixels) {
+            throw new JPDFiumException(String.format(
+                    "refusing to render %dx%d pixels - exceeds jpdfium.maxRenderPixels=%d. "
+                            + "Reduce the dimensions or raise -Djpdfium.maxRenderPixels (0 disables the bound)",
+                    width, height, maxPixels));
+        }
+        if (targetBitmap.byteSize() < requiredSize) {
+            throw new IllegalArgumentException(
+                    "targetBitmap too small: need " + requiredSize + " bytes");
+        }
+    }
+
+    /**
+     * Returns the configured render-pixel budget ({@code jpdfium.maxRenderPixels},
+     * default 100M, {@code <= 0} disables). Applies to single renders and to
+     * aggregated outputs such as stitched multi-page images.
+     */
+    public static long maxRenderPixels() {
+        // Read per call so the bound stays configurable at runtime.
+        return Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+    }
+
+    /**
+     * Post-generation save-result acceptance limit ({@code jpdfium.maxSaveResultBytes},
+     * 0 = disabled). It bounds the Java copy, channel write, and reinterpretation,
+     * not the transient native snapshot, which already exists when checked.
+     */
+    public static long maxSaveResultBytes() {
+        return Long.getLong("jpdfium.maxSaveResultBytes", 0);
+    }
+
+    /** Overflow-safe RGBA stride with an actionable overflow error. */
+    static int checkedRgbaStride(int width) {
+        try {
+            return Math.multiplyExact(width, 4);
+        } catch (ArithmeticException ex) {
+            throw new IllegalArgumentException(
+                    "width is too large for a 4-byte RGBA stride: " + width, ex);
+        }
+    }
+
+    /**
+     * Validates a native pointer/length output pair before reinterpretation.
+     * Zero length permits a null pointer; positive lengths require a nonzero
+     * native address, so a native error path returning success with an invalid
+     * pair fails here instead of inside {@code reinterpret}.
+     */
+    static long checkNativeBuffer(MemorySegment ptr, long len, String ctx, boolean applySaveCap) {
+        if (len < 0) {
+            throw new JPDFiumException("native returned negative byte count for " + ctx + ": " + len);
+        }
+        if (len > 0 && (ptr == null || ptr.address() == 0)) {
+            throw new JPDFiumException("native returned no buffer for " + ctx + " (" + len + " bytes)");
+        }
+        if (applySaveCap) {
+            long cap = maxSaveResultBytes();
+            if (cap > 0 && len > cap) {
+                throw new JPDFiumException("native " + ctx + " output " + len
+                        + " bytes exceeds jpdfium.maxSaveResultBytes=" + cap);
+            }
+        }
+        return len;
+    }
+
     /** Refuse renders whose pixel dimensions exceed the configured bound. */
     private static void checkRenderBounds(long page, int dpi) {
-        // Read per render so the bound stays configurable at runtime.
-        long maxPixels = Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+        long maxPixels = maxRenderPixels();
         if (maxPixels <= 0) return;
         double scale = dpi / 72.0;
         float pw = pageWidth0(page);
@@ -436,8 +633,8 @@ public final class JpdfiumLib {
         private final MemorySegment pixels;
         private final int width;
         private final int height;
-        private final java.util.concurrent.atomic.AtomicBoolean closed =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
+        private final AtomicBoolean closed =
+                new AtomicBoolean(false);
 
         private SvgRaster(MemorySegment pixels, int width, int height) {
             this.pixels = pixels;
@@ -481,7 +678,7 @@ public final class JpdfiumLib {
                 check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
                         ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToNative");
                 MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
-                long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "svgToNative", false);
                 int w = INT_SCRATCH.get(JAVA_INT, 0);
                 int h = INT2_SCRATCH.get(JAVA_INT, 0);
                 if (ptr == null) {
@@ -512,7 +709,7 @@ public final class JpdfiumLib {
 
     /**
      * Fast path that returns a heap {@link RenderResult}. Avoids the
-     * {@link RenderedPageView} wrapper (object + {@link java.util.concurrent.atomic.AtomicBoolean}
+     * {@link RenderedPageView} wrapper (object + {@link AtomicBoolean}
      * + cleanup lambda) so the common {@code page.renderAt()} call stays allocation-lean;
      * this is the path the JMH FFM benchmarks gate on. Zero-copy consumers that need the
      * native pixel buffer (e.g. the Vips encoder) should call {@link #renderPageView}.
@@ -526,6 +723,7 @@ public final class JpdfiumLib {
     }
 
     public static RenderResult renderPage(long page, int dpi, boolean transparent, int flags) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
@@ -534,9 +732,15 @@ public final class JpdfiumLib {
             int w = INT_SCRATCH.get(JAVA_INT, 0);
             int h = INT2_SCRATCH.get(JAVA_INT, 0);
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            byte[] rgba = nativePtr.reinterpret((long) w * h * 4).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return new RenderResult(w, h, rgba);
+            long byteLen = (long) w * h * 4;
+            BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
+            try {
+                byte[] rgba = nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
+                return new RenderResult(w, h, rgba);
+            } finally {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+                BridgeAlloc.freed(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
+            }
         } finally {
             NativeGuard.release();
         }
@@ -551,6 +755,7 @@ public final class JpdfiumLib {
     }
 
     public static RenderedPageView renderPageView(long page, int dpi, boolean transparent, int flags) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         NativeGuard.acquire();
         try {
             checkRenderBounds(page, dpi);
@@ -561,8 +766,12 @@ public final class JpdfiumLib {
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
             long byteLen = (long) w * h * 4;
             MemorySegment pixels = nativePtr.reinterpret(byteLen);
+            BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
             return new RenderedPageView(w, h, w * 4, 4, PixelFormat.RGBA_STRAIGHT,
-                    pixels, () -> JpdfiumH.jpdfium_free_buffer(nativePtr));
+                    pixels, () -> {
+                        JpdfiumH.jpdfium_free_buffer(nativePtr);
+                        BridgeAlloc.freed(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
+                    });
         } finally {
             NativeGuard.release();
         }
@@ -571,9 +780,11 @@ public final class JpdfiumLib {
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,
                                                 int width, int height, int stride, int flags,
                                                 MemorySegment cancelFlag) {
+        checkRenderIntoArgs(targetBitmap, width, height);
         NativeGuard.acquire();
         try {
-            return JpdfiumH.jpdfium_render_page_progressive_start(rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+            return JpdfiumH.jpdfium_render_page_progressive_start(rawPage, targetBitmap,
+                    targetBitmap.byteSize(), width, height, stride, flags, cancelFlag);
         } finally {
             NativeGuard.release();
         }
@@ -608,6 +819,7 @@ public final class JpdfiumLib {
      * @param flags          render flags (e.g. RenderBindings.FPDF_REVERSE_BYTE_ORDER | RenderBindings.FPDF_ANNOT)
      */
     public static void renderPageInto(long page, MemorySegment targetBitmap, int width, int height, int flags) {
+        checkRenderIntoArgs(targetBitmap, width, height);
         NativeGuard.acquire();
         try {
             if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
@@ -669,8 +881,8 @@ public final class JpdfiumLib {
         // rendering + unpremultiply under Skia, straight pixels for AGG.
         if (HAS_RENDER_PAGE_INTO) {
             try {
-                check(JpdfiumH.jpdfium_render_page_into(rawPage, targetBitmap, width, height,
-                        width * 4, flags), "renderPageInto");
+                check(JpdfiumH.jpdfium_render_page_into(rawPage, targetBitmap, targetBitmap.byteSize(),
+                        width, height, width * 4, flags), "renderPageInto");
                 return;
             } catch (RuntimeException re) {
                 throw re;
@@ -875,6 +1087,7 @@ public final class JpdfiumLib {
     }
 
     public static void pageToImage(long doc, int pageIndex, int dpi) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         NativeGuard.acquire();
         try {
             check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
@@ -1002,9 +1215,19 @@ public final class JpdfiumLib {
         try {
             check(JpdfiumH.jpdfium_doc_save_incremental(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveIncremental");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            byte[] result = nativePtr.reinterpret(LONG_SCRATCH.get(JAVA_LONG, 0)).toArray(JAVA_BYTE);
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-            return result;
+            // Acquire the pointer in its own try-finally so the buffer is freed even when
+            // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
+            try {
+                long byteLen = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "docSaveIncremental", true);
+                BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
+                try {
+                    return nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
+                } finally {
+                    BridgeAlloc.freed(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
+                }
+            } finally {
+                JpdfiumH.jpdfium_free_buffer(nativePtr);
+            }
         } finally {
             NativeGuard.release();
         }
@@ -1145,7 +1368,7 @@ public final class JpdfiumLib {
             check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, ADDR_SCRATCH, LONG_SCRATCH),
                     "signatureDigest");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            long len = LONG_SCRATCH.get(JAVA_LONG, 0);
+            long len = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "signatureDigest", false);
             byte[] result = nativePtr == null ? new byte[0] : nativePtr.reinterpret(len).toArray(JAVA_BYTE);
             if (nativePtr != null) {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);

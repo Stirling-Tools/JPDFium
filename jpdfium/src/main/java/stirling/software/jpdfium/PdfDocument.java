@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.io.BufferedOutputStream;
 import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
@@ -21,6 +22,7 @@ import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
@@ -37,7 +39,9 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +49,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.ObjIntConsumer;
 
@@ -56,7 +61,7 @@ import java.util.function.ObjIntConsumer;
  *
  * <p>Independent {@code PdfDocument} instances may be used from separate threads:
  * PDFium itself is not thread-safe even across independent documents, so every
- * native call is serialised by {@link stirling.software.jpdfium.panama.NativeGuard}.
+ * native call is serialised by {@link NativeGuard}.
  * That makes concurrent use safe, but PDFium work does not run in parallel - the
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
@@ -65,10 +70,37 @@ public final class PdfDocument implements AutoCloseable {
     private final long handle;
     private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicInteger structureEpoch = new AtomicInteger(0);
+
+    /**
+     * Temporary file this document owns, deleted on {@link #close()}.
+     *
+     * <p>Set both when a document is opened from a stream (which spools to a
+     * spool file) and when a file-backed merge or split produces one. PDFium keeps
+     * its own handle on the file for the document's lifetime, so it cannot be
+     * removed earlier. Volatile and cleared on close so the deletion happens once.
+     */
+    private volatile Path ownedTempFile;
 
     PdfDocument(long handle) {
+        this(handle, null);
+    }
+
+    PdfDocument(long handle, Path ownedTempFile) {
         this.handle = handle;
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        this.ownedTempFile = ownedTempFile;
+    }
+
+    /**
+     * Open a temporary file as a document that deletes the file on close.
+     * Used by file-backed merge and split so large results never sit on the heap.
+     *
+     * @param tmp existing readable PDF file
+     */
+    static PdfDocument openTemp(Path tmp) {
+        Path abs = tmp.toAbsolutePath();
+        return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs);
     }
 
     /**
@@ -79,9 +111,26 @@ public final class PdfDocument implements AutoCloseable {
      * pointer, so that EmbedPDF direct bindings pick up the new address.
      * External callers must not invoke this; the invariant is maintained automatically
      * by every library operation that reloads the document.
+     *
+     * <p>Refreshing implies native replacement: previously opened pages become
+     * stale and fail loudly instead of touching freed memory.
      */
     public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        structureEpoch.incrementAndGet();
+    }
+
+    /** Returns the current structural epoch, bumped by every reload/raster operation. */
+    int structureEpoch() {
+        return structureEpoch.get();
+    }
+
+    /**
+     * Invalidates every previously opened page (internal use only; called
+     * automatically after structural ops that free native state).
+     */
+    void invalidateOpenPages() {
+        refreshRawHandle();
     }
 
     public static PdfDocument open(Path path) {
@@ -95,23 +144,151 @@ public final class PdfDocument implements AutoCloseable {
         return new PdfDocument(JpdfiumLib.docOpenBytes(data));
     }
 
+    /**
+     * Open password-protected raw PDF bytes (see {@link #open(Path, String)} for
+     * the shared null/empty password contract).
+     */
     public static PdfDocument open(byte[] data, String password) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
-        if (password == null || password.isEmpty()) {
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) {
             return new PdfDocument(JpdfiumLib.docOpenBytes(data));
         }
         return new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
     }
 
+    /**
+     * Opens a document from a stream.
+     *
+     * <p><strong>No size limit is applied.</strong> The stream is spooled to an
+     * owned temporary file and PDFium opens it file-backed, so peak memory stays
+     * bounded by the copy buffer regardless of document size. That is what makes
+     * the absence of a default limit safe: an unbounded stream cannot exhaust the
+     * heap, and is never materialised as a whole-document {@code byte[]}.
+     *
+     * <p>For untrusted input prefer {@link #open(InputStream, long)}, which
+     * rejects an over-long stream while spooling instead of writing it all out.
+     *
+     * @param in source stream (fully consumed)
+     */
     public static PdfDocument open(InputStream in) throws IOException {
-        if (in == null) throw new IllegalArgumentException("in must not be null");
-        return open(in.readAllBytes());
+        return openStream(in, null, null);
     }
 
+    /**
+     * Opens a document from a stream, refusing to spool more than
+     * {@code maxBytes} bytes.
+     *
+     * <p>This is the opt-in bound for untrusted input: the stream is rejected as
+     * soon as it exceeds {@code maxBytes}, so neither the heap nor the temporary
+     * file can grow without limit.
+     *
+     * @param in       source stream (fully consumed up to the bound)
+     * @param maxBytes maximum bytes to spool; non-positive values are rejected
+     * @throws IllegalArgumentException if the stream exceeds {@code maxBytes}
+     */
+    public static PdfDocument open(InputStream in, long maxBytes) throws IOException {
+        if (maxBytes <= 0) throw new IllegalArgumentException("maxBytes must be > 0");
+        return openStream(in, maxBytes, null);
+    }
+
+    /**
+     * Opens a password-protected document from a stream.
+     *
+     * <p>See {@link #open(InputStream)} for the file-backed spooling contract.
+     */
     public static PdfDocument open(InputStream in, String password) throws IOException {
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) return openStream(in, null, null);
+        return openStream(in, null, password);
+    }
+
+    /**
+     * Opens a password-protected document from a stream with an explicit spool bound
+     * (see {@link #open(InputStream, long)} and the shared password contract on
+     * {@link #open(Path, String)}).
+     */
+    public static PdfDocument open(InputStream in, String password, long maxBytes) throws IOException {
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (maxBytes <= 0) throw new IllegalArgumentException("maxBytes must be > 0");
+        if (password.isEmpty()) return openStream(in, maxBytes, null);
+        return openStream(in, maxBytes, password);
+    }
+
+    /**
+     * Spool {@code in} to an owner-only temporary file and open it file-backed.
+     *
+     * <p>The temp file outlives this call because PDFium keeps its own handle on
+     * the document, so it is deleted by {@link #close()}. Every failure path
+     * deletes it immediately, so a rejected stream leaves nothing behind.
+     */
+    private static PdfDocument openStream(InputStream in, Long maxBytes, String password)
+            throws IOException {
         if (in == null) throw new IllegalArgumentException("in must not be null");
-        return open(in.readAllBytes(), password);
+        Path spooled = spool(in, maxBytes);
+        long handle = 0;
+        boolean ok = false;
+        try {
+            handle = password == null
+                    ? JpdfiumLib.docOpen(spooled.toAbsolutePath().toString())
+                    : JpdfiumLib.docOpenProtected(spooled.toAbsolutePath().toString(), password);
+            PdfDocument doc = new PdfDocument(handle, spooled);
+            ok = true;
+            return doc;
+        } finally {
+            if (!ok) {
+                // The constructor can still throw (for example while resolving the
+                // raw handle), so the native document is closed here and the spool
+                // is removed instead of being orphaned.
+                if (handle != 0) JpdfiumLib.docClose(handle);
+                deleteQuietly(spooled);
+            }
+        }
+    }
+
+    /**
+     * Copy a stream to an owner-only temporary file, enforcing an optional bound.
+     *
+     * <p>The bound is checked as bytes arrive, so an over-long or endless stream
+     * is abandoned without ever being fully written.
+     */
+    private static Path spool(InputStream in, Long maxBytes) throws IOException {
+        Path tmp;
+        try {
+            tmp = Files.createTempFile("jpdfium-spool-", ".pdf",
+                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        } catch (UnsupportedOperationException ignored) {
+            tmp = Files.createTempFile("jpdfium-spool-", ".pdf");
+        }
+        try {
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(tmp))) {
+                byte[] buf = new byte[64 * 1024];
+                long total = 0;
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (maxBytes != null && total > maxBytes) {
+                        throw new IllegalArgumentException("input stream exceeds maxBytes=" + maxBytes);
+                    }
+                    out.write(buf, 0, n);
+                }
+            }
+            return tmp;
+        } catch (Throwable e) {
+            // Covers Error (OOM, StackOverflow) as well as IOException and
+            // RuntimeException, so a partially written spool is never left behind.
+            deleteQuietly(tmp);
+            throw e;
+        }
+    }
+
+    private static void deleteQuietly(Path p) {
+        try {
+            Files.deleteIfExists(p);
+        } catch (IOException ignored) {
+            // Best effort: a leftover spool is removed by the OS temp sweeper.
+        }
     }
 
     public static PdfDocument open(File file) {
@@ -152,16 +329,26 @@ public final class PdfDocument implements AutoCloseable {
 
     public static PdfDocument open(ByteBuffer buffer, String password) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
-        if (password == null || password.isEmpty()) return open(buffer);
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) return open(buffer);
         // Password path still needs heap bytes (no segment+password ABI); single copy only.
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         return open(bytes, password);
     }
 
+    /**
+     * Open a password-protected document.
+     *
+     * <p>Password contract (consistent across all {@code open} overloads):
+     * {@code null} is rejected with {@link IllegalArgumentException}, while an
+     * empty password falls back to a plain open - PDFium accepts empty passwords
+     * for documents that need none, so emptiness alone is not an error.
+     */
     public static PdfDocument open(Path path, String password) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) return open(path);
         return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
     }
 
@@ -436,7 +623,7 @@ public final class PdfDocument implements AutoCloseable {
 
     public PdfPage page(int index) {
         ensureOpen();
-        return PdfPage.open(handle, index);
+        return PdfPage.open(this, handle, index);
     }
 
     /**
@@ -880,18 +1067,18 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        invalidateOpenPages();
     }
 
     /**
-     * JSON report of the last mandatory sanitize stage (qpdf pass) that ran
-     * when a redacted document was saved, or empty when none has run.
+     * JSON report of the last sanitize stage (qpdf pass) that ran when a
+     * redacted document was saved, or empty when none has run.
      *
-     * <p>Every save of a redacted document runs a sanitize pass that purges
-     * dead objects, scrubs metadata/XMP/annotations/form values/outlines,
-     * strips the structure tree, filters ToUnicode maps and erases redacted
-     * glyph outlines from touched font programs. The report carries the
-     * per-category counts (see {@code RedactionSession#sanitizeReport()}).
+     * <p>Sanitization is <strong>opt-in</strong> (needs
+     * {@link #setSanitizeOnSave(boolean) setSanitizeOnSave(true)} plus redaction);
+     * default saves leave metadata and structure untouched.
      */
     public String sanitizeReport() {
         ensureOpen();
@@ -1093,7 +1280,7 @@ public final class PdfDocument implements AutoCloseable {
      * Returns the raw bridge document handle.
      *
      * <p><strong>Internal use only.</strong> This handle is an opaque token understood
-     * only by {@link stirling.software.jpdfium.panama.JpdfiumLib} and its companions.
+     * only by {@link JpdfiumLib} and its companions.
      * External callers bypassing this method bypass all closed-document checks and
      * thread-safety contracts enforced by this class.
      */
@@ -1111,6 +1298,21 @@ public final class PdfDocument implements AutoCloseable {
         // compareAndSet, not check-then-set: a lost race here frees the same
         // native document twice and corrupts the heap.
         if (!closed.compareAndSet(false, true)) return;
-        JpdfiumLib.docClose(handle);
+        try {
+            JpdfiumLib.docClose(handle);
+        } finally {
+            // PDFium has released its handle on the temp file, so it can go now.
+            // A still-locked file (Windows) falls back to delete-on-exit rather
+            // than leaving document content behind for an unbounded time.
+            Path tmp = ownedTempFile;
+            if (tmp != null) {
+                ownedTempFile = null;
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException | RuntimeException ignored) {
+                    tmp.toFile().deleteOnExit();
+                }
+            }
+        }
     }
 }
