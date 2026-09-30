@@ -12,6 +12,7 @@ import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.panama.JpdfiumH;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.RenderBindings;
 
@@ -37,9 +38,6 @@ public final class PdfFormRenderer {
     /** Render flags: annotations plus RGBA byte order (matches PdfPage.renderInto). */
     private static final int RENDER_FLAGS =
             RenderBindings.FPDF_REVERSE_BYTE_ORDER | RenderBindings.FPDF_ANNOT;
-
-    /** Matches the 256M pixel cap used by the bridge render path. */
-    private static final long MAX_PIXELS = 268435456L;
 
     /**
      * Render one page with its form widgets drawn on top, at the given DPI.
@@ -68,9 +66,6 @@ public final class PdfFormRenderer {
                 PageSize size = page.size();
                 int width = Math.max(1, (int) Math.round(size.width() * dpi / 72.0));
                 int height = Math.max(1, (int) Math.round(size.height() * dpi / 72.0));
-                if ((long) width * height > MAX_PIXELS) {
-                    throw new FormFillException("render size exceeds the 256M pixel cap");
-                }
                 return render(env, rawPage, width, height);
             } finally {
                 try {
@@ -87,8 +82,17 @@ public final class PdfFormRenderer {
 
     private static RenderResult render(PdfFormFiller.FormEnv env, MemorySegment rawPage,
                                        int width, int height) {
+        // Validate the requested geometry before allocating: a rejected render
+        // must not first reserve width*height*4 bytes of native memory.
+        int stride = Math.multiplyExact(width, 4);
+        long required = (long) stride * height;
+        long maxPixels = JpdfiumLib.maxRenderPixels();
+        if (maxPixels > 0 && (long) width * height > maxPixels) {
+            throw new FormFillException("render size " + width + "x" + height
+                    + " exceeds jpdfium.maxRenderPixels=" + maxPixels);
+        }
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment buffer = arena.allocate((long) width * height * 4);
+            MemorySegment buffer = arena.allocate(required);
             try {
                 FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, env.formHandle());
             } catch (Throwable t) {
@@ -98,9 +102,10 @@ public final class PdfFormRenderer {
                 // Page + FFLDraw centralized in the bridge: Skia-aware bitmap
                 // format, matrix rendering, unpremultiply, and
                 // FPDF_REVERSE_BYTE_ORDER handling all live in one place.
+                JpdfiumLib.checkRenderIntoArgs(buffer, width, height);
                 int rc = JpdfiumH.jpdfium_render_page_form_into(
-                        rawPage, env.formHandle(), buffer, width, height, width * 4,
-                        RENDER_FLAGS);
+                        rawPage, env.formHandle(), buffer, buffer.byteSize(), width, height,
+                        stride, RENDER_FLAGS);
                 if (rc != 0) {
                     throw new FormFillException(
                             "jpdfium_render_page_form_into failed (rc=" + rc + ")");

@@ -3,6 +3,7 @@ package stirling.software.jpdfium.panama;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
@@ -30,6 +31,25 @@ public final class NativeGuard {
 
     private static final ReentrantLock LOCK = new ReentrantLock();
 
+    /**
+     * Serialization-pressure telemetry. Acquisition counting is always on (one
+     * uncontended {@link LongAdder} increment, verified allocation-free by
+     * {@code AllocationVerificationTest}). Wait/hold timing is gated behind
+     * {@code -Djpdfium.nativeGuard.telemetry=true} and off by default: the
+     * timestamps, hold-count reads, and thread-local slot are worth it only
+     * during contention analysis. The static-final flag lets the JIT eliminate
+     * the diagnostic branch from production paths entirely.
+     */
+    private static final boolean TELEMETRY_TIMING =
+            Boolean.getBoolean("jpdfium.nativeGuard.telemetry");
+    private static final LongAdder ACQUISITIONS =
+            new LongAdder();
+    private static final LongAdder WAIT_NANOS =
+            new LongAdder();
+    private static final LongAdder HOLD_NANOS =
+            new LongAdder();
+    private static final ThreadLocal<long[]> HOLD_START = ThreadLocal.withInitial(() -> new long[1]);
+
     private static final MethodHandle ACQUIRE;
     private static final MethodHandle RELEASE;
 
@@ -46,20 +66,52 @@ public final class NativeGuard {
     private NativeGuard() {}
 
     public static void acquire() {
+        if (!TELEMETRY_TIMING) {
+            LOCK.lock();
+            ACQUISITIONS.increment();
+            return;
+        }
+        acquireTimed();
+    }
+
+    private static void acquireTimed() {
+        long t0 = System.nanoTime();
         LOCK.lock();
+        WAIT_NANOS.add(System.nanoTime() - t0);
+        ACQUISITIONS.increment();
+        if (LOCK.getHoldCount() == 1) {
+            HOLD_START.get()[0] = System.nanoTime();
+        }
     }
 
     public static void release() {
-        LOCK.unlock();
+        if (!TELEMETRY_TIMING) {
+            LOCK.unlock();
+            return;
+        }
+        try {
+            if (LOCK.getHoldCount() == 1) {
+                HOLD_NANOS.add(System.nanoTime() - HOLD_START.get()[0]);
+            }
+        } finally {
+            LOCK.unlock();
+        }
+    }
+
+    /** Snapshot of guard serialization pressure (counts are cumulative per JVM). */
+    public record GuardStats(long acquisitions, long waitNanos, long holdNanos) {}
+
+    public static GuardStats stats() {
+        return new GuardStats(ACQUISITIONS.sum(), WAIT_NANOS.sum(), HOLD_NANOS.sum());
     }
 
     /** Runs the action with the PDFium lock held. */
     public static void run(Runnable action) {
-        LOCK.lock();
+        acquire();
         try {
             action.run();
         } finally {
-            LOCK.unlock();
+            release();
         }
     }
 
@@ -70,11 +122,11 @@ public final class NativeGuard {
 
     /** Calls the supplier with the PDFium lock held. */
     public static <T> T call(Supplier<T> action) {
-        LOCK.lock();
+        acquire();
         try {
             return action.get();
         } finally {
-            LOCK.unlock();
+            release();
         }
     }
 
