@@ -1,16 +1,18 @@
 #pragma once
+#include <fpdf_annot.h>
 #include <fpdf_edit.h>
+#include <fpdf_text.h>
 #include <fpdfview.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <memory_resource>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -68,6 +70,10 @@ struct DocCore {
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
     int32_t unappliedRedactMarksCount = 0;
+    // Structural generation: bumped whenever native state is freed and
+    // replaced (document reload, page raster replacement). Pages capture it
+    // at open; a mismatch means their FPDF_PAGE outlived its document.
+    int64_t generation = 0;
 
     std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>
         redactedLiteralsSet{};
@@ -123,10 +129,24 @@ struct DocCore {
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
                                             int64_t blen = 0) {
+    // Own the document and buffer until DocCore takes them: `new DocCore()` and
+    // the shared_ptr construction below can both throw, and the caller has no
+    // handle to clean up with at that point.
+    struct PendingDoc {
+        FPDF_DOCUMENT doc;
+        uint8_t* buf;
+        ~PendingDoc() {
+            if (doc) FPDF_CloseDocument(doc);
+            if (buf) free(buf);
+        }
+    } pending{doc, buf};
+
     auto* core = new DocCore();
-    core->doc = doc;
-    core->buf = buf;
+    core->doc = pending.doc;
+    core->buf = pending.buf;
     core->blen = blen;
+    pending.doc = nullptr;
+    pending.buf = nullptr;
     return std::shared_ptr<DocCore>(core, [](DocCore* c) {
         for (FPDF_FONT f : c->loadedFonts) {
             FPDFFont_Close(f);
@@ -157,19 +177,39 @@ struct PageWrapper {
                                   // require the document
     int32_t pageIndex = -1;
     std::shared_ptr<DocCore> core;  // keeps the document (and bookkeeping) alive
+    // DocCore generation at open. A mismatch means the document was freed and
+    // replaced after this page was created, so page points into dead state.
+    int64_t generation = 0;
 
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, int32_t idx, std::shared_ptr<DocCore> o)
-        : page(p), doc(d), pageIndex(idx), core(std::move(o)) {}
+        : page(p), doc(d), pageIndex(idx), core(std::move(o)) {
+        // Read back through the moved-to member: o itself is empty after move.
+        generation = core->generation;
+    }
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, std::shared_ptr<DocCore> o)
-        : page(p), doc(d), pageIndex(-1), core(std::move(o)) {}
+        : page(p), doc(d), pageIndex(-1), core(std::move(o)) {
+        generation = core->generation;
+    }
+
+    bool stale() const noexcept {
+        return !core || !page || generation != core->generation;
+    }
 
     ~PageWrapper() {
-        if (page) {
+        // Never close a page whose document was already freed and replaced;
+        // FPDF_ClosePage on it would be a use-after-free. The wrapper itself
+        // is still destroyed, so only a few dozen bytes leak on misuse.
+        if (page && !stale()) {
             FPDF_ClosePage(page);
             page = nullptr;
         }
     }
 };
+
+// True when a decoded page handle is live for its document generation.
+inline bool pageAlive(PageWrapper* pw) {
+    return pw && !pw->stale();
+}
 
 // Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
 // selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
@@ -199,33 +239,91 @@ void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept;
 inline DocWrapper* decodeDoc(int64_t h) {
     return reinterpret_cast<DocWrapper*>(static_cast<uintptr_t>(h));
 }
+
+// Decode a page handle, rejecting one whose document was freed and replaced.
+// Returning nullptr here makes every handle-based entry point refuse a stale
+// page (they all null-check the decoded pointer) instead of dereferencing
+// freed PDFium state. jpdfium_page_close still deletes the wrapper, so the
+// stale check must not be duplicated there.
 inline PageWrapper* decodePage(int64_t h) {
-    return reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(h));
+    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(h));
+    return pageAlive(pw) ? pw : nullptr;
 }
 
 inline int64_t encodeHandle(void* p) {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(p));
 }
 
-// Scratch arena for redaction/crop hot paths. All per-call containers
-// (vectors, maps, strings) allocate from a single monotonic buffer so a
-// typical crop/redact performs zero heap allocations outside PDFium itself.
-// The inline buffer covers small/medium pages; overflow spills to the default
-// heap resource, which is still amortised to a handful of allocations.
-class ScratchArena {
-   public:
-    ScratchArena() : mrb_(inlineBuf_.data(), inlineBuf_.size()) {}
-    ScratchArena(const ScratchArena&) = delete;
-    ScratchArena& operator=(const ScratchArena&) = delete;
+// RAII owners for PDFium handles and temporaries.
+//
+// Every acquisition below establishes its owner immediately, so a throwing
+// operation between acquire and release cannot leak. Exception translation is a
+// separate concern: jpdfium_guarded (below) converts a throw into a return code
+// at the C boundary, and it is only correct on top of code whose resources
+// already clean themselves up.
+struct PageCloser {
+    void operator()(FPDF_PAGE p) const noexcept {
+        if (p) FPDF_ClosePage(p);
+    }
+};
+struct TextPageCloser {
+    void operator()(FPDF_TEXTPAGE p) const noexcept {
+        if (p) FPDFText_ClosePage(p);
+    }
+};
+struct SchCloser {
+    void operator()(FPDF_SCHHANDLE s) const noexcept {
+        if (s) FPDFText_FindClose(s);
+    }
+};
+struct BitmapCloser {
+    void operator()(FPDF_BITMAP b) const noexcept {
+        if (b) FPDFBitmap_Destroy(b);
+    }
+};
+struct PageObjectCloser {
+    void operator()(FPDF_PAGEOBJECT o) const noexcept {
+        if (o) FPDFPageObj_Destroy(o);
+    }
+};
+struct AnnotCloser {
+    void operator()(FPDF_ANNOTATION a) const noexcept {
+        if (a) FPDFPage_CloseAnnot(a);
+    }
+};
+struct FileCloser {
+    void operator()(std::FILE* f) const noexcept {
+        if (f) std::fclose(f);
+    }
+};
 
-    std::pmr::memory_resource* resource() noexcept {
-        return &mrb_;
+using UniquePage = std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>, PageCloser>;
+using UniqueTextPage = std::unique_ptr<std::remove_pointer_t<FPDF_TEXTPAGE>, TextPageCloser>;
+using UniqueSch = std::unique_ptr<std::remove_pointer_t<FPDF_SCHHANDLE>, SchCloser>;
+using UniqueBitmap = std::unique_ptr<std::remove_pointer_t<FPDF_BITMAP>, BitmapCloser>;
+using UniquePageObject = std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, PageObjectCloser>;
+using UniqueAnnot = std::unique_ptr<std::remove_pointer_t<FPDF_ANNOTATION>, AnnotCloser>;
+using UniqueFile = std::unique_ptr<std::FILE, FileCloser>;
+
+// Scoped unlink for repair temp files. Untrusted input is written to these
+// paths, so they must not survive the call - on success, on error, or on an
+// exception thrown between creation and release.
+class ScopedUnlink {
+   public:
+    explicit ScopedUnlink(const char* path) : path_(path) {}
+    ~ScopedUnlink() {
+        if (path_) std::remove(path_);
+    }
+    ScopedUnlink(const ScopedUnlink&) = delete;
+    ScopedUnlink& operator=(const ScopedUnlink&) = delete;
+
+    // Give up ownership (the file was already removed deliberately).
+    void release() noexcept {
+        path_ = nullptr;
     }
 
    private:
-    static constexpr std::size_t kInlineCapacity = 16 * 1024;
-    std::array<std::byte, kInlineCapacity> inlineBuf_;
-    std::pmr::monotonic_buffer_resource mrb_;
+    const char* path_;
 };
 
 template <typename Fn>
