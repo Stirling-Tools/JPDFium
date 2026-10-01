@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: en-US
+tone_instructions: >-
+  Be direct, concise, and evidence-based. Prioritize correctness and performance.
+  Group repeated style issues; avoid praise, generic advice, and speculative
+  rewrites.
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_details: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  path_instructions:
+    - path: "**/*.java"
+      instructions: >-
+        Apply the Java 25 and FFM rules from .github/CODERABBIT_REVIEW.md.
+        Trace native lifetime and domain admission. Prefer imports over needless
+        package-qualified names. Generated bindings need ABI review, not manual
+        style cleanup. Focus performance feedback on concrete hot paths.
+    - path: "native/**/*.{c,cc,cpp,cxx,h,hh,hpp,hxx}"
+      instructions: >-
+        Apply the native ownership, C ABI, C++23, engine integration, memory, and
+        SIMD rules from .github/CODERABBIT_REVIEW.md. Review cleanup ordering,
+        writer finalization, arithmetic, and failure paths across callers.
+        Distinguish maintained source from vendored code.
+    - path: "**/src/test/**"
+      instructions: >-
+        Enforce meaningful assertions, deterministic concurrency, failure-path
+        cleanup, and explicit native/stub requirements. Reject silently passing
+        tests when required inputs or tools are absent. Global lifecycle and
+        counters must be isolated across participating test classes.
+    - path: "**/CMakeLists.txt"
+      instructions: >-
+        Check target-scoped flags, exported ABI, reproducibility, sanitizer
+        instrumentation, dependency compatibility, and portable CPU targets. Do
+        not trade semantic correctness for blanket optimization flags.
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - files: ".github/CODERABBIT_REVIEW.md"
+        applyTo: "**/*"
