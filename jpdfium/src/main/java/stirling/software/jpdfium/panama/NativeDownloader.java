@@ -151,9 +151,9 @@ final class NativeDownloader {
     static Path downloadCachePath(String platform, String version) {
         Path root = NativeCache.resolveCacheRoot();
         if (root == null) {
-            String tmp = System.getProperty("java.io.tmpdir");
-            if (tmp == null || tmp.isBlank()) return null;
-            root = Path.of(tmp).resolve("jpdfium-downloads");
+            String tmpDir = System.getProperty("java.io.tmpdir");
+            if (tmpDir == null || tmpDir.isBlank()) return null;
+            root = Path.of(tmpDir).resolve("jpdfium-downloads");
         } else {
             root = root.resolve("downloads");
         }

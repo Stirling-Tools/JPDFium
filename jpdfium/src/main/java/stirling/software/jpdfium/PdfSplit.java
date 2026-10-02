@@ -460,14 +460,14 @@ public final class PdfSplit {
                                              List<Bookmark> remappedBookmarks, StorageOptions options) {
         List<Path> cleanup = new ArrayList<>();
         try {
-            Path tmp = options.createTempFile("jpdfium-split", ".pdf");
-            cleanup.add(tmp);
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, tmp)) return null;
-            Path result = tmp;
+            Path staging = options.createTempFile("jpdfium-split", ".pdf");
+            cleanup.add(staging);
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging)) return null;
+            Path result = staging;
             if (!remappedBookmarks.isEmpty()) {
                 Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
                 cleanup.add(tmpBookmarks);
-                try (PdfDocument part = PdfDocument.open(tmp)) {
+                try (PdfDocument part = PdfDocument.open(staging)) {
                     PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
                 }
                 result = tmpBookmarks;

@@ -52,11 +52,11 @@ public final class VipsImageConverter {
     }
 
     /** Set the image-job bound (0 = explicit unlimited). Negative is rejected. */
-    public static synchronized int setMaxConcurrency(int max) {
-        if (max < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
+    public static synchronized int setMaxConcurrency(int maxJobs) {
+        if (maxJobs < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
         Semaphore permits = IMAGE_PERMITS;
         int prev = permits == null ? 0 : permits.availablePermits();
-        IMAGE_PERMITS = max == 0 ? null : new Semaphore(Math.max(1, max));
+        IMAGE_PERMITS = maxJobs == 0 ? null : new Semaphore(Math.max(1, maxJobs));
         return prev;
     }
 

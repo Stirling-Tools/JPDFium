@@ -66,11 +66,11 @@ public final class QpdfLib {
     }
 
     /** Set the QPDF job bound (0 = explicit unlimited). Negative is rejected. */
-    public static synchronized int setMaxConcurrency(int max) {
-        if (max < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
+    public static synchronized int setMaxConcurrency(int maxJobs) {
+        if (maxJobs < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
         Semaphore permits = QPDF_PERMITS;
         int prev = permits == null ? 0 : permits.availablePermits();
-        QPDF_PERMITS = max == 0 ? null : new Semaphore(Math.max(1, max));
+        QPDF_PERMITS = maxJobs == 0 ? null : new Semaphore(Math.max(1, maxJobs));
         return prev;
     }
 
@@ -252,14 +252,14 @@ public final class QpdfLib {
             MemorySegment lensArraySeg = call.arena.allocate(JAVA_LONG, count);
 
             for (int i = 0; i < count; i++) {
-                byte[] data = inputs.get(i);
-                if (data == null || data.length == 0) {
+                byte[] inputBytes = inputs.get(i);
+                if (inputBytes == null || inputBytes.length == 0) {
                     inputsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
                     lensArraySeg.setAtIndex(JAVA_LONG, i, 0L);
                 } else {
-                    MemorySegment buf = call.copyBytes(data);
+                    MemorySegment buf = call.copyBytes(inputBytes);
                     inputsArraySeg.setAtIndex(ADDRESS, i, buf);
-                    lensArraySeg.setAtIndex(JAVA_LONG, i, (long) data.length);
+                    lensArraySeg.setAtIndex(JAVA_LONG, i, (long) inputBytes.length);
                 }
             }
 
