@@ -2,8 +2,8 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
-import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -67,31 +67,30 @@ public final class PdfMetadata {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment tagSegment = arena.allocateFrom(tag.pdfKey());
 
-            long needed;
-            NativeGuard.acquire();
-            try {
-                if (DocBindings.FPDF_GetMetaText == null) return Optional.empty();
-                needed = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
-                return Optional.empty();
-            } finally {
-                NativeGuard.release();
-            }
+            long needed = PdfiumRuntime.executeLong(() -> {
+                try {
+                    if (DocBindings.FPDF_GetMetaText == null) return -1L;
+                    return (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment,
+                            MemorySegment.NULL, 0L);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return -1L;
+                }
+            });
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment bufferSegment = arena.allocate(needed);
-            NativeGuard.acquire();
-            try {
-                long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
-                return Optional.empty();
-            } finally {
-                NativeGuard.release();
-            }
+            boolean fillOk = PdfiumRuntime.execute(() -> {
+                try {
+                    long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
+                    return true;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    return false;
+                }
+            });
+            if (!fillOk) return Optional.empty();
 
             String value = FfmHelper.fromWideString(bufferSegment, needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
@@ -114,32 +113,30 @@ public final class PdfMetadata {
      * See PDF Reference Table 3.20 for bit definitions.
      */
     public int permissions() {
-        NativeGuard.acquire();
-        try {
-            if (DocBindings.FPDF_GetDocPermissions == null) return -1;
-            return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
-        } catch (Throwable t) {
-            NativeRuntime.rethrowFatal(t);
-            return -1;
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.execute(() -> {
+            try {
+                if (DocBindings.FPDF_GetDocPermissions == null) return -1;
+                return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return -1;
+            }
+        });
     }
 
     /**
      * Returns the security handler revision, or 0 if the document is not encrypted.
      */
     public int securityHandlerRevision() {
-        NativeGuard.acquire();
-        try {
-            if (DocBindings.FPDF_GetSecurityHandlerRevision == null) return 0;
-            return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
-        } catch (Throwable t) {
-            NativeRuntime.rethrowFatal(t);
-            return 0;
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.execute(() -> {
+            try {
+                if (DocBindings.FPDF_GetSecurityHandlerRevision == null) return 0;
+                return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return 0;
+            }
+        });
     }
 
     /**
@@ -150,29 +147,28 @@ public final class PdfMetadata {
      */
     public Optional<String> pageLabel(int pageIndex) {
         try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            NativeGuard.acquire();
-            try {
-                if (DocBindings.FPDF_GetPageLabel == null) return Optional.empty();
-                needed = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException("FPDF_GetPageLabel size call", t);
-            } finally {
-                NativeGuard.release();
-            }
+            long needed = PdfiumRuntime.executeLong(() -> {
+                try {
+                    if (DocBindings.FPDF_GetPageLabel == null) return -1L;
+                    return (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
+                            MemorySegment.NULL, 0L);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException("FPDF_GetPageLabel size call", t);
+                }
+            });
 
             if (needed <= 2) return Optional.empty();
 
             MemorySegment bufferSegment = arena.allocate(needed);
-            NativeGuard.acquire();
-            try {
-                long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException("FPDF_GetPageLabel fill call", t);
-            } finally {
-                NativeGuard.release();
-            }
+            PdfiumRuntime.execute((Runnable) () -> {
+                try {
+                    long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException("FPDF_GetPageLabel fill call", t);
+                }
+            });
 
             String label = FfmHelper.fromWideString(bufferSegment, needed);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);

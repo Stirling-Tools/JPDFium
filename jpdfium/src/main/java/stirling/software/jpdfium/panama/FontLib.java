@@ -32,7 +32,7 @@ public final class FontLib {
         NativeLoader.ensureLoaded();
         var symbol = SymbolLookup.loaderLookup().find("jpdfium_strip_fonts").orElse(null);
         jpdfium_strip_fonts = (symbol != null)
-                ? NativeGuard.guard(Linker.nativeLinker().downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)))
+                ? PdfiumRuntime.guarded(Linker.nativeLinker().downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)))
                 : null;
     }
 
@@ -57,28 +57,27 @@ public final class FontLib {
             throw new JPDFiumException(
                     "jpdfium_font_covers_text not in this native build");
         }
-        NativeGuard.acquire();
-        try {
-            try (Arena a = Arena.ofConfined()) {
-                MemorySegment out = a.allocate(JAVA_BYTE, codepoints.length);
-                JpdfiumLib.check((int) jpdfium_font_covers_text.invokeExact(
-                        a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
-                        a.allocateFrom(JAVA_INT, codepoints), codepoints.length, out),
-                        "fontCoversText");
-                boolean[] covered = new boolean[codepoints.length];
-                MemorySegment bytes = out.reinterpret(codepoints.length);
-                for (int i = 0; i < covered.length; i++) {
-                    covered[i] = bytes.get(JAVA_BYTE, i) != 0;
+        return PdfiumRuntime.execute(() -> {
+            try {
+                try (Arena a = Arena.ofConfined()) {
+                    MemorySegment out = a.allocate(JAVA_BYTE, codepoints.length);
+                    JpdfiumLib.check((int) jpdfium_font_covers_text.invokeExact(
+                            a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
+                            a.allocateFrom(JAVA_INT, codepoints), codepoints.length, out),
+                            "fontCoversText");
+                    boolean[] covered = new boolean[codepoints.length];
+                    MemorySegment bytes = out.reinterpret(codepoints.length);
+                    for (int i = 0; i < covered.length; i++) {
+                        covered[i] = bytes.get(JAVA_BYTE, i) != 0;
+                    }
+                    return covered;
                 }
-                return covered;
+            } catch (JPDFiumException e) {
+                throw e;
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
             }
-        } catch (JPDFiumException e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new JPDFiumException(t);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -99,44 +98,43 @@ public final class FontLib {
         if (!Float.isFinite(fontSize) || fontSize <= 0 || fontSize > Integer.MAX_VALUE / 64.0) {
             throw new IllegalArgumentException("fontSize must be finite and fit a 26.6 fixed-point scale");
         }
-        NativeGuard.acquire();
-        try {
-            try (Arena a = Arena.ofConfined()) {
-                MemorySegment ptrSeg = a.allocate(ADDRESS);
-                JpdfiumLib.check((int) jpdfium_text_shape.invokeExact(
-                        a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
-                        a.allocateFrom(text), fontSize, ptrSeg), "textShape");
-                MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
-                String json;
-                try {
-                    json = FfmHelper.readNativeString(strPtr);
-                } finally {
-                    JpdfiumH.jpdfium_free_string(strPtr);
+        return PdfiumRuntime.execute(() -> {
+            try {
+                try (Arena a = Arena.ofConfined()) {
+                    MemorySegment ptrSeg = a.allocate(ADDRESS);
+                    JpdfiumLib.check((int) jpdfium_text_shape.invokeExact(
+                            a.allocateFrom(JAVA_BYTE, fontData), (long) fontData.length,
+                            a.allocateFrom(text), fontSize, ptrSeg), "textShape");
+                    MemorySegment strPtr = ptrSeg.get(ADDRESS, 0);
+                    String json;
+                    try {
+                        json = FfmHelper.readNativeString(strPtr);
+                    } finally {
+                        JpdfiumH.jpdfium_free_string(strPtr);
+                    }
+                    List<Map<String, String>> rows = NativeJsonParser.parseArray(json);
+                    List<ShapedGlyph> out = new ArrayList<>(rows.size());
+                    for (Map<String, String> row : rows) {
+                        out.add(new ShapedGlyph(
+                                Integer.parseInt(row.get("g")),
+                                Integer.parseInt(row.get("ax")) / 64f,
+                                Integer.parseInt(row.get("ay")) / 64f,
+                                Integer.parseInt(row.get("dx")) / 64f,
+                                Integer.parseInt(row.get("dy")) / 64f,
+                                Integer.parseInt(row.get("cluster"))));
+                    }
+                    return out;
                 }
-                List<Map<String, String>> rows = NativeJsonParser.parseArray(json);
-                List<ShapedGlyph> out = new ArrayList<>(rows.size());
-                for (Map<String, String> row : rows) {
-                    out.add(new ShapedGlyph(
-                            Integer.parseInt(row.get("g")),
-                            Integer.parseInt(row.get("ax")) / 64f,
-                            Integer.parseInt(row.get("ay")) / 64f,
-                            Integer.parseInt(row.get("dx")) / 64f,
-                            Integer.parseInt(row.get("dy")) / 64f,
-                            Integer.parseInt(row.get("cluster"))));
-                }
-                return out;
+            } catch (JPDFiumException e) {
+                throw e;
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
             }
-        } catch (JPDFiumException e) {
-            throw e;
-        } catch (Throwable t) {
-            throw new JPDFiumException(t);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
-    public static byte[] getData(long page, int fontIndex) {        NativeGuard.acquire();
-        try {
+    public static byte[] getData(long page, int fontIndex) {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 MemorySegment lenSeg = a.allocate(JAVA_LONG);
@@ -147,14 +145,11 @@ public final class FontLib {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String classify(byte[] fontData) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_classify(
@@ -164,40 +159,31 @@ public final class FontLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int fixToUnicode(long doc, int pageIndex) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment cSeg = a.allocate(JAVA_INT);
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_fix_tounicode(doc, pageIndex, cSeg), "fontFixToUnicode");
                 return cSeg.get(JAVA_INT, 0);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int repairWidths(long doc, int pageIndex) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment cSeg = a.allocate(JAVA_INT);
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_repair_widths(doc, pageIndex, cSeg), "fontRepairWidths");
                 return cSeg.get(JAVA_INT, 0);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String normalizePage(long doc, int pageIndex) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_font_normalize_page(doc, pageIndex, ptrSeg), "fontNormalizePage");
@@ -206,9 +192,7 @@ public final class FontLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -221,8 +205,7 @@ public final class FontLib {
         if (jpdfium_strip_fonts == null) {
             return 0;
         }
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment cSeg = a.allocate(JAVA_INT);
                 int rc;
@@ -232,14 +215,11 @@ public final class FontLib {
                 JpdfiumLib.check(rc, "stripFonts");
                 return cSeg.get(JAVA_INT, 0);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static byte[] subset(byte[] fontData, int[] codepoints, boolean retainGids) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 MemorySegment lenSeg = a.allocate(JAVA_LONG);
@@ -254,8 +234,6 @@ public final class FontLib {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }
