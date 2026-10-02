@@ -139,8 +139,9 @@ val jpdfiumFunctions = listOf(
     "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
-    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
-    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
+    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_save_to_file", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
+    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_info",
+    "jpdfium_page_close",
     "jpdfium_render_page", "jpdfium_render_page_flags", "jpdfium_render_page_into", "jpdfium_render_page_form_into",
     "jpdfium_render_page_progressive_start", "jpdfium_render_page_progressive_continue", "jpdfium_render_page_progressive_close",
     "jpdfium_free_buffer",
@@ -196,11 +197,17 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_optimize_file",
     "jpdfium_qpdf_sanitize",
+    "jpdfium_qpdf_sanitize_file",
     "jpdfium_qpdf_merge",
+    "jpdfium_qpdf_merge_files",
     "jpdfium_qpdf_extract_pages",
+    "jpdfium_qpdf_extract_pages_file",
     "jpdfium_qpdf_encrypt",
+    "jpdfium_qpdf_encrypt_file",
     "jpdfium_qpdf_decrypt",
+    "jpdfium_qpdf_decrypt_file",
     // Signatures
     "jpdfium_signature_count",
     "jpdfium_signature_revision_count",
@@ -306,7 +313,8 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
 
             // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
             val qpdfFuncs = listOf(
-                "jpdfium_qpdf_optimize", "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_file",
+                "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
                 "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
             )
             for (fn in qpdfFuncs) {
