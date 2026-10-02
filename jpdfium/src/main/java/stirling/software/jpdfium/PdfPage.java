@@ -27,6 +27,7 @@ import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.PdfiumBuffers;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
@@ -45,6 +46,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Represents an open page within a {@link PdfDocument}.
@@ -63,6 +65,7 @@ public final class PdfPage implements AutoCloseable {
     private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
     private final AtomicBoolean progressiveActive = new AtomicBoolean(false);
+    private final AtomicReference<ProgressiveSession> activeSession = new AtomicReference<>();
 
     private PdfPage(PdfDocument ownerDoc, long docHandle, long handle, int pageIndex) {
         this.ownerDoc = ownerDoc;
@@ -93,7 +96,9 @@ public final class PdfPage implements AutoCloseable {
 
     public PageSize size() {
         ensureOpen();
-        return new PageSize(JpdfiumLib.pageWidth(handle), JpdfiumLib.pageHeight(handle));
+        // One coarse domain admission for both dimensions, not two leaf dispatches.
+        JpdfiumLib.PageInfo info = JpdfiumLib.pageInfo(handle);
+        return new PageSize(info.width(), info.height());
     }
 
     public RenderResult renderAt(int dpi) {
@@ -362,6 +367,11 @@ public final class PdfPage implements AutoCloseable {
             try {
                 ProgressiveSession session = new ProgressiveSession(
                         this, rawPageSegment, targetBitmap, width, height, stride, flags);
+                // A terminal-at-start session retires inside its constructor;
+                // publishing it as active would retain stale state.
+                if (!session.isRetired()) {
+                    activeSession.set(session);
+                }
                 started = true;
                 return session;
             } finally {
@@ -376,16 +386,91 @@ public final class PdfPage implements AutoCloseable {
         progressiveActive.set(false);
     }
 
+    void clearSession(ProgressiveSession session) {
+        activeSession.compareAndSet(session, null);
+    }
+
+    /**
+     * Start a progressive render into an owner-accessible buffer.
+     *
+     * <p>Unlike the segment overloads, the session holds an explicit
+     * {@code RenderLease} on the buffer: the caller may close its own handle
+     * at any time and the target stays valid until the session terminates,
+     * when the last lease reclaims the arena. Prefer this overload for
+     * retained sessions; the segment overloads are legacy synchronous
+     * caller-thread operations.
+     */
+    public ProgressiveSession startProgressiveRender(
+            PdfiumBuffers.SharedRenderBuffer buffer, int flags) {
+        if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        ensureOpen();
+        JpdfiumLib.checkRenderIntoArgs(buffer.pixels(), buffer.width(), buffer.height());
+        synchronized (this) {
+            ensureOpen();
+            if (!progressiveActive.compareAndSet(false, true)) {
+                throw new IllegalStateException("A progressive render session is already active on this page");
+            }
+            PdfiumBuffers.RenderLease lease = null;
+            boolean started = false;
+            try {
+                lease = buffer.acquireLease();
+                ProgressiveSession session = new ProgressiveSession(
+                        this, rawPageSegment, buffer.pixels(), buffer.width(),
+                        buffer.height(), buffer.stride(), flags, lease);
+                // A terminal-at-start session retires inside its constructor;
+                // publishing it as active would retain stale state.
+                if (!session.isRetired()) {
+                    activeSession.set(session);
+                }
+                started = true;
+                return session;
+            } catch (Throwable constructionFailure) {
+                // Best-effort cleanup of the partially-started session. The
+                // lease is retired first: its arena backs the bitmap the
+                // session may have handed to native code, and native state is
+                // released by the page-close abandon backstop if construction
+                // got far enough to start anything. A cleanup failure must not
+                // mask the construction failure, and the page must never stay
+                // marked active.
+                try {
+                    if (lease != null) {
+                        lease.close();
+                    }
+                } catch (Throwable cleanupFailure) {
+                    if (cleanupFailure != constructionFailure) {
+                        constructionFailure.addSuppressed(cleanupFailure);
+                    }
+                } finally {
+                    progressiveActive.set(false);
+                }
+                throw constructionFailure;
+            }
+        }
+    }
+
     public static final class ProgressiveSession implements AutoCloseable {
         private final PdfPage owner;
         private final MemorySegment rawPage;
         private final Arena cancelArena;
         private final MemorySegment cancelFlag;
+        /**
+         * Buffer lease keeping a shared target's arena alive for the session,
+         * or {@code null} for legacy segment sessions whose lifetime stays
+         * caller-managed. Retired (closed) strictly after the progressive
+         * PDFium state, never before.
+         */
+        private final PdfiumBuffers.RenderLease bufferLease;
         private final AtomicBoolean closed = new AtomicBoolean(false);
 
         ProgressiveSession(PdfPage owner, MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags) {
+            this(owner, rawPage, targetBitmap, width, height, stride, flags, null);
+        }
+
+        ProgressiveSession(PdfPage owner, MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags,
+                           PdfiumBuffers.RenderLease bufferLease) {
             this.owner = owner;
             this.rawPage = rawPage;
+            this.bufferLease = bufferLease;
             this.cancelArena = Arena.ofShared();
             this.cancelFlag = cancelArena.allocate(ValueLayout.JAVA_INT);
             this.cancelFlag.set(ValueLayout.JAVA_INT, 0, 0);
@@ -398,16 +483,38 @@ public final class PdfPage implements AutoCloseable {
                 cancelArena.close();
                 throw t;
             }
-            if (status == ProgressiveStatus.DONE.code()) {
+            if (status != ProgressiveStatus.TO_BE_CONTINUED.code()) {
+                // Terminal at start: the native bridge already closed its
+                // progressive state on this path, so retire Java ownership
+                // without a redundant native close. The factory above must
+                // not publish this session as active (see isRetired check).
                 closed.set(true);
-                cancelArena.close();
-                owner.releaseProgressive();
-            } else if (status != ProgressiveStatus.TO_BE_CONTINUED.code()) {
-                closed.set(true);
-                cancelArena.close();
-                owner.releaseProgressive();
-                throw new JPDFiumException("Progressive render start failed: " + status);
+                retireAll(Retirement.NATIVE_ALREADY_RETIRED, false);
+                if (status != ProgressiveStatus.DONE.code()) {
+                    throw new JPDFiumException("Progressive render start failed: " + status);
+                }
             }
+        }
+
+        /** True once this session reached any terminal state. */
+        boolean isRetired() {
+            return closed.get();
+        }
+
+        /**
+         * Whether the terminal transition still owes PDFium a progressive
+         * close. Terminal {@code start}/{@code continue} statuses already
+         * closed native state inside the bridge, so re-closing is redundant
+         * (a harmless no-op against a missing entry, but an extra crossing of
+         * the domain for nothing). Every other ending, explicit close, cancel
+         * completion, owner teardown, leaves native state live and must close
+         * it explicitly while the page is still valid.
+         */
+        private enum Retirement {
+            /** Native state is still live: close it explicitly. */
+            NATIVE_LIVE,
+            /** Native state is already gone: only Java ownership remains. */
+            NATIVE_ALREADY_RETIRED
         }
 
         public void cancel() {
@@ -427,7 +534,7 @@ public final class PdfPage implements AutoCloseable {
             }
             // Synchronized with PdfPage.close() on the owner monitor so the
             // page cannot be freed between the isClosed check and the native
-            // continue call. Lock order is always owner -> NativeGuard.
+            // continue call. Lock order is always owner -> domain.
             synchronized (owner) {
                 if (closed.get()) {
                     return ProgressiveStatus.DONE;
@@ -440,7 +547,9 @@ public final class PdfPage implements AutoCloseable {
                 int code = JpdfiumLib.renderPageProgressiveContinue(rawPage, cancelFlag);
                 ProgressiveStatus status = ProgressiveStatus.fromCode(code);
                 if (status != ProgressiveStatus.TO_BE_CONTINUED) {
-                    close();
+                    // Terminal continue: the bridge already retired native
+                    // progressive state, so retire Java ownership only.
+                    closeInternal(Retirement.NATIVE_ALREADY_RETIRED);
                 }
                 return status;
             }
@@ -448,19 +557,89 @@ public final class PdfPage implements AutoCloseable {
 
         @Override
         public void close() {
+            closeInternal(Retirement.NATIVE_LIVE);
+        }
+
+        /**
+         * Retirement during page teardown: the owner is already marked closed,
+         * but its native page is still valid, so the explicit progressive
+         * close runs instead of depending on the native abandon backstop.
+         */
+        void closeForOwnerTeardown() {
+            closeInternal(Retirement.NATIVE_LIVE, true);
+        }
+
+        private void closeInternal(Retirement retirement) {
+            closeInternal(retirement, false);
+        }
+
+        private void closeInternal(Retirement retirement, boolean ownerClosing) {
             if (!closed.compareAndSet(false, true)) {
                 return;
             }
             synchronized (owner) {
+                retireAll(retirement, ownerClosing);
+            }
+        }
+
+        /**
+         * The single terminal transition for every session ending: terminal
+         * start, terminal continue (via {@code close()}), explicit close, and
+         * owner teardown. Exactly once per session:
+         *
+         * <ul>
+         *   <li>native progressive state, if the bridge still holds one;</li>
+         *   <li>session registry lease;</li>
+         *   <li>buffer lease, strictly after native retirement, the native
+         *       target must stay mapped until PDFium is done with it;</li>
+         *   <li>cancel storage;</li>
+         *   <li>page active-state release and {@code activeSession} removal.</li>
+         * </ul>
+         *
+         * <p>Ordering matters for the buffer lease: native progressive state
+         * may still hold the target bitmap, so the lease is released strictly
+         * after the native close attempt, never before. When the native close
+         * itself fails, {@link PdfPage#close()} still runs its page-close
+         * abandon backstop before any remaining native borrower could outlive
+         * the arena.
+         *
+         * @param retirement    whether native progressive state still needs an
+         *                      explicit close
+         * @param ownerClosing  true when the owner page is already marked
+         *                      closed but still natively valid, so the explicit
+         *                      progressive close runs instead of depending on
+         *                      the native abandon backstop
+         */
+        private void retireAll(Retirement retirement, boolean ownerClosing) {
+            try {
+                // A stale owner already had its native page freed by the
+                // structural operation that invalidated it, so there is
+                // nothing left to close; every other case (session open,
+                // or owner teardown before pageClose) still has valid native
+                // page state and must be closed explicitly.
+                if (retirement == Retirement.NATIVE_LIVE
+                        && (ownerClosing || !owner.isClosed())
+                        && !owner.isStale()) {
+                    JpdfiumLib.renderPageProgressiveClose(rawPage);
+                }
+            } finally {
                 try {
-                    if (!owner.isClosed() && !owner.isStale()) {
-                        JpdfiumLib.renderPageProgressiveClose(rawPage);
-                    }
+                    JpdfiumLib.releaseProgressiveSession();
                 } finally {
                     try {
-                        cancelArena.close();
+                        if (bufferLease != null) {
+                            bufferLease.close();
+                        }
                     } finally {
-                        owner.releaseProgressive();
+                        try {
+                            cancelArena.close();
+                        } finally {
+                            try {
+                                owner.releaseProgressive();
+                            } finally {
+                                owner.clearSession(ProgressiveSession.this);
+                            }
+                        }
                     }
                 }
             }
@@ -777,8 +956,14 @@ public final class PdfPage implements AutoCloseable {
      *
      * <p><strong>Lifetime:</strong> zero-length view of native memory owned by this
      * {@code PdfPage}. Must not outlive {@link #close()}, must stay on the thread
-     * that owns this page, and every native call using it must hold
-     * {@code NativeGuard} (via the {@code *Bindings} or {@code JpdfiumLib} helpers).
+     * that owns this page, and every native call using it must run inside the
+     * PdfiumRuntime execution domain (via the {@code *Bindings} or
+     * {@code JpdfiumLib} helpers).
+     *
+     * <p><strong>Outside the execution-domain guarantee:</strong> like
+     * {@link PdfDocument#rawHandle()}, direct use bypasses the admission and
+     * ordering enforced for built-in operations. It keeps working, but the
+     * domain makes no promise about it.
      */
     public MemorySegment rawHandle() {
         ensureOpen();
@@ -1106,6 +1291,7 @@ public final class PdfPage implements AutoCloseable {
 
     @Override
     public void close() {
+        // Lifecycle: OPEN → teardown under this monitor → CLOSED.
         // compareAndSet, not check-then-set: a lost race here closes the same
         // native page twice and corrupts the heap. Synchronized with
         // ProgressiveSession step/close on this monitor so an in-flight
@@ -1113,11 +1299,45 @@ public final class PdfPage implements AutoCloseable {
         // abandons pending progressive state on page close as a backstop).
         synchronized (this) {
             if (!closed.compareAndSet(false, true)) return;
-            // jpdfium_page_close handles stale wrappers without touching freed
-            // PDFium state, and releases the DocCore reference held by this page.
-            // Skipping the call leaks the DocCore (replacement FPDF_DOCUMENT, byte
-            // buffer, loaded fonts) for the life of the process.
-            JpdfiumLib.pageClose(handle);
+            // Retire the active session first, while the native page is still
+            // valid, so its explicit progressive close runs instead of
+            // depending on the abandon backstop. A session failure is
+            // aggregated, never silently dropped, but native page retirement
+            // still proceeds.
+            ProgressiveSession session = activeSession.getAndSet(null);
+            Throwable sessionFailure = null;
+            if (session != null) {
+                try {
+                    session.closeForOwnerTeardown();
+                } catch (Throwable t) {
+                    sessionFailure = t;
+                }
+            }
+            try {
+                // jpdfium_page_close handles stale wrappers without touching freed
+                // PDFium state, and releases the DocCore reference held by this page.
+                // Skipping the call leaks the DocCore (replacement FPDF_DOCUMENT, byte
+                // buffer, loaded fonts) for the life of the process.
+                JpdfiumLib.pageClose(handle);
+            } catch (RuntimeException re) {
+                if (sessionFailure != null) {
+                    re.addSuppressed(sessionFailure);
+                }
+                throw re;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (sessionFailure != null) {
+                    t.addSuppressed(sessionFailure);
+                }
+                throw new JPDFiumException("page close failed", t);
+            }
+            if (sessionFailure != null) {
+                NativeRuntime.rethrowFatal(sessionFailure);
+                if (sessionFailure instanceof RuntimeException re) {
+                    throw re;
+                }
+                throw new JPDFiumException("progressive session close failed", sessionFailure);
+            }
         }
     }
 }
