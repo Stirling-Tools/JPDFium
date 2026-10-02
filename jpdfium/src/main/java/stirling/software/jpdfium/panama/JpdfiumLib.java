@@ -646,120 +646,164 @@ public final class JpdfiumLib {
             } finally {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
             }
+        });
+    }
+
+    /**
+     * Streams saved document bytes to a channel with bounded memory.
+     *
+     * <p>Two stages: (1) PDFium serializes via {@code FPDF_FILEWRITE} to an
+     * owned native temp file inside the execution domain; (2) the domain is
+     * released and the temp file is transferred in {@code 256 KiB} chunks, so
+     * a slow, throwing, or partially-writing channel never stalls unrelated
+     * PDFium work and neither a document-sized native buffer nor a Java
+     * {@code byte[]} is ever materialized. The temp file is deleted on success
+     * and on every failure path; the caller's channel exception (if any) is
+     * preserved.
+     */
+    public static void docSaveTo(long doc, WritableByteChannel channel) throws IOException {
+        docSaveTo(doc, channel, SaveOptions.fast());
+    }
+
+    public static void docSaveTo(long doc, WritableByteChannel channel, SaveOptions options)
+            throws IOException {
+        if (channel == null) throw new IllegalArgumentException("channel must not be null");
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        Path tmp = docSaveToTempFile(doc, opts);
+        try (FileChannel in = FileChannel.open(tmp, StandardOpenOption.READ)) {
+            ByteBuffer buf = ByteBuffer.allocate(SAVE_TRANSFER_BYTES);
+            int zeroSpins = 0;
+            while (true) {
+                buf.clear();
+                int n = in.read(buf);
+                if (n < 0) break;
+                if (n == 0) continue;
+                buf.flip();
+                while (buf.hasRemaining()) {
+                    int w = channel.write(buf);
+                    if (w == 0) {
+                        if (++zeroSpins > 10_000) {
+                            throw new IOException("channel is not making progress");
+                        }
+                    } else if (w > 0) {
+                        zeroSpins = 0;
+                    }
+                }
+            }
+            if (!channel.isOpen()) {
+                throw new IOException("channel closed during save");
+            }
         } finally {
-            NativeGuard.release();
+            OutputTransaction.deleteQuietly(tmp);
         }
     }
 
     /**
-     * Streams saved document bytes directly to a channel without intermediate Java heap byte[] allocation.
-     *
-     * <p>The serialized bytes are produced under {@link NativeGuard} into a detached
-     * native allocation, then written <em>outside</em> the guard: a slow, throwing,
-     * or partially-writing channel must never stall unrelated PDFium work behind the
-     * process-wide lock. The buffer is independent document state (plain
-     * {@code malloc}), so releasing it needs no guard either. Outputs larger than
-     * {@link Integer#MAX_VALUE} are written in chunked slices because a single
-     * {@code ByteBuffer} view cannot span them.
+     * Ordered teardown, leaf first: callers close pages/progressive/text state
+     * before the document, and documents before library shutdown. A second
+     * close is a no-op at the wrapper layer; the native close itself runs in
+     * the execution domain like every other PDFium call.
      */
-    public static void docSaveTo(long doc, WritableByteChannel channel) throws IOException {
-        final MemorySegment nativePtr;
-        final long rawLen;
-        final long len;
-        NativeGuard.acquire();
-        try {
-            check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
-            nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            // LONG_SCRATCH is process-wide and only the guard makes it readable, so
-            // the length has to be copied out before another thread can overwrite it.
-            rawLen = LONG_SCRATCH.get(JAVA_LONG, 0);
-        } finally {
-            NativeGuard.release();
-        }
-        // Acquire the pointer in its own try-finally so the buffer is freed even when
-        // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
-        try {
-            len = checkNativeBuffer(nativePtr, rawLen, "docSaveBytes", true);
-            MemorySegment bytes = nativePtr.reinterpret(len);
-            BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, len);
-            try {
-                long offset = 0;
-                while (offset < len) {
-                    long chunk = Math.min(len - offset, Integer.MAX_VALUE);
-                    ByteBuffer bb = bytes.asSlice(offset, chunk).asByteBuffer();
-                    while (bb.hasRemaining()) {
-                        channel.write(bb);
-                    }
-                    offset += chunk;
-                }
-            } finally {
-                BridgeAlloc.freed(BridgeAlloc.Tag.SAVE_OUTPUT, len);
-            }
-        } finally {
-            JpdfiumH.jpdfium_free_buffer(nativePtr);
-        }
-    }
-
     public static void docClose(long doc) {
-        NativeGuard.acquire();
-        try {
-            try {
-                if (FastLinks.DOC_CLOSE != null) {
-                    FastLinks.DOC_CLOSE.invokeExact(doc);
-                    return;
+        PdfiumRuntime.executeTeardown(() -> {
+            // Binding selected before invocation. A cleanup handle that threw
+            // and then fell back would risk closing the same native document
+            // twice - exactly the corruption this wrapper exists to prevent.
+            MethodHandle fast = FastLinks.DOC_CLOSE;
+            if (fast != null) {
+                try {
+                    fast.invokeExact(doc);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    if (t instanceof JPDFiumException jpdfiumException) {
+                        throw jpdfiumException;
+                    }
+                    throw new JPDFiumException("docClose fast-path invocation failed", t);
                 }
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
+            } else {
+                JpdfiumH.jpdfium_doc_close(doc);
             }
-            JpdfiumH.jpdfium_doc_close(doc);
-        } finally {
-            NativeGuard.release();
-        }
+            PdfiumRuntime.documentClosed();
+        });
     }
 
     public static long pageOpen(long doc, int idx) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeLong(() -> {
             check(JpdfiumH.jpdfium_page_open(doc, idx, LONG_SCRATCH), "pageOpen: " + idx);
-            return LONG_SCRATCH.get(JAVA_LONG, 0);
-        } finally {
-            NativeGuard.release();
-        }
+            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            PdfiumRuntime.pageOpened();
+            return handle;
+        });
     }
 
     public static float pageWidth(long page) {
-        NativeGuard.acquire();
-        try {
-            return pageWidth0(page);
-        } finally {
-            NativeGuard.release();
-        }
+        return (float) PdfiumRuntime.executeDouble(() -> pageWidth0(page));
     }
 
     public static float pageHeight(long page) {
-        NativeGuard.acquire();
-        try {
-            return pageHeight0(page);
-        } finally {
-            NativeGuard.release();
-        }
+        return (float) PdfiumRuntime.executeDouble(() -> pageHeight0(page));
+    }
+
+    /** Width and height resolved under a single domain admission. */
+    public record PageInfo(float width, float height) {}
+
+    /**
+     * Coarse page-geometry query: width plus height in one native validation
+     * ({@code jpdfium_page_info}) instead of two leaf dispatches. Prefer this
+     * (and its future siblings) over pairing {@link #pageWidth} with
+     * {@link #pageHeight} on hot paths. Falls back to batched leaves on older
+     * bridges that predate the coarse entry.
+     */
+    public static PageInfo pageInfo(long page) {
+        return PdfiumRuntime.executeBatch(() -> {
+            MethodHandle coarse = PageInfoHandle.HANDLE;
+            if (coarse != null) {
+                try {
+                    int rc = (int) coarse.invokeExact(page, FLOAT_SCRATCH, FLOAT2_SCRATCH);
+                    if (rc == OK) {
+                        return new PageInfo(
+                                FLOAT_SCRATCH.get(JAVA_FLOAT, 0), FLOAT2_SCRATCH.get(JAVA_FLOAT, 0));
+                    }
+                    // Native rejection (e.g. stale handle) is authoritative;
+                    // do not fall back to leaves that would re-validate.
+                    check(rc, "pageInfo");
+                } catch (JPDFiumException e) {
+                    throw e;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    // Invocation failure (not a native error code): fall back
+                    // to leaves so old bridges still work.
+                }
+            }
+            return new PageInfo(pageWidth0(page), pageHeight0(page));
+        });
+    }
+
+    /** Optional coarse geometry handle; null on bridges predating the entry. */
+    private static final class PageInfoHandle {
+        static final MethodHandle HANDLE = Symbols.downcallOptional("jpdfium_page_info",
+                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
     }
 
     public static void pageClose(long page) {
-        NativeGuard.acquire();
-        try {
-            try {
-                if (FastLinks.PAGE_CLOSE != null) {
-                    FastLinks.PAGE_CLOSE.invokeExact(page);
-                    return;
+        PdfiumRuntime.executeTeardown(() -> {
+            // See docClose: no retry-on-throw, to avoid a double close.
+            MethodHandle fast = FastLinks.PAGE_CLOSE;
+            if (fast != null) {
+                try {
+                    fast.invokeExact(page);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    if (t instanceof JPDFiumException jpdfiumException) {
+                        throw jpdfiumException;
+                    }
+                    throw new JPDFiumException("pageClose fast-path invocation failed", t);
                 }
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
+            } else {
+                JpdfiumH.jpdfium_page_close(page);
             }
-            JpdfiumH.jpdfium_page_close(page);
-        } finally {
-            NativeGuard.release();
-        }
+            PdfiumRuntime.pageClosed();
+        });
     }
 
     /**
@@ -803,13 +847,19 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Returns the configured render-pixel budget ({@code jpdfium.maxRenderPixels},
-     * default 100M, {@code <= 0} disables). Applies to single renders and to
-     * aggregated outputs such as stitched multi-page images.
+     * Returns the render-pixel budget ({@code jpdfium.maxRenderPixels},
+     * default 0 = unlimited). Set to a finite value for untrusted documents;
+     * negative is invalid and rejected. Read per call so tests
+     * can adjust it at runtime; each operation captures the value once at
+     * entry and uses that snapshot throughout.
      */
     public static long maxRenderPixels() {
-        // Read per call so the bound stays configurable at runtime.
-        return Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+        long v = Long.getLong("jpdfium.maxRenderPixels", DEFAULT_MAX_RENDER_PIXELS);
+        if (v < 0) {
+            throw new IllegalStateException(
+                    "invalid jpdfium.maxRenderPixels=" + v + " (use 0 for unlimited)");
+        }
+        return v;
     }
 
     /**
@@ -938,8 +988,7 @@ public final class JpdfiumLib {
     public static SvgRaster svgToNative(byte[] svg, int width, int height) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
                         ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToNative");
                 MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -950,9 +999,7 @@ public final class JpdfiumLib {
                     throw new JPDFiumException("svgToNative returned no buffer");
                 }
                 return new SvgRaster(ptr.reinterpret(len), w, h);
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
@@ -989,8 +1036,7 @@ public final class JpdfiumLib {
 
     public static RenderResult renderPage(long page, int dpi, boolean transparent, int flags) {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
             check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
@@ -1006,9 +1052,7 @@ public final class JpdfiumLib {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
                 BridgeAlloc.freed(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static RenderedPageView renderPageView(long page, int dpi) {
@@ -1021,8 +1065,7 @@ public final class JpdfiumLib {
 
     public static RenderedPageView renderPageView(long page, int dpi, boolean transparent, int flags) {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
             check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
@@ -1037,40 +1080,37 @@ public final class JpdfiumLib {
                         JpdfiumH.jpdfium_free_buffer(nativePtr);
                         BridgeAlloc.freed(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
                     });
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,
                                                 int width, int height, int stride, int flags,
                                                 MemorySegment cancelFlag) {
         checkRenderIntoArgs(targetBitmap, width, height);
-        NativeGuard.acquire();
-        try {
-            return JpdfiumH.jpdfium_render_page_progressive_start(rawPage, targetBitmap,
+        return PdfiumRuntime.executeInt(() -> {
+            int status = JpdfiumH.jpdfium_render_page_progressive_start(rawPage, targetBitmap,
                     targetBitmap.byteSize(), width, height, stride, flags, cancelFlag);
-        } finally {
-            NativeGuard.release();
-        }
+            // Registration joins the native create inside this one domain
+            // operation; every exit path out of the session owner releases it.
+            PdfiumRuntime.sessionStarted();
+            return status;
+        });
+    }
+
+    /** Release one registry session lease (idempotent pairing with start). */
+    public static void releaseProgressiveSession() {
+        PdfiumRuntime.sessionEnded();
     }
 
     public static int renderPageProgressiveContinue(MemorySegment rawPage, MemorySegment cancelFlag) {
-        NativeGuard.acquire();
-        try {
-            return JpdfiumH.jpdfium_render_page_progressive_continue(rawPage, cancelFlag);
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.executeInt(() ->
+                JpdfiumH.jpdfium_render_page_progressive_continue(rawPage, cancelFlag));
     }
 
     public static void renderPageProgressiveClose(MemorySegment rawPage) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.executeTeardown(() -> {
             JpdfiumH.jpdfium_render_page_progressive_close(rawPage);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1085,8 +1125,7 @@ public final class JpdfiumLib {
      */
     public static void renderPageInto(long page, MemorySegment targetBitmap, int width, int height, int flags) {
         checkRenderIntoArgs(targetBitmap, width, height);
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
                 if (NativeRuntime.isStub()) {
                     return;
@@ -1095,13 +1134,7 @@ public final class JpdfiumLib {
             }
             MemorySegment rawPage = pageRawHandle0(page);
             doRenderLocked(rawPage, targetBitmap, width, height, flags);
-        } catch (RuntimeException re) {
-            throw re;
-        } catch (Throwable t) {
-            throw new JPDFiumException("renderPageInto failed", t);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1112,7 +1145,9 @@ public final class JpdfiumLib {
      */
     public static void renderPageIntoSegment(MemorySegment rawPage, MemorySegment targetBitmap,
                                       int width, int height, int flags) {
-        NativeGuard.acquire();
+        // Leaf admission: four captured arguments made this a per-call
+        // allocation on the certified zero-allocation render path.
+        PdfiumRuntime.enterLeaf();
         try {
             if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
                 if (NativeRuntime.isStub()) {
@@ -1121,12 +1156,8 @@ public final class JpdfiumLib {
                 throw new JPDFiumException("Direct render bindings not available");
             }
             doRenderLocked(rawPage, targetBitmap, width, height, flags);
-        } catch (RuntimeException re) {
-            throw re;
-        } catch (Throwable t) {
-            throw new JPDFiumException("renderPageInto failed", t);
         } finally {
-            NativeGuard.release();
+            PdfiumRuntime.exitLeaf();
         }
     }
 
@@ -1173,64 +1204,49 @@ public final class JpdfiumLib {
 
     /** JSON report of the last sanitize stage ("" when none has run). */
     public static String docSanitizeReport(long doc) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_sanitize_report(doc, ADDR_SCRATCH), "docSanitizeReport");
             MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Enable or disable the QPDF sanitize pass when saving a redacted document. */
     public static void docSetSanitizeOnSave(long doc, boolean enable) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_set_sanitize_on_save(doc, enable ? 1 : 0), "docSetSanitizeOnSave");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String textGetChars(long page) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_chars(page, ADDR_SCRATCH), "textGetChars");
             MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String textFind(long page, String query) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cQuery = a.allocateFrom(query);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_text_find(page, cQuery, ADDR_SCRATCH), "textFind");
                 MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
                 String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
     public static void redactRegion(long page, float x, float y, float w, float h, int argb, boolean removeContent) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_redact_region(page, x, y, w, h, argb, removeContent ? 1 : 0), "redactRegion");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1246,23 +1262,22 @@ public final class JpdfiumLib {
      * @param h    crop rect height
      */
     public static void cropRemoveContent(long page, float x, float y, float w, float h) {
-        NativeGuard.acquire();
+        // Leaf admission: five captured arguments made this one of the hottest
+        // allocating call sites (see docPageCount).
+        PdfiumRuntime.enterLeaf();
         try {
             check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
         } finally {
-            NativeGuard.release();
+            PdfiumRuntime.exitLeaf();
         }
     }
 
     public static void redactPattern(long page, String pattern, int argb, boolean removeContent) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPattern = a.allocateFrom(pattern);
-            NativeGuard.acquire();
-            try {
+            PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_redact_pattern(page, cPattern, argb, removeContent ? 1 : 0), "redactPattern");
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
@@ -1275,13 +1290,10 @@ public final class JpdfiumLib {
                 MemorySegment s = a.allocateFrom(words[i]);
                 ptrs.setAtIndex(ADDRESS, i, s);
             }
-            NativeGuard.acquire();
-            try {
+            PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_redact_words(page, ptrs, words.length, argb, padding,
                         wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0), "redactWords");
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
@@ -1298,15 +1310,12 @@ public final class JpdfiumLib {
                                      boolean wholeWord, boolean useRegex, boolean removeContent,
                                      boolean caseSensitive) {
         if (wordsPtrs == null || wordsPtrs.equals(MemorySegment.NULL) || wordCount <= 0) return 0;
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_redact_words_ex(page, wordsPtrs, wordCount, argb, padding,
                     wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
                     caseSensitive ? 1 : 0, INT_SCRATCH), "redactWordsEx");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int redactWordsEx(long page, String[] words, int argb, float padding,
@@ -1321,44 +1330,42 @@ public final class JpdfiumLib {
     }
 
     public static void pageFlatten(long page) {
-        NativeGuard.acquire();
-        try {
-            if (FastLinks.PAGE_FLATTEN != null) {
+        PdfiumRuntime.execute(() -> {
+            // Binding selected before invocation; a mutation must never be
+            // re-invoked through the slow binding after an error.
+            MethodHandle fast = FastLinks.PAGE_FLATTEN;
+            if (fast != null) {
                 try {
-                    int rc = (int) FastLinks.PAGE_FLATTEN.invokeExact(page);
+                    int rc = (int) fast.invokeExact(page);
                     check(rc, "pageFlatten");
                     return;
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
+                    if (t instanceof JPDFiumException jpdfiumException) {
+                        throw jpdfiumException;
+                    }
+                    throw new JPDFiumException("pageFlatten fast-path invocation failed", t);
                 }
             }
             check(JpdfiumH.jpdfium_page_flatten(page), "pageFlatten");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String textGetCharPositions(long page) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_char_positions(page, ADDR_SCRATCH), "textGetCharPositions");
             MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static void pageToImage(long doc, int pageIndex, int dpi) {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1368,13 +1375,10 @@ public final class JpdfiumLib {
      * @return the annotation index within the page's annotation array
      */
     public static int annotCreateRedact(long page, float x, float y, float w, float h, int argb) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, INT_SCRATCH), "annotCreateRedact");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1387,15 +1391,12 @@ public final class JpdfiumLib {
                                        float padding, boolean wholeWord, boolean useRegex,
                                        boolean caseSensitive, int argb) {
         if (wordsPtrs == null || wordsPtrs.equals(MemorySegment.NULL) || wordCount <= 0) return 0;
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_redact_mark_words(page, wordsPtrs, wordCount, padding,
                     wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
                     argb, INT_SCRATCH), "redactMarkWords");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int redactMarkWords(long page, String[] words, float padding,
@@ -1411,47 +1412,35 @@ public final class JpdfiumLib {
 
     /** Returns the number of pending REDACT annotations on the page. */
     public static int annotCountRedacts(long page) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_annot_count_redacts(page, INT_SCRATCH), "annotCountRedacts");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Returns JSON array of all REDACT annotation rects. */
     public static String annotGetRedactsJson(long page) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_annot_get_redacts_json(page, ADDR_SCRATCH), "annotGetRedactsJson");
             MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Remove a specific REDACT annotation by its index. */
     public static void annotRemoveRedact(long page, int annotIndex) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_annot_remove_redact(page, annotIndex), "annotRemoveRedact");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Remove all REDACT annotations from the page (undo all marks). */
     public static void annotClearRedacts(long page) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_annot_clear_redacts(page), "annotClearRedacts");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1462,13 +1451,10 @@ public final class JpdfiumLib {
      * @return the number of REDACT annotations that were committed
      */
     public static int redactCommit(long page, int argb, boolean removeContent) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, INT_SCRATCH), "redactCommit");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1476,8 +1462,7 @@ public final class JpdfiumLib {
      * The document handle remains valid after this call.
      */
     public static byte[] docSaveIncremental(long doc) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_save_incremental(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveIncremental");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
             // Acquire the pointer in its own try-finally so the buffer is freed even when
@@ -1493,9 +1478,7 @@ public final class JpdfiumLib {
             } finally {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1503,44 +1486,33 @@ public final class JpdfiumLib {
      * This enables direct FFM calls to PDFium functions not covered by the bridge.
      */
     public static MemorySegment docRawHandle(long doc) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             long raw = JpdfiumH.jpdfium_doc_raw_handle(doc);
             if (raw == 0) {
                 throw new JPDFiumException("jpdfium_doc_raw_handle returned null pointer for handle " + doc);
             }
             return FfmHelper.ptrToSegment(raw);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
      * Returns the raw FPDF_PAGE pointer (as a MemorySegment) from a bridge handle.
      */
     public static MemorySegment pageRawHandle(long page) {
-        NativeGuard.acquire();
-        try {
-            return pageRawHandle0(page);
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.execute(() -> pageRawHandle0(page));
     }
 
     /**
      * Returns the raw FPDF_DOCUMENT pointer for the document that owns a page.
      */
     public static MemorySegment pageDocRawHandle(long page) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             long raw = JpdfiumH.jpdfium_page_doc_raw_handle(page);
             if (raw == 0) {
                 throw new JPDFiumException("jpdfium_page_doc_raw_handle returned null pointer for handle " + page);
             }
             return FfmHelper.ptrToSegment(raw);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -1550,15 +1522,14 @@ public final class JpdfiumLib {
                                    float margin, int position, int imageFormat) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, imageData);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_image_to_pdf(
                         cData, imageData.length,
                         pageWidth, pageHeight, margin, position, imageFormat, LONG_SCRATCH), "imageToPdf");
-                return LONG_SCRATCH.get(JAVA_LONG, 0);
-            } finally {
-                NativeGuard.release();
-            }
+                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                PdfiumRuntime.documentOpened();
+                return handle;
+            });
         }
     }
 
@@ -1578,58 +1549,45 @@ public final class JpdfiumLib {
                                         float margin, int position, int imageFormat, int insertAtIndex) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, imageData);
-            NativeGuard.acquire();
-            try {
+            PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_doc_add_image_page(
                         doc, cData, imageData.length,
                         pageWidth, pageHeight, margin, position, imageFormat, insertAtIndex),
                         "docAddImagePage");
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
     // ---- Signatures ----
 
     public static int signatureCount(long doc) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_signature_count(doc, INT_SCRATCH), "signatureCount");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static int signatureRevisionCount(long doc) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_signature_revision_count(doc, INT_SCRATCH), "signatureRevisionCount");
             return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Flat JSON info for one signature field. */
     public static String signatureInfo(long doc, int index) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_signature_info(doc, index, ADDR_SCRATCH), "signatureInfo");
             MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /** Digest of the signature /ByteRange (0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512). */
     public static byte[] signatureDigest(long doc, int index, int algorithm) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, ADDR_SCRATCH, LONG_SCRATCH),
                     "signatureDigest");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -1639,8 +1597,6 @@ public final class JpdfiumLib {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
             }
             return result;
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }
