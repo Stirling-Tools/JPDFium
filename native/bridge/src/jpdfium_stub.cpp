@@ -234,7 +234,9 @@ uint32_t jpdfium_abi_version() JPDFIUM_NOEXCEPT {
 
 int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
     // The stub links no PDFium headers; these mirror FS_RECTF
-    // {float left, top, right, bottom} exactly.
+    // {float left, top, right, bottom}, FS_MATRIX {a,b,c,d,e,f}, and
+    // FPDF_FILEWRITE {version + WriteBlock} geometry exactly enough for the
+    // Java handshake to distinguish stub from real builds.
     switch (query) {
         case JPDFIUM_ABI_QUERY_PTR_SIZE:
             return static_cast<int64_t>(sizeof(void*));
@@ -242,6 +244,25 @@ int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
             return 16;
         case JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET:
             return 8;
+        case JPDFIUM_ABI_QUERY_ULONG_SIZE:
+            return static_cast<int64_t>(sizeof(unsigned long));
+        case JPDFIUM_ABI_QUERY_RECTF_LEFT_OFFSET:
+            return 0;
+        case JPDFIUM_ABI_QUERY_RECTF_BOTTOM_OFFSET:
+            return 12;
+        case JPDFIUM_ABI_QUERY_RECTF_TOP_OFFSET:
+            return 4;
+        case JPDFIUM_ABI_QUERY_MATRIX_SIZE:
+            return 24;
+        case JPDFIUM_ABI_QUERY_FILEWRITE_SIZE:
+            // version(int) + padding + function pointer
+            return static_cast<int64_t>(sizeof(void*) * 2);
+        case JPDFIUM_ABI_QUERY_FILEWRITE_VERSION:
+            return 1;
+        case JPDFIUM_ABI_QUERY_HAS_SKIA:
+            return 0;
+        case JPDFIUM_ABI_QUERY_HAS_QPDF:
+            return 0;
         default:
             return -1;
     }
@@ -405,6 +426,30 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     return return_stub();
 }
 
+int32_t jpdfium_doc_save_to_file(int64_t handle, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    if (out_bytes) *out_bytes = 0;
+    if (!path || !*path) return JPDFIUM_ERR_INVALID;
+    if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
+    int32_t rc = jpdfium_doc_save(handle, path);
+    if (rc != JPDFIUM_OK) return rc;
+    if (FilePtr in = FilePtr(std::fopen(path, "rb")); in) {
+        std::fseek(in.get(), 0, SEEK_END);
+        const long sz = std::ftell(in.get());
+        if (sz < 0) return JPDFIUM_ERR_IO;
+        if (max_bytes > 0 && static_cast<int64_t>(sz) > max_bytes) {
+            in.reset();
+            std::remove(path);
+            return JPDFIUM_ERR_IO;
+        }
+        if (out_bytes) *out_bytes = static_cast<int64_t>(sz);
+        return JPDFIUM_OK;
+    }
+    // jpdfium_doc_save stub may succeed without writing (unknown handle);
+    // report success with zero bytes only when the file truly exists.
+    return JPDFIUM_ERR_IO;
+}
+
 void jpdfium_doc_close(int64_t handle) noexcept {
     g_docs.erase(handle);
 }
@@ -434,6 +479,11 @@ int32_t jpdfium_page_width(int64_t, float* w) {
 }
 int32_t jpdfium_page_height(int64_t, float* h) {
     *h = 842.0f;
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_info(int64_t, float* w, float* h) {
+    if (w) *w = 595.0f;
+    if (h) *h = 842.0f;
     return JPDFIUM_OK;
 }
 
