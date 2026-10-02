@@ -11,13 +11,20 @@ import stirling.software.jpdfium.exception.UncommittedMarksException;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.RenderResult;
+import stirling.software.jpdfium.model.SaveOptions;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -31,9 +38,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * and result-code to exception translation.
  *
  * <p>PDFium keeps process-wide mutable state, so it is not thread-safe even across
- * independent documents. Every method here serialises on {@link NativeGuard}, which
+ * independent documents. Every method here submits to {@link PdfiumRuntime}, which
  * makes concurrent calls safe. A single document handle must still not be accessed
- * concurrently - the guard prevents native corruption, not logical interleaving.
+ * concurrently - the domain prevents native corruption, not logical interleaving.
  *
  * <p>Advanced feature bindings are split into focused companion classes:
  * {@link Pcre2Lib}, {@link FlashTextLib}, {@link FontLib},
@@ -62,10 +69,11 @@ public final class JpdfiumLib {
     public static final int POSITION_BOTTOM_CENTER = 7;
     public static final int POSITION_BOTTOM_RIGHT  = 8;
 
-    // Shared scratch outputs for leaf downcalls. Every access holds NativeGuard,
-    // which is reentrant: a value must be consumed before any reentrant call that
-    // reuses the same slot. Distinct slots (INT vs FLOAT vs ADDR) may nest;
-    // the same slot must never be live across a nested JpdfiumLib call.
+    // Shared scratch outputs for leaf downcalls. Every access runs inside the
+    // PdfiumRuntime domain, which is reentrant: a value must be consumed before
+    // any reentrant call that reuses the same slot. Distinct slots (INT vs FLOAT
+    // vs ADDR) may nest; the same slot must never be live across a nested
+    // JpdfiumLib call.
     private static final Arena GLOBAL = Arena.global();
     private static final MemorySegment INT_SCRATCH    = GLOBAL.allocate(JAVA_INT);
     private static final MemorySegment INT2_SCRATCH   = GLOBAL.allocate(JAVA_INT);
@@ -74,7 +82,11 @@ public final class JpdfiumLib {
     private static final MemorySegment FLOAT2_SCRATCH = GLOBAL.allocate(JAVA_FLOAT);
     private static final MemorySegment ADDR_SCRATCH   = GLOBAL.allocate(ADDRESS);
 
-    private static final long DEFAULT_MAX_RENDER_PIXELS = 100_000_000L;
+    /**
+     * Unlimited by default. Set a finite budget for untrusted documents.
+     * Negative values are invalid configuration and are rejected.
+     */
+    private static final long DEFAULT_MAX_RENDER_PIXELS = 0L;
 
     static {
         NativeLoader.ensureLoaded();
@@ -98,9 +110,11 @@ public final class JpdfiumLib {
             rc = JpdfiumH.jpdfium_init();
         }
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
-        // Native teardown must wait for in-flight calls or PDFium segfaults.
+        // JVM-exit teardown quiesces first, then destroys only when no live
+        // resources remain (the OS reclaims the rest). Never force-destroys an
+        // active library for cosmetic teardown.
         // Platform thread required: virtual threads cannot be shutdown hooks.
-        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> NativeGuard.run(JpdfiumH::jpdfium_destroy)));
+        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(PdfiumRuntime::shutdownOnJvmExit));
     }
 
     private JpdfiumLib() {}
@@ -123,22 +137,12 @@ public final class JpdfiumLib {
 
     /** Bridge ABI version the loaded native library speaks (must match Java's expectation). */
     public static int abiVersion() {
-        NativeGuard.acquire();
-        try {
-            return JpdfiumH.jpdfium_abi_version();
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.executeInt(JpdfiumH::jpdfium_abi_version);
     }
 
     /** Native layout probe (pointer width, struct geometry); unknown ids return -1. */
     public static long abiQuery(int query) {
-        NativeGuard.acquire();
-        try {
-            return JpdfiumH.jpdfium_abi_query(query);
-        } finally {
-            NativeGuard.release();
-        }
+        return PdfiumRuntime.executeLong(() -> JpdfiumH.jpdfium_abi_query(query));
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
@@ -149,15 +153,71 @@ public final class JpdfiumLib {
     public static final long EXPECTED_RECTF_SIZE = 16;
     /** Expected {@code offsetof(FS_RECTF, right)}. */
     public static final long EXPECTED_RECTF_RIGHT_OFFSET = 8;
+    /** Query ids mirroring {@code JPDFIUM_ABI_QUERY_*}. */
+    public static final int ABI_Q_PTR_SIZE = 0;
+    public static final int ABI_Q_RECTF_SIZE = 1;
+    public static final int ABI_Q_RECTF_RIGHT = 2;
+    public static final int ABI_Q_ULONG_SIZE = 3;
+    public static final int ABI_Q_RECTF_LEFT = 4;
+    public static final int ABI_Q_RECTF_BOTTOM = 5;
+    public static final int ABI_Q_RECTF_TOP = 6;
+    public static final int ABI_Q_MATRIX_SIZE = 7;
+    public static final int ABI_Q_FILEWRITE_SIZE = 8;
+    public static final int ABI_Q_FILEWRITE_VERSION = 9;
+    public static final int ABI_Q_HAS_SKIA = 10;
+    public static final int ABI_Q_HAS_QPDF = 11;
+
+    /**
+     * ABI probes used by the loader, deliberately outside the execution domain.
+     *
+     * <p>{@link NativeLoader} verifies the ABI while loading the library, and
+     * {@code JpdfiumLib}'s own class initializer calls
+     * {@code NativeLoader.ensureLoaded()}. If these probes went through
+     * {@link PdfiumRuntime}, two things break:
+     *
+     * <ul>
+     *   <li>QPDF stops being independent of PDFium. {@code QpdfLib}'s first use
+     *       resolves a symbol, which loads the library, which probes the ABI
+     *       through the domain - so a QPDF operation blocks whenever any thread
+     *       holds the domain, which is the opposite of the intended split.</li>
+     *   <li>A class-initialization cycle: loader waits on {@code JpdfiumLib}
+     *       while {@code JpdfiumLib}'s initializer waits on the loader.</li>
+     * </ul>
+     *
+     * <p>Safe because these are constant getters that touch no document, page
+     * or mutable state. They read the same values the domain-guarded
+     * {@link #abiVersion()} and {@link #abiQuery(int)} do; the domain adds
+     * nothing to a constant read.
+     */
+    static int abiVersionUnguarded() {
+        return JpdfiumH.jpdfium_abi_version();
+    }
+
+    /** Unguarded {@link #abiQuery(int)}; see {@link #abiVersionUnguarded()}. */
+    static long abiQueryUnguarded(int query) {
+        return JpdfiumH.jpdfium_abi_query(query);
+    }
 
     /**
      * Verifies the packaged Java/native combination against every exposed ABI
-     * probe: version, pointer width, and PDFium struct geometry.
+     * probe: version, pointer width, {@code unsigned long} width (platform
+     * dependent in {@code FPDF_FILEACCESS}/{@code FPDF_FILEWRITE}), PDFium
+     * struct geometry, {@code FPDF_FILEWRITE} version (must be 1 per
+     * {@code fpdf_save.h}), and feature/build identity (Skia/QPDF presence).
+     *
+     * <p>Called by {@link NativeLoader} during loading, so it uses the
+     * unguarded probes: see {@link #abiVersionUnguarded()} for why acquiring the
+     * execution domain here would be wrong. A mismatch fails before any
+     * document is processed.
      *
      * @throws JPDFiumException on any mismatch, naming the offending component
      */
     public static void checkAbiCompatible() {
-        checkAbiCompatible(abiVersion(), abiQuery(0), abiQuery(1), abiQuery(2));
+        checkAbiCompatible(abiVersionUnguarded(), abiQueryUnguarded(0),
+                abiQueryUnguarded(1), abiQueryUnguarded(2), abiQueryUnguarded(3),
+                abiQueryUnguarded(4), abiQueryUnguarded(5), abiQueryUnguarded(6),
+                abiQueryUnguarded(7), abiQueryUnguarded(8), abiQueryUnguarded(9),
+                abiQueryUnguarded(10), abiQueryUnguarded(11));
     }
 
     /**
@@ -167,9 +227,20 @@ public final class JpdfiumLib {
      * @param ptrSize   native pointer-width probe result
      * @param rectfSize native {@code FS_RECTF} size probe result
      * @param rightOff  native {@code FS_RECTF.right} offset probe result
+     * @param ulongSize native {@code sizeof(unsigned long)} probe result
+     * @param leftOff   native {@code FS_RECTF.left} offset probe result
+     * @param bottomOff native {@code FS_RECTF.bottom} offset probe result
+     * @param topOff    native {@code FS_RECTF.top} offset probe result
+     * @param matrixSize native {@code sizeof(FS_MATRIX)} probe result
+     * @param fileWriteSize native {@code sizeof(FPDF_FILEWRITE)} probe result
+     * @param fileWriteVersion native {@code FPDF_FILEWRITE} version probe (must be 1)
+     * @param hasSkia   native Skia-build probe (0/1)
+     * @param hasQpdf   native QPDF-build probe (0/1)
      * @throws JPDFiumException on any mismatch, naming the offending component
      */
-    static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff) {
+    static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff,
+            long ulongSize, long leftOff, long bottomOff, long topOff, long matrixSize,
+            long fileWriteSize, long fileWriteVersion, long hasSkia, long hasQpdf) {
         if (version != EXPECTED_ABI_VERSION) {
             throw new JPDFiumException(
                     "Unsupported native bridge ABI version " + version + " (expected "
@@ -187,6 +258,58 @@ public final class JpdfiumLib {
             throw new JPDFiumException("Unsupported FS_RECTF.right offset " + rightOff + " (expected "
                     + EXPECTED_RECTF_RIGHT_OFFSET + " on " + NativeLoader.detectPlatform() + ")");
         }
+        // Unsigned long is platform-dependent (LP64 vs LLP64): PDFium uses it
+        // in FPDF_FILEACCESS/FPDF_FILEWRITE and signature string lengths. The
+        // Java FFM mapping assumes the native width reported here; a mismatch
+        // would truncate save sizes on Windows. Accept 4 or 8, reject anything
+        // else.
+        if (ulongSize != 4 && ulongSize != 8) {
+            throw new JPDFiumException("Unsupported native unsigned long width " + ulongSize
+                    + " (expected 4 or 8 on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (leftOff != 0) {
+            throw new JPDFiumException("Unsupported FS_RECTF.left offset " + leftOff
+                    + " (expected 0 on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (topOff != 4) {
+            throw new JPDFiumException("Unsupported FS_RECTF.top offset " + topOff
+                    + " (expected 4 on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (bottomOff != 12) {
+            throw new JPDFiumException("Unsupported FS_RECTF.bottom offset " + bottomOff
+                    + " (expected 12 on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (matrixSize != 24) {
+            throw new JPDFiumException("Unsupported FS_MATRIX size " + matrixSize
+                    + " (expected 24 on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (fileWriteVersion != 1) {
+            throw new JPDFiumException("Unsupported FPDF_FILEWRITE version " + fileWriteVersion
+                    + " (expected 1 per fpdf_save.h on " + NativeLoader.detectPlatform() + ")");
+        }
+        if (fileWriteSize <= 0) {
+            throw new JPDFiumException("Invalid FPDF_FILEWRITE size " + fileWriteSize + " on "
+                    + NativeLoader.detectPlatform());
+        }
+        // Feature identity is informational at handshake time (Skia/QPDF
+        // absence surfaces as ERR_NOT_FOUND or renderer fallback at use time),
+        // but unknown probe values (-1) mean an old bridge that predates the
+        // probe and must be rejected.
+        if (hasSkia < 0 || hasSkia > 1 || hasQpdf < 0 || hasQpdf > 1) {
+            throw new JPDFiumException("Unsupported feature-identity probe hasSkia=" + hasSkia
+                    + " hasQpdf=" + hasQpdf + " on " + NativeLoader.detectPlatform()
+                    + " (bridge predates feature probes; rebuild natives)");
+        }
+    }
+
+    static void checkAbiCompatible(int version, long ptrSize, long rectfSize, long rightOff) {
+        // Backwards-compatible 4-tuple for older tests: expand with live
+        // probes for the remaining fields so old call sites still verify the
+        // full surface.
+        checkAbiCompatible(version, ptrSize, rectfSize, rightOff, abiQueryUnguarded(3),
+                abiQueryUnguarded(4), abiQueryUnguarded(5), abiQueryUnguarded(6),
+                abiQueryUnguarded(7), abiQueryUnguarded(8), abiQueryUnguarded(9),
+                abiQueryUnguarded(10), abiQueryUnguarded(11));
     }
 
     static void check(int rc, String ctx) {
@@ -209,28 +332,55 @@ public final class JpdfiumLib {
     }
 
     private static float pageWidth0(long page) {
-        try {
-            if (FastLinks.PAGE_WIDTH != null) {
-                int rc = (int) FastLinks.PAGE_WIDTH.invokeExact(page, FLOAT_SCRATCH);
-                check(rc, "pageWidth");
-                return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
-            }
-        } catch (Throwable t) {
-            NativeRuntime.rethrowFatal(t);
+        // Binding selected BEFORE invocation, never as a fallback. The earlier
+        // shape wrapped the fast call in try/catch and re-invoked through
+        // JpdfiumH when it threw, which meant an ordinary native error code
+        // (check -> JPDFiumException, not an Error) silently ran the same
+        // operation a second time and reported the second result. See
+        // pageWidth0Fast for why that matters.
+        MethodHandle fast = FastLinks.PAGE_WIDTH;
+        if (fast != null) {
+            return pageWidth0Fast(fast, page);
         }
         check(JpdfiumH.jpdfium_page_width(page, FLOAT_SCRATCH), "pageWidth");
         return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
     }
 
-    private static float pageHeight0(long page) {
+    /**
+     * Direct-handle path for a geometry query. A failure here is the operation's
+     * own outcome and must surface unchanged: {@link #check} throws
+     * {@link JPDFiumException} for a non-OK return code, and that must not be
+     * mistaken for "the fast binding is unusable, retry slowly". Only a JVM
+     * fatal error is rethrown as-is; nothing falls back to a second invocation.
+     */
+    private static float pageWidth0Fast(MethodHandle fast, long page) {
         try {
-            if (FastLinks.PAGE_HEIGHT != null) {
-                int rc = (int) FastLinks.PAGE_HEIGHT.invokeExact(page, FLOAT2_SCRATCH);
-                check(rc, "pageHeight");
-                return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
-            }
+            int rc = (int) fast.invokeExact(page, FLOAT_SCRATCH);
+            check(rc, "pageWidth");
+            return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpdfiumException) {
+                throw jpdfiumException;
+            }
+            throw new JPDFiumException("pageWidth fast-path invocation failed", t);
+        }
+    }
+
+    private static float pageHeight0(long page) {
+        MethodHandle fast = FastLinks.PAGE_HEIGHT;
+        if (fast != null) {
+            try {
+                int rc = (int) fast.invokeExact(page, FLOAT2_SCRATCH);
+                check(rc, "pageHeight");
+                return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) {
+                    throw jpdfiumException;
+                }
+                throw new JPDFiumException("pageHeight fast-path invocation failed", t);
+            }
         }
         check(JpdfiumH.jpdfium_page_height(page, FLOAT2_SCRATCH), "pageHeight");
         return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
@@ -247,36 +397,33 @@ public final class JpdfiumLib {
     public static long docOpen(String path) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(path);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_doc_open(cPath, LONG_SCRATCH), "docOpen: " + path);
-                return LONG_SCRATCH.get(JAVA_LONG, 0);
-            } finally {
-                NativeGuard.release();
-            }
+                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                PdfiumRuntime.documentOpened();
+                return handle;
+            });
         }
     }
 
     public static long docCreate() {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeLong(() -> {
             check(JpdfiumH.jpdfium_doc_create(LONG_SCRATCH), "docCreate");
-            return LONG_SCRATCH.get(JAVA_LONG, 0);
-        } finally {
-            NativeGuard.release();
-        }
+            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            PdfiumRuntime.documentOpened();
+            return handle;
+        });
     }
 
     public static long docOpenBytes(byte[] data) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, data);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_doc_open_bytes(cData, data.length, LONG_SCRATCH), "docOpenBytes");
-                return LONG_SCRATCH.get(JAVA_LONG, 0);
-            } finally {
-                NativeGuard.release();
-            }
+                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                PdfiumRuntime.documentOpened();
+                return handle;
+            });
         }
     }
 
@@ -292,13 +439,12 @@ public final class JpdfiumLib {
      * only. Peak Java heap cost is zero beyond the call.
      */
     public static long docOpenSegment(MemorySegment data, long len) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.executeLong(() -> {
             check(JpdfiumH.jpdfium_doc_open_bytes(data, len, LONG_SCRATCH), "docOpenBytes");
-            return LONG_SCRATCH.get(JAVA_LONG, 0);
-        } finally {
-            NativeGuard.release();
-        }
+            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            PdfiumRuntime.documentOpened();
+            return handle;
+        });
     }
 
     public static long docOpenBytesProtected(byte[] data, String password) {
@@ -308,13 +454,12 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, data);
             MemorySegment cPass = a.allocateFrom(password);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_doc_open_bytes_protected(cData, data.length, cPass, LONG_SCRATCH), "docOpenBytesProtected");
-                return LONG_SCRATCH.get(JAVA_LONG, 0);
-            } finally {
-                NativeGuard.release();
-            }
+                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                PdfiumRuntime.documentOpened();
+                return handle;
+            });
         }
     }
 
@@ -322,50 +467,170 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(path);
             MemorySegment cPass = a.allocateFrom(password);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_doc_open_protected(cPath, cPass, LONG_SCRATCH), "docOpenProtected: " + path);
-                return LONG_SCRATCH.get(JAVA_LONG, 0);
-            } finally {
-                NativeGuard.release();
-            }
+                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                PdfiumRuntime.documentOpened();
+                return handle;
+            });
         }
     }
 
     public static int docPageCount(long doc) {
-        NativeGuard.acquire();
+        // Leaf admission rather than executeInt: this runs in tight document
+        // loops, and a captured lambda stays a 24-byte allocation per call
+        // until C2 compiles this method, which breaks the zero-allocation
+        // budget. Same admission semantics, no closure on the stack.
+        PdfiumRuntime.enterLeaf();
         try {
-            try {
-                if (FastLinks.DOC_PAGE_COUNT != null) {
-                    int rc = (int) FastLinks.DOC_PAGE_COUNT.invokeExact(doc, INT_SCRATCH);
+            // Binding chosen before invocation; see pageWidth0 for why a fast
+            // call must never be retried through the slow binding on failure.
+            MethodHandle fast = FastLinks.DOC_PAGE_COUNT;
+            if (fast != null) {
+                try {
+                    int rc = (int) fast.invokeExact(doc, INT_SCRATCH);
                     check(rc, "docPageCount");
                     return INT_SCRATCH.get(JAVA_INT, 0);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    if (t instanceof JPDFiumException jpdfiumException) {
+                        throw jpdfiumException;
+                    }
+                    throw new JPDFiumException("docPageCount fast-path invocation failed", t);
                 }
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
             }
             check(JpdfiumH.jpdfium_doc_page_count(doc, INT_SCRATCH), "docPageCount");
             return INT_SCRATCH.get(JAVA_INT, 0);
         } finally {
-            NativeGuard.release();
+            PdfiumRuntime.exitLeaf();
         }
     }
 
     public static void docSave(long doc, String path) {
+        docSaveNative(doc, path, 0);
+    }
+
+    /**
+     * Optional streaming file-save entry point
+     * ({@code jpdfium_doc_save_to_file}): writes PDFium output straight to a
+     * native {@code FILE*} via {@code FPDF_FILEWRITE} with an in-callback byte
+     * budget, so large saves never materialize a document-sized native vector.
+     * Admitted to the PDFium domain like every other document save.
+     */
+    private static final MethodHandle SAVE_TO_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_doc_save_to_file",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+
+    /** Bounded chunk used when spooling a staged save file to a channel. */
+    static final int SAVE_TRANSFER_BYTES = 256 * 1024;
+
+    /**
+     * Low-level guarded save to an exact filesystem path (no staging, no
+     * move). Prefers the streaming native entry point when the loaded bridge
+     * exports it; otherwise falls back to the buffered {@code jpdfium_doc_save}
+     * plus a post-hoc size/cap check.
+     */
+    public static void docSaveNative(long doc, String absPath, long maxBytes) {
         try (Arena a = Arena.ofConfined()) {
-            MemorySegment cPath = a.allocateFrom(path);
-            NativeGuard.acquire();
-            try {
-                check(JpdfiumH.jpdfium_doc_save(doc, cPath), "docSave: " + path);
-            } finally {
-                NativeGuard.release();
+            MemorySegment cPath = a.allocateFrom(absPath);
+            if (SAVE_TO_FILE_HANDLE != null) {
+                MemorySegment outLen = a.allocate(JAVA_LONG);
+                PdfiumRuntime.execute(() -> {
+                    try {
+                        check((int) SAVE_TO_FILE_HANDLE.invokeExact(doc, cPath, maxBytes, outLen),
+                                "docSave: " + absPath);
+                    } catch (RuntimeException re) {
+                        throw re;
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                        throw new JPDFiumException("docSave failed", t);
+                    }
+                });
+                return;
+            }
+            PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_doc_save(doc, cPath), "docSave: " + absPath);
+            });
+            if (maxBytes > 0) {
+                try {
+                    long size = Files.size(Path.of(absPath));
+                    if (size > maxBytes) {
+                        try {
+                            Files.deleteIfExists(Path.of(absPath));
+                        } catch (IOException ignored) {
+                        }
+                        throw new JPDFiumException("save output " + size
+                                + " bytes exceeds limit " + maxBytes);
+                    }
+                } catch (IOException e) {
+                    throw new JPDFiumException("docSave size check failed", e);
+                }
             }
         }
     }
 
-    public static byte[] docSaveBytes(long doc) {
-        NativeGuard.acquire();
+    /**
+     * Transactional file save: stream to a sibling staging file under the
+     * PDFium guard, then atomically publish. A failed save never replaces or
+     * leaves a partial destination behind.
+     */
+    public static void docSaveToFile(long doc, Path destination, SaveOptions options) {
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        try (OutputTransaction tx = OutputTransaction.begin(destination)) {
+            docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+            tx.publish(opts);
+        } catch (IOException e) {
+            throw new JPDFiumException("docSaveToFile failed", e);
+        }
+    }
+
+    public static void docSaveToFile(long doc, Path destination) {
+        docSaveToFile(doc, destination, SaveOptions.fast());
+    }
+
+    /**
+     * Save to an owned temporary file and hand the path to the caller (who
+     * owns deletion). Backs {@code saveToTempFile()} and the channel-spool
+     * path without ever exposing a staging file as a successful result.
+     */
+    public static Path docSaveToTempFile(long doc, SaveOptions options) {
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        Path tmp;
         try {
+            try {
+                tmp = Files.createTempFile("jpdfium-save-", ".pdf",
+                        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
+            } catch (UnsupportedOperationException e) {
+                tmp = Files.createTempFile("jpdfium-save-", ".pdf");
+            }
+        } catch (IOException e) {
+            throw new JPDFiumException("save temp creation failed", e);
+        }
+        try {
+            docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+            if (opts.maxOutputBytes() > 0) {
+                long size = Files.size(tmp);
+                if (size > opts.maxOutputBytes()) {
+                    throw new JPDFiumException("save output " + size
+                            + " bytes exceeds limit " + opts.maxOutputBytes());
+                }
+            }
+            if (Files.size(tmp) <= 0) {
+                throw new JPDFiumException("save produced an empty file");
+            }
+            return tmp;
+        } catch (Throwable t) {
+            OutputTransaction.deleteQuietly(tmp);
+            if (t instanceof JPDFiumException jex) throw jex;
+            if (t instanceof IOException ioe) throw new JPDFiumException("save failed", ioe);
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("save failed", t);
+        }
+    }
+
+    public static byte[] docSaveBytes(long doc) {
+        return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
             // Acquire the pointer in its own try-finally so the buffer is freed even when
