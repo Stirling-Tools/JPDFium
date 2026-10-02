@@ -18,20 +18,46 @@ import java.util.List;
  */
 public final class VipsDecoder {
 
-    public static final long MAX_IMAGE_PIXELS = Long.getLong("jpdfium.image.max_pixels", 100_000_000L);
-    public static final int MAX_IMAGE_DIMENSION = Integer.getInteger("jpdfium.image.max_dimension", 30_000);
-    public static final int MAX_FRAMES = 1024;
-    public static final long MAX_AGGREGATE_PIXELS = 100_000_000L;
+    /**
+     * Service-safe image guards (finite by default). Set any to {@code 0} for
+     * explicit unlimited trusted-batch mode; negative is invalid.
+     */
+    public static final long MAX_IMAGE_PIXELS = validatedLong("jpdfium.image.max_pixels", 0L);
+    public static final int MAX_IMAGE_DIMENSION = validatedInt("jpdfium.image.max_dimension", 0);
+    public static final int MAX_FRAMES = validatedInt("jpdfium.image.max_frames", 0);
+    public static final long MAX_AGGREGATE_PIXELS =
+            validatedLong("jpdfium.image.max_aggregate_pixels", 0L);
+
+    private static long validatedLong(String key, long def) {
+        long v = Long.getLong(key, def);
+        if (v < 0) throw new IllegalStateException("invalid " + key + "=" + v + " (use 0 for unlimited)");
+        return v;
+    }
+
+    private static int validatedInt(String key, int def) {
+        int v = Integer.getInteger(key, def);
+        if (v < 0) throw new IllegalStateException("invalid " + key + "=" + v + " (use 0 for unlimited)");
+        return v;
+    }
 
     private VipsDecoder() {}
 
     private static void checkDimensions(VImage image) {
         int w = image.getWidth();
         int h = image.getHeight();
-        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
-                || (long) w * h > MAX_IMAGE_PIXELS) {
+        if (w <= 0 || h <= 0) {
             throw new IllegalArgumentException(
-                    "Image dimensions " + w + "x" + h + " exceed safe limit (decompression bomb protection)");
+                    "Image dimensions " + w + "x" + h + " invalid");
+        }
+        if (MAX_IMAGE_DIMENSION > 0 && (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION)) {
+            throw new IllegalArgumentException(
+                    "Image dimensions " + w + "x" + h + " exceed jpdfium.image.max_dimension="
+                            + MAX_IMAGE_DIMENSION + " (decompression bomb protection)");
+        }
+        if (MAX_IMAGE_PIXELS > 0 && (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException(
+                    "Image dimensions " + w + "x" + h + " exceed jpdfium.image.max_pixels="
+                            + MAX_IMAGE_PIXELS + " (decompression bomb protection)");
         }
     }
 
@@ -110,8 +136,9 @@ public final class VipsDecoder {
                 }
                 frames.add(toRgbaFrame(probe));
             } else {
-                if (nPages > MAX_FRAMES) {
-                    throw new IllegalArgumentException("Frame count " + nPages + " exceeds limit (" + MAX_FRAMES + ")");
+                if (MAX_FRAMES > 0 && nPages > MAX_FRAMES) {
+                    throw new IllegalArgumentException("Frame count " + nPages
+                            + " exceeds jpdfium.image.max_frames=" + MAX_FRAMES);
                 }
                 long totalPixels = 0;
                 for (int i = 0; i < nPages; i++) {
@@ -120,8 +147,10 @@ public final class VipsDecoder {
                             VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
                     checkDimensions(pageImg);
                     totalPixels += (long) pageImg.getWidth() * pageImg.getHeight();
-                    if (totalPixels > MAX_AGGREGATE_PIXELS) {
-                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels + " exceeds safe limit");
+                    if (MAX_AGGREGATE_PIXELS > 0 && totalPixels > MAX_AGGREGATE_PIXELS) {
+                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels
+                                + " exceeds jpdfium.image.max_aggregate_pixels="
+                                + MAX_AGGREGATE_PIXELS);
                     }
                     Integer interlaced = pageImg.getInt("interlaced");
                     if (interlaced != null && interlaced != 0) {
@@ -158,8 +187,9 @@ public final class VipsDecoder {
                 }
                 frames.add(toRgbaFrame(probe));
             } else {
-                if (nPages > MAX_FRAMES) {
-                    throw new IllegalArgumentException("Frame count " + nPages + " exceeds limit (" + MAX_FRAMES + ")");
+                if (MAX_FRAMES > 0 && nPages > MAX_FRAMES) {
+                    throw new IllegalArgumentException("Frame count " + nPages
+                            + " exceeds jpdfium.image.max_frames=" + MAX_FRAMES);
                 }
                 long totalPixels = 0;
                 for (int i = 0; i < nPages; i++) {
@@ -168,8 +198,10 @@ public final class VipsDecoder {
                             VipsOption.Enum("access", VipsAccess.ACCESS_SEQUENTIAL));
                     checkDimensions(pageImg);
                     totalPixels += (long) pageImg.getWidth() * pageImg.getHeight();
-                    if (totalPixels > MAX_AGGREGATE_PIXELS) {
-                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels + " exceeds safe limit");
+                    if (MAX_AGGREGATE_PIXELS > 0 && totalPixels > MAX_AGGREGATE_PIXELS) {
+                        throw new IllegalArgumentException("Aggregate pixel count " + totalPixels
+                                + " exceeds jpdfium.image.max_aggregate_pixels="
+                                + MAX_AGGREGATE_PIXELS);
                     }
                     Integer interlaced = pageImg.getInt("interlaced");
                     if (interlaced != null && interlaced != 0) {
@@ -186,10 +218,16 @@ public final class VipsDecoder {
     private static byte[] toRgbaFrame(VImage image) {
         int w = image.getWidth();
         int h = image.getHeight();
-        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
-                || (long) w * h > MAX_IMAGE_PIXELS) {
-            throw new IllegalArgumentException(
-                    "Image dimensions " + w + "x" + h + " exceed safe limit (decompression bomb protection)");
+        if (w <= 0 || h <= 0) {
+            throw new IllegalArgumentException("Image dimensions " + w + "x" + h + " invalid");
+        }
+        if (MAX_IMAGE_DIMENSION > 0 && (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION)) {
+            throw new IllegalArgumentException("Image dimensions " + w + "x" + h
+                    + " exceed jpdfium.image.max_dimension=" + MAX_IMAGE_DIMENSION);
+        }
+        if (MAX_IMAGE_PIXELS > 0 && (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException("Image dimensions " + w + "x" + h
+                    + " exceed jpdfium.image.max_pixels=" + MAX_IMAGE_PIXELS);
         }
         VImage srgb = image.colourspace(VipsInterpretation.INTERPRETATION_sRGB);
         if (!srgb.hasAlpha()) {

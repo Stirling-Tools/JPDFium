@@ -111,7 +111,7 @@ public class S19_PdfToImages {
         SampleBase.done("S19_PdfToImages");
     }
 
-    /** Frame encoders refuse dimensions over 30000px; skip such pages loudly. */
+    /** Sample-local guard (library defaults are unlimited): skip absurd renders loudly. */
     private static boolean exceedsFrameBudget(PdfDocument doc, int pageIndex, int dpi) {
         try (PdfPage page = doc.page(pageIndex)) {
             long w = Math.max(1, Math.round(page.size().width() * dpi / 72.0));
