@@ -9,10 +9,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "jpdfium.h"
@@ -54,6 +56,7 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
         pw->code = code;
         pw->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
 
+        Pcre2HandleRegistry::instance().add(pw);
         *handle = reinterpret_cast<int64_t>(pw);
         return JPDFIUM_OK;
 
@@ -66,7 +69,8 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
     try {
         if (!text || !json_result) return JPDFIUM_ERR_INVALID;
         auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
-        if (!pw || !pw->code) return JPDFIUM_ERR_INVALID;
+        if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return JPDFIUM_ERR_INVALID;
+        if (!pw->code) return JPDFIUM_ERR_INVALID;
 
         PCRE2_SIZE subject_len = strlen(text);
         std::string json = "[";
@@ -128,8 +132,11 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
 }
 
 void jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
+    // Membership is checked before any dereference, so a fabricated handle is
+    // rejected rather than read. See HandleRegistry for the lifetime contract.
     auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
-    if (!pw) return;
+    if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return;
+    Pcre2HandleRegistry::instance().remove(pw);
     if (pw->match_data) pcre2_match_data_free(pw->match_data);
     if (pw->code) pcre2_code_free(pw->code);
     delete pw;
@@ -273,6 +280,7 @@ int32_t jpdfium_flashtext_create(int64_t* handle) {
     try {
         if (!handle) return JPDFIUM_ERR_INVALID;
         auto* ft = new FlashTextProcessor();
+        FlashTextHandleRegistry::instance().add(ft);
         *handle = reinterpret_cast<int64_t>(ft);
         return JPDFIUM_OK;
 
@@ -284,7 +292,8 @@ int32_t jpdfium_flashtext_create(int64_t* handle) {
 int32_t jpdfium_flashtext_add_keyword(int64_t handle, const char* keyword, const char* label) {
     try {
         auto* ft = reinterpret_cast<FlashTextProcessor*>(handle);
-        if (!ft || !keyword) return JPDFIUM_ERR_INVALID;
+        if (!ft || !FlashTextHandleRegistry::instance().contains(ft)) return JPDFIUM_ERR_INVALID;
+        if (!keyword) return JPDFIUM_ERR_INVALID;
         ft->addKeyword(keyword, label);
         return JPDFIUM_OK;
 
@@ -296,7 +305,8 @@ int32_t jpdfium_flashtext_add_keyword(int64_t handle, const char* keyword, const
 int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
     try {
         auto* ft = reinterpret_cast<FlashTextProcessor*>(handle);
-        if (!ft || !json) return JPDFIUM_ERR_INVALID;
+        if (!ft || !FlashTextHandleRegistry::instance().contains(ft)) return JPDFIUM_ERR_INVALID;
+        if (!json) return JPDFIUM_ERR_INVALID;
 
         // Simple JSON parser for: [{"keyword":"...","label":"..."}, ...]
         const char* p = json;
@@ -329,7 +339,8 @@ int32_t jpdfium_flashtext_add_keywords_json(int64_t handle, const char* json) {
 int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_result) {
     try {
         auto* ft = reinterpret_cast<FlashTextProcessor*>(handle);
-        if (!ft || !json_result) return JPDFIUM_ERR_INVALID;
+        if (!ft || !FlashTextHandleRegistry::instance().contains(ft)) return JPDFIUM_ERR_INVALID;
+        if (!json_result) return JPDFIUM_ERR_INVALID;
         std::string result = ft->findAll(text);
         *json_result = strdup(result.c_str());
         return JPDFIUM_OK;
@@ -340,7 +351,10 @@ int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_res
 }
 
 void jpdfium_flashtext_free(int64_t handle) noexcept {
+    // Identity checked before the delete; a fabricated handle is a no-op.
     auto* ft = reinterpret_cast<FlashTextProcessor*>(handle);
+    if (!ft || !FlashTextHandleRegistry::instance().contains(ft)) return;
+    FlashTextHandleRegistry::instance().remove(ft);
     delete ft;
 }
 
@@ -845,6 +859,26 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
         free(copy);
         return JPDFIUM_ERR_NATIVE;
     }
+
+    // Retire native state tied to the old document before committing the
+    // replacement: loaded FPDF_FONT handles belong to the old FPDF_DOCUMENT
+    // and would otherwise dangle, and cached redact/sanitize bookkeeping
+    // describes bytes that no longer exist.
+    for (FPDF_FONT f : w->core->loadedFonts) {
+        FPDFFont_Close(f);
+    }
+    w->core->loadedFonts.clear();
+    w->core->clearRedactPatternCache();
+    w->core->redactedLiteralsSet.clear();
+    w->core->redactedLiterals.clear();
+    w->core->redactZones.clear();
+    w->core->touchedFontsSet.clear();
+    w->core->touchedFontNames.clear();
+    w->core->sanitizeReport.clear();
+    w->core->contentRedacted = false;
+    w->core->sanitizeOnSave = false;
+    w->core->unappliedRedactMarksCount = 0;
+    w->core->sourcePath.clear();
 
     FPDF_CloseDocument(w->core->doc);
     free(w->core->buf);  // free() ignores NULL
