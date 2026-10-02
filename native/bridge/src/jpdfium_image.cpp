@@ -240,6 +240,11 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
                                             float page_width, float page_height, float margin,
                                             int32_t position, int32_t image_format,
                                             int64_t* doc_handle) {
+    // Provisional registration guard: if an exception escapes after add()
+    // but before release(), the entry must be removed. Declared outside the
+    // try so the catch can see it.
+    DocWrapper* provisional = nullptr;
+    std::unique_ptr<DocWrapper> dw;
     try {
         if (!image_data || image_len <= 0 || !doc_handle) {
             return JPDFIUM_ERR_INVALID;
@@ -251,24 +256,40 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
         // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.).
         // unique_ptr owns it until the raw handle is published, so a throw from
         // makeDocCore or create_page_with_image cannot leak the wrapper.
-        auto dw = std::make_unique<DocWrapper>();
+        dw = std::make_unique<DocWrapper>();
         dw->core = makeDocCore(FPDF_CreateNewDocument());
         if (!dw->core->doc) {
             return JPDFIUM_ERR_NATIVE;
         }
 
+        // Register before the handle is handed to create_page_with_image: that
+        // call decodes the handle via decodeDoc, which now validates against the
+        // registry, so an unregistered handle would be rejected as bogus.
+        DocWrapper* raw = dw.get();
+        DocHandleRegistry::instance().add(raw);
+        provisional = raw;
+
         int32_t result = create_page_with_image(
-            encodeHandle(dw.get()), image_data, static_cast<size_t>(image_len), page_width,
+            encodeHandle(raw), image_data, static_cast<size_t>(image_len), page_width,
             page_height, margin, static_cast<Position>(position), image_format, 0);
 
         if (result != JPDFIUM_OK) {
+            // The wrapper was registered before the attempt; unregister it so a
+            // failed creation cannot leave a dangling entry behind.
+            DocHandleRegistry::instance().remove(raw);
+            provisional = nullptr;
             return result;
         }
 
-        *doc_handle = encodeHandle(dw.release());
+        dw.release();
+        provisional = nullptr;
+        *doc_handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
+        if (provisional != nullptr) {
+            DocHandleRegistry::instance().remove(provisional);
+        }
         return JPDFIUM_ERR_NATIVE;
     }
 }
