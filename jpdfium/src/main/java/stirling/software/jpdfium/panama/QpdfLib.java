@@ -738,32 +738,28 @@ public final class QpdfLib {
     /**
      * Post-write acceptance check: rejects empty output and outputs over
      * maxBytes. Bounds publication, not transient disk use during native
-     * write. Best-effort interrupt check only; for raced cancellation use
-     * the commit overload below.
+     * write. Every production file operation publishes through the commit
+     * overload below so cancellation and publication share one state.
      */
     private static void publish(Path staging, Path output, long maxBytes) throws IOException {
-        if (Thread.currentThread().isInterrupted()) {
-            throw new IOException("interrupted before publish; staging discarded for " + output);
-        }
-        publishCommitted(staging, output, maxBytes, false);
+        publish(staging, output, maxBytes, new PublishCommit());
     }
 
     /**
-     * Publish under an explicit commit. The caller must win
-     * {@link PublishCommit#tryCommit} before calling; a lost race throws
-     * instead of publishing. Cancellation after COMMITTING is too late.
+     * Publish under an explicit commit: interruption fails fast, then only the
+     * thread that claims COMMITTING publishes. Cancellation after that point
+     * is too late to guarantee rollback.
      */
     static void publish(Path staging, Path output, long maxBytes, PublishCommit commit)
             throws IOException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new IOException("interrupted before publish; staging discarded for " + output);
+        }
         if (commit != null && !commit.tryCommit()) {
             throw new IOException("publication cancelled for " + output);
         }
-        try {
-            publishCommitted(staging, output, maxBytes, false);
-            if (commit != null) commit.committed();
-        } catch (IOException | RuntimeException e) {
-            throw e;
-        }
+        publishCommitted(staging, output, maxBytes, false);
+        if (commit != null) commit.committed();
     }
 
     private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber)
@@ -789,15 +785,6 @@ public final class QpdfLib {
     }
 
     /**
-     * Atomic replacement: staging beside output so the move is a same-device
-     * rename; ATOMIC_MOVE preferred, plain replace as portable fallback.
-     * Durability (fsync/power-loss) is not claimed, only atomic visibility.
-     */
-    static void publishReplace(Path staging, Path output) throws IOException {
-        publishCommitted(staging, output, 0, false);
-    }
-
-    /**
      * Atomic no-clobber publication via CREATE_NEW (O_EXCL). The destination
      * is created exclusively and staging bytes are streamed into it, so a
      * concurrent creator winning the race leaves existing bytes unchanged and
@@ -805,8 +792,16 @@ public final class QpdfLib {
      * of a rename; replacement paths keep using atomic renames.
      */
     public static void publishNewFile(Path staging, Path output, long maxBytes) throws IOException {
+        publishNewFile(staging, output, maxBytes, new PublishCommit());
+    }
+
+    static void publishNewFile(Path staging, Path output, long maxBytes, PublishCommit commit)
+            throws IOException {
         if (Thread.currentThread().isInterrupted()) {
             throw new IOException("interrupted before publish; staging discarded for " + output);
+        }
+        if (commit != null && !commit.tryCommit()) {
+            throw new IOException("publication cancelled for " + output);
         }
         long size = Files.size(staging);
         if (size <= 0) {
@@ -817,14 +812,6 @@ public final class QpdfLib {
                     "qpdf output " + size + " bytes exceeds budget " + maxBytes + " for " + output);
         }
         publishNoClobber(staging, output);
-    }
-
-    static void publishNewFile(Path staging, Path output, long maxBytes, PublishCommit commit)
-            throws IOException {
-        if (commit != null && !commit.tryCommit()) {
-            throw new IOException("publication cancelled for " + output);
-        }
-        publishNewFile(staging, output, maxBytes);
         if (commit != null) commit.committed();
     }
 

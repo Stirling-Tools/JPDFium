@@ -120,7 +120,7 @@ class PublishCommitTest {
         byte[] before = new byte[]{8, 8};
         Files.write(output, before);
         try {
-            QpdfLib.publishReplace(staging, output);
+            QpdfLib.publish(staging, output, 0, new QpdfLib.PublishCommit());
             assertTrue(false, "missing staging must fail");
         } catch (IOException expected) {
             assertArrayEquals(before, Files.readAllBytes(output),
