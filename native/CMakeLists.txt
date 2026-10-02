@@ -604,17 +604,68 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(native_smoke PRIVATE jpdfium_stub)
     endif()
     add_test(NAME native_smoke COMMAND native_smoke)
+
+    # Handle-safety and writer harness: regressions for the execution-domain
+    # migration's native changes (handle validation, writer finalization).
+    # Runs inside the bridge with no JVM, so ASan/UBSan does not have to
+    # coexist with HotSpot's SIGSEGV handling.
+    add_executable(handle_safety bridge/tests/handle_safety.cpp)
+    target_include_directories(handle_safety PRIVATE bridge/include)
+    if(MSVC)
+        target_compile_options(handle_safety PRIVATE /W4 /WX)
+    else()
+        target_compile_options(handle_safety PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(handle_safety PRIVATE jpdfium)
+    else()
+        # The stub has no handle registries and answers with canned success
+        # values, so the harness skips its rejection assertions in this mode.
+        target_link_libraries(handle_safety PRIVATE jpdfium_stub)
+        target_compile_definitions(handle_safety PRIVATE JPDFIUM_STUB_BUILD=1)
+    endif()
+    add_test(NAME handle_safety COMMAND handle_safety)
+
+    # Prices the validation the registries add to every handle decode, so the
+    # correctness cost is a measured number rather than an assumption.
+    add_executable(registry_cost bridge/tests/registry_cost.cpp)
+    target_include_directories(registry_cost PRIVATE bridge/include)
+    if(NOT MSVC)
+        target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(registry_cost PRIVATE jpdfium)
+    else()
+        target_link_libraries(registry_cost PRIVATE jpdfium_stub)
+    endif()
     # Component PDFium builds: the sibling libpdfium.* lives in PDFIUM_LIB_DIR
     # and is only resolvable at test time via the library search path.
     if(JPDFIUM_USE_PDFIUM AND PDFIUM_LINK_MODE STREQUAL "component")
         if(JPDFIUM_OS STREQUAL "darwin")
             set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
                 "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
+            set_tests_properties(handle_safety PROPERTIES ENVIRONMENT
+                "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
         elseif(JPDFIUM_OS STREQUAL "linux")
             set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
                 "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
+            set_tests_properties(handle_safety PROPERTIES ENVIRONMENT
+                "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
         endif()
     endif()
+    # UBSan findings must fail the run rather than merely print, so a latent
+    # overflow in the writer's budget arithmetic cannot pass silently.
+    if(JPDFIUM_SANITIZE AND NOT MSVC)
+        string(FIND "${JPDFIUM_SANITIZE}" "undefined" _has_ubsan)
+        if(NOT _has_ubsan EQUAL -1)
+            set_tests_properties(native_smoke handle_safety PROPERTIES ENVIRONMENT
+                "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+        endif()
+    endif()
+    # handle_safety reads a real PDF fixture by relative path, and CTest runs
+    # from the build directory, so the path must be anchored at the repo root.
+    set_tests_properties(handle_safety PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
 if(JPDFIUM_BUILD_FUZZERS)
