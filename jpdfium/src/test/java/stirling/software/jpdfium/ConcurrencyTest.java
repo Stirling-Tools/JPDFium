@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>PDFium keeps process-wide mutable state (font manager and cache, page
  * module, parser tables) that is shared by every open document, so two threads
  * calling into it simultaneously corrupt that state even when each owns a
- * completely independent document. Before the {@code NativeGuard} serialisation
+ * completely independent document. Before the PdfiumRuntime execution domain serialisation
  * these tests segfaulted the JVM within a second, or - in the quieter failure
  * mode - reported the great majority of perfectly valid documents as corrupt.
  *

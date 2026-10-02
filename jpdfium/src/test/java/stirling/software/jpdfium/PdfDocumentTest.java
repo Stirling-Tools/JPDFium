@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
-import stirling.software.jpdfium.panama.NativeGuard;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import java.io.IOException;
 import java.net.URL;
@@ -354,7 +354,7 @@ class PdfDocumentTest {
 
     @Test
     void nativeGuardBatch() throws Exception {
-        int pages = NativeGuard.callBatch(() -> {
+        int pages = PdfiumRuntime.executeBatch(() -> {
             try (var doc = PdfDocument.open(pdfPath())) {
                 return doc.pageCount();
             } catch (Exception e) {

@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Like the rest of {@link BenchmarkSuite} this is stub-safe: the stub returns
  * {@code JPDFIUM_OK} immediately, so the benchmark isolates the Java/FFM wrapper cost
- * (NativeGuard lock + jextract downcall + no boxing/array churn) without a real PDFium.
+ * (PdfiumRuntime execution domain + jextract downcall + no boxing/array churn) without a real PDFium.
  * A fast-path (crop == full page) against real PDFium is covered by {@code S94_CropPerf}.
  *
  * <p>Run with: {@code ./gradlew :jpdfium:jmh -Pjmh.include=CropBenchmark}
