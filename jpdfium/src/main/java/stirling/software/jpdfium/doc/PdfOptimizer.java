@@ -5,6 +5,8 @@ import stirling.software.jpdfium.panama.QpdfLib;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 
 /**
  * In-process qpdf structural optimization (FFM, no CLI).
@@ -52,14 +54,48 @@ public final class PdfOptimizer {
                 objectStreamMode, streamDataMode, decodeLevel);
     }
 
+    /**
+     * Optimize file-to-file, keeping no document-sized buffer in Java heap.
+     *
+     * <p>Preferred over the byte[] route for anything large: that form reads
+     * the whole input with {@code Files.readAllBytes} and also materializes the
+     * output, so peak heap is roughly input + output. This form streams through
+     * native code and holds only the paths.
+     *
+     * <p>Falls back to the buffered path when the native file route is
+     * unavailable (non-qpdf or stub builds), so callers do not have to branch
+     * on capability.
+     */
     public static void optimize(Path input, Path output, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) throws IOException {
+        if (QpdfLib.optimizeFile(input, output, flags, objectStreamMode, streamDataMode,
+                decodeLevel)) {
+            return;
+        }
         byte[] result = optimize(input, flags, compressionLevel,
                 objectStreamMode, streamDataMode, decodeLevel);
         if (result == null) {
             throw new IOException("qpdf optimization produced no output");
         }
-        Files.write(output, result);
+        Path staging = output.toAbsolutePath().getParent() != null
+                ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-opt-", ".pdf")
+                : Files.createTempFile("jpdfium-opt-", ".pdf");
+        try {
+            Files.write(staging, result);
+            try {
+                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
+    }
+
+    /** True when the file-backed optimize route is usable in this build. */
+    public static boolean isFileOptimizeSupported() {
+        return QpdfLib.isOptimizeFileSupported();
     }
 
     /**

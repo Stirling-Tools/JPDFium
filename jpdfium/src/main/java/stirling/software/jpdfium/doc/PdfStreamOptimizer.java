@@ -6,6 +6,8 @@ import java.nio.file.Path;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.QpdfLib;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 
 /**
  * PDF stream optimization (object streams, cross-reference streams).
@@ -28,6 +30,10 @@ public final class PdfStreamOptimizer {
      */
     public static void optimize(Path input, Path output) {
         try {
+            if (QpdfLib.optimizeFile(input, output, 0, PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                    PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT)) {
+                return;
+            }
             byte[] out = PdfOptimizer.optimize(
                     Files.readAllBytes(input),
                     0,
@@ -38,7 +44,20 @@ public final class PdfStreamOptimizer {
             if (out == null) {
                 throw new JPDFiumException("qpdf optimization produced no output");
             }
-            Files.write(output, out);
+            Path staging = output.toAbsolutePath().getParent() != null
+                    ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-opt-", ".pdf")
+                    : Files.createTempFile("jpdfium-opt-", ".pdf");
+            try {
+                Files.write(staging, out);
+                try {
+                    Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(staging);
+            }
         } catch (IOException e) {
             throw new JPDFiumException("qpdf optimization failed", e);
         }
@@ -53,6 +72,10 @@ public final class PdfStreamOptimizer {
      */
     public static void compact(Path input, Path output) {
         try {
+            if (QpdfLib.optimizeFile(input, output, 0, PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT)) {
+                return;
+            }
             byte[] out = PdfOptimizer.optimize(
                     Files.readAllBytes(input),
                     0,
@@ -63,7 +86,20 @@ public final class PdfStreamOptimizer {
             if (out == null) {
                 throw new JPDFiumException("qpdf compaction produced no output");
             }
-            Files.write(output, out);
+            Path staging = output.toAbsolutePath().getParent() != null
+                    ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-compact-", ".pdf")
+                    : Files.createTempFile("jpdfium-compact-", ".pdf");
+            try {
+                Files.write(staging, out);
+                try {
+                    Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException e) {
+                    Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(staging);
+            }
         } catch (IOException e) {
             throw new JPDFiumException("qpdf compaction failed", e);
         }

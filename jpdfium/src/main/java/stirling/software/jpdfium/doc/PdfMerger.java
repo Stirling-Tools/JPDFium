@@ -9,6 +9,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 
 /**
  * In-process PDF document merging backed by QPDF.
@@ -47,12 +49,29 @@ public final class PdfMerger {
             inputBytes.add(Files.readAllBytes(p));
         }
 
+        if (QpdfLib.mergeFiles(inputPaths, outputPath)) {
+            return;
+        }
+
         byte[] merged = mergeBytes(inputBytes);
         if (merged == null) {
             throw new JPDFiumException("PDF merge failed or produced empty output");
         }
 
-        Files.write(outputPath, merged);
+        Path staging = outputPath.toAbsolutePath().getParent() != null
+                ? Files.createTempFile(outputPath.toAbsolutePath().getParent(), ".jpdfium-merge-", ".pdf")
+                : Files.createTempFile("jpdfium-merge-", ".pdf");
+        try {
+            Files.write(staging, merged);
+            try {
+                Files.move(staging, outputPath, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, outputPath, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
     }
 
     /**

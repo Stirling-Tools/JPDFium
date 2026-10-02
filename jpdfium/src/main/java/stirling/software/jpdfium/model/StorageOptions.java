@@ -3,6 +3,7 @@ package stirling.software.jpdfium.model;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 
 /**
  * How merge/split moves document bytes: heap or disk.
@@ -36,26 +37,39 @@ public final class StorageOptions {
 
     public static Builder builder() { return new Builder(); }
 
-    /** Temp file in the configured dir. Created mode 0600 on POSIX. */
+    /** Temp file in the configured dir. Owner-only from creation on POSIX. */
     public Path createTempFile(String prefix, String suffix) throws IOException {
         if (tempDir != null) {
             Files.createDirectories(tempDir);
-            return Files.createTempFile(tempDir, prefix, suffix);
+            return restrictedTemp(tempDir, prefix, suffix);
         }
-        return Files.createTempFile(prefix, suffix);
+        return restrictedTemp(null, prefix, suffix);
     }
 
     /**
-     * Staging file for content that will replace {@code target}: created in the
-     * target's directory when possible so the final move is a rename, not a
-     * cross-device copy. Created mode 0600 on POSIX.
+     * Staging file beside {@code target} so publish is a rename.
+     * Owner-only from creation on POSIX; Windows uses temp-dir defaults.
      */
     public Path createStagingFile(Path target) throws IOException {
         Path parent = target.toAbsolutePath().getParent();
         if (parent != null && Files.isDirectory(parent)) {
-            return Files.createTempFile(parent, ".jpdfium-stage", ".pdf");
+            return restrictedTemp(parent, ".jpdfium-stage", ".pdf");
         }
         return createTempFile("jpdfium-stage", ".pdf");
+    }
+
+    private static Path restrictedTemp(Path dir, String prefix, String suffix) throws IOException {
+        try {
+            var attr = PosixFilePermissions.asFileAttribute(
+                    PosixFilePermissions.fromString("rw-------"));
+            return dir == null
+                    ? Files.createTempFile(prefix, suffix, attr)
+                    : Files.createTempFile(dir, prefix, suffix, attr);
+        } catch (UnsupportedOperationException e) {
+            return dir == null
+                    ? Files.createTempFile(prefix, suffix)
+                    : Files.createTempFile(dir, prefix, suffix);
+        }
     }
 
     public static final class Builder {

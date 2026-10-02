@@ -5,6 +5,8 @@ import stirling.software.jpdfium.panama.QpdfLib;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 
 /**
  * In-process qpdf structural sanitization (FFM, no CLI).
@@ -39,11 +41,34 @@ public final class PdfSanitizer {
     }
 
     public static void sanitize(Path input, Path output, int flags) throws IOException {
+        sanitize(input, output, flags, 0);
+    }
+
+    public static void sanitize(Path input, Path output, int flags, long maxBytes) throws IOException {
+        if (QpdfLib.sanitizeToFile(input, output, flags, maxBytes)) {
+            return;
+        }
         byte[] result = sanitize(input, flags);
         if (result == null) {
             throw new IOException("qpdf sanitization produced no output");
         }
-        Files.write(output, result);
+        if (maxBytes > 0 && result.length > maxBytes) {
+            throw new IOException("sanitize output exceeds budget");
+        }
+        Path staging = output.toAbsolutePath().getParent() != null
+                ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-sanitize-", ".pdf")
+                : Files.createTempFile("jpdfium-sanitize-", ".pdf");
+        try {
+            Files.write(staging, result);
+            try {
+                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
     }
 
     /** Check if in-process QPDF sanitization is available. */

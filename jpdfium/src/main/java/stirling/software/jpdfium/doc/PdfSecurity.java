@@ -16,6 +16,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
 
 /**
  * Comprehensive PDF security hardening and sanitization (builder pattern).
@@ -111,12 +113,28 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void encrypt(Path input, Path output, String userPassword, String ownerPassword, int permissions, int keyLength) throws IOException {
+        if (QpdfLib.encryptToFile(input, output, userPassword, ownerPassword, permissions, keyLength)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] encBytes = encryptBytes(inBytes, userPassword, ownerPassword, permissions, keyLength);
         if (encBytes == null) {
             throw new JPDFiumException("PDF encryption failed");
         }
-        Files.write(output, encBytes);
+        Path staging = output.toAbsolutePath().getParent() != null
+                ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-encrypt-", ".pdf")
+                : Files.createTempFile("jpdfium-encrypt-", ".pdf");
+        try {
+            Files.write(staging, encBytes);
+            try {
+                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
     }
 
     /**
@@ -155,12 +173,28 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void decrypt(Path input, Path output, String password) throws IOException {
+        if (QpdfLib.decryptToFile(input, output, password)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] decBytes = decryptBytes(inBytes, password);
         if (decBytes == null) {
             throw new JPDFiumException("PDF decryption failed");
         }
-        Files.write(output, decBytes);
+        Path staging = output.toAbsolutePath().getParent() != null
+                ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-decrypt-", ".pdf")
+                : Files.createTempFile("jpdfium-decrypt-", ".pdf");
+        try {
+            Files.write(staging, decBytes);
+            try {
+                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
     }
 
     /**
