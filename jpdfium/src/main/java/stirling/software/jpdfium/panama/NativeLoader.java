@@ -53,15 +53,20 @@ public final class NativeLoader {
     }
 
     /**
-     * Handshakes the freshly loaded bridge: version, pointer width, and struct
-     * geometry must match this Java artifact. Bridges predating the probe
-     * surface skip verification; mismatched bridges fail the load loudly.
+     * Handshakes the freshly loaded bridge: version, pointer width, unsigned
+     * long width, struct geometry, file-writer version, and feature identity
+     * must match this Java artifact. A bridge predating the probe surface or
+     * any probe is rejected loudly, silent pass would let an ancient native
+     * process documents with unchecked layout assumptions. Mismatched bridges
+     * fail the load.
      */
     private static void verifyBridgeAbi() {
         if (SymbolLookup.loaderLookup()
                 .find("jpdfium_abi_version")
                 .isEmpty()) {
-            return;
+            throw new NativeLoadException(
+                    "Native bridge predates ABI handshake (missing jpdfium_abi_version); "
+                            + "rebuild natives for " + detectPlatform());
         }
         // checkAbiCompatible() initializes JpdfiumLib, whose static initializer
         // calls back into ensureLoaded(). Without this guard that re-enters
