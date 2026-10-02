@@ -20,6 +20,11 @@
 
 #ifdef JPDFIUM_HAS_QPDF
 
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include <qpdf/Constants.h>
 
 #include <qpdf/Buffer.hh>
@@ -132,6 +137,88 @@ QpdfResult sanitize(std::span<const uint8_t> input, int32_t flags) {
     }
 }
 
+// Shared file-backed sanitize body: processFile + same mutations + file output.
+// Factored so memory and file paths cannot drift in which flags they honour.
+static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags) {
+    if (!in_path || !*in_path || !out_path || !*out_path) return -1;
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processFile(in_path);
+        auto root = qpdf->getRoot();
+        if (flags & JPDFIUM_SANITIZE_JAVASCRIPT) {
+            root.removeKey("/OpenAction");
+            root.removeKey("/AA");
+            if (root.hasKey("/Names")) {
+                auto names = root.getKey("/Names");
+                if (names.hasKey("/JavaScript")) names.removeKey("/JavaScript");
+            }
+            QPDFPageDocumentHelper pdh(*qpdf);
+            for (auto& page : pdh.getAllPages()) {
+                page.getObjectHandle().removeKey("/AA");
+                for (auto& ann : page.getAnnotations()) ann.getObjectHandle().removeKey("/AA");
+            }
+        }
+        if (flags & JPDFIUM_SANITIZE_STRUCTURE) root.removeKey("/StructTreeRoot");
+        if (flags & JPDFIUM_SANITIZE_ATTACHMENTS) {
+            QPDFEmbeddedFileDocumentHelper efdh(*qpdf);
+            for (auto const& [name, spec] : efdh.getEmbeddedFiles()) efdh.removeEmbeddedFile(name);
+        }
+        if (flags & JPDFIUM_SANITIZE_ACROFORM) {
+            root.removeKey("/AcroForm");
+            QPDFPageDocumentHelper pdh(*qpdf);
+            for (auto& page : pdh.getAllPages()) {
+                QPDFObjectHandle ph = page.getObjectHandle();
+                if (!ph.hasKey("/Annots")) continue;
+                QPDFObjectHandle annots = ph.getKey("/Annots");
+                if (!annots.isArray()) continue;
+                std::vector<QPDFObjectHandle> kept;
+                int n = annots.getArrayNItems();
+                for (int i = 0; i < n; ++i) {
+                    QPDFObjectHandle a = annots.getArrayItem(i);
+                    if (!a.isDictionaryOfType("/Annot", "/Widget")) kept.push_back(a);
+                }
+                if (kept.empty())
+                    ph.removeKey("/Annots");
+                else
+                    ph.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
+            }
+        }
+        if (flags & JPDFIUM_SANITIZE_FLATTEN) {
+            QPDFPageDocumentHelper pdh(*qpdf);
+            pdh.flattenAnnotations();
+        }
+        if (flags & JPDFIUM_SANITIZE_METADATA) root.removeKey("/Metadata");
+        if (flags & JPDFIUM_SANITIZE_INFO) qpdf->getTrailer().removeKey("/Info");
+
+        FILE* out = nullptr;
+#ifdef _WIN32
+        out = std::fopen(out_path, "wb");
+#else
+        int fd = ::open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (fd >= 0) {
+            out = ::fdopen(fd, "wb");
+            if (!out) ::close(fd);
+        }
+#endif
+        if (!out) return -1;
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter w(*qpdf);
+            w.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            w.write();
+            return 0;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "jpdfium qpdf sanitize file: %s\n", e.what());
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf sanitize file: %s\n", e.what());
+        return -1;
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -164,6 +251,11 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t input
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path,
+                                                  int32_t flags) {
+    return sanitizeFile(in_path, out_path, flags);
+}
+
 }  // extern "C"
 
 #else  // !JPDFIUM_HAS_QPDF
@@ -178,6 +270,10 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t input
     if (outputLen) *outputLen = 0;
     (void)input;
     (void)inputLen;
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char*, const char*, int32_t) {
     return -1;
 }
 
