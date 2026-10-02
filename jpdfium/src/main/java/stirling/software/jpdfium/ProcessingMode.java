@@ -44,6 +44,19 @@ public final class ProcessingMode {
     /** Default mode: sequential, non-streaming. */
     public static final ProcessingMode DEFAULT = new ProcessingMode(false, 1, 0, 50);
 
+    /**
+     * Initial policy for parallel workers (16) pending the concurrency sweep;
+     * 0 means explicit unbounded trusted-batch mode. Negative is invalid.
+     */
+    public static final int MAX_PARALLELISM = validatedMaxParallelism();
+
+    private static int validatedMaxParallelism() {
+        int v = Integer.getInteger("jpdfium.pipeline.maxParallelism", 0);
+        if (v < 0) throw new IllegalStateException(
+                "invalid jpdfium.pipeline.maxParallelism=" + v + " (use 0 for unlimited)");
+        return v;
+    }
+
     private final boolean streaming;
     private final int parallelism;
     private final int chunkSize;
@@ -51,7 +64,9 @@ public final class ProcessingMode {
 
     private ProcessingMode(boolean streaming, int parallelism, int chunkSize, int flushInterval) {
         this.streaming = streaming;
-        this.parallelism = Math.max(1, parallelism);
+        int p = Math.max(1, parallelism);
+        if (MAX_PARALLELISM > 0) p = Math.min(p, MAX_PARALLELISM);
+        this.parallelism = p;
         this.chunkSize = Math.max(0, chunkSize);
         this.flushInterval = Math.max(1, flushInterval);
     }

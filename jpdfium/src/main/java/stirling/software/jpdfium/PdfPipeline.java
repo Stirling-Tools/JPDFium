@@ -13,7 +13,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 import stirling.software.jpdfium.exception.JPDFiumException;
-import stirling.software.jpdfium.panama.NativeGuard;
 
 /**
  * Orchestrates page-level operations with optional streaming (low-memory)
@@ -25,7 +24,7 @@ import stirling.software.jpdfium.panama.NativeGuard;
  *   <li><b>Streaming</b> - processes pages one at a time with periodic save/reload
  *       cycles to release PDFium internal caches and reduce memory pressure.</li>
   *   <li><b>Parallel</b> - uses a thread pool to execute page operations
-  *       concurrently. PDFium calls serialize internally via NativeGuard
+  *       concurrently. PDFium calls serialize internally via the PdfiumRuntime execution domain
   *       (the library is not thread-safe), but Java-side processing between
   *       PDFium calls runs in true parallel across worker threads.</li>
  *   <li><b>Streaming + Parallel</b> - combines both: parallel worker threads
@@ -36,9 +35,8 @@ import stirling.software.jpdfium.panama.NativeGuard;
  * <p>PDFium's internal state (font renderer, document loader, page parser) is
  * <b>not thread-safe</b> - even across independent document instances. All
  * PDFium native calls must be serialized. Since 1.0.4 the library does this
- * for you: every native call goes through
- * {@link NativeGuard}, so no caller-side
- * locking is required anywhere.
+ * for you: every native call goes through the PdfiumRuntime execution domain,
+ * so no caller-side locking is required anywhere.
  *
  * <p>Parallel speedup comes from overlapping Java-side work (hashing, NLP,
  * image processing, I/O) across threads while PDFium calls are pipelined
@@ -59,7 +57,7 @@ import stirling.software.jpdfium.panama.NativeGuard;
  * PdfPipeline.forEach(input, ProcessingMode.parallel(4),
  *     (doc, pageIndex) -> {
  *         String text;
- *         // No caller locking: NativeGuard serializes internally. Do NOT wrap
+ *         // No caller locking: the PdfiumRuntime execution domain serializes internally. Do NOT wrap
  *         // in synchronized(PDFIUM_LOCK): holding a monitor across a downcall
  *         // pins virtual-thread carriers for the native duration (JEP 444/491).
  *         try (PdfPage page = doc.page(pageIndex)) {
@@ -89,8 +87,7 @@ public final class PdfPipeline {
      * - even across independent document instances.
      *
      * @deprecated since 1.0.4 - callers no longer need this. Every native call
-     *     is serialised internally by
-     *     {@link NativeGuard}, so PDFium calls
+     *     is serialised internally by the PdfiumRuntime execution domain, so PDFium calls
      *     are safe from any thread without caller-side locking. The field is
      *     retained so existing {@code synchronized(PDFIUM_LOCK)} blocks keep
      *     compiling; they are now redundant but harmless.
@@ -101,7 +98,7 @@ public final class PdfPipeline {
     /**
      * A page-level operation applied to each page of a document.
      *
-     * <p>No caller locking needed: native calls serialize via NativeGuard.
+     * <p>No caller locking needed: native calls serialize via the PdfiumRuntime execution domain.
      * Java-side work runs in parallel across worker threads.
      */
     @FunctionalInterface
@@ -266,9 +263,8 @@ public final class PdfPipeline {
 
         ExecutorService executor = Executors.newFixedThreadPool(
                 Math.min(parallelism, chunks.size()));
+        List<Future<ChunkResult>> futures = new ArrayList<>();
         try {
-            List<Future<ChunkResult>> futures = new ArrayList<>();
-
             for (int chunkIndex = 0; chunkIndex < chunkBytes.size(); chunkIndex++) {
                 final byte[] currentChunkBytes = chunkBytes.get(chunkIndex);
                 final int order = chunkIndex;
@@ -289,14 +285,17 @@ public final class PdfPipeline {
             } finally {
                 documentsToMerge.forEach(PdfDocument::close);
             }
+        } catch (Throwable t) {
+            for (Future<ChunkResult> f : futures) f.cancel(true);
+            throw t;
         } finally {
-            executor.shutdown();
+            shutdownAndReport(executor, "processParallel");
         }
     }
 
     /**
      * Opens a single shared document and dispatches per-page tasks to a pool.
-     * Native calls serialize via NativeGuard; consumers add no locking.
+     * Native calls serialize via the PdfiumRuntime execution domain; consumers add no locking.
      */
     private static void forEachParallel(byte[] sourceBytes, ProcessingMode mode,
                                         BiConsumer<PdfDocument, Integer> consumer) {
@@ -307,25 +306,31 @@ public final class PdfPipeline {
         int parallelism = Math.min(mode.parallelism(), totalPages);
 
         ExecutorService executor = Executors.newFixedThreadPool(parallelism);
+        List<Future<?>> futures = new ArrayList<>();
         try {
-            List<Future<?>> futures = new ArrayList<>();
             // Submit one task per page for maximum pipeline overlap:
-            // while thread A does Java work on page N, thread B can acquire
-            // NativeGuard for page N+1's extraction.
+            // while thread A does Java work on page N, thread B can enter
+            // the PdfiumRuntime execution domain for page N+1's extraction.
             for (int i = 0; i < totalPages; i++) {
                 final int pi = i;
                 futures.add(executor.submit(() -> consumer.accept(doc, pi)));
             }
             collectVoidResults(futures);
+        } catch (Throwable t) {
+            for (Future<?> f : futures) f.cancel(true);
+            throw t;
         } finally {
-            executor.shutdown();
-            doc.close();
+            try {
+                shutdownAndReport(executor, "forEachParallel");
+            } finally {
+                doc.close();
+            }
         }
     }
 
     /**
      * Process a chunk with optional streaming flushes.
-     * Native calls serialize internally via NativeGuard; no caller locking here
+     * Native calls serialize internally via the PdfiumRuntime execution domain; no caller locking here
      * (holding a monitor across a downcall pins vthread carriers).
      */
     private static byte[] processChunkBytes(byte[] chunkBytes, ProcessingMode mode, PageOperation op) {
@@ -379,6 +384,30 @@ public final class PdfPipeline {
                 Thread.currentThread().interrupt();
                 throw new JPDFiumException("Parallel processing interrupted", e);
             }
+        }
+    }
+
+    /**
+     * Terminates a pipeline pool and reports failure instead of treating it
+     * as cleanup. {@code shutdownNow} is best-effort: a native task ignoring
+     * interruption keeps owning its arenas, leases, staging files, and
+     * permits until it actually exits, so a false return means ownership is
+     * still outstanding, not released.
+     */
+    private static void shutdownAndReport(java.util.concurrent.ExecutorService executor, String op) {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+                if (!executor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                    throw new JPDFiumException(
+                            op + " did not terminate; native work may still own its resources");
+                }
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException(op + " interrupted during shutdown", e);
         }
     }
 
