@@ -28,8 +28,8 @@ namespace {
 
 int g_failures = 0;
 
-constexpr int kLiveHandles = 64;   // realistic: a handful of open documents
-constexpr int kStaleProbes = 1;    // include a rejected lookup per iteration
+constexpr int kLiveHandles = 64;  // realistic: a handful of open documents
+constexpr int kStaleProbes = 1;   // include a rejected lookup per iteration
 constexpr int kIters = 2'000'000;
 
 // A: the pre-registry decode. Rejects nothing; dereferences garbage.
@@ -39,7 +39,7 @@ inline void* decodeUnchecked(int64_t h) {
 
 // B: mutex + unordered_set. Correct, but pays a lock on every read.
 class MutexRegistry {
-  public:
+   public:
     void add(const void* w) {
         std::lock_guard<std::mutex> lock(mutex_);
         live_.insert(w);
@@ -49,7 +49,7 @@ class MutexRegistry {
         return live_.find(w) != live_.end();
     }
 
-  private:
+   private:
     mutable std::mutex mutex_;
     std::unordered_set<const void*> live_;
 };
@@ -57,7 +57,7 @@ class MutexRegistry {
 // C: the production algorithm - open addressing, tombstones, atomics only on
 // the read path, mutex-guarded overflow set when the table fills.
 class LockFreeRegistry {
-  public:
+   public:
     static constexpr size_t kSlots = 1024;
 
     void add(const void* w) {
@@ -110,7 +110,7 @@ class LockFreeRegistry {
         return count_.load(std::memory_order_relaxed) + overflow_.size();
     }
 
-  private:
+   private:
     static constexpr uintptr_t kTombstoneAddr = 1;
     static const void* tombstone() {
         return reinterpret_cast<const void*>(kTombstoneAddr);
@@ -149,8 +149,8 @@ void check(bool ok, const char* msg) {
 
 int main() {
     std::printf("=== handle registry validation cost ===\n");
-    std::printf("live handles=%d, %d probes/iteration, %d iterations\n\n",
-                kLiveHandles, kLiveHandles + kStaleProbes, kIters);
+    std::printf("live handles=%d, %d probes/iteration, %d iterations\n\n", kLiveHandles,
+                kLiveHandles + kStaleProbes, kIters);
 
     std::vector<int64_t> handles;
     handles.reserve(kLiveHandles);
@@ -175,10 +175,9 @@ int main() {
     for (int i = 0; i < 100'000; i++) {
         int64_t h = handles[i % handles.size()];
         sink += decodeUnchecked(h) != nullptr;
-        sink += mutex_reg.contains(reinterpret_cast<const void*>(
-                    static_cast<uintptr_t>(h))) ? 1 : 0;
-        sink += fast_reg.contains(reinterpret_cast<const void*>(
-                    static_cast<uintptr_t>(h))) ? 1 : 0;
+        sink +=
+            mutex_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(h))) ? 1 : 0;
+        sink += fast_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(h))) ? 1 : 0;
     }
 
     double a = time_ns([&] {
@@ -190,23 +189,22 @@ int main() {
     double b = time_ns([&] {
         for (int i = 0; i < kIters; i++) {
             auto h = handles[i % handles.size()];
-            sink += mutex_reg.contains(
-                        reinterpret_cast<const void*>(static_cast<uintptr_t>(h)))
-                    ? 1 : 0;
-            sink += mutex_reg.contains(
-                        reinterpret_cast<const void*>(static_cast<uintptr_t>(stale)))
-                    ? 1 : 0;
+            sink += mutex_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(h)))
+                        ? 1
+                        : 0;
+            sink += mutex_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(stale)))
+                        ? 1
+                        : 0;
         }
     });
     double c = time_ns([&] {
         for (int i = 0; i < kIters; i++) {
             auto h = handles[i % handles.size()];
-            sink += fast_reg.contains(
-                        reinterpret_cast<const void*>(static_cast<uintptr_t>(h)))
-                    ? 1 : 0;
-            sink += fast_reg.contains(
-                        reinterpret_cast<const void*>(static_cast<uintptr_t>(stale)))
-                    ? 1 : 0;
+            sink +=
+                fast_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(h))) ? 1 : 0;
+            sink += fast_reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(stale)))
+                        ? 1
+                        : 0;
         }
     });
 
@@ -230,8 +228,7 @@ int main() {
             if (!reg.contains(objs[i])) false_rejects++;
         }
         for (int i = 0; i < 64; i++) {
-            if (reg.contains(reinterpret_cast<const void*>(
-                    static_cast<uintptr_t>(0x3039 + i))))
+            if (reg.contains(reinterpret_cast<const void*>(static_cast<uintptr_t>(0x3039 + i))))
                 false_accepts++;
         }
         for (int i = 0; i < kObjects; i++) {
@@ -243,9 +240,10 @@ int main() {
         }
     }
 
-    std::printf("\nE stress: false_rejects=%d false_accepts=%d use_after_remove=%d "
-                "final_size=%zu (expected all zero, size 0)\n",
-                false_rejects, false_accepts, use_after_remove, reg.size());
+    std::printf(
+        "\nE stress: false_rejects=%d false_accepts=%d use_after_remove=%d "
+        "final_size=%zu (expected all zero, size 0)\n",
+        false_rejects, false_accepts, use_after_remove, reg.size());
     check(false_rejects == 0, "every registered handle validates");
     check(false_accepts == 0, "no never-registered address validates");
     check(use_after_remove == 0, "no removed handle still validates");
@@ -260,8 +258,7 @@ int main() {
         dup.add(obj);
         dup.add(obj);
         dup.remove(obj);
-        check(!dup.contains(obj),
-              "duplicate registration does not survive one remove");
+        check(!dup.contains(obj), "duplicate registration does not survive one remove");
         delete reinterpret_cast<int64_t*>(obj);
     }
 
@@ -278,7 +275,7 @@ int main() {
             sat.add(fill[i]);
         }
         auto* extra = new int64_t(-1);
-        sat.add(extra); // table full -> overflow path, must still validate
+        sat.add(extra);  // table full -> overflow path, must still validate
         check(sat.contains(extra), "overflow entry validates past full table");
         check(!sat.contains(reinterpret_cast<const void*>(1)),
               "tombstone still rejected with full table + tombstones absent");
@@ -296,7 +293,7 @@ int main() {
         check(live == 512, "removal through chains keeps survivors visible");
         for (size_t i = 0; i < kSlots; i += 2) {
             auto* o = new int64_t((int64_t)i);
-            sat.add(o); // reuse tombstone slots
+            sat.add(o);  // reuse tombstone slots
             fill[i] = o;
         }
         int relive = 0;

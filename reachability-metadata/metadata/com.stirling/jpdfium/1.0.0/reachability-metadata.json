@@ -40,19 +40,6 @@
       "allPublicFields": true
     },
     {
-      "type": "stirling.software.jpdfium.panama.PdfiumRuntime",
-      "methods": [
-        {
-          "name": "execute",
-          "parameterTypes": []
-        },
-        {
-          "name": "shutdown",
-          "parameterTypes": []
-        }
-      ]
-    },
-    {
       "type": "stirling.software.jpdfium.panama.ActionBindings"
     },
     {

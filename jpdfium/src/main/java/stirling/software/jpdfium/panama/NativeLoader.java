@@ -56,8 +56,14 @@ public final class NativeLoader {
                 loaded = true;
             } catch (UnsatisfiedLinkError e) {
                 loadError = classpathMiss;
-                throw new NativeNotFoundException(
+                // Carry both earlier failures: classpathMiss holds the suppressed
+                // version/repository/jar-validation error from the opt-in
+                // download, which is exactly what a caller needs to fix it.
+                NativeNotFoundException failure = new NativeNotFoundException(
                         detectPlatform() + ". Also tried System.loadLibrary(\"jpdfium\") and failed.");
+                failure.addSuppressed(classpathMiss);
+                failure.addSuppressed(e);
+                throw failure;
             }
         } catch (Throwable t) {
             loadError = t;

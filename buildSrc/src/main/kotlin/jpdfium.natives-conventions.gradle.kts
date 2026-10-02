@@ -53,6 +53,10 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
     // Don't fail the build when the dist dir is absent (local dev, stub builds, etc.).
     // CI is responsible for populating it before `publish`.
     onlyIf { distDir.asFile.isDirectory && distDir.asFile.listFiles()?.isNotEmpty() == true }
+    // Copy never removes: without this, switching real<->stub locally leaves
+    // the previous bundle's libraries beside the new ones, and the jar ships
+    // a mixed bridge/dependency set that loads (or crashes) unpredictably.
+    doFirst { stagedRoot.get().asFile.deleteRecursively() }
 }
 
 val writeNativeManifest = tasks.register("writeNativeManifest") {

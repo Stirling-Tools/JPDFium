@@ -624,6 +624,12 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(handle_safety PRIVATE jpdfium_stub)
         target_compile_definitions(handle_safety PRIVATE JPDFIUM_STUB_BUILD=1)
     endif()
+    if(MSVC)
+        # The harness writes scratch PDFs with fopen like the bridge itself
+        # does, so it needs the same CRT deprecation opt-out the library gets.
+        # /WX turns the otherwise-fatal C4996 into a build break on Windows.
+        target_compile_definitions(handle_safety PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+    endif()
     add_test(NAME handle_safety COMMAND handle_safety)
 
     # Prices the validation the registries add to every handle decode, so the

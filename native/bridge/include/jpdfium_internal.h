@@ -136,8 +136,7 @@ struct DocCore {
 };
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
-                                            int64_t blen = 0,
-                                            const char* sourcePath = nullptr) {
+                                            int64_t blen = 0, const char* sourcePath = nullptr) {
     // Own the document and buffer until DocCore takes them: `new DocCore()` and
     // the shared_ptr construction below can both throw, and the caller has no
     // handle to clean up with at that point.
@@ -252,7 +251,7 @@ struct PageWrapper {
 // domain (see PdfiumRuntime) remains the end-game; an owner thread is an
 // optional alternative, not a requirement for this fix.
 class HandleRegistry {
-  public:
+   public:
     // 1024 slots holds far more live handles than any realistic document set;
     // the overflow path exists so the limit is never a correctness cliff.
     static constexpr size_t kSlots = 1024;
@@ -312,7 +311,7 @@ class HandleRegistry {
         return count_.load(std::memory_order_relaxed) + overflow_.size();
     }
 
-  private:
+   private:
     // Address 1 is in the unmapped first page and can never be a real
     // allocation, so it is a safe tombstone sentinel.
     static constexpr uintptr_t kTombstoneAddr = 1;
@@ -335,16 +334,22 @@ class HandleRegistry {
 };
 
 class PageHandleRegistry {
-  public:
+   public:
     static PageHandleRegistry& instance() {
         static PageHandleRegistry r;
         return r;
     }
-    void add(const PageWrapper* w) { registry().add(w); }
-    void remove(const PageWrapper* w) { registry().remove(w); }
-    bool contains(const PageWrapper* w) const { return registry().contains(w); }
+    void add(const PageWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const PageWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const PageWrapper* w) const {
+        return registry().contains(w);
+    }
 
-  private:
+   private:
     // Separate table from documents: a live PageWrapper* must never validate
     // as a DocWrapper* and vice versa. Sharing one table made cross-type
     // confusion pass membership and then dereference the wrong layout.
@@ -367,16 +372,22 @@ inline bool pageAlive(PageWrapper* pw) {
 // Typed aliases keep the call sites self-documenting: a DocWrapper* cannot be
 // passed where a PageWrapper* is expected.
 class DocHandleRegistry {
-  public:
+   public:
     static DocHandleRegistry& instance() {
         static DocHandleRegistry r;
         return r;
     }
-    void add(const DocWrapper* w) { registry().add(w); }
-    void remove(const DocWrapper* w) { registry().remove(w); }
-    bool contains(const DocWrapper* w) const { return registry().contains(w); }
+    void add(const DocWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const DocWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const DocWrapper* w) const {
+        return registry().contains(w);
+    }
 
-  private:
+   private:
     // Separate table from pages; see PageHandleRegistry above.
     static HandleRegistry& registry() {
         static HandleRegistry r;
@@ -387,16 +398,22 @@ class DocHandleRegistry {
 // Auxiliary handles carry a kind tag so membership also establishes type:
 // a valid FlashText handle must not validate as PCRE2 and vice versa.
 class Pcre2HandleRegistry {
-  public:
+   public:
     static Pcre2HandleRegistry& instance() {
         static Pcre2HandleRegistry r;
         return r;
     }
-    void add(const void* w) { registry().add(w); }
-    void remove(const void* w) { registry().remove(w); }
-    bool contains(const void* w) const { return registry().contains(w); }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
 
-  private:
+   private:
     static HandleRegistry& registry() {
         static HandleRegistry r;
         return r;
@@ -404,16 +421,22 @@ class Pcre2HandleRegistry {
 };
 
 class FlashTextHandleRegistry {
-  public:
+   public:
     static FlashTextHandleRegistry& instance() {
         static FlashTextHandleRegistry r;
         return r;
     }
-    void add(const void* w) { registry().add(w); }
-    void remove(const void* w) { registry().remove(w); }
-    bool contains(const void* w) const { return registry().contains(w); }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
 
-  private:
+   private:
     static HandleRegistry& registry() {
         static HandleRegistry r;
         return r;
@@ -423,16 +446,22 @@ class FlashTextHandleRegistry {
 // Backwards-compatible alias for call sites that only need "aux, not doc/page".
 // New code uses the kind-specific registries above.
 class AuxHandleRegistry {
-  public:
+   public:
     static AuxHandleRegistry& instance() {
         static AuxHandleRegistry r;
         return r;
     }
-    void add(const void* w) { registry().add(w); }
-    void remove(const void* w) { registry().remove(w); }
-    bool contains(const void* w) const { return registry().contains(w); }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
 
-  private:
+   private:
     static HandleRegistry& registry() {
         static HandleRegistry r;
         return r;

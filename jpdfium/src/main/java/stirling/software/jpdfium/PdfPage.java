@@ -411,7 +411,6 @@ public final class PdfPage implements AutoCloseable {
                 throw new IllegalStateException("A progressive render session is already active on this page");
             }
             PdfiumBuffers.RenderLease lease = null;
-            boolean started = false;
             try {
                 lease = buffer.acquireLease();
                 ProgressiveSession session = new ProgressiveSession(
@@ -422,7 +421,6 @@ public final class PdfPage implements AutoCloseable {
                 if (!session.isRetired()) {
                     activeSession.set(session);
                 }
-                started = true;
                 return session;
             } catch (Throwable constructionFailure) {
                 // Best-effort cleanup of the partially-started session. The

@@ -43,7 +43,7 @@ extern "C" {
 #define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
 #define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
-#define JPDFIUM_ERR_TOO_LARGE (-9)      // save aborted: output exceeded the byte budget
+#define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -516,8 +516,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
 // success. On failure a partial out_path may exist and should be removed by
 // the caller.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path,
-                                                 int32_t flags, int32_t objectStreamMode,
-                                                 int32_t streamDataMode, int32_t decodeLevel);
+                                                  int32_t flags, int32_t objectStreamMode,
+                                                  int32_t streamDataMode, int32_t decodeLevel);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm

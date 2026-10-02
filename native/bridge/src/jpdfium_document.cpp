@@ -345,92 +345,93 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
 int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                  int64_t* out_bytes) {
     try {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    if (!path || !*path) return JPDFIUM_ERR_INVALID;
-    if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
-    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
-    if (out_bytes) *out_bytes = 0;
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (!path || !*path) return JPDFIUM_ERR_INVALID;
+        if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
+        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        if (out_bytes) *out_bytes = 0;
 
-    // Opt-in sanitize pass needs the whole serialization post-hoc, so it
-    // keeps the buffered path. The common case streams with no large buffer.
-    if (w->core->contentRedacted && w->core->sanitizeOnSave) {
-        struct BufWriter : FPDF_FILEWRITE {
-            std::vector<uint8_t> buf;
-            static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-                auto* bw = static_cast<BufWriter*>(self);
-                try {
-                    auto* src = static_cast<const uint8_t*>(data);
-                    bw->buf.insert(bw->buf.end(), src, src + size);
-                    return 1;
-                } catch (...) {
-                    return 0;  // never let exceptions cross the C callback
+        // Opt-in sanitize pass needs the whole serialization post-hoc, so it
+        // keeps the buffered path. The common case streams with no large buffer.
+        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+            struct BufWriter : FPDF_FILEWRITE {
+                std::vector<uint8_t> buf;
+                static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+                    auto* bw = static_cast<BufWriter*>(self);
+                    try {
+                        auto* src = static_cast<const uint8_t*>(data);
+                        bw->buf.insert(bw->buf.end(), src, src + size);
+                        return 1;
+                    } catch (...) {
+                        return 0;  // never let exceptions cross the C callback
+                    }
                 }
-            }
-        } bw;
-        bw.version = 1;
-        bw.WriteBlock = BufWriter::Write;
+            } bw;
+            bw.version = 1;
+            bw.WriteBlock = BufWriter::Write;
 
-        if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
-        int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
-        if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
-        if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes) return JPDFIUM_ERR_IO;
+            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+            int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+            if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+            if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes)
+                return JPDFIUM_ERR_IO;
+
+            FILE* f = safe_fopen_write(path);
+            if (!f) return JPDFIUM_ERR_IO;
+            size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
+            int closeRc = fclose(f);
+            if (written != bw.buf.size() || closeRc != 0) {
+                std::remove(path);
+                return JPDFIUM_ERR_IO;
+            }
+            if (out_bytes) *out_bytes = static_cast<int64_t>(written);
+            return JPDFIUM_OK;
+        }
+
+        // Alias protection: saving over the document's own backing file would
+        // truncate the input PDFium is still reading from. Checked before the
+        // output is opened, because O_TRUNC would destroy the source first.
+        if (!w->core->sourcePath.empty() && w->core->sourcePath == path) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
         FILE* f = safe_fopen_write(path);
         if (!f) return JPDFIUM_ERR_IO;
-        size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
-        int closeRc = fclose(f);
-        if (written != bw.buf.size() || closeRc != 0) {
+
+        FileWriteContext ctx;
+        ctx.version = 1;
+        ctx.WriteBlock = FileWriteContext::Write;
+        ctx.file = f;
+        ctx.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
+
+        // PDFium's own outcome and the sink's are recorded separately: a save can
+        // return true while the sink failed, or fail while everything written so
+        // far was fine. Reporting only one of them would misattribute the cause.
+        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
+        const int flushRc = std::fflush(f);
+        const int closeRc = std::fclose(f);
+        ctx.file = nullptr;
+
+        if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
+            // Never publish a partial destination: a truncated PDF is worse than
+            // no output, so the file is removed and the stage that failed is what
+            // gets reported.
+            std::remove(path);
+            if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
+            if (!pdfium_ok) return JPDFIUM_ERR_IO;
+            if (flushRc != 0) return JPDFIUM_ERR_IO;  // flush failure
+            if (closeRc != 0) return JPDFIUM_ERR_IO;  // close failure
+            return JPDFIUM_ERR_IO;                    // sink failure
+        }
+        // An empty result is not a valid PDF, so treat it as a failure rather than
+        // reporting a zero-byte success.
+        if (ctx.bytes_written == 0) {
             std::remove(path);
             return JPDFIUM_ERR_IO;
         }
-        if (out_bytes) *out_bytes = static_cast<int64_t>(written);
+        if (out_bytes) *out_bytes = static_cast<int64_t>(ctx.bytes_written);
         return JPDFIUM_OK;
-    }
-
-    // Alias protection: saving over the document's own backing file would
-    // truncate the input PDFium is still reading from. Checked before the
-    // output is opened, because O_TRUNC would destroy the source first.
-    if (!w->core->sourcePath.empty() && w->core->sourcePath == path) {
-        return JPDFIUM_ERR_INVALID;
-    }
-
-    FILE* f = safe_fopen_write(path);
-    if (!f) return JPDFIUM_ERR_IO;
-
-    FileWriteContext ctx;
-    ctx.version = 1;
-    ctx.WriteBlock = FileWriteContext::Write;
-    ctx.file = f;
-    ctx.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
-
-    // PDFium's own outcome and the sink's are recorded separately: a save can
-    // return true while the sink failed, or fail while everything written so
-    // far was fine. Reporting only one of them would misattribute the cause.
-    const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
-    const int flushRc = std::fflush(f);
-    const int closeRc = std::fclose(f);
-    ctx.file = nullptr;
-
-    if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
-        // Never publish a partial destination: a truncated PDF is worse than
-        // no output, so the file is removed and the stage that failed is what
-        // gets reported.
-        std::remove(path);
-        if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
-        if (!pdfium_ok) return JPDFIUM_ERR_IO;
-        if (flushRc != 0) return JPDFIUM_ERR_IO;   // flush failure
-        if (closeRc != 0) return JPDFIUM_ERR_IO;   // close failure
-        return JPDFIUM_ERR_IO;                     // sink failure
-    }
-    // An empty result is not a valid PDF, so treat it as a failure rather than
-    // reporting a zero-byte success.
-    if (ctx.bytes_written == 0) {
-        std::remove(path);
-        return JPDFIUM_ERR_IO;
-    }
-    if (out_bytes) *out_bytes = static_cast<int64_t>(ctx.bytes_written);
-    return JPDFIUM_OK;
     } catch (...) {
         // Never let a C++ exception cross the FFM boundary; also remove any
         // partial file the failed save may have created.

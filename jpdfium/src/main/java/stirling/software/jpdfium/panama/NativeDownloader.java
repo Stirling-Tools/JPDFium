@@ -187,9 +187,12 @@ final class NativeDownloader {
             throw new NativeLoadException("No writable location for the natives download.");
         }
         try {
-            Files.createDirectories(destination.getParent());
+            // The cache root can fall back to the system temp directory, which
+            // is shared. This holds native code, so tighten the directory before
+            // anything is written into it and fail closed if that is impossible.
+            NativeCache.requirePrivateDirectory(destination.getParent());
         } catch (IOException e) {
-            throw new NativeLoadException("Cannot create natives download directory.", e);
+            throw new NativeLoadException("Cannot create a private natives download directory.", e);
         }
         Path staging = null;
         try {

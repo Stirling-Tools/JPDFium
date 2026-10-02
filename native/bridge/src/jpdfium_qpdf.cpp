@@ -61,8 +61,8 @@ struct QpdfResult {
 // revisit only if a per-instance alternative appears in qpdf.
 // Apply the writer configuration. Shared by the memory and file paths so the
 // two cannot drift apart in which flags they honour.
-void configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode,
-                     int32_t streamDataMode, int32_t decodeLevel) {
+void configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode, int32_t streamDataMode,
+                     int32_t decodeLevel) {
     if (flags & JPDFIUM_QPDF_LINEARIZE) w.setLinearization(true);
     if (flags & JPDFIUM_QPDF_RECOMPRESS_FLATE) w.setRecompressFlate(true);
     if (flags & JPDFIUM_QPDF_COMPRESS_STREAMS) w.setCompressStreams(true);
@@ -70,10 +70,8 @@ void configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode,
     if (flags & JPDFIUM_QPDF_NORMALIZE_CONTENT) w.setContentNormalization(true);
     if (objectStreamMode >= 0)
         w.setObjectStreamMode(static_cast<qpdf_object_stream_e>(objectStreamMode));
-    if (streamDataMode >= 0)
-        w.setStreamDataMode(static_cast<qpdf_stream_data_e>(streamDataMode));
-    if (decodeLevel >= 0)
-        w.setDecodeLevel(static_cast<qpdf_stream_decode_level_e>(decodeLevel));
+    if (streamDataMode >= 0) w.setStreamDataMode(static_cast<qpdf_stream_data_e>(streamDataMode));
+    if (decodeLevel >= 0) w.setDecodeLevel(static_cast<qpdf_stream_decode_level_e>(decodeLevel));
 }
 
 // Write an already-parsed document straight to a file. QPDFWriter takes
@@ -316,8 +314,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const in
 // independent of document size - the byte[] variant necessarily holds both the
 // input and the output simultaneously.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path,
-                                                 int32_t flags, int32_t objectStreamMode,
-                                                 int32_t streamDataMode, int32_t decodeLevel) {
+                                                  int32_t flags, int32_t objectStreamMode,
+                                                  int32_t streamDataMode, int32_t decodeLevel) {
     if (!in_path || !*in_path || !out_path || !*out_path) return -1;
     try {
         auto qpdf = QPDF::create();
@@ -655,7 +653,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const*, int32_t, con
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char*, const char*, int32_t, int32_t,
-                                                 int32_t, int32_t) {
+                                                  int32_t, int32_t) {
     return -1;
 }
 
@@ -683,8 +681,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char*, const char*, int3
     return -1;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char*, const char*, const char*,
-                                                 const char*, int32_t, int32_t) {
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char*, const char*, const char*, const char*,
+                                                 int32_t, int32_t) {
     return -1;
 }
 

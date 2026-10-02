@@ -270,8 +270,8 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
         provisional = raw;
 
         int32_t result = create_page_with_image(
-            encodeHandle(raw), image_data, static_cast<size_t>(image_len), page_width,
-            page_height, margin, static_cast<Position>(position), image_format, 0);
+            encodeHandle(raw), image_data, static_cast<size_t>(image_len), page_width, page_height,
+            margin, static_cast<Position>(position), image_format, 0);
 
         if (result != JPDFIUM_OK) {
             // The wrapper was registered before the attempt; unregister it so a
