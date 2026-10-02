@@ -65,7 +65,10 @@ public class PdfiumDomainBenchmark {
         doc = PdfDocument.open(bytes);
         page = doc.page(0);
         pageHandle = page.nativeHandle();
-        arena = Arena.ofConfined();
+        // Shared, not confined: JMH does not guarantee that @Setup, @Benchmark
+        // and @TearDown run on the same thread, and a confined arena rejects
+        // access from another one.
+        arena = Arena.ofShared();
         outSegment = arena.allocate(java.lang.foreign.ValueLayout.JAVA_FLOAT);
     }
 

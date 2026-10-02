@@ -121,9 +121,11 @@ class SplitReuseTest {
                         PdfSplit.COUNTERS.outputWrites.get());
                 assertEquals(100, total);
                 // Snapshot-once invariant: exactly one source serialization for
-                // a default (snapshot-always) split, whatever the range count.
-                assertEquals(1, PdfSplit.COUNTERS.sourceSerializations.get(),
-                        "a default split must serialize the source exactly once");
+                // a default (snapshot-always) multi-output split. A single-range
+                // split never stages a source at all.
+                int ranges = (100 + per - 1) / per;
+                assertEquals(ranges > 1 ? 1 : 0, PdfSplit.COUNTERS.sourceSerializations.get(),
+                        "a default split must serialize the source at most once");
             }
         }
     }

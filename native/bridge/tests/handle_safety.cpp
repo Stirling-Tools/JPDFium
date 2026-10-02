@@ -20,22 +20,29 @@
 #include <vector>
 
 #if !defined(_WIN32)
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 /**
- * Creates (or truncates) {@code path} for writing, owner-only.
+ * Creates (or truncates) {@code path} for writing, owner-only from the start.
  *
- * fopen(..., "wb") creates with mode 0666 before umask, and these scratch files
- * hold document content, so a shared temp directory would expose it to every
- * local user. Windows uses the temp directory's own ACLs.
+ * fopen(..., "wb") creates with mode 0666 before umask, so these scratch files
+ * would be world-writable for a moment and a /tmp path could be swapped between
+ * the create and any follow-up chmod. open() takes the mode atomically with the
+ * creation instead. Windows uses the temp directory's own ACLs.
  */
 static FILE* create_private_file(const char* path) {
-    FILE* f = std::fopen(path, "wb");
-#if !defined(_WIN32)
-    if (f) ::chmod(path, S_IRUSR | S_IWUSR);
-#endif
+#if defined(_WIN32)
+    return std::fopen(path, "wb");
+#else
+    const int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) return nullptr;
+    FILE* f = ::fdopen(fd, "wb");
+    if (!f) ::close(fd);
     return f;
+#endif
 }
 
 // The stub library (jpdfium_stub) answers with canned success values and has no
@@ -74,7 +81,7 @@ static int g_failures = 0;
 //
 // Override with argv[1] to test any PDF.
 static std::vector<uint8_t> load_fixture(int argc, char** argv) {
-    // codeql[js/path-injection] argv[1] is the point of this harness: a
+    // codeql[cpp/path-injection] argv[1] is the point of this harness: a
     // developer points it at their own PDF when investigating a failure. It is
     // a locally run test binary, never a service taking untrusted input.
     const char* path = (argc > 1) ? argv[1] : "jpdfium/src/test/resources/pdfs/general/minimal.pdf";
@@ -141,7 +148,7 @@ static void test_real_handle_lifecycle(const std::vector<uint8_t>& pdf) {
     }
     // Round trip: create -> register -> use -> close -> unregister.
     int64_t doc = 0;
-    int32_t rc = jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc);
+    int32_t rc = jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc);
     CHECK(rc == JPDFIUM_OK && doc != 0, "doc_open_bytes returns a live handle");
 
     int32_t count = 0;
@@ -192,7 +199,7 @@ static void test_writer_budget_and_failure(const std::vector<uint8_t>& pdf) {
         return;
     }
     int64_t doc = 0;
-    if (jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc) != JPDFIUM_OK) {
+    if (jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc) != JPDFIUM_OK) {
         CHECK(false, "writer test: doc_open_bytes failed");
         return;
     }
@@ -236,20 +243,35 @@ static void test_failed_save_does_not_truncate_destination(const std::vector<uin
         return;
     }
     int64_t doc = 0;
-    if (jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc) != JPDFIUM_OK) {
+    if (jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc) != JPDFIUM_OK) {
         CHECK(false, "truncation test: doc_open_bytes failed");
         return;
     }
     const char* path = "/tmp/jpdfium_asan_trunc.pdf";
-    // Pre-existing content we expect to survive a failed overwrite.
+    // A std::string, not a char*: sizeof on the literal's name would be the
+    // pointer size, and the comparison below would read only part of it.
+    const std::string sentinel = "PREEXISTING";
+    std::remove(path);
     FILE* pre = create_private_file(path);
     if (pre) {
-        const char* sentinel = "PREEXISTING";
-        std::fwrite(sentinel, 1, std::strlen(sentinel), pre);
+        std::fwrite(sentinel.data(), 1, sentinel.size(), pre);
         std::fclose(pre);
     }
     int32_t rc = jpdfium_doc_save_to_file(doc, path, 4, nullptr);
     CHECK(rc != JPDFIUM_OK, "budgeted overwrite fails");
+
+    // A refused save must leave the destination byte-for-byte as it was: this is
+    // the whole point of writing through a staging file and publishing by
+    // rename, so assert it instead of only checking the return code.
+    FILE* after = std::fopen(path, "rb");
+    CHECK(after != nullptr, "refused save left the destination in place");
+    if (after) {
+        std::string buf(sentinel.size() + 1, '\0');
+        const size_t got = std::fread(buf.data(), 1, sentinel.size(), after);
+        std::fclose(after);
+        CHECK(got == sentinel.size() && buf.compare(0, sentinel.size(), sentinel) == 0,
+              "refused save did not truncate or replace the existing file");
+    }
     std::remove(path);
     jpdfium_doc_close(doc);
 }
@@ -310,7 +332,7 @@ static void test_writer_rejects_bad_inputs(const std::vector<uint8_t>& pdf) {
         return;
     }
     int64_t doc = 0;
-    if (jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc) != JPDFIUM_OK) {
+    if (jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc) != JPDFIUM_OK) {
         CHECK(false, "writer_inputs: doc_open_bytes failed");
         return;
     }
@@ -373,7 +395,7 @@ static void test_cross_type_handles_rejected(const std::vector<uint8_t>& pdf) {
         return;
     }
     int64_t doc = 0;
-    if (jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc) != JPDFIUM_OK) {
+    if (jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc) != JPDFIUM_OK) {
         CHECK(false, "cross-type: doc_open_bytes failed");
         return;
     }
@@ -475,7 +497,7 @@ static void test_page_info_coarse(const std::vector<uint8_t>& pdf) {
         return;
     }
     int64_t doc = 0;
-    if (jpdfium_doc_open_bytes(pdf.data(), pdf.size(), &doc) != JPDFIUM_OK) {
+    if (jpdfium_doc_open_bytes(pdf.data(), static_cast<int64_t>(pdf.size()), &doc) != JPDFIUM_OK) {
         CHECK(false, "page_info: doc_open_bytes failed");
         return;
     }

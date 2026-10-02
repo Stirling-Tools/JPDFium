@@ -6,6 +6,7 @@
 #include <fpdf_save.h>
 #include <fpdfview.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -13,8 +14,11 @@
 #include <string>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include "jpdfium.h"
@@ -29,6 +33,45 @@ FILE* safe_fopen_write(const char* path) {
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return nullptr;
     return ::fdopen(fd, "wb");
+#endif
+}
+
+// Sibling staging file for an atomic publish.
+//
+// Writing straight to the destination destroys it the moment the save fails:
+// the sink opens with O_TRUNC, and the failure path removes "the partial
+// output" - which is the user's pre-existing file. Serializing into a sibling
+// and renaming means a refused save leaves the destination byte-for-byte
+// untouched. The sibling is what makes the publish a rename rather than a
+// cross-device copy, and it carries the staging mode (0600) until publish.
+std::string staging_sibling(const char* path) {
+    static std::atomic<unsigned> counter{0};
+    const unsigned n = counter.fetch_add(1, std::memory_order_relaxed);
+#if defined(_WIN32)
+    const long pid = static_cast<long>(GetCurrentProcessId());
+#else
+    const long pid = static_cast<long>(::getpid());
+#endif
+    return std::string(path) + ".jpdfium-save-" + std::to_string(pid) + "-" + std::to_string(n) +
+           ".tmp";
+}
+
+// Rename staging over the destination. Falls back to a non-atomic replace when
+// the platform refuses (a cross-device rename cannot happen here because the
+// staging file is a sibling, but some filesystems reject rename onto an open
+// target).
+bool publish_staged(const std::string& staging, const char* destination) {
+#if defined(_WIN32)
+    // Windows rename fails if the target exists; MoveFileEx replaces it.
+    if (::MoveFileExA(staging.c_str(), destination,
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        return true;
+    std::remove(destination);
+    if (std::rename(staging.c_str(), destination) == 0) return true;
+    std::remove(staging.c_str());
+    return false;
+#else
+    return std::rename(staging.c_str(), destination) == 0;
 #endif
 }
 
@@ -377,12 +420,17 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes)
                 return JPDFIUM_ERR_IO;
 
-            FILE* f = safe_fopen_write(path);
+            const std::string staging = staging_sibling(path);
+            FILE* f = safe_fopen_write(staging.c_str());
             if (!f) return JPDFIUM_ERR_IO;
             size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
             int closeRc = fclose(f);
             if (written != bw.buf.size() || closeRc != 0) {
-                std::remove(path);
+                std::remove(staging.c_str());
+                return JPDFIUM_ERR_IO;
+            }
+            if (!publish_staged(staging, path)) {
+                std::remove(staging.c_str());
                 return JPDFIUM_ERR_IO;
             }
             if (out_bytes) *out_bytes = static_cast<int64_t>(written);
@@ -396,7 +444,8 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             return JPDFIUM_ERR_INVALID;
         }
 
-        FILE* f = safe_fopen_write(path);
+        const std::string staging = staging_sibling(path);
+        FILE* f = safe_fopen_write(staging.c_str());
         if (!f) return JPDFIUM_ERR_IO;
 
         FileWriteContext ctx;
@@ -415,9 +464,10 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
 
         if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
             // Never publish a partial destination: a truncated PDF is worse than
-            // no output, so the file is removed and the stage that failed is what
-            // gets reported.
-            std::remove(path);
+            // no output, so the staging file is discarded and the stage that
+            // failed is what gets reported. The destination is never opened, so
+            // an existing file at that path survives untouched.
+            std::remove(staging.c_str());
             if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
             if (!pdfium_ok) return JPDFIUM_ERR_IO;
             if (flushRc != 0) return JPDFIUM_ERR_IO;  // flush failure
@@ -427,15 +477,17 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // An empty result is not a valid PDF, so treat it as a failure rather than
         // reporting a zero-byte success.
         if (ctx.bytes_written == 0) {
-            std::remove(path);
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        if (!publish_staged(staging, path)) {
+            std::remove(staging.c_str());
             return JPDFIUM_ERR_IO;
         }
         if (out_bytes) *out_bytes = static_cast<int64_t>(ctx.bytes_written);
         return JPDFIUM_OK;
     } catch (...) {
-        // Never let a C++ exception cross the FFM boundary; also remove any
-        // partial file the failed save may have created.
-        if (path && *path) std::remove(path);
+        // Never let a C++ exception cross the FFM boundary.
         return JPDFIUM_ERR_NATIVE;
     }
 }

@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.doc.PdfSecurity;
+import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 
@@ -638,6 +639,7 @@ public final class QpdfLib {
             MemorySegment passSeg = call.cString(password);
             int rc = (int) DECRYPT_FILE_HANDLE.invokeExact(inSeg, outSeg, passSeg);
             if (rc != 0) return false;
+            requireUnencrypted(staging);
             publish(staging, output, maxBytes);
             staging = null;
             return true;
@@ -652,6 +654,25 @@ public final class QpdfLib {
 
     public static boolean decryptToFile(Path input, Path output, String password) {
         return decryptToFile(input, output, password, 0);
+    }
+
+    /**
+     * Refuse to publish an output that is still password protected.
+     *
+     * <p>Decryption that reports success while leaving {@code /Encrypt} in place
+     * is the worst possible outcome here: the caller believes the protection is
+     * gone. Opening the staged file with no password is the only check that
+     * proves it, and it costs one parse against a full qpdf rewrite.
+     */
+    private static void requireUnencrypted(Path staging) {
+        try (PdfDocument probe = PdfDocument.open(staging)) {
+            if (probe.pageCount() < 0) {
+                throw new JPDFiumException("decrypt produced an unreadable output for " + staging);
+            }
+        } catch (JPDFiumException e) {
+            throw new JPDFiumException(
+                    "qpdf decrypt left the output encrypted; refusing to publish it", e);
+        }
     }
 
     private static void rejectAlias(List<Path> inputs, Path output) throws IOException {

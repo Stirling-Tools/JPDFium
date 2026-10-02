@@ -63,6 +63,10 @@ public final class NativeLoader {
                         detectPlatform() + ". Also tried System.loadLibrary(\"jpdfium\") and failed.");
                 failure.addSuppressed(classpathMiss);
                 failure.addSuppressed(e);
+                // Cache the complete failure, not classpathMiss: a later
+                // ensureLoaded() reports loadError, and that must carry the
+                // system-load error too.
+                loadError = failure;
                 throw failure;
             }
         } catch (Throwable t) {

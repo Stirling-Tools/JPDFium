@@ -98,12 +98,15 @@ int32_t stub_effective_pages(const uint8_t* data, int64_t len) {
     std::string_view sv(reinterpret_cast<const char*>(data), static_cast<std::size_t>(len));
     if (sv.find("/Type /Pages") != std::string_view::npos) {
         if (auto countPos = sv.find("/Count "); countPos != std::string_view::npos) {
-            int parsed = 0;
+            // Saturate instead of overflowing: a long digit run would wrap a
+            // signed int, which is undefined behaviour and halts UBSan.
+            int64_t parsed = 0;
             for (const char* p = sv.data() + countPos + 7;
                  p < sv.data() + sv.size() && *p >= '0' && *p <= '9'; ++p) {
                 parsed = parsed * 10 + (*p - '0');
+                if (parsed > INT32_MAX) return 0;
             }
-            if (parsed > 0) return parsed;
+            if (parsed > 0) return static_cast<int32_t>(parsed);
         }
     }
     return 3;
@@ -429,6 +432,14 @@ int32_t jpdfium_doc_page_count(int64_t handle, int32_t* count) {
     return JPDFIUM_OK;
 }
 
+// Sibling staging + rename publish, mirroring the real bridge: a refused save
+// must never remove or truncate a file that already exists at the destination.
+bool stub_publish_staged(const char* staging, const char* destination) {
+    if (std::rename(staging, destination) == 0) return true;
+    std::remove(staging);
+    return false;
+}
+
 int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     auto it = g_docs.find(handle);
     if (it == g_docs.end()) return JPDFIUM_OK;
@@ -442,21 +453,40 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
             "0}";
     }
 
-    if (!doc.path.empty()) {
-        FilePtr in(std::fopen(doc.path.c_str(), "rb"));
-        FilePtr out = safe_fopen_write(output_path);
-        if (in && out) {
-            std::array<char, 8192> buf{};
-            while (true) {
-                const std::size_t n = std::fread(buf.data(), 1, buf.size(), in.get());
-                if (n == 0) break;
-                std::fwrite(buf.data(), 1, n, out.get());
+    // Serialize into a sibling staging file and publish by rename so a refused
+    // save leaves an existing destination untouched, as the real bridge does.
+    const std::string staging = std::string(output_path) + ".jpdfium-save.tmp";
+    {
+        // Sized read, like every other copy in this stub: a chunked read loop
+        // leaves the analyzer unable to prove the stream position stays valid.
+        std::vector<uint8_t> payload;
+        if (!doc.path.empty()) {
+            FilePtr in(std::fopen(doc.path.c_str(), "rb"));
+            if (in) {
+                std::fseek(in.get(), 0, SEEK_END);
+                const long sz = std::ftell(in.get());
+                std::fseek(in.get(), 0, SEEK_SET);
+                if (sz < 0) return JPDFIUM_ERR_IO;
+                payload.resize(static_cast<std::size_t>(sz));
+                if (!payload.empty() &&
+                    std::fread(payload.data(), 1, payload.size(), in.get()) != payload.size()) {
+                    return JPDFIUM_ERR_IO;
+                }
+            }
+        } else if (!doc.bytes.empty()) {
+            payload.assign(doc.bytes.begin(), doc.bytes.end());
+        }
+        if (!payload.empty()) {
+            FilePtr out = safe_fopen_write(staging.c_str());
+            if (!out) return JPDFIUM_ERR_IO;
+            if (std::fwrite(payload.data(), 1, payload.size(), out.get()) != payload.size()) {
+                out.reset();
+                std::remove(staging.c_str());
+                return JPDFIUM_ERR_IO;
             }
         }
-    } else if (!doc.bytes.empty()) {
-        if (FilePtr out = safe_fopen_write(output_path); out)
-            std::fwrite(doc.bytes.data(), 1, doc.bytes.size(), out.get());
     }
+    if (!stub_publish_staged(staging.c_str(), output_path)) return JPDFIUM_ERR_IO;
     return JPDFIUM_OK;
 }
 
@@ -509,18 +539,34 @@ int32_t jpdfium_doc_save_to_file(int64_t handle, const char* path, int64_t max_b
     if (out_bytes) *out_bytes = 0;
     if (!path || !*path) return JPDFIUM_ERR_INVALID;
     if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
+    auto it = g_docs.find(handle);
+    if (it == g_docs.end()) return JPDFIUM_OK;
+    const auto& doc = it->second;
+
+    // Enforce the budget before publishing, exactly like the real bridge: a
+    // refused save must leave the destination untouched, not remove it.
+    int64_t size = 0;
+    if (!doc.path.empty()) {
+        FilePtr in(std::fopen(doc.path.c_str(), "rb"));
+        if (in) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            if (sz < 0) return JPDFIUM_ERR_IO;
+            size = sz;
+        }
+    } else if (!doc.bytes.empty()) {
+        size = static_cast<int64_t>(doc.bytes.size());
+    }
+    if (max_bytes > 0 && size > max_bytes) return JPDFIUM_ERR_TOO_LARGE;
+
     int32_t rc = jpdfium_doc_save(handle, path);
     if (rc != JPDFIUM_OK) return rc;
     if (FilePtr in = FilePtr(std::fopen(path, "rb")); in) {
-        std::fseek(in.get(), 0, SEEK_END);
-        const long sz = std::ftell(in.get());
-        if (sz < 0) return JPDFIUM_ERR_IO;
-        if (max_bytes > 0 && static_cast<int64_t>(sz) > max_bytes) {
-            in.reset();
-            std::remove(path);
-            return JPDFIUM_ERR_IO;
+        if (out_bytes) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            if (sz > 0) *out_bytes = static_cast<int64_t>(sz);
         }
-        if (out_bytes) *out_bytes = static_cast<int64_t>(sz);
         return JPDFIUM_OK;
     }
     // jpdfium_doc_save stub may succeed without writing (unknown handle);

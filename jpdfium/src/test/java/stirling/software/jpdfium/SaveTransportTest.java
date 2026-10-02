@@ -18,6 +18,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assumptions.abort;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -122,8 +123,7 @@ class SaveTransportTest {
     }
 
     private static String posixMode(Path p) throws IOException {
-        return java.nio.file.attribute.PosixFilePermissions.toString(
-                Files.getPosixFilePermissions(p));
+        return PosixFilePermissions.toString(Files.getPosixFilePermissions(p));
     }
 
     @Test
@@ -182,7 +182,7 @@ class SaveTransportTest {
             try {
                 Files.createSymbolicLink(link, real);
             } catch (UnsupportedOperationException | IOException e) {
-                return; // no symlink support here
+                abort("no symlink support on this host: " + e);
             }
             try (OutputTransaction tx = OutputTransaction.begin(link)) {
                 Files.write(tx.staging(), new byte[]{8, 8, 8, 8});

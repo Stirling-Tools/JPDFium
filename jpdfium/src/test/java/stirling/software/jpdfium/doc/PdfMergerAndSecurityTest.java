@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.SyntheticPdfFactory;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -11,6 +12,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PdfMergerAndSecurityTest {
@@ -45,10 +47,31 @@ class PdfMergerAndSecurityTest {
             byte[] encrypted = PdfSecurity.encryptBytes(pdf, "userPass", "ownerPass", PdfSecurity.PERM_ALL);
             assertNotNull(encrypted);
             assertTrue(encrypted.length > 0);
+            // The stub bridge passes bytes through instead of encrypting, so it
+            // cannot model the protection half of the contract. Real natives
+            // can, and there the whole point is checked.
+            boolean canEncrypt = NativeRuntime.isFull();
+            if (canEncrypt) {
+                assertThrows(Exception.class, () -> {
+                    try (PdfDocument d = PdfDocument.open(encrypted)) {
+                        d.pageCount();
+                    }
+                }, "the encrypted fixture must not open without a password");
+            }
 
+            // Length alone proves nothing: qpdf's writer preserves the source
+            // encryption unless it is told not to, so a "decrypted" result can
+            // still be a valid, fully encrypted PDF. The only check that proves
+            // the contract is opening the output with no password at all.
             byte[] decrypted = PdfSecurity.decryptBytes(encrypted, "ownerPass");
             assertNotNull(decrypted);
             assertTrue(decrypted.length > 0);
+            if (canEncrypt) {
+                try (PdfDocument d = PdfDocument.open(decrypted)) {
+                    assertTrue(d.pageCount() > 0,
+                            "decrypted bytes must open without a password");
+                }
+            }
 
             Path inPath = tempDir.resolve("plain.pdf");
             Path encPath = tempDir.resolve("enc.pdf");
@@ -60,6 +83,12 @@ class PdfMergerAndSecurityTest {
 
             PdfSecurity.decrypt(encPath, decPath, "ownerPass");
             assertTrue(Files.exists(decPath));
+            if (canEncrypt) {
+                try (PdfDocument d = PdfDocument.open(decPath)) {
+                    assertTrue(d.pageCount() > 0,
+                            "the decrypted file must open without a password");
+                }
+            }
         }
     }
 

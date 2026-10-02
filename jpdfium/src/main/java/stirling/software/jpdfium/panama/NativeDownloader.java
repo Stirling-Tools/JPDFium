@@ -133,6 +133,18 @@ final class NativeDownloader {
         }
         String repo = repoBase();
         Path cached = downloadCachePath(platform, version);
+        // Claim the cache directory before the cache hit. When the root falls
+        // back to the shared system temp directory, anything already sitting
+        // there - including another local user's jar - must not be adopted
+        // before we have made the directory ours.
+        if (cached != null) {
+            try {
+                NativeCache.requirePrivateDirectory(cached.getParent());
+            } catch (IOException e) {
+                throw new NativeLoadException(
+                        "Cannot create a private natives download directory.", e);
+            }
+        }
         if (cached != null && isUsableJar(cached, platform)) return cached;
         Path downloaded = download(jarUrl(platform, version, repo), cached);
         if (!isUsableJar(downloaded, platform)) {

@@ -84,6 +84,9 @@ int writeToFile(std::shared_ptr<QPDF> qpdf, const char* out_path, int32_t flags,
     bool writerOwnsFile = false;
     try {
         QPDFWriter w{*qpdf};
+        // Encryption is deliberately preserved here: optimize, merge, and
+        // extract are round-trip operations, and silently dropping the
+        // source encryption would change the document's protection.
         w.setOutputFile("jpdfium-out", out, true);
         writerOwnsFile = true;
         configureWriter(w, flags, objectStreamMode, streamDataMode, decodeLevel);
@@ -238,6 +241,10 @@ QpdfResult decryptPdf(std::span<const uint8_t> input, const char* password) {
         }
 
         QPDFWriter w{*qpdf};
+        // QPDFWriter preserves the source document's encryption by default, so
+        // without this the output would still carry /Encrypt and the caller
+        // would be told the decryption succeeded.
+        w.setPreserveEncryption(false);
         w.setOutputMemory();
         w.write();
         return {w.getBufferSharedPointer(), ""};
@@ -598,6 +605,10 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char* in_path, const char
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*qpdf};
+            // See decryptPdf: QPDFWriter preserves the source encryption unless
+            // it is told not to, so without this the output would still carry
+            // /Encrypt and the caller would be told the decryption succeeded.
+            w.setPreserveEncryption(false);
             w.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
             w.write();

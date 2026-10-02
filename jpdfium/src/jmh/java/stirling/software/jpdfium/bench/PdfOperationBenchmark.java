@@ -141,6 +141,10 @@ public class PdfOperationBenchmark {
 
     @TearDown(Level.Trial)
     public void tearDown() throws Exception {
+        if (renderArena != null) {
+            renderArena.close();
+            renderArena = null;
+        }
         if (doc != null) {
             doc.close();
         }
@@ -323,7 +327,10 @@ public class PdfOperationBenchmark {
             int h = Math.max(1, Math.round(size.height() * 150f / 72f));
             if (renderWidth != w || renderHeight != h) {
                 if (renderArena != null) renderArena.close();
-                renderArena = Arena.ofConfined();
+                // Shared, not confined: JMH does not guarantee that @Setup,
+                // @Benchmark and @TearDown run on the same thread, and a
+                // confined arena rejects access from another one.
+                renderArena = Arena.ofShared();
                 renderWidth = w;
                 renderHeight = h;
                 renderBuffer = renderArena.allocate((long) w * h * 4);

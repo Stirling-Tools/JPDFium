@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
+import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
@@ -18,6 +19,7 @@ import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -299,6 +301,10 @@ class MemoryBehaviorTest {
     @Test
     @Timeout(300)
     void pathMergeMustNotMaterializeEveryInput() throws Exception {
+        // Without the native file merge the inputs must be read to be merged at
+        // all, so this measures a capability, not the streaming path.
+        assumeTrue(QpdfLib.isMergeSupported(),
+                "file-backed merge requires the native qpdf file entry point");
         Path a = Files.createTempFile("mem-pathmerge-a", ".pdf");
         Path b = Files.createTempFile("mem-pathmerge-b", ".pdf");
         Path out = Files.createTempFile("mem-pathmerge-out", ".pdf");
