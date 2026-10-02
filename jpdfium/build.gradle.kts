@@ -134,6 +134,27 @@ jmh {
     includes.add(includePattern)
 }
 
+// Version stamp for the runtime natives downloader: lets a JVM that has the
+// pure-Java jar but no natives jar resolve the matching
+// com.stirling:jpdfium-natives-<platform>:<version> from Maven Central when
+// -Djpdfium.native.download=true is set. Written to the build dir (never the
+// source tree) and added to processResources below.
+val writeVersionProperties = tasks.register("writeVersionProperties") {
+    description = "Write the library version for runtime natives resolution"
+    val outDir = layout.buildDirectory.dir("generated/version")
+    outputs.dir(outDir)
+    doLast {
+        val pkg = outDir.get().asFile.resolve("stirling/software/jpdfium/panama")
+        pkg.mkdirs()
+        pkg.resolve("jpdfium-version.properties").writeText("version=${project.version}\n")
+    }
+}
+
+tasks.named<Copy>("processResources") {
+    dependsOn(writeVersionProperties)
+    from(writeVersionProperties)
+}
+
 // Set jpdfium.jextractHome in ~/.gradle/gradle.properties or JEXTRACT_HOME env var.
 val jextractBin: String = run {
     val home = findProperty("jpdfium.jextractHome")?.toString()

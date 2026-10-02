@@ -8,6 +8,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.lang.foreign.SymbolLookup;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -19,6 +22,13 @@ import java.util.Map;
 public final class NativeLoader {
 
     private static volatile boolean loaded = false;
+
+    /**
+     * Classpath for a Maven-downloaded natives jar. Consulted only when the
+     * application classpath lacks the resource, so bundled jars always win.
+     * Retained for the JVM lifetime: one jar per platform at most.
+     */
+    private static volatile ClassLoader supplementalLoader;
 
     /** Re-entry guard for the ABI handshake; see verifyBridgeAbi(). */
     private static boolean verifyingBridgeAbi;
@@ -36,6 +46,10 @@ public final class NativeLoader {
             tryLoadFromClasspath();
             loaded = true;
         } catch (NativeNotFoundException classpathMiss) {
+            if (tryDownloadedLoad(classpathMiss)) {
+                loaded = true;
+                return;
+            }
             try {
                 System.loadLibrary("jpdfium");
                 verifyBridgeAbi();
@@ -84,6 +98,57 @@ public final class NativeLoader {
         }
     }
 
+    /**
+     * Fetches the platform natives jar when opted in, then loads from it.
+     * Returns false when downloads are disabled or the attempt fails, so the
+     * caller falls through to its original error with details attached.
+     */
+    private static boolean tryDownloadedLoad(NativeNotFoundException classpathMiss) {
+        Path jar;
+        try {
+            jar = NativeDownloader.fetchNativesJar(detectPlatform());
+        } catch (NativeLoadException e) {
+            classpathMiss.addSuppressed(e);
+            return false;
+        }
+        if (jar == null) return false;
+        try {
+            installSupplementalLoader(jar);
+            tryLoadFromClasspath();
+            return true;
+        } catch (IOException | NativeNotFoundException e) {
+            classpathMiss.addSuppressed(e);
+            return false;
+        }
+    }
+
+    /** Points resource lookup at a downloaded natives jar. */
+    static void installSupplementalLoader(Path jar) throws IOException {
+        try {
+            supplementalLoader = new URLClassLoader(new URL[]{jar.toUri().toURL()},
+                    NativeLoader.class.getClassLoader());
+        } catch (MalformedURLException e) {
+            throw new NativeLoadException("Downloaded natives jar path is not a URL.", e);
+        }
+    }
+
+    /** Looks up a resource in the downloaded jar first, then the classpath. */
+    static URL findResource(String absolutePath) {
+        String stripped = absolutePath.startsWith("/") ? absolutePath.substring(1) : absolutePath;
+        ClassLoader extra = supplementalLoader;
+        if (extra != null) {
+            URL url = extra.getResource(stripped);
+            if (url != null) return url;
+        }
+        return NativeLoader.class.getResource(absolutePath);
+    }
+
+    /** Opens a resource with the same lookup order as {@link #findResource}. */
+    static InputStream openResource(String absolutePath) throws IOException {
+        URL url = findResource(absolutePath);
+        return url == null ? null : url.openStream();
+    }
+
     private static void tryLoadFromClasspath() {
         String platform    = detectPlatform();
         String resourceBase = "/natives/" + platform + "/";
@@ -91,7 +156,7 @@ public final class NativeLoader {
         String pdfiumName  = nativeFilename("pdfium");
         String indexResource = resourceBase + "native-libs.txt";
 
-        if (NativeLoader.class.getResource(resourceBase + bridgeName) == null)
+        if (findResource(resourceBase + bridgeName) == null)
             throw new NativeNotFoundException(platform);
 
         try {
@@ -127,7 +192,7 @@ public final class NativeLoader {
             if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.CACHE_ENABLED_PROPERTY))
                     && !libs.isEmpty() && !checksums.isEmpty()) {
                 tmpDir = NativeCache.prepare(platform, libs, checksums,
-                        name -> NativeLoader.class.getResourceAsStream(resourceBase + name));
+                        name -> openResource(resourceBase + name));
             }
             if (tmpDir == null) {
                 tmpDir = NativeCache.createFallbackDir();
@@ -185,7 +250,7 @@ public final class NativeLoader {
 
     private static List<String> readLibraryIndex(String resource) throws IOException {
         List<String> result = new ArrayList<>();
-        try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) return result;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(is, StandardCharsets.UTF_8))) {
@@ -218,7 +283,7 @@ public final class NativeLoader {
     }
 
     private static Map<String, String> readChecksumIndex(String resource) throws IOException {
-        try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) return Map.of();  // older natives jars ship no checksums
             String text = new String(is.readAllBytes(), StandardCharsets.UTF_8);
             Map<String, String> parsed = NativeCache.parseChecksums(text);
@@ -231,7 +296,7 @@ public final class NativeLoader {
 
     private static void extractToDir(String resource, Path dir, String expectedHash)
             throws IOException {
-        try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) return;
             Path target = dir.resolve(resource.substring(resource.lastIndexOf('/') + 1));
             if (expectedHash == null) {
@@ -346,7 +411,7 @@ public final class NativeLoader {
     }
 
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {
-        try (InputStream is = NativeLoader.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) throw new NativeNotFoundException(detectPlatform());
             Path target = dir.resolve(filename);
             Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);

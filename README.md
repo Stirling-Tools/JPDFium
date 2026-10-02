@@ -25,6 +25,56 @@ try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
 
 More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S95_RedactPipelinePerf`). Full API reference is in the Javadoc.
 
+## Native libraries
+
+`jpdfium` itself is pure Java. At runtime it needs exactly one platform natives
+jar for every OS it runs on (decide at packaging time, not build time):
+
+| Run platform | Runtime dependency |
+|---|---|
+| Linux x64 / arm64 | `com.stirling:jpdfium-natives-linux-x64` / `-linux-arm64` |
+| Alpine / musl x64 / arm64 | `com.stirling:jpdfium-natives-linux-musl-x64` / `-linux-musl-arm64` |
+| macOS x64 / arm64 | `com.stirling:jpdfium-natives-darwin-x64` / `-darwin-arm64` |
+| Windows x64 / arm64 | `com.stirling:jpdfium-natives-windows-x64` / `-windows-arm64` |
+
+```groovy
+// Gradle (same version as jpdfium, preferably via jpdfium-bom)
+runtimeOnly "com.stirling:jpdfium-natives-windows-x64:${jpdfiumVersion}"
+```
+
+```xml
+<!-- Maven -->
+<dependency>
+    <groupId>com.stirling</groupId>
+    <artifactId>jpdfium-natives-windows-x64</artifactId>
+    <version>${jpdfium.version}</version>
+    <scope>runtime</scope>
+</dependency>
+```
+
+Ship the jar for the machine that runs the code, not the one that builds it.
+A jar assembled on Linux (including Docker builds) contains only the platforms
+declared there, so running that same jar on Windows fails with
+`NativeNotFoundException: windows-x64`. Bundle every target OS, or one
+per distribution artifact.
+
+Missing natives at runtime can instead be fetched once from Maven Central
+and cached with the extracted libraries. This is strictly opt-in and off by
+default; enable it only when runtime network access to Central is acceptable:
+
+```bash
+java -Djpdfium.native.download=true --enable-native-access=ALL-UNNAMED -jar app.jar
+```
+
+The downloader resolves `com.stirling:jpdfium-natives-<platform>:<version>`
+from the running jar's stamped version (override with
+`-Djpdfium.native.version=<version>`, mirror with
+`-Djpdfium.native.repo=<https-url>`), refuses plain HTTP except for loopback
+test servers, rejects snapshot versions, and still SHA-256 verifies every
+extracted file against the jar manifest. Downloaded jars are reused offline
+from later runs. TLS authenticates the repository; per-file checksums attest
+the contents, the same split of duties as build-time dependency resolution.
+
 ## Image I/O
 
 JPDFium provides familiar PDFBox-style and ImageIO-style APIs:
