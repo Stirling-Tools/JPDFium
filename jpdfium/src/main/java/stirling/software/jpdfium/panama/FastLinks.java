@@ -74,6 +74,7 @@ public final class FastLinks {
             try {
                 return LINKER.downcallHandle(sym.get(), desc, Linker.Option.critical(false));
             } catch (Throwable _) {
+                // Critical linking is best effort; fall through to the plain downcall below.
             }
         }
         return LINKER.downcallHandle(sym.get(), desc);
