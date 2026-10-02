@@ -43,6 +43,7 @@ extern "C" {
 #define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
 #define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
+#define JPDFIUM_ERR_TOO_LARGE (-9)      // save aborted: output exceeded the byte budget
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -55,6 +56,20 @@ extern "C" {
 #define JPDFIUM_ABI_QUERY_PTR_SIZE (0)
 #define JPDFIUM_ABI_QUERY_RECTF_SIZE (1)
 #define JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET (2)
+// Platform-sensitive and feature-identity probes. Java verifies the full set
+// at startup and refuses to process documents on any mismatch: upstream
+// PDFium uses platform-dependent `unsigned long` in FPDF_FILEACCESS /
+// FPDF_FILEWRITE, struct geometry differs by platform, and feature selection
+// (Skia/QPDF) changes runtime behavior. See fpdfview.h / fpdf_save.h.
+#define JPDFIUM_ABI_QUERY_ULONG_SIZE (3)
+#define JPDFIUM_ABI_QUERY_RECTF_LEFT_OFFSET (4)
+#define JPDFIUM_ABI_QUERY_RECTF_BOTTOM_OFFSET (5)
+#define JPDFIUM_ABI_QUERY_RECTF_TOP_OFFSET (6)
+#define JPDFIUM_ABI_QUERY_MATRIX_SIZE (7)
+#define JPDFIUM_ABI_QUERY_FILEWRITE_SIZE (8)
+#define JPDFIUM_ABI_QUERY_FILEWRITE_VERSION (9)
+#define JPDFIUM_ABI_QUERY_HAS_SKIA (10)
+#define JPDFIUM_ABI_QUERY_HAS_QPDF (11)
 JPDFIUM_EXPORT uint32_t jpdfium_abi_version(void) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT;
 
@@ -120,6 +135,13 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_open_protected(const char* path, const char* 
 JPDFIUM_EXPORT int32_t jpdfium_doc_page_count(int64_t doc, int32_t* count);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save(int64_t doc, const char* path);
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len);
+// Streaming file save: PDFium serializes straight to a native FILE* via
+// FPDF_FILEWRITE (no document-sized memory buffer). max_bytes bounds the
+// output (0 = unlimited); the callback aborts mid-write once exceeded.
+// out_bytes receives the byte count on success (may be NULL). A failed save
+// removes the partial file and never reports success.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                                int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
@@ -127,6 +149,10 @@ JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle);
 JPDFIUM_EXPORT int32_t jpdfium_page_width(int64_t page, float* width);
 JPDFIUM_EXPORT int32_t jpdfium_page_height(int64_t page, float* height);
+// Coarse geometry: single handle validation + both dimensions in one call.
+// Prefer this over width+height pairs on hot paths: it pays one registry
+// probe and one domain admission instead of two.
+JPDFIUM_EXPORT int32_t jpdfium_page_info(int64_t page, float* width, float* height);
 JPDFIUM_EXPORT void jpdfium_page_close(int64_t page) JPDFIUM_NOEXCEPT;
 
 // Negative dpi renders with transparent background (alpha = 0) at resolution abs(dpi).
@@ -483,6 +509,16 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
                                              int32_t compressionLevel, int32_t objectStreamMode,
                                              int32_t streamDataMode, int32_t decodeLevel);
 
+// File-backed optimize: parses from disk, writes straight to disk. No
+// document-sized buffer exists on either side, so peak heap is independent of
+// document size. Honours the same flag/mode parameters as
+// jpdfium_qpdf_optimize; compressionLevel is likewise ignored. Returns 0 on
+// success. On failure a partial out_path may exist and should be removed by
+// the caller.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path,
+                                                 int32_t flags, int32_t objectStreamMode,
+                                                 int32_t streamDataMode, int32_t decodeLevel);
+
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
 // widgets, and flattens annotations. Does NOT do visual redaction (removing
@@ -500,6 +536,12 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
 #define JPDFIUM_SANITIZE_FLATTEN 0x40      // flatten annotations
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize(const uint8_t* input, int64_t inputLen,
                                              uint8_t** output, int64_t* outputLen, int32_t flags);
+
+// File-backed sanitize: parses from disk, writes straight to disk. No
+// document-sized buffer exists on either side. On failure a partial out_path
+// may exist and should be removed by the caller.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path,
+                                                  int32_t flags);
 
 // QPDF In-Process Document Merging
 // Losslessly merges multiple PDF files in memory into a single document with
@@ -552,6 +594,16 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt(const uint8_t* input, int64_t inputL
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t* input, int64_t inputLen,
                                             const char* password, uint8_t** output,
                                             int64_t* outputLen);
+
+// File-backed encrypt/decrypt: parse from disk, write straight to disk. No
+// document-sized buffer exists on either side. On failure a partial out_path
+// may exist and should be removed by the caller.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char* in_path, const char* out_path,
+                                                 const char* userPassword,
+                                                 const char* ownerPassword, int32_t permissions,
+                                                 int32_t keyLength);
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char* in_path, const char* out_path,
+                                                 const char* password);
 
 // Brotli Codec (PDF 2.0+ /BrotliDecode streams)
 //
