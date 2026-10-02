@@ -5,9 +5,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.StandardCopyOption;
 
 /**
  * PDF stream optimization (object streams, cross-reference streams).
@@ -49,12 +48,7 @@ public final class PdfStreamOptimizer {
                     : Files.createTempFile("jpdfium-opt-", ".pdf");
             try {
                 Files.write(staging, out);
-                try {
-                    Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException e) {
-                    Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-                }
+                                    OutputTransaction.publishStaged(staging, output);
             } finally {
                 Files.deleteIfExists(staging);
             }
@@ -91,12 +85,7 @@ public final class PdfStreamOptimizer {
                     : Files.createTempFile("jpdfium-compact-", ".pdf");
             try {
                 Files.write(staging, out);
-                try {
-                    Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (AtomicMoveNotSupportedException e) {
-                    Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-                }
+                                    OutputTransaction.publishStaged(staging, output);
             } finally {
                 Files.deleteIfExists(staging);
             }

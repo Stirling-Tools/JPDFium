@@ -7,6 +7,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
@@ -16,8 +17,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.StandardCopyOption;
 
 /**
  * Comprehensive PDF security hardening and sanitization (builder pattern).
@@ -126,12 +125,7 @@ public final class PdfSecurity {
                 : Files.createTempFile("jpdfium-encrypt-", ".pdf");
         try {
             Files.write(staging, encBytes);
-            try {
-                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-            }
+                            OutputTransaction.publishStaged(staging, output);
         } finally {
             Files.deleteIfExists(staging);
         }
@@ -186,12 +180,7 @@ public final class PdfSecurity {
                 : Files.createTempFile("jpdfium-decrypt-", ".pdf");
         try {
             Files.write(staging, decBytes);
-            try {
-                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-            }
+                            OutputTransaction.publishStaged(staging, output);
         } finally {
             Files.deleteIfExists(staging);
         }

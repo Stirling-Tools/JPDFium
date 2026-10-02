@@ -321,7 +321,7 @@ public final class PdfiumRuntime {
      * Refuse teardown once destruction has begun or completed. Only ever
      * called with the domain already held. A close after {@link State#STOPPED}
      * can only be harmless when its resource was already retired, in which
-     * case the wrapper-level idempotence guard returns before reaching here , 
+     * case the wrapper-level idempotence guard returns before reaching here ,
      * so reaching here means an accounting defect, and failing loudly is
      * correct.
      */
@@ -509,7 +509,12 @@ public final class PdfiumRuntime {
         return new GuardStats(ACQUISITIONS.sum(), WAIT_NANOS.sum(), HOLD_NANOS.sum());
     }
 
-    private static void acquire() {
+    /**
+     * Package-private for the deprecated compatibility facade in this package
+     * only: it is the one caller that must acquire and release the domain
+     * across separate statements. Everything else goes through {@code execute}.
+     */
+    static void acquire() {
         long t0 = TELEMETRY_TIMING ? System.nanoTime() : 0;
         DOMAIN.lock();
         noteHolder();
@@ -571,7 +576,8 @@ public final class PdfiumRuntime {
         return sb.append(')').toString();
     }
 
-    private static void release() {
+    /** @see #acquire() */
+    static void release() {
         if (!TELEMETRY_TIMING) {
             DOMAIN.unlock();
             return;

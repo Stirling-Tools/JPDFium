@@ -15,11 +15,17 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.panama.FastLinks;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 
 /**
  * Domain-admission cost: coarse {@code pageInfo()} (one admission) against the
@@ -46,6 +52,9 @@ public class PdfiumDomainBenchmark {
     private PdfDocument doc;
     private PdfPage page;
     private long pageHandle;
+    /** Out-parameter slot for the raw guarded downcall; allocated once per trial. */
+    private Arena arena;
+    private MemorySegment outSegment;
 
     @Setup(Level.Trial)
     public void openDoc() throws Exception {
@@ -56,10 +65,16 @@ public class PdfiumDomainBenchmark {
         doc = PdfDocument.open(bytes);
         page = doc.page(0);
         pageHandle = page.nativeHandle();
+        arena = Arena.ofConfined();
+        outSegment = arena.allocate(java.lang.foreign.ValueLayout.JAVA_FLOAT);
     }
 
     @TearDown(Level.Trial)
     public void closeDoc() {
+        if (arena != null) {
+            arena.close();
+            arena = null;
+        }
         page.close();
         doc.close();
     }
@@ -110,32 +125,39 @@ public class PdfiumDomainBenchmark {
     }
 
     /**
-     * Single leaf query, unbatched. Paired with pageWidthHeightPair this
-     * isolates the per-call admission cost, which is the number that decides
-     * whether coarse operations or a cheaper admission backend win.
+     * Single leaf query, unbatched, on the document-count path. Paired with
+     * pageWidthHeightPair this isolates the per-call admission cost, which is
+     * the number that decides whether coarse operations or a cheaper admission
+     * backend win.
      */
     @Benchmark
     @OperationsPerInvocation(BATCH)
-    public float pageCountSingle() {
-        long h = pageHandle;
-        float acc = 0;
+    public int pageCountSingle() {
+        long h = doc.nativeHandle();
+        int acc = 0;
         for (int i = 0; i < BATCH; i++) {
-            acc += JpdfiumLib.pageWidth(h);
+            acc += JpdfiumLib.docPageCount(h);
         }
         return acc;
     }
 
     /**
      * Guarded MethodHandle: the wrapper cost for raw bindings, which is the
-     * other candidate admission path.
+     * other candidate admission path. Invokes the same {@code jpdfium_page_width}
+     * downcall as {@link #pageWidthHeightPair}, but reached through
+     * {@link PdfiumRuntime#guarded} instead of the typed binding, so the
+     * difference between the two is exactly the admission mechanism.
      */
     @Benchmark
     @OperationsPerInvocation(BATCH)
     public float guardedGeometryPair() throws Throwable {
+        MethodHandle guardedWidth = PdfiumRuntime.guarded(FastLinks.PAGE_WIDTH);
         long h = pageHandle;
         float acc = 0;
         for (int i = 0; i < BATCH; i++) {
-            acc += JpdfiumLib.pageWidth(h);
+            MemorySegment out = outSegment;
+            int rc = (int) guardedWidth.invokeExact(h, out);
+            acc += rc + out.get(JAVA_FLOAT, 0);
         }
         return acc;
     }

@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.IOException;
@@ -9,8 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.StandardCopyOption;
 
 /**
  * In-process PDF document merging backed by QPDF.
@@ -32,6 +31,10 @@ public final class PdfMerger {
     /**
      * Merge multiple PDF files into a single output file.
      *
+     * <p>File-backed first: the native merge streams each input, so the common
+     * case never puts the inputs on the Java heap. The in-memory fallback only
+     * materializes them when the native path is unavailable or fails.
+     *
      * @param inputPaths list of input PDF file paths
      * @param outputPath destination PDF file path
      * @throws IOException on I/O error
@@ -44,13 +47,14 @@ public final class PdfMerger {
             throw new IllegalArgumentException("outputPath must not be null");
         }
 
+        if (QpdfLib.mergeFiles(inputPaths, outputPath)) {
+            return;
+        }
+
+        // Native file merge unavailable or failed: only now pay for the bytes.
         List<byte[]> inputBytes = new ArrayList<>(inputPaths.size());
         for (Path p : inputPaths) {
             inputBytes.add(Files.readAllBytes(p));
-        }
-
-        if (QpdfLib.mergeFiles(inputPaths, outputPath)) {
-            return;
         }
 
         byte[] merged = mergeBytes(inputBytes);
@@ -63,12 +67,7 @@ public final class PdfMerger {
                 : Files.createTempFile("jpdfium-merge-", ".pdf");
         try {
             Files.write(staging, merged);
-            try {
-                Files.move(staging, outputPath, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(staging, outputPath, StandardCopyOption.REPLACE_EXISTING);
-            }
+                            OutputTransaction.publishStaged(staging, outputPath);
         } finally {
             Files.deleteIfExists(staging);
         }

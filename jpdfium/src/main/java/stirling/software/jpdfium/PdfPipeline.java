@@ -321,10 +321,15 @@ public final class PdfPipeline {
             for (Future<?> f : futures) f.cancel(true);
             throw t;
         } finally {
+            boolean terminated = false;
             try {
                 shutdownAndReport(executor, "forEachParallel");
+                terminated = true;
             } finally {
-                doc.close();
+                // Ownership of doc stays with the running tasks when shutdown
+                // times out and throws: closing it here would free native
+                // handles a task that ignored interruption is still using.
+                if (terminated) doc.close();
             }
         }
     }
@@ -394,6 +399,10 @@ public final class PdfPipeline {
      * interruption keeps owning its arenas, leases, staging files, and
      * permits until it actually exits, so a false return means ownership is
      * still outstanding, not released.
+     *
+     * <p>Can therefore return by throwing while tasks are still running.
+     * Callers that own a resource the tasks are using must keep ownership when
+     * this throws, and must not close it from a {@code finally}.
      */
     private static void shutdownAndReport(ExecutorService executor, String op) {
         executor.shutdown();

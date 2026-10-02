@@ -56,41 +56,65 @@ public final class QpdfLib {
      */
     private static volatile Semaphore QPDF_PERMITS = createPermits();
 
-    private static Semaphore createPermits() {
+    /**
+     * The configured bound, tracked apart from live semaphore availability:
+     * while jobs are in flight {@code availablePermits()} reports fewer slots
+     * than were configured, and {@link #setMaxConcurrency} must still hand back
+     * the number the caller set so save-and-restore works.
+     */
+    private static volatile int QPDF_BOUND = configuredBound();
+
+    private static int configuredBound() {
         int configured = Integer.getInteger("jpdfium.qpdf.maxConcurrency", 0);
         if (configured < 0) {
             throw new IllegalStateException(
                     "invalid jpdfium.qpdf.maxConcurrency=" + configured + " (use 0 for unlimited)");
         }
+        return configured;
+    }
+
+    private static Semaphore createPermits() {
+        int configured = configuredBound();
         return configured == 0 ? null : new Semaphore(Math.max(1, configured));
     }
 
-    /** Set the QPDF job bound (0 = explicit unlimited). Negative is rejected. */
+    /**
+     * Set the QPDF job bound (0 = explicit unlimited). Negative is rejected.
+     *
+     * @return the previously configured bound, not the currently free slot count
+     */
     public static synchronized int setMaxConcurrency(int maxJobs) {
         if (maxJobs < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
-        Semaphore permits = QPDF_PERMITS;
-        int prev = permits == null ? 0 : permits.availablePermits();
+        int prev = QPDF_BOUND;
+        QPDF_BOUND = maxJobs;
         QPDF_PERMITS = maxJobs == 0 ? null : new Semaphore(Math.max(1, maxJobs));
         return prev;
     }
 
-    /** Current bound (0 = unlimited). */
+    /** Current configured bound (0 = unlimited). */
     public static int maxConcurrency() {
-        int v = Integer.getInteger("jpdfium.qpdf.maxConcurrency", 0);
-        if (v < 0) throw new IllegalStateException("invalid jpdfium.qpdf.maxConcurrency=" + v);
-        return v;
+        return QPDF_BOUND;
     }
 
-    /** Acquire a slot when bounded; no-op when unlimited. */
-    public static void acquireSlot() throws InterruptedException {
+    /**
+     * Acquire a slot when bounded; no-op when unlimited.
+     *
+     * <p>The returned semaphore is the one that granted the slot. Pass it back
+     * to {@link #releaseSlot}: the bound can be swapped while a job runs, and
+     * releasing to the new semaphore would inflate its limit while waiters
+     * stayed parked on the old one.
+     *
+     * @return the semaphore holding the acquired slot, or null when unbounded
+     */
+    public static Semaphore acquireSlot() throws InterruptedException {
         Semaphore permits = QPDF_PERMITS;
         if (permits != null) permits.acquire();
+        return permits;
     }
 
-    /** Release a slot; no-op when unlimited. */
-    public static void releaseSlot() {
-        Semaphore permits = QPDF_PERMITS;
-        if (permits != null) permits.release();
+    /** Release a slot back to the semaphore that granted it. */
+    public static void releaseSlot(Semaphore held) {
+        if (held != null) held.release();
     }
 
     /**
@@ -297,10 +321,9 @@ public final class QpdfLib {
         if (!Files.isReadable(input)) {
             return false;
         }
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf optimize interrupted while waiting for a job slot", e);
@@ -313,7 +336,7 @@ public final class QpdfLib {
         } catch (IOException e) {
             throw new JPDFiumException("qpdf file optimize failed", e);
         } finally {
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -351,10 +374,9 @@ public final class QpdfLib {
         if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty() || output == null) {
             return false;
         }
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf merge interrupted while waiting for a job slot", e);
@@ -387,7 +409,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf merge files failed", t);
         } finally {
             deleteQuietly(staging);
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -409,10 +431,9 @@ public final class QpdfLib {
                 || pageIndices == null || pageIndices.length == 0) {
             return false;
         }
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
@@ -437,7 +458,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf extract pages to file failed", t);
         } finally {
             deleteQuietly(staging);
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -526,10 +547,9 @@ public final class QpdfLib {
     public static boolean sanitizeToFile(Path input, Path output, int flags, long maxBytes) {
         if (SANITIZE_FILE_HANDLE == null || input == null || output == null) return false;
         if (!Files.isReadable(input)) return false;
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf sanitize interrupted while waiting for a job slot", e);
@@ -550,7 +570,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf sanitize file failed", t);
         } finally {
             deleteQuietly(staging);
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -563,10 +583,9 @@ public final class QpdfLib {
             String ownerPassword, int permissions, int keyLength, long maxBytes) {
         if (ENCRYPT_FILE_HANDLE == null || input == null || output == null) return false;
         if (!Files.isReadable(input)) return false;
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf encrypt interrupted while waiting for a job slot", e);
@@ -590,7 +609,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf encrypt file failed", t);
         } finally {
             deleteQuietly(staging);
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -603,10 +622,9 @@ public final class QpdfLib {
     public static boolean decryptToFile(Path input, Path output, String password, long maxBytes) {
         if (DECRYPT_FILE_HANDLE == null || input == null || output == null) return false;
         if (!Files.isReadable(input)) return false;
-        boolean acquired = false;
+        Semaphore held = null;
         try {
-            acquireSlot();
-            acquired = true;
+            held = acquireSlot();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf decrypt interrupted while waiting for a job slot", e);
@@ -628,7 +646,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf decrypt file failed", t);
         } finally {
             deleteQuietly(staging);
-            if (acquired) releaseSlot();
+            releaseSlot(held);
         }
     }
 
@@ -764,6 +782,7 @@ public final class QpdfLib {
 
     private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber)
             throws IOException {
+        requireNonNegativeBudget(maxBytes);
         long size = Files.size(staging);
         if (size <= 0) {
             throw new JPDFiumException("qpdf wrote an empty staging file for " + output);
@@ -776,12 +795,7 @@ public final class QpdfLib {
             publishNoClobber(staging, output);
             return;
         }
-        try {
-            Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-        }
+                    OutputTransaction.publishStaged(staging, output);
     }
 
     /**
@@ -797,6 +811,7 @@ public final class QpdfLib {
 
     static void publishNewFile(Path staging, Path output, long maxBytes, PublishCommit commit)
             throws IOException {
+        requireNonNegativeBudget(maxBytes);
         if (Thread.currentThread().isInterrupted()) {
             throw new IOException("interrupted before publish; staging discarded for " + output);
         }
@@ -815,7 +830,18 @@ public final class QpdfLib {
         if (commit != null) commit.committed();
     }
 
-    private static void publishNoClobber(Path staging, Path output) throws IOException {
+    /**
+ * A byte budget is either a positive bound or 0 (unbounded). A negative value
+ * is a caller bug - most often a subtractive computation that underflowed - and
+ * would silently turn an intended cap into no cap at all.
+ */
+private static void requireNonNegativeBudget(long maxBytes) {
+    if (maxBytes < 0) {
+        throw new IllegalArgumentException("maxBytes must be >= 0 (0 = unlimited), got " + maxBytes);
+    }
+}
+
+private static void publishNoClobber(Path staging, Path output) throws IOException {
         // CREATE_NEW opens O_CREAT|O_EXCL atomically, so existence check and
         // creation are one step with no precheck race. See Files CREATE_NEW:
         // https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/Files.html

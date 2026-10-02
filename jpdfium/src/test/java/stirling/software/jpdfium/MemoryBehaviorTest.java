@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
+import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import java.io.IOException;
@@ -290,7 +291,77 @@ class MemoryBehaviorTest {
         return (System.nanoTime() - t0) / (double) iterations;
     }
 
-    /** Builds a structurally valid, xref-correct PDF with the requested page count. */
+    /**
+     * The path-based merge must try the native file-to-file route before reading
+     * any input, otherwise a "file-backed" merge still holds the whole input set
+     * on the Java heap.
+     */
+    @Test
+    @Timeout(300)
+    void pathMergeMustNotMaterializeEveryInput() throws Exception {
+        Path a = Files.createTempFile("mem-pathmerge-a", ".pdf");
+        Path b = Files.createTempFile("mem-pathmerge-b", ".pdf");
+        Path out = Files.createTempFile("mem-pathmerge-out", ".pdf");
+        try {
+            Files.write(a, bigPdf(12, 400_000));
+            Files.write(b, bigPdf(12, 400_000));
+            long combined = Files.size(a) + Files.size(b);
+
+            double perOp = bytesPerOp(() -> {
+                try {
+                    PdfMerger.merge(List.of(a, b), out);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }, 3, 8);
+            System.out.printf("MEM PdfMerger.merge(paths) %.1f MB input -> %.1f KB/op Java heap%n",
+                    combined / 1e6, perOp / 1024);
+            assertTrue(perOp < combined / 4,
+                    "PdfMerger.merge allocated " + perOp + " B/op for " + combined
+                            + " B of input - inputs were materialized before the file merge");
+        } finally {
+            Files.deleteIfExists(a);
+            Files.deleteIfExists(b);
+            Files.deleteIfExists(out);
+        }
+    }
+
+    /** Same builder with a filler payload, so a whole-document copy would dominate. */
+    private static byte[] bigPdf(int pages, int fillerBytes) {
+        StringBuilder sb = new StringBuilder();
+        List<Integer> offsets = new ArrayList<>();
+        sb.append("%PDF-1.4\n");
+        offsets.add(0);
+        offsets.add(sb.length());
+        sb.append("1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n");
+        offsets.add(sb.length());
+        StringBuilder kids = new StringBuilder();
+        for (int i = 0; i < pages; i++) kids.append(3 + i).append(" 0 R ");
+        sb.append("2 0 obj<</Type/Pages/Kids[").append(kids.toString().trim())
+                .append("]/Count ").append(pages).append(">>endobj\n");
+        String filler = "x".repeat(fillerBytes);
+        int firstContent = 3 + pages;
+        for (int i = 0; i < pages; i++) {
+            offsets.add(sb.length());
+            sb.append(3 + i).append(" 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents ")
+                    .append(firstContent + i).append(" 0 R>>endobj\n");
+        }
+        for (int i = 0; i < pages; i++) {
+            offsets.add(sb.length());
+            sb.append(firstContent + i).append(" 0 obj<</Length ").append(filler.length())
+                    .append(">>\nstream\n").append(filler).append("\nendstream\nendobj\n");
+        }
+        int xref = sb.length();
+        int total = firstContent + pages;
+        sb.append("xref\n0 ").append(total).append("\n0000000000 65535 f \n");
+        for (int i = 1; i < total; i++) {
+            sb.append(String.format(java.util.Locale.ROOT, "%010d 00000 n \n", offsets.get(i)));
+        }
+        sb.append("trailer<</Size ").append(total).append("/Root 1 0 R>>\nstartxref\n")
+                .append(xref).append("\n%%EOF");
+        return sb.toString().getBytes(StandardCharsets.ISO_8859_1);
+    }
+
     private static byte[] buildLargePdf(int pages) throws IOException {
         final int firstPageObj = 3;
         final int contentObj = firstPageObj + pages;

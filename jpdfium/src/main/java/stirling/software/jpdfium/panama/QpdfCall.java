@@ -75,8 +75,10 @@ final class QpdfCall implements AutoCloseable {
             }
             return null;
         }
-        long len = checkByteCount(rawLen, ctx);
+        // checkByteCount inside the try: validating before it would throw past
+        // the finally and leak the whole detached buffer.
         try {
+            long len = checkByteCount(rawLen, ctx);
             return nativeOut.reinterpret(len).toArray(JAVA_BYTE);
         } finally {
             JpdfiumH.jpdfium_free_buffer(nativeOut);

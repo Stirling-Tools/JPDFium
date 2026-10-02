@@ -1,12 +1,11 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.StandardCopyOption;
 
 /**
  * In-process qpdf structural sanitization (FFM, no CLI).
@@ -60,12 +59,7 @@ public final class PdfSanitizer {
                 : Files.createTempFile("jpdfium-sanitize-", ".pdf");
         try {
             Files.write(staging, result);
-            try {
-                Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(staging, output, StandardCopyOption.REPLACE_EXISTING);
-            }
+                            OutputTransaction.publishStaged(staging, output);
         } finally {
             Files.deleteIfExists(staging);
         }

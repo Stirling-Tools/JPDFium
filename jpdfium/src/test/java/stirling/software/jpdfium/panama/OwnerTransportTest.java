@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -118,9 +119,16 @@ class OwnerTransportTest {
         assertTrue(inside.await(30, TimeUnit.SECONDS), "blocker never entered");
 
         // Fill the single slot, then prove the next submission is refused
-        // rather than executed here.
+        // rather than executed here. Wait for the filler to actually be
+        // enqueued: starting the thread is not enough, and submitting while it
+        // is still on its way to offer() would find free capacity.
         Thread filler = Thread.ofPlatform().unstarted(() -> t.submit("filler", () -> null));
         filler.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (t.pendingCount() == 0 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(1, t.pendingCount(), "filler never reached the queue");
 
         JPDFiumException refused = assertThrows(JPDFiumException.class,
                 () -> t.submit("overflow", () -> {
@@ -275,5 +283,85 @@ class OwnerTransportTest {
         }
         assertTrue(stable.get(), "the owner must be one stable thread, not a pool");
         assertTrue(first.get().isDaemon(), "the owner must not block JVM exit");
+    }
+    /** shutdown must not overlap a running command, and must be prompt. */
+    @Test
+    void shutdownNeverOverlapsAndIsPrompt() throws Exception {
+        OwnerTransport t = started(8, op -> true);
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger overlaps = new AtomicInteger();
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch hold = new CountDownLatch(1);
+
+        Thread slow = Thread.ofPlatform().unstarted(() -> t.submit("slow", () -> {
+            inFlight.incrementAndGet();
+            inside.countDown();
+            try { hold.await(10, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            inFlight.decrementAndGet();
+            return null;
+        }));
+        slow.start();
+        assertTrue(inside.await(10, TimeUnit.SECONDS));
+
+        // Queue 5 commands while the owner is still blocked in "slow", so none
+        // of them can start. Waiting for the queue to actually hold them (not
+        // just for the submitting threads to exist) is what makes the count
+        // below deterministic.
+        AtomicInteger queued = new AtomicInteger();
+        for (int i = 0; i < 5; i++) {
+            Thread.ofPlatform().start(() -> t.submit("q", () -> {
+                if (inFlight.incrementAndGet() != 1) overlaps.incrementAndGet();
+                queued.incrementAndGet();
+                inFlight.decrementAndGet();
+                return null;
+            }));
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (t.pendingCount() < 5 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(5, t.pendingCount(), "queued commands never reached the queue");
+
+        Thread shutdownCaller = Thread.ofPlatform().unstarted(() -> t.shutdown(5_000));
+        shutdownCaller.start();
+        Thread.sleep(300);            // shutdown is called while "slow" still runs
+        hold.countDown();
+
+        shutdownCaller.join(10_000);
+        assertFalse(shutdownCaller.isAlive(), "shutdown returned");
+        slow.join(10_000);
+        assertEquals(0, overlaps.get(), "no two commands may overlap");
+        assertEquals(5, queued.get(), "accepted commands still completed");
+        assertThrows(Exception.class, () -> t.submit("after", () -> null));
+    }
+
+    /** idle owner must be woken by shutdown instead of burning the join timeout */
+    @Test
+    void shutdownWakesIdleOwnerPromptly() {
+        OwnerTransport t = started(4, op -> true);
+        long t0 = System.nanoTime();
+        t.shutdown(5_000);
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        assertTrue(ms < 2_000, "idle shutdown took " + ms + " ms");
+    }
+
+    /** submit racing with shutdown must never park the submitter forever */
+    @Test
+    void submitRacingShutdownNeverHangs() throws Exception {
+        for (int attempt = 0; attempt < 300; attempt++) {
+            OwnerTransport t = started(2, op -> true);
+            AtomicReference<Throwable> err = new AtomicReference<>();
+            CountDownLatch done = new CountDownLatch(1);
+            Thread submitter = Thread.ofPlatform().unstarted(() -> {
+                try {
+                    for (int i = 0; i < 40; i++) t.submit("x", () -> null);
+                } catch (Throwable e) { err.set(e); } finally { done.countDown(); }
+            });
+            submitter.start();
+            Thread.ofPlatform().start(() -> t.shutdown(2_000));
+            assertTrue(done.await(15, TimeUnit.SECONDS), "submitter hung on attempt " + attempt);
+            submitter.join(5_000);
+            if (err.get() != null) assertInstanceOf(JPDFiumException.class, err.get());
+        }
     }
 }

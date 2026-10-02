@@ -99,15 +99,21 @@ public final class VipsImageCodec implements ImageCodec {
             throw new IllegalArgumentException("Frame dimensions " + width + "x" + height
                     + " exceed jpdfium.image.max_pixels=" + VipsDecoder.MAX_IMAGE_PIXELS);
         }
-        int pixelBytes = width * height * 4;
-        if (pixelBytes > frame.length - 8) {
+        // Compute the payload size in long: width * height * 4 overflows int for
+        // large headers (32768x32768 wraps to 0), which would let a zero-byte
+        // buffer back a huge image and send libvips out of bounds.
+        long pixelBytesL = (long) width * height * 4L;
+        long strideL = (long) width * 4L;
+        if (pixelBytesL > frame.length - 8L) {
             throw new IllegalArgumentException("Invalid frame dimensions or payload length");
         }
+        int pixelBytes = (int) pixelBytesL;
+        int stride = (int) strideL;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment pixels = arena.allocate(pixelBytes);
             pixels.copyFrom(MemorySegment.ofArray(frame).asSlice(8, pixelBytes));
             RenderedPageView view = new RenderedPageView(
-                    width, height, width * 4, 4, PixelFormat.RGBA_STRAIGHT, pixels, null);
+                    width, height, stride, 4, PixelFormat.RGBA_STRAIGHT, pixels, null);
             return encodeView(view, format, quality);
         }
     }

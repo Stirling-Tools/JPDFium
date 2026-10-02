@@ -106,6 +106,14 @@ final class OwnerTransport {
         return rejected.get();
     }
 
+    /**
+     * Commands admitted but not yet started. Lets a test wait for the queue to
+     * reach capacity instead of racing the submitting thread.
+     */
+    int pendingCount() {
+        return queue.size();
+    }
+
     long callbackReentryCount() {
         return callbackReentries.get();
     }
@@ -137,6 +145,16 @@ final class OwnerTransport {
             // PDFium outside the owner and break the single-thread rule.
             rejected.incrementAndGet();
             throw failure("PDFium owner queue is saturated; " + operation + " refused");
+        }
+        if (!running.get() && queue.remove(task)) {
+            // Shutdown won the race after admission: the owner has already
+            // drained and exited, so nobody will ever run this command. Fail it
+            // here instead of leaving the submitter blocked on its future.
+            // queue.remove only succeeds while the owner still has not taken
+            // the task, which is exactly the case where cancelling is safe.
+            rejected.incrementAndGet();
+            future.cancel(false);
+            throw failure("PDFium owner has stopped; " + operation + " refused");
         }
 
         boolean interrupted = false;
@@ -175,22 +193,17 @@ final class OwnerTransport {
     }
 
     /**
-     * Best-effort teardown: stop accepting work, let queued commands finish,
-     * then join. Bounded so a stuck owner cannot hang the caller.
+     * Best-effort teardown: stop accepting work, let accepted commands finish
+     * on the owner, then join. Bounded so a stuck owner cannot hang the caller.
+     *
+     * <p>The caller never runs a command itself. The owner may still be inside
+     * one, and executing another on this thread would put two PDFium calls on
+     * two threads at the same time, which is the one thing this transport
+     * exists to prevent.
      */
     void shutdown(long timeoutMillis) {
         if (!running.compareAndSet(true, false)) {
             return;
-        }
-        // Drain queued tasks so accepted work still completes. Running them
-        // here is safe only because the owner has stopped accepting and the
-        // drain loop below joins it, so no PDFium call can be in flight.
-        for (Task pending = queue.poll(); pending != null; pending = queue.poll()) {
-            try {
-                pending.run();
-            } catch (Throwable t) {
-                ownerFailure.compareAndSet(null, t);
-            }
         }
         try {
             owner.join(timeoutMillis);
@@ -199,35 +212,51 @@ final class OwnerTransport {
         }
     }
 
+    /** How long an idle owner parks before re-checking the shutdown flag. */
+    private static final long IDLE_POLL_MILLIS = 25;
+
     private void runLoop() {
         onOwner.set(Boolean.TRUE);
         started.countDown();
         try {
             while (true) {
-                Task task = queue.take();
-                if (!running.get() && queue.isEmpty()) {
-                    // Shutdown has drained the queue; nothing left to do.
-                    return;
+                // Timed poll rather than take(): flipping `running` alone cannot
+                // wake a parked take(), so shutdown would otherwise always burn
+                // the whole join timeout and leave the daemon alive.
+                Task task = queue.poll(IDLE_POLL_MILLIS, TimeUnit.MILLISECONDS);
+                if (task == null) {
+                    // Exit only once shutdown was requested, so a submission
+                    // racing with shutdown still finds a live owner.
+                    if (!running.get()) return;
+                    continue;
                 }
-                try {
-                    task.run();
-                    executed.incrementAndGet();
-                } catch (Throwable t) {
-                    // A failing command must not kill the owner: pending
-                    // callers are already waiting on their own futures, and
-                    // the runtime decides whether the failure is terminal.
-                    ownerFailure.compareAndSet(null, t);
-                }
+                // A taken task always runs, even if `running` flipped while it
+                // was in flight: its submitter is already parked on the future
+                // and has no other way to learn the outcome.
+                runOne(task);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
             onOwner.set(Boolean.FALSE);
-            // Fail anything still queued so no caller waits forever.
+            // Last chance to complete accepted work. Still the owner thread, so
+            // commands stay strictly serialized even while winding down.
             Task pending;
             while ((pending = queue.poll()) != null) {
-                pending.future().cancel(false);
+                runOne(pending);
             }
+        }
+    }
+
+    private void runOne(Task task) {
+        try {
+            task.run();
+            executed.incrementAndGet();
+        } catch (Throwable t) {
+            // A failing command must not kill the owner: pending callers are
+            // already waiting on their own futures, and the runtime decides
+            // whether the failure is terminal.
+            ownerFailure.compareAndSet(null, t);
         }
     }
 

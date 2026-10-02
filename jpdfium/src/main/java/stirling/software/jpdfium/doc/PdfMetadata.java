@@ -83,8 +83,9 @@ public final class PdfMetadata {
             MemorySegment bufferSegment = arena.allocate(needed);
             boolean fillOk = PdfiumRuntime.execute(() -> {
                 try {
-                    long _ = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
-                    return true;
+                    long written = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
+                    // -1 means the fill failed and the buffer was never written.
+                    return written >= 0;
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
                     return false;
@@ -161,14 +162,19 @@ public final class PdfMetadata {
             if (needed <= 2) return Optional.empty();
 
             MemorySegment bufferSegment = arena.allocate(needed);
-            PdfiumRuntime.execute((Runnable) () -> {
+            boolean fillOk = PdfiumRuntime.execute(() -> {
                 try {
-                    long _ = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
+                    // FPDF_GetPageLabel returns the length it stored, or -1 on
+                    // failure. A negative result means the buffer was never
+                    // written, so decoding it would read uninitialized memory.
+                    long written = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
+                    return written >= 0;
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    throw new JPDFiumException("FPDF_GetPageLabel fill call", t);
+                    return false;
                 }
             });
+            if (!fillOk) return Optional.empty();
 
             String label = FfmHelper.fromWideString(bufferSegment, needed);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);

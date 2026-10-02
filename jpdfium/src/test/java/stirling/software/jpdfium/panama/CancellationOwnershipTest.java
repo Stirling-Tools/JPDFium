@@ -7,6 +7,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
@@ -34,8 +35,8 @@ class CancellationOwnershipTest {
 
         ExecutorService pool = Executors.newSingleThreadExecutor();
         Future<?> future;
+        Semaphore outerHeld = QpdfLib.acquireSlot();
         try {
-            QpdfLib.acquireSlot();
             future = pool.submit(() -> {
                 try {
                     entered.countDown();
@@ -54,7 +55,9 @@ class CancellationOwnershipTest {
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 } finally {
-                    QpdfLib.releaseSlot();
+                    // Ownership transferred to the task, so it retires the very
+                    // permit this thread acquired before handing it over.
+                    QpdfLib.releaseSlot(outerHeld);
                     releasedPermit.set(true);
                 }
             });
@@ -70,6 +73,8 @@ class CancellationOwnershipTest {
             release.countDown();
             pool.shutdown();
             assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS), "task must retire after release");
+            // Only release the outer permit if the task never got to run it.
+            if (!releasedPermit.get()) QpdfLib.releaseSlot(outerHeld);
             QpdfLib.setMaxConcurrency(prev);
             Files.deleteIfExists(staging);
             Files.deleteIfExists(output);
@@ -85,14 +90,14 @@ class CancellationOwnershipTest {
         CountDownLatch holderEntered = new CountDownLatch(1);
         CountDownLatch holderRelease = new CountDownLatch(1);
         Future<?> holder = pool.submit(() -> {
-            QpdfLib.acquireSlot();
+            Semaphore held = QpdfLib.acquireSlot();
             try {
                 holderEntered.countDown();
                 holderRelease.await(10, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
-                QpdfLib.releaseSlot();
+                QpdfLib.releaseSlot(held);
             }
             return null;
         });

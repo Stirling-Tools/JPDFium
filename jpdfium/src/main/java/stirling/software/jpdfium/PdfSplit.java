@@ -79,34 +79,43 @@ public final class PdfSplit {
     }
 
     /**
-     * Split with explicit storage control. When the native file path is
-     * available the live document is materialized once and reused for every
-     * range: per-range saves would serialize the full source N times.
+     * Split with explicit storage control. The live document is materialized
+     * once and reused for every range: per-range saves would serialize the full
+     * source N times.
      *
      * <p>Snapshot semantics: one save captures current state (including
      * unsaved edits); every part derives from that snapshot. The source
-     * generation is captured before the snapshot and rechecked per range ,
+     * generation is captured before the snapshot and rechecked per range,
      * concurrent structural mutation fails loudly instead of mixing states.
      * Multi-output splitting is best-effort per part, not atomic: earlier
      * parts may succeed when a later one fails; the caller owns returned
      * documents and must close them.
+     *
+     * <p>The original file is reused instead of the snapshot only when
+     * {@link StorageOptions#reuseSourceFile()} is set, and then only for a
+     * document opened from that path. Many mutating APIs do not bump the
+     * structural epoch (redaction, flatten, page edits all leave it at zero),
+     * so an unmodified-looking file-opened document can still hold edits the
+     * file does not - reusing it would publish pre-edit content. That shortcut
+     * is therefore opt-in and the caller's assertion, not something this class
+     * can infer.
      */
     public static List<PdfDocument> split(PdfDocument doc, SplitStrategy strategy,
             StorageOptions options) {
         List<int[]> ranges = strategy.computeRanges(doc);
         if (ranges.size() > 1 && options.mode() != StorageOptions.Mode.MEMORY
                 && QpdfLib.isExtractFileSupported()) {
-            // Unmodified file-backed docs reuse the original file (no lost
-            // edits); otherwise snapshot once. Source stays alive for all
-            // outputs: QPDF foreign objects may read stream bytes from the
-            // original until writing finishes.
+            // Snapshot unless the caller vouched for the source file. Source
+            // stays alive for all outputs: QPDF foreign objects may read stream
+            // bytes from the original until writing finishes.
             // https://qpdf.readthedocs.io/en/stable/design.html
             Path reusable = null;
             boolean ownsReusable = false;
             int epoch = doc.structureEpoch();
             Path src = doc.sourcePath();
+            List<PdfDocument> results = new ArrayList<>(ranges.size());
             try {
-                if (src != null && epoch == 0 && Files.isReadable(src)) {
+                if (src != null && options.reuseSourceFile() && Files.isReadable(src)) {
                     reusable = src;
                 } else {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
@@ -114,7 +123,6 @@ public final class PdfSplit {
                     doc.save(reusable);
                     COUNTERS.sourceSerializations.incrementAndGet();
                 }
-                List<PdfDocument> results = new ArrayList<>(ranges.size());
                 List<Bookmark> sourceBookmarks = doc.bookmarks();
                 for (int[] range : ranges) {
                     if (doc.structureEpoch() != epoch) {
@@ -140,9 +148,11 @@ public final class PdfSplit {
                 }
                 return results;
             } catch (RuntimeException e) {
+                closeAll(results);
                 throw e;
-            } catch (Exception _) {
+            } catch (Exception e) {
                 // Fall through to per-range path on snapshot failure only.
+                closeAll(results);
             } finally {
                 if (ownsReusable) deleteQuietly(reusable);
             }
@@ -152,6 +162,18 @@ public final class PdfSplit {
             results.add(extractPageRange(doc, range[0], range[1], options));
         }
         return results;
+    }
+
+    /**
+     * Close parts already produced by a failing multi-output split. They have
+     * no cleaner and own native handles plus temp files, so dropping them on
+     * the floor would leak both.
+     */
+    private static void closeAll(List<PdfDocument> parts) {
+        for (PdfDocument part : parts) {
+            try { part.close(); } catch (Exception _) {}
+        }
+        parts.clear();
     }
 
     /**

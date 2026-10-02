@@ -68,6 +68,10 @@ class DomainConsistencyTest {
     void noScatteredGuardReferences() throws IOException {
         Path root = mainSources();
         List<String> hits = grep(root, "NativeGuard");
+        // The deprecated NativeGuard facade exists only for source/binary
+        // compatibility and forwards every call to PdfiumRuntime; it holds no
+        // lock of its own, so its own file is not a scattering site.
+        hits.removeIf(hit -> hit.contains("panama/NativeGuard.java"));
         assertTrue(hits.isEmpty(),
                 () -> "scattered guard management is gone - route through PdfiumRuntime:\n"
                         + String.join("\n", hits));
@@ -79,7 +83,10 @@ class DomainConsistencyTest {
         List<String> hits = new ArrayList<>();
         hits.addAll(grep(root, ".acquire()"));
         hits.addAll(grep(root, "ReentrantLock"));
-        hits.removeIf(hit -> hit.contains("panama/PdfiumRuntime.java"));
+        // PdfiumRuntime owns the lock. The deprecated NativeGuard facade is
+        // allowed too: it delegates to PdfiumRuntime and holds no lock itself.
+        hits.removeIf(hit -> hit.contains("panama/PdfiumRuntime.java")
+                || hit.contains("panama/NativeGuard.java"));
         // Opt-in slot bounding (QpdfLib/Vips) is admission control, not
         // PDFium serialization. Allowed only inside the slot helpers.
         hits.removeIf(hit -> (hit.contains("panama/QpdfLib.java")

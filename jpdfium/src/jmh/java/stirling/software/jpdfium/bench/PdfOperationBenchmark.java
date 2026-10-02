@@ -15,13 +15,16 @@ import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfSplit;
 import stirling.software.jpdfium.doc.PdfOptimizer;
+import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
-import java.awt.image.BufferedImage;
 
 /**
  * Whole-operation cost for the operations that dominate real workloads:
@@ -67,10 +70,19 @@ public class PdfOperationBenchmark {
     /** 14 MB real document: representative of a working file, not a stub. */
     private static final String LARGE_INPUT = "/pdfs/redact/redact-test-tj-deviation.pdf";
 
+    /**
+     * 100-page fixture for the split benchmark. The 14 MB fixture has 3 pages,
+     * so an every-10-pages split there is a single range and never enters the
+     * multi-output path this PR optimized.
+     */
+    private static final String MULTIPAGE_INPUT = "/pdfs/redact/redact-test-100pages.pdf";
+
     private Path inputPath;
     private byte[] inputBytes;
     private Path workDir;
     private PdfDocument doc;
+    /** Reused by the redaction benchmark so every invocation starts identical. */
+    private Path redactionSource;
 
     @Setup(Level.Trial)
     public void setUp() throws Exception {
@@ -79,12 +91,47 @@ public class PdfOperationBenchmark {
             throw new IllegalStateException(
                     "benchmark input " + LARGE_INPUT + " not found on the classpath");
         }
+        byte[] multipage = readResource(MULTIPAGE_INPUT);
+        if (multipage == null) {
+            throw new IllegalStateException(
+                    "benchmark input " + MULTIPAGE_INPUT + " not found on the classpath");
+        }
         workDir = Files.createTempDirectory("jpdfium-bench");
         inputPath = workDir.resolve("input.pdf");
         Files.write(inputPath, inputBytes);
+        multipageInput = workDir.resolve("multipage.pdf");
+        Files.write(multipageInput, multipage);
 
         doc = PdfDocument.open(inputPath);
+        redactionSource = workDir.resolve("redact-src.pdf");
+        Files.copy(inputPath, redactionSource, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
+
+    /**
+     * A document with no redactions yet. The redaction benchmark reopens this
+     * per invocation so every sample removes the same text: reusing one document
+     * would make every sample after the first redact nothing.
+     */
+    @Setup(Level.Invocation)
+    public void resetRedactionTarget() throws Exception {
+        redactionDoc = PdfDocument.open(redactionSource);
+    }
+
+    @TearDown(Level.Invocation)
+    public void closeRedactionTarget() {
+        if (redactionDoc != null) {
+            redactionDoc.close();
+            redactionDoc = null;
+        }
+    }
+
+    private Path multipageInput;
+    private PdfDocument redactionDoc;
+    /** Caller-owned render destination, re-created only when the geometry changes. */
+    private Arena renderArena;
+    private MemorySegment renderBuffer;
+    private int renderWidth;
+    private int renderHeight;
 
     private static byte[] readResource(String name) throws IOException {
         try (var in = PdfOperationBenchmark.class.getResourceAsStream(name)) {
@@ -143,8 +190,10 @@ public class PdfOperationBenchmark {
     }
 
     /**
-     * Serialization only, with no destination filesystem work. Control that
-     * separates "PDFium is slow to serialize" from "writing a file is slow".
+     * Serialization to a private temp file. Includes the destination filesystem
+     * write, so read it as "serialize plus write"; {@link #saveToBytes} is the
+     * heap-cost reference and {@link #saveToPath} the caller-chosen-path
+     * reference. It is not a filesystem-free serialization control.
      */
     @Benchmark
     public long saveToTempFile() throws IOException {
@@ -162,11 +211,11 @@ public class PdfOperationBenchmark {
         return doc.saveBytes().length;
     }
 
-
     /**
-     * Split every 10 pages. Cost driver under investigation: per-range
-     * {@code doc.save(materialized)} + QPDF parse/write + verify open. See
-     * {@code PdfSplit} for the breakdown; do not re-batch this method.
+     * Split every 10 pages of the 14 MB fixture. Unchanged workload: the gate
+     * compares this name against the main-branch baseline, so a different
+     * document here would read as a regression. See
+     * {@link #splitMultiRangeEveryTenPages} for the multi-output path.
      */
     @Benchmark
     public int splitEveryTenPages() {
@@ -176,6 +225,50 @@ public class PdfOperationBenchmark {
             part.close();
         }
         return parts;
+    }
+
+    /**
+     * Split the 100-page fixture every 10 pages: 10 ranges, so this is the
+     * multi-output path - one source snapshot plus N native extracts. The 14 MB
+     * fixture has 3 pages, so an every-10-pages split there is a single range
+     * and never reaches it.
+     */
+    @Benchmark
+    public int splitMultiRangeEveryTenPages() throws IOException {
+        try (PdfDocument src = PdfDocument.open(multipagePath())) {
+            int parts = 0;
+            for (PdfDocument part : PdfSplit.split(src, PdfSplit.SplitStrategy.everyNPages(10))) {
+                parts += part.pageCount();
+                part.close();
+            }
+            return parts;
+        }
+    }
+
+    /**
+     * Same 10-range split with the caller's assertion that the source file is
+     * untouched, so no source snapshot is taken. The difference against
+     * {@link #splitMultiRangeEveryTenPages} is exactly the cost of that one
+     * snapshot.
+     */
+    @Benchmark
+    public int splitMultiRangeReusingSource() throws IOException {
+        try (PdfDocument src = PdfDocument.open(multipagePath())) {
+            int parts = 0;
+            for (PdfDocument part : PdfSplit.split(src, PdfSplit.SplitStrategy.everyNPages(10),
+                    StorageOptions.builder().reuseSourceFile(true).build())) {
+                parts += part.pageCount();
+                part.close();
+            }
+            return parts;
+        }
+    }
+
+    /** A fresh copy of the multi-page fixture, so no benchmark mutates the shared one. */
+    private Path multipagePath() throws IOException {
+        Path copy = workDir.resolve("split-src-" + System.nanoTime() + ".pdf");
+        Files.copy(multipageInput, copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        return copy;
     }
 
     /**
@@ -195,16 +288,21 @@ public class PdfOperationBenchmark {
     }
 
 
-    /** Redaction on page 0 with a per-invocation handle: doc stays usable. */
+    /**
+     * Redaction on page 0. Runs against a document reopened per invocation
+     * ({@link #resetRedactionTarget}), because redacting is destructive: reusing
+     * one document would leave every sample after the first with nothing left to
+     * remove and the benchmark would measure a no-op.
+     */
     @Benchmark
     public long redactPattern() {
-        long p = JpdfiumLib.pageOpen(doc.nativeHandle(), 0);
+        long p = JpdfiumLib.pageOpen(redactionDoc.nativeHandle(), 0);
         try {
             JpdfiumLib.redactPattern(p, "CONFIDENTIAL", 0xFF000000, true);
         } finally {
             JpdfiumLib.pageClose(p);
         }
-        return doc.pageCount();
+        return redactionDoc.pageCount();
     }
 
     /** Metadata read: should not scale with document size, only tag count. */
@@ -213,13 +311,25 @@ public class PdfOperationBenchmark {
         return doc.metadata().size();
     }
 
-
-    /** Render page 0 at 150 DPI into caller storage (low-allocation path). */
+    /**
+     * Render page 0 at 150 DPI into a buffer allocated once per trial: the
+     * low-allocation path, where the pixel destination is caller storage.
+     */
     @Benchmark
-    public long renderIntoSuppliedBuffer() {
+    public long renderIntoSuppliedBuffer() throws IOException {
         try (var page = doc.page(0)) {
-            BufferedImage img = page.renderImage(150);
-            return img.getWidth() * (long) img.getHeight();
+            var size = page.size();
+            int w = Math.max(1, Math.round(size.width() * 150f / 72f));
+            int h = Math.max(1, Math.round(size.height() * 150f / 72f));
+            if (renderWidth != w || renderHeight != h) {
+                if (renderArena != null) renderArena.close();
+                renderArena = Arena.ofConfined();
+                renderWidth = w;
+                renderHeight = h;
+                renderBuffer = renderArena.allocate((long) w * h * 4);
+            }
+            page.renderInto(renderBuffer, w, h);
+            return (long) w * h;
         }
     }
 
