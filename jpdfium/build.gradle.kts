@@ -102,15 +102,26 @@ dependencies {
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
     jmhRuntimeOnly(project(":jpdfium-vips"))
+    // The jmh source set needs the same platform natives as testRuntimeOnly.
+    // Without it every benchmark dies in JpdfiumLib's static initializer with
+    // "Symbol not found", so JMH silently measures nothing.
+    jmhRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
 }
 
 jmh {
-    // Run each benchmark for a brief warmup + 3 measurement forks so CI
-    // finishes in reasonable time. Developers can override on the command line:
-    //   ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=5 -Pjmh.iterations=5
+    // CI defaults stay fast (1 fork, 2+3 x 1s). Annotations in bench sources
+    // request the trustworthy shape (Fork 3, 5 warmup + 10 measurement) but the
+    // plugin overrides them, so pass explicit properties for a ranking you can
+    // actually compare:
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark \
+    //     -Pjmh.forks=3 -Pjmh.warmupIterations=5 -Pjmh.iterations=10
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark -Pjmh.profilers=gc
+    // Ranking rule: do not claim X faster than Y when 99.9% CIs overlap. With
+    // Cnt=3 the CI is mostly noise (t-distribution); Cnt>=15 is the minimum
+    // for a comparison, Cnt=30 (3x10) is the trustworthy default.
     warmupIterations.set((findProperty("jmh.warmupIterations") as String? ?: "2").toInt())
     iterations.set((findProperty("jmh.iterations") as String? ?: "3").toInt())
-    fork.set(1)
+    fork.set((findProperty("jmh.forks") as String? ?: findProperty("jmh.fork") as String? ?: "1").toInt())
     timeUnit.set("ms")
     resultFormat.set("JSON")
     resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
