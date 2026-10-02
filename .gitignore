@@ -114,3 +114,15 @@ test-output/
 **/surefire-reports/
 samples-output/
 **/samples-output/
+
+# Native sanitizer/cost build trees (reproducible from CMakeLists; see
+# BASELINE-CHECKPOINT.md)
+native/build-asan/
+native/build-asan-stub/
+native/build-cost/
+native/pdfium/
+native/rust/target/
+
+# Sample outputs from the integration suite (regenerate with
+# ./gradlew :jpdfium:integrationTest)
+samples-output/
