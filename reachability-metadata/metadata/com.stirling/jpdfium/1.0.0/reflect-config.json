@@ -39,19 +39,6 @@
     "allPublicFields": true
   },
   {
-    "name": "stirling.software.jpdfium.panama.NativeGuard",
-    "methods": [
-      {
-        "name": "acquire",
-        "parameterTypes": []
-      },
-      {
-        "name": "release",
-        "parameterTypes": []
-      }
-    ]
-  },
-  {
     "name": "stirling.software.jpdfium.panama.ActionBindings"
   },
   {
