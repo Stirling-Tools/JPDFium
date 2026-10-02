@@ -7,6 +7,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
@@ -683,15 +684,15 @@ public final class PdfiumRuntime {
 
     /** Test-only gate ordering an in-flight operation against quiescing without sleeps. */
     static <T> T executeGated(Supplier<T> op,
-                              java.util.concurrent.CountDownLatch admitted,
-                              java.util.concurrent.CountDownLatch proceed) {
+                              CountDownLatch admitted,
+                              CountDownLatch proceed) {
         Objects.requireNonNull(op, "op");
         enter(Context.ORDINARY);
         try {
             ensureRunningInside();
             admitted.countDown();
             try {
-                if (!proceed.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!proceed.await(30, TimeUnit.SECONDS)) {
                     throw new JPDFiumException("test gate timed out");
                 }
             } catch (InterruptedException e) {

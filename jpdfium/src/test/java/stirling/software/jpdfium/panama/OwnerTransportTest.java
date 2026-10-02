@@ -17,6 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.io.IOException;
+import java.util.function.Predicate;
 
 /**
  * Owner-transport contract, proven with no native PDFium involved.
@@ -38,7 +40,7 @@ class OwnerTransportTest {
         }
     }
 
-    private OwnerTransport started(int capacity, java.util.function.Predicate<String> admit) {
+    private OwnerTransport started(int capacity, Predicate<String> admit) {
         transport = new OwnerTransport("jpdfium-owner-test", capacity, admit);
         transport.start();
         return transport;
@@ -170,15 +172,15 @@ class OwnerTransportTest {
         JPDFiumException seen = assertThrows(JPDFiumException.class,
                 () -> t.submit("checked", () -> {
                     try {
-                        throw new java.io.IOException("disk gone");
-                    } catch (java.io.IOException e) {
+                        throw new IOException("disk gone");
+                    } catch (IOException e) {
                         throw new JPDFiumException("writer failed", e);
                     }
                 }));
         // The cause must survive, not just the wrapper message: a native writer
         // failure that loses its cause is undiagnosable.
         assertEquals("writer failed", seen.getMessage());
-        assertTrue(seen.getCause() instanceof java.io.IOException,
+        assertTrue(seen.getCause() instanceof IOException,
                 "the underlying I/O failure must be preserved as the cause");
         assertEquals("disk gone", seen.getCause().getMessage());
     }

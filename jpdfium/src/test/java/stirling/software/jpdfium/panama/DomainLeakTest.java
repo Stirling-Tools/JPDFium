@@ -9,6 +9,10 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import stirling.software.jpdfium.PdfDocument;
 
 /**
  * Regression: a rejected admission must never leave the domain locked.
@@ -74,9 +78,9 @@ class DomainLeakTest {
     @Test
     void rejectedGuardedCallReleasesItsAdmission() throws Throwable {
         PdfiumRuntime.quiesce();
-        java.lang.invoke.MethodHandle guarded = PdfiumRuntime.guarded(
-                java.lang.invoke.MethodHandles.empty(
-                        java.lang.invoke.MethodType.methodType(void.class)));
+        MethodHandle guarded = PdfiumRuntime.guarded(
+                MethodHandles.empty(
+                        MethodType.methodType(void.class)));
         assertThrows(JPDFiumException.class, guarded::invokeExact);
         assertFalse(PdfiumRuntime.domainLocked(),
                 "a refused guarded handle must release the admission it took");
@@ -88,8 +92,8 @@ class DomainLeakTest {
     void ordinaryWorkReleasesTheDomainEveryTime() throws Exception {
         byte[] pdf = Objects.requireNonNull(DomainLeakTest.class.getResourceAsStream(
                 "/pdfs/general/minimal.pdf")).readAllBytes();
-        try (stirling.software.jpdfium.PdfDocument doc =
-                     stirling.software.jpdfium.PdfDocument.open(pdf)) {
+        try (PdfDocument doc =
+                     PdfDocument.open(pdf)) {
             for (int i = 0; i < 50; i++) {
                 assertFalse(PdfiumRuntime.domainLocked(),
                         "domain still held after iteration " + i);

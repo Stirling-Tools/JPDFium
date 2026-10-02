@@ -5,6 +5,9 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Storage-reclamation behavior that needs no live PDFium operation: the
@@ -65,15 +68,15 @@ class PdfiumBufferReclamationTest {
         // the rollback itself attempts storage reclamation and that fails. The
         // acquisition rejection must stay primary with the cleanup failure
         // suppressed onto it.
-        java.util.concurrent.CountDownLatch incremented = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.CountDownLatch resume = new java.util.concurrent.CountDownLatch(1);
+        CountDownLatch incremented = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
         PdfiumBuffers.acquirePostIncrementHook = () -> {
             incremented.countDown();
-            resume.await(30, java.util.concurrent.TimeUnit.SECONDS);
+            resume.await(30, TimeUnit.SECONDS);
         };
         PdfiumBuffers.failLeaseConstruction = true;
-        java.util.concurrent.atomic.AtomicReference<Throwable> seen =
-                new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicReference<Throwable> seen =
+                new AtomicReference<>();
         Thread acquirer = Thread.ofPlatform().unstarted(() -> {
             try {
                 buf.acquireLease();
@@ -83,7 +86,7 @@ class PdfiumBufferReclamationTest {
         });
         try {
             acquirer.start();
-            assertTrue(incremented.await(30, java.util.concurrent.TimeUnit.SECONDS),
+            assertTrue(incremented.await(30, TimeUnit.SECONDS),
                     "acquisition did not reach its increment");
             buf.close();
             resume.countDown();

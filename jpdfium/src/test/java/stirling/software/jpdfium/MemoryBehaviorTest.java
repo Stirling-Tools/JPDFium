@@ -17,6 +17,7 @@ import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Memory-behaviour tests: what stays live, what is charged to the Java heap,
@@ -341,6 +342,6 @@ class MemoryBehaviorTest {
         }
         sb.append("trailer<</Size ").append(offsets.size()).append("/Root 1 0 R>>\n");
         sb.append("startxref\n").append(xrefOffset).append("\n%%EOF\n");
-        return sb.toString().getBytes(java.nio.charset.StandardCharsets.ISO_8859_1);
+        return sb.toString().getBytes(StandardCharsets.ISO_8859_1);
     }
 }

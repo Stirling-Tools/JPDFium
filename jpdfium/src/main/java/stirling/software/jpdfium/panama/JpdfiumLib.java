@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermissions;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -599,8 +600,8 @@ public final class JpdfiumLib {
         try {
             try {
                 tmp = Files.createTempFile("jpdfium-save-", ".pdf",
-                        java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
-                                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
+                        PosixFilePermissions.asFileAttribute(
+                                PosixFilePermissions.fromString("rw-------")));
             } catch (UnsupportedOperationException e) {
                 tmp = Files.createTempFile("jpdfium-save-", ".pdf");
             }

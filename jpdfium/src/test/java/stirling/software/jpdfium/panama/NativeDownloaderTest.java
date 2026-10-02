@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import com.sun.net.httpserver.HttpHandler;
 
 /** Covers the opt-in Maven natives download without touching the real network. */
 class NativeDownloaderTest {
@@ -183,7 +184,7 @@ class NativeDownloaderTest {
         System.setProperty(NativeCache.CACHE_DIR_PROPERTY, tempDir.toString());
     }
 
-    private void startServer(com.sun.net.httpserver.HttpHandler handler) {
+    private void startServer(HttpHandler handler) {
         try {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", handler);

@@ -13,6 +13,7 @@ import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.nio.charset.StandardCharsets;
 
 /**
  * The file-backed optimize route must keep the document out of Java heap.
@@ -63,7 +64,7 @@ class FileBackedOptimizeTest {
             try (var in2 = Files.newInputStream(out)) {
                 assertEquals(5, in2.read(head));
             }
-            assertEquals("%PDF-", new String(head, java.nio.charset.StandardCharsets.ISO_8859_1),
+            assertEquals("%PDF-", new String(head, StandardCharsets.ISO_8859_1),
                     "output must be a PDF");
             try (PdfDocument doc = PdfDocument.open(out)) {
                 assertTrue(doc.pageCount() > 0, "optimized output must still open");

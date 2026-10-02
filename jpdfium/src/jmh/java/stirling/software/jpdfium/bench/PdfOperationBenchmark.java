@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
+import java.awt.image.BufferedImage;
 
 /**
  * Whole-operation cost for the operations that dominate real workloads:
@@ -217,7 +218,7 @@ public class PdfOperationBenchmark {
     @Benchmark
     public long renderIntoSuppliedBuffer() {
         try (var page = doc.page(0)) {
-            java.awt.image.BufferedImage img = page.renderImage(150);
+            BufferedImage img = page.renderImage(150);
             return img.getWidth() * (long) img.getHeight();
         }
     }
@@ -226,7 +227,7 @@ public class PdfOperationBenchmark {
     @Benchmark
     public long renderAllocating() {
         try (var page = doc.page(0)) {
-            java.awt.image.BufferedImage img = page.renderImage(150);
+            BufferedImage img = page.renderImage(150);
             return img.getWidth() * (long) img.getHeight() + img.getRGB(0, 0);
         }
     }

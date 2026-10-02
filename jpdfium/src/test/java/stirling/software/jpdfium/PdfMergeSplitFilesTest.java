@@ -20,6 +20,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.util.Random;
+import javax.imageio.ImageIO;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
 /**
  * File-backed merge/split: same results as the bytes paths, flat heap.
@@ -279,32 +288,32 @@ class PdfMergeSplitFilesTest {
 
     /** Multi-megabyte input: qpdf must re-read its streams lazily while writing. */
     private static byte[] largePdf(int pages) throws Exception {
-        java.awt.image.BufferedImage img =
-                new java.awt.image.BufferedImage(1600, 1600, java.awt.image.BufferedImage.TYPE_INT_RGB);
-        java.util.Random rnd = new java.util.Random(42);
+        BufferedImage img =
+                new BufferedImage(1600, 1600, BufferedImage.TYPE_INT_RGB);
+        Random rnd = new Random(42);
         for (int y = 0; y < 1600; y++) {
             for (int x = 0; x < 1600; x++) {
                 img.setRGB(x, y, rnd.nextInt(0xFFFFFF));
             }
         }
-        java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
-        javax.imageio.ImageIO.write(img, "png", png);
-        try (org.apache.pdfbox.pdmodel.PDDocument doc =
-                new org.apache.pdfbox.pdmodel.PDDocument()) {
-            org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject image =
-                    org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        ImageIO.write(img, "png", png);
+        try (PDDocument doc =
+                new PDDocument()) {
+            PDImageXObject image =
+                    PDImageXObject
                             .createFromByteArray(doc, png.toByteArray(), "big");
             for (int i = 0; i < pages; i++) {
-                org.apache.pdfbox.pdmodel.PDPage page =
-                        new org.apache.pdfbox.pdmodel.PDPage(
-                                org.apache.pdfbox.pdmodel.common.PDRectangle.LETTER);
+                PDPage page =
+                        new PDPage(
+                                PDRectangle.LETTER);
                 doc.addPage(page);
-                try (org.apache.pdfbox.pdmodel.PDPageContentStream cs =
-                        new org.apache.pdfbox.pdmodel.PDPageContentStream(doc, page)) {
+                try (PDPageContentStream cs =
+                        new PDPageContentStream(doc, page)) {
                     cs.drawImage(image, 0, 0, 612, 792);
                 }
             }
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
             return out.toByteArray();
         }

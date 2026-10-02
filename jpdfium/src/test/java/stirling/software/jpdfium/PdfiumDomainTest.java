@@ -14,6 +14,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.lang.foreign.ValueLayout;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Domain-level behavior against real PDFium: coarse geometry queries cost one
@@ -148,11 +156,11 @@ class PdfiumDomainTest {
         // Pause acquisition after its count increment, close caller ownership
         // from here, then resume: the increment must roll back through the
         // same release primitive, reclaiming the arena instead of leaking it.
-        java.util.concurrent.CountDownLatch incremented = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.CountDownLatch resume = new java.util.concurrent.CountDownLatch(1);
+        CountDownLatch incremented = new CountDownLatch(1);
+        CountDownLatch resume = new CountDownLatch(1);
         PdfiumBuffers.acquirePostIncrementHook = () -> {
             incremented.countDown();
-            if (!resume.await(30, java.util.concurrent.TimeUnit.SECONDS)) {
+            if (!resume.await(30, TimeUnit.SECONDS)) {
                 throw new IllegalStateException("hook timed out");
             }
         };
@@ -166,7 +174,7 @@ class PdfiumDomainTest {
         });
         try {
             acquirer.start();
-            assertTrue(incremented.await(30, java.util.concurrent.TimeUnit.SECONDS),
+            assertTrue(incremented.await(30, TimeUnit.SECONDS),
                     "acquisition did not reach its increment");
             buf.close();
             resume.countDown();
@@ -179,7 +187,7 @@ class PdfiumDomainTest {
         assertEquals(before, PdfiumBuffers.liveSharedBytes(),
                 "rollback to zero must reclaim the arena");
         assertThrows(IllegalStateException.class,
-                () -> buf.pixels().get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0));
+                () -> buf.pixels().get(ValueLayout.JAVA_BYTE, 0));
     }
 
     @Test
@@ -212,7 +220,7 @@ class PdfiumDomainTest {
         assertEquals(before, PdfiumBuffers.liveSharedBytes());
         assertThrows(IllegalStateException.class, buf::acquireLease);
         assertThrows(IllegalStateException.class,
-                () -> buf.pixels().get(java.lang.foreign.ValueLayout.JAVA_BYTE, 0));
+                () -> buf.pixels().get(ValueLayout.JAVA_BYTE, 0));
     }
 
     @Test
@@ -232,10 +240,10 @@ class PdfiumDomainTest {
         PdfiumBuffers.RenderLease anchor = buf.acquireLease();
         int threads = 8;
         int iterations = 500;
-        java.util.concurrent.ExecutorService pool =
-                java.util.concurrent.Executors.newFixedThreadPool(threads);
+        ExecutorService pool =
+                Executors.newFixedThreadPool(threads);
         try {
-            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+            List<Future<?>> futures = new ArrayList<>();
             for (int t = 0; t < threads; t++) {
                 futures.add(pool.submit(() -> {
                     for (int i = 0; i < iterations; i++) {
@@ -249,8 +257,8 @@ class PdfiumDomainTest {
                     return null;
                 }));
             }
-            for (java.util.concurrent.Future<?> f : futures) {
-                f.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            for (Future<?> f : futures) {
+                f.get(60, TimeUnit.SECONDS);
             }
         } finally {
             pool.shutdownNow();
