@@ -26,6 +26,7 @@ import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * FFM bindings for the in-process qpdf structural operations.
@@ -49,10 +50,9 @@ public final class QpdfLib {
     private QpdfLib() {}
 
     /**
-     * Service-safe bound for concurrent QPDF jobs. Default is the initial
-     * policy min(4, cores) pending the concurrency sweep. Set
-     * -Djpdfium.qpdf.maxConcurrency=0 for explicit unlimited trusted-batch
-     * mode. Negative is invalid and rejected.
+     * Bound for concurrent QPDF jobs, unlimited by default. Set
+     * -Djpdfium.qpdf.maxConcurrency=N to bound workloads. Negative is
+     * invalid and rejected.
      */
     private static volatile Semaphore QPDF_PERMITS = createPermits();
 
@@ -521,7 +521,6 @@ public final class QpdfLib {
         }
     }
 
-    // ---- Transactional file-output helpers (guard-free; caller paths only) ----
 
     /** File-backed sanitize with no heap buffer; staged and published on success. */
     public static boolean sanitizeToFile(Path input, Path output, int flags, long maxBytes) {
@@ -709,8 +708,8 @@ public final class QpdfLib {
             CANCELLED
         }
 
-        private final java.util.concurrent.atomic.AtomicReference<State> state =
-                new java.util.concurrent.atomic.AtomicReference<>(State.RUNNING);
+        private final AtomicReference<State> state =
+                new AtomicReference<>(State.RUNNING);
 
         /** Compete to publish; true only for the single winner. */
         public boolean tryCommit() {

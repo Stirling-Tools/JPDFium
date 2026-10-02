@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.nio.file.StandardCopyOption;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 /** Split reuse and fan-out semantics on a real multi-page fixture. */
 class SplitReuseTest {
@@ -59,7 +61,7 @@ class SplitReuseTest {
         Path in = resource("/pdfs/redact/redact-test-100pages.pdf");
         Path work = Files.createTempFile("split-mod", ".pdf");
         try {
-            Files.copy(in, work, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(in, work, StandardCopyOption.REPLACE_EXISTING);
             try (PdfDocument doc = PdfDocument.open(work)) {
                 List<PdfDocument> parts =
                         PdfSplit.split(doc, PdfSplit.SplitStrategy.everyNPages(50));
@@ -98,7 +100,7 @@ class SplitReuseTest {
             List<PdfDocument> parts = PdfSplit.split(doc, PdfSplit.SplitStrategy.everyNPages(20));
             for (PdfDocument p : parts) p.close();
         }
-        var live = stirling.software.jpdfium.panama.PdfiumRuntime.liveResources();
+        var live = PdfiumRuntime.liveResources();
         assertTrue(live.documents() >= 0, "live accounting must not underflow");
     }
 

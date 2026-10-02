@@ -44,10 +44,7 @@ public final class ProcessingMode {
     /** Default mode: sequential, non-streaming. */
     public static final ProcessingMode DEFAULT = new ProcessingMode(false, 1, 0, 50);
 
-    /**
-     * Initial policy for parallel workers (16) pending the concurrency sweep;
-     * 0 means explicit unbounded trusted-batch mode. Negative is invalid.
-     */
+    /** Parallel worker cap, unbounded by default. Negative is rejected. */
     public static final int MAX_PARALLELISM = validatedMaxParallelism();
 
     private static int validatedMaxParallelism() {

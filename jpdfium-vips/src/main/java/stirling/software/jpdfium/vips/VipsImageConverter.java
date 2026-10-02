@@ -39,11 +39,7 @@ public final class VipsImageConverter {
 
     private VipsImageConverter() {}
 
-    /**
-     * Service-safe bound for image jobs. Default min(4, cores) pending sweep.
-     * Set -Djpdfium.image.maxConcurrency=0 for explicit unlimited mode.
-     * Negative is invalid and rejected.
-     */
+    /** Bound for image jobs, unlimited by default. Negative is rejected. */
     private static volatile Semaphore IMAGE_PERMITS = createPermits();
 
     private static Semaphore createPermits() {

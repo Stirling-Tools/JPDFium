@@ -518,7 +518,7 @@ public final class PdfImageConverter {
 
     // Internal helpers
 
-    // Service-safe DPI cap (30000) pending sweep; 0 = explicit unlimited.
+    // DPI cap, unlimited by default; set -Djpdfium.image.max_dimension=N to bound.
     private static final int MAX_IMAGE_DIMENSION = validatedDimension();
 
     private static int validatedDimension() {

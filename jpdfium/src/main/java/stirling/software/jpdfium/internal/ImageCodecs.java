@@ -426,12 +426,7 @@ public final class ImageCodecs {
         return rgba;
     }
 
-    /**
-     * Service-safe image guards (100M pixels, 30000 dimension). Set either to
-     * {@code 0} for explicit unlimited trusted-batch mode; negative is invalid.
-     * Each operation reads these constants once (class init), restart the JVM
-     * to change them.
-     */
+    /** Image guards, unlimited by default; restart the JVM to change them. */
     public static final long MAX_IMAGE_PIXELS = validatedLong("jpdfium.image.max_pixels", 0L);
     public static final int MAX_IMAGE_DIMENSION = validatedInt("jpdfium.image.max_dimension", 0);
 

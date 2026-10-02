@@ -18,10 +18,7 @@ import java.util.List;
  */
 public final class VipsDecoder {
 
-    /**
-     * Service-safe image guards (finite by default). Set any to {@code 0} for
-     * explicit unlimited trusted-batch mode; negative is invalid.
-     */
+    /** Image guards, unlimited by default; set a finite value to bound untrusted inputs. */
     public static final long MAX_IMAGE_PIXELS = validatedLong("jpdfium.image.max_pixels", 0L);
     public static final int MAX_IMAGE_DIMENSION = validatedInt("jpdfium.image.max_dimension", 0);
     public static final int MAX_FRAMES = validatedInt("jpdfium.image.max_frames", 0);

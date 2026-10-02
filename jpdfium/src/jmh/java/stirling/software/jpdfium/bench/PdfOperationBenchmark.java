@@ -113,7 +113,6 @@ public class PdfOperationBenchmark {
         return workDir.resolve(name + "-" + System.nanoTime() + ".pdf");
     }
 
-    // ---- open: one open per invocation, page count prevents DCE ---------
 
     @Benchmark
     public long openFromPath() {
@@ -129,7 +128,6 @@ public class PdfOperationBenchmark {
         }
     }
 
-    // ---- save: one save per invocation -----------------------------------
 
     /** Direct native save to a path: no output-sized Java buffer expected. */
     @Benchmark
@@ -163,7 +161,6 @@ public class PdfOperationBenchmark {
         return doc.saveBytes().length;
     }
 
-    // ---- structural: one split/optimize per invocation -------------------
 
     /**
      * Split every 10 pages. Cost driver under investigation: per-range
@@ -196,7 +193,6 @@ public class PdfOperationBenchmark {
         }
     }
 
-    // ---- mutation: fresh handle per invocation, no accumulated state -----
 
     /** Redaction on page 0 with a per-invocation handle: doc stays usable. */
     @Benchmark
@@ -216,7 +212,6 @@ public class PdfOperationBenchmark {
         return doc.metadata().size();
     }
 
-    // ---- render: caller-owned buffer per invocation, no leaked arenas -----
 
     /** Render page 0 at 150 DPI into caller storage (low-allocation path). */
     @Benchmark

@@ -1558,7 +1558,6 @@ public final class JpdfiumLib {
         }
     }
 
-    // ---- Signatures ----
 
     public static int signatureCount(long doc) {
         return PdfiumRuntime.executeInt(() -> {

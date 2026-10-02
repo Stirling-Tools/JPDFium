@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Orchestrates page-level operations with optional streaming (low-memory)
@@ -394,12 +395,12 @@ public final class PdfPipeline {
      * permits until it actually exits, so a false return means ownership is
      * still outstanding, not released.
      */
-    private static void shutdownAndReport(java.util.concurrent.ExecutorService executor, String op) {
+    private static void shutdownAndReport(ExecutorService executor, String op) {
         executor.shutdown();
         try {
-            if (!executor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
                 executor.shutdownNow();
-                if (!executor.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
                     throw new JPDFiumException(
                             op + " did not terminate; native work may still own its resources");
                 }

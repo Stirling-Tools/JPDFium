@@ -32,16 +32,12 @@ constexpr int kLiveHandles = 64;   // realistic: a handful of open documents
 constexpr int kStaleProbes = 1;    // include a rejected lookup per iteration
 constexpr int kIters = 2'000'000;
 
-// ---------------------------------------------------------------------------
 // A: the pre-registry decode. Rejects nothing; dereferences garbage.
-// ---------------------------------------------------------------------------
 inline void* decodeUnchecked(int64_t h) {
     return reinterpret_cast<void*>(static_cast<uintptr_t>(h));
 }
 
-// ---------------------------------------------------------------------------
 // B: mutex + unordered_set. Correct, but pays a lock on every read.
-// ---------------------------------------------------------------------------
 class MutexRegistry {
   public:
     void add(const void* w) {
@@ -58,10 +54,8 @@ class MutexRegistry {
     std::unordered_set<const void*> live_;
 };
 
-// ---------------------------------------------------------------------------
 // C: the production algorithm - open addressing, tombstones, atomics only on
 // the read path, mutex-guarded overflow set when the table fills.
-// ---------------------------------------------------------------------------
 class LockFreeRegistry {
   public:
     static constexpr size_t kSlots = 1024;

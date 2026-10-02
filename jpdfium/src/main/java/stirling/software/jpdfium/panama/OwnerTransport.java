@@ -3,47 +3,35 @@ package stirling.software.jpdfium.panama;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
- * Command transport for an optional owner-thread backend.
+ * Command transport for an optional owner-thread backend. Not the default:
+ * production calls go through {@link PdfiumRuntime} directly. This exists
+ * only for experiments, so no two calls ever overlap by construction.
  *
- * <p><b>Not the default execution policy.</b> The default is the centralized
- * synchronous domain in {@link PdfiumRuntime}: direct calls serialized by one
- * lock, with no queue, scheduler, or cross-thread dispatch. Measurements
- * support retaining that path; this transport exists only as an explicitly
- * opt-in alternative for experiments, and parallel PDFium (if ever required)
- * is a separate worker-process capability, not this class on the default path.
- *
- * <p>PDFium requires that only one call execute at a time. The lock backend
- * enforces that with a mutex every caller contends on; this enforces it by
- * construction: one long-lived thread runs every command, so no two calls ever
- * overlap. It does <em>not</em> make PDFium parallel, and it does not make a
- * long synchronous save interruptible.
- *
- * <p>Deliberately not a specialized queue. A lock-free ring was considered and
- * rejected: this transport is not the hot path (a command carries a whole
- * document operation), and the registry's lock-free design solves a different
- * problem. Measure before specializing.
+ * <p>Deliberately not a specialized queue: a command carries a whole document
+ * operation, so transport cost is off the hot path. Measure before specializing.
  *
  * <p>Contract:
  * <ul>
  *   <li>Bounded FIFO admission. A full queue rejects; it never runs the command
- *       on the caller. {@code ThreadPoolExecutor.CallerRunsPolicy} would do
- *       exactly that and would silently break PDFium's single-thread rule.</li>
+ *       on the caller, which would break PDFium's single-thread rule.</li>
  *   <li>Accepted commands run to completion, even if quiesce happens while they
  *       are queued. Admission is checked once, at submission.</li>
- *   <li>A command submitted from the owner runs inline. Otherwise a nested
- *       operation would deadlock waiting on itself.</li>
+ *   <li>A command submitted from the owner runs inline, avoiding self-deadlock.</li>
  *   <li>Interruption does not abandon the command: the caller waits for the real
- *       outcome, then restores its interrupt status. Returning early would hand
- *       back results while native code still borrows the caller's buffers.</li>
+ *       outcome, then restores its interrupt status, since native code may still
+ *       borrow the caller's buffers.</li>
  * </ul>
  */
 final class OwnerTransport {
@@ -61,10 +49,10 @@ final class OwnerTransport {
     }
 
     /**
-     * A submitted command. The {@link java.util.concurrent.FutureTask} carries
+     * A submitted command. The {@link FutureTask} carries
      * the result or failure to the waiting caller; the owner only ever runs it.
      */
-    private record Task(java.util.concurrent.FutureTask<?> future) {
+    private record Task(FutureTask<?> future) {
         void run() {
             future.run();
         }
@@ -80,10 +68,10 @@ final class OwnerTransport {
     /** Callbacks the owner refuses to run, so this stays observable. */
     private final AtomicLong callbackReentries = new AtomicLong();
     private final ThreadLocal<Boolean> onOwner = ThreadLocal.withInitial(() -> Boolean.FALSE);
-    private final java.util.function.Predicate<String> admissionCheck;
+    private final Predicate<String> admissionCheck;
     private final String name;
 
-    OwnerTransport(String name, int capacity, java.util.function.Predicate<String> admissionCheck) {
+    OwnerTransport(String name, int capacity, Predicate<String> admissionCheck) {
         this.name = name;
         this.admissionCheck = admissionCheck;
         this.queue = new ArrayBlockingQueue<>(capacity);
@@ -142,7 +130,7 @@ final class OwnerTransport {
             throw failure("PDFium runtime refuses " + operation + " (" + why + ")");
         }
 
-        var future = new java.util.concurrent.FutureTask<T>(body::get);
+        var future = new FutureTask<T>(body::get);
         Task task = new Task(future);
         if (!queue.offer(task)) {
             // Never fall back to running on this thread: that would execute
@@ -163,7 +151,7 @@ final class OwnerTransport {
                 // Remember, keep waiting: the command may still be using
                 // borrowed native memory, so abandoning it here is unsafe.
                 interrupted = true;
-            } catch (java.util.concurrent.ExecutionException e) {
+            } catch (ExecutionException e) {
                 if (interrupted) {
                     Thread.currentThread().interrupt();
                 }

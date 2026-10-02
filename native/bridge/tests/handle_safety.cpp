@@ -83,11 +83,9 @@ static std::vector<uint8_t> load_fixture(int argc, char** argv) {
   return bytes;
 }
 
-// ---------------------------------------------------------------------------
 // 1-2: fabricated handles must be refused by the registries, not dereferenced.
 // Before the registry work, decodeDoc cast the int64 straight to a pointer and
 // decodePage dereferenced it inside pageAlive(), so these crashed.
-// ---------------------------------------------------------------------------
 static void test_fabricated_handles_rejected() {
   int32_t count = 0;
   float w = 0;
@@ -117,10 +115,8 @@ static void test_fabricated_handles_rejected() {
   }
 }
 
-// ---------------------------------------------------------------------------
 // 3-5: real handle lifecycle. Registration must not leak, and a second close
 // must not double free (both are ASan aborts).
-// ---------------------------------------------------------------------------
 static void test_real_handle_lifecycle(const std::vector<uint8_t>& pdf) {
   if (pdf.empty()) {
     CHECK(false, "real_handle_lifecycle: no fixture");
@@ -170,11 +166,9 @@ static void test_real_handle_lifecycle(const std::vector<uint8_t>& pdf) {
   CHECK(true, "repeated doc close frees exactly once");
 }
 
-// ---------------------------------------------------------------------------
 // 6: the save writer path. A budget smaller than the document must abort the
 // save rather than silently truncating, and must not leave a partial file
 // reported as success.
-// ---------------------------------------------------------------------------
 static void test_writer_budget_and_failure(const std::vector<uint8_t>& pdf) {
   if (pdf.empty()) {
     CHECK(false, "writer_budget: no fixture");
@@ -245,11 +239,9 @@ static void test_failed_save_does_not_truncate_destination(const std::vector<uin
 }
 
 
-// ---------------------------------------------------------------------------
 // Writer finalization and alias protection. These run against the stub build,
 // where ASan/UBSan actually function (PDFium's partition_alloc is not
 // ASan-compatible), so the marshalling and failure plumbing is covered here.
-// ---------------------------------------------------------------------------
 static void test_writer_alias_rejected(const std::vector<uint8_t>& pdf) {
   if (pdf.empty()) {
     CHECK(false, "writer_alias: no fixture");
@@ -358,11 +350,9 @@ int main(int argc, char** argv) {
   return g_failures == 0 ? 0 : 1;
 }
 
-// ---------------------------------------------------------------------------
 // Cross-type confusion: a live document handle must not validate as a page
 // and vice versa. Separate registry tables enforce this; a shared table let a
 // DocWrapper* pass pageAlive and then dereference the wrong layout.
-// ---------------------------------------------------------------------------
 static void test_cross_type_handles_rejected(const std::vector<uint8_t>& pdf) {
   if (pdf.empty() || !kHasRealRegistries) {
     if (!kHasRealRegistries)
@@ -408,11 +398,9 @@ static void test_cross_type_handles_rejected(const std::vector<uint8_t>& pdf) {
   jpdfium_doc_close(doc);
 }
 
-// ---------------------------------------------------------------------------
 // Auxiliary handles (PCRE2/FlashText) must validate on use, not just on free.
 // Previously only *_free checked membership, so a fabricated handle reached
 // reinterpret_cast + dereference on the match/add/find paths.
-// ---------------------------------------------------------------------------
 static void test_aux_handles_validated() {
   if (!kHasRealRegistries) {
     std::printf("skip  aux-handle validation (stub build: no registry)\n");
@@ -471,10 +459,8 @@ static void test_aux_handles_validated() {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Coarse geometry: single validation returns both dimensions and agrees with
 // the leaf pair. Guards against the Java-composed batch drifting from native.
-// ---------------------------------------------------------------------------
 static void test_page_info_coarse(const std::vector<uint8_t>& pdf) {
   if (pdf.empty()) {
     CHECK(false, "page_info: no fixture");
@@ -509,10 +495,8 @@ static void test_page_info_coarse(const std::vector<uint8_t>& pdf) {
   jpdfium_doc_close(doc);
 }
 
-// ---------------------------------------------------------------------------
 // ABI probes: every query id the Java handshake verifies must answer sanely.
 // Unknown ids return -1; known ids never return -1 on a current bridge.
-// ---------------------------------------------------------------------------
 static void test_abi_probes() {
   CHECK(jpdfium_abi_version() == (uint32_t)JPDFIUM_ABI_VERSION,
         "abi version matches header");

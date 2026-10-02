@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.io.IOException;
 
 /** Commit boundary and no-clobber publication races. */
 class PublishCommitTest {
@@ -34,7 +35,7 @@ class PublishCommitTest {
         Files.write(staging, new byte[]{1});
         QpdfLib.PublishCommit commit = new QpdfLib.PublishCommit();
         assertTrue(commit.cancel(), "cancel before commit must win");
-        assertThrows(java.io.IOException.class, () -> QpdfLib.publish(staging, output, 0, commit));
+        assertThrows(IOException.class, () -> QpdfLib.publish(staging, output, 0, commit));
         assertFalse(Files.exists(output), "cancelled commit must not publish");
         assertTrue(Files.exists(staging), "staging stays for caller cleanup");
         Files.deleteIfExists(staging);
@@ -121,7 +122,7 @@ class PublishCommitTest {
         try {
             QpdfLib.publishReplace(staging, output);
             assertTrue(false, "missing staging must fail");
-        } catch (java.io.IOException expected) {
+        } catch (IOException expected) {
             assertArrayEquals(before, Files.readAllBytes(output),
                     "failed publication must leave destination untouched");
         } finally {
@@ -135,19 +136,19 @@ class PublishCommitTest {
         Path dir = Files.createTempDirectory("cleanup-fail");
         Path output = dir.resolve("o.pdf");
         Files.write(output, new byte[]{1});
-        java.io.IOException primary = new java.io.IOException("primary");
-        java.io.IOException cleanup = null;
+        IOException primary = new IOException("primary");
+        IOException cleanup = null;
         try {
             try {
                 throw primary;
             } finally {
                 try {
                     Files.deleteIfExists(dir.resolve("absent-tmp.pdf"));
-                } catch (java.io.IOException e) {
+                } catch (IOException e) {
                     cleanup = e;
                 }
             }
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             assertTrue(e == primary, "primary failure must propagate, cleanup must not mask it");
             assertTrue(cleanup == null, "quiet cleanup must not produce a failure");
         } finally {

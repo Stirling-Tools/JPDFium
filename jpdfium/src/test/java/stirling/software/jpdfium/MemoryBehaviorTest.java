@@ -56,9 +56,7 @@ class MemoryBehaviorTest {
         return (after - before) / (double) iterations;
     }
 
-    // ------------------------------------------------------------------
     // Leak detection: every tracked resource must drain to zero.
-    // ------------------------------------------------------------------
 
     @Test
     @Timeout(120)
@@ -158,10 +156,8 @@ class MemoryBehaviorTest {
         }
     }
 
-    // ------------------------------------------------------------------
     // Eager loading: file-backed operations must not copy the whole
     // document into Java heap.
-    // ------------------------------------------------------------------
 
     @Test
     @Timeout(300)
@@ -240,9 +236,7 @@ class MemoryBehaviorTest {
         }
     }
 
-    // ------------------------------------------------------------------
     // Retention: a huge job must not degrade later normal work.
-    // ------------------------------------------------------------------
 
     @Test
     @Timeout(600)
