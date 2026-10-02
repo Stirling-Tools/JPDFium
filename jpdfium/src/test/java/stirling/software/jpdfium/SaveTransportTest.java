@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -11,11 +12,17 @@ import stirling.software.jpdfium.panama.OutputTransaction;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assumptions.abort;
@@ -203,5 +210,40 @@ class SaveTransportTest {
         assertEquals(0, SaveOptions.fast().maxOutputBytes());
         assertTrue(SaveOptions.validated().verifyReopen());
         assertEquals(1234, SaveOptions.maxOutputBytes(1234).maxOutputBytes());
+    }
+
+    /**
+     * Concurrent saves to one destination must not share a staging file, and a
+     * save must never leave staging debris next to the destination.
+     */
+    @Test
+    void concurrentSavesShareNoStagingFile(@TempDir Path dir) throws Exception {
+        Path dest = dir.resolve("out.pdf");
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            List<Callable<Void>> jobs = new ArrayList<>();
+            for (int i = 0; i < 16; i++) {
+                jobs.add(() -> {
+                    try (PdfDocument d = PdfDocument.open(pdfBytes())) {
+                        d.saveTo(dest);
+                    }
+                    return null;
+                });
+            }
+            for (Future<Void> f : pool.invokeAll(jobs)) {
+                f.get();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        // A shared staging file would publish another save's fragment.
+        try (PdfDocument d = PdfDocument.open(dest)) {
+            assertTrue(d.pageCount() > 0, "published file must be a complete PDF");
+        }
+        try (var files = Files.list(dir)) {
+            List<String> strays =
+                    files.map(p -> p.getFileName().toString()).filter(n -> n.contains("jpdfium-save")).toList();
+            assertTrue(strays.isEmpty(), "staging leftovers: " + strays);
+        }
     }
 }

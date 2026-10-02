@@ -8,10 +8,12 @@
 
 #if !defined(_WIN32)
 #include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -455,7 +457,14 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
 
     // Serialize into a sibling staging file and publish by rename so a refused
     // save leaves an existing destination untouched, as the real bridge does.
-    const std::string staging = std::string(output_path) + ".jpdfium-save.tmp";
+    // Unique per save, like the real bridge: a fixed suffix would let two
+    // concurrent saves to the same destination clobber each other's staging
+    // file and then rename it away.
+    static std::atomic<unsigned> counter{0};
+    const unsigned seq = counter.fetch_add(1, std::memory_order_relaxed);
+    const std::string staging = std::string(output_path) + ".jpdfium-save-" +
+                                std::to_string(static_cast<long>(::getpid())) + "-" +
+                                std::to_string(seq) + ".tmp";
     {
         // Sized read, like every other copy in this stub: a chunked read loop
         // leaves the analyzer unable to prove the stream position stays valid.

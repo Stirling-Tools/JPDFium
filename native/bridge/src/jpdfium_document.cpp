@@ -62,11 +62,16 @@ std::string staging_sibling(const char* path) {
 // target).
 bool publish_staged(const std::string& staging, const char* destination) {
 #if defined(_WIN32)
-    // Windows rename fails if the target exists; MoveFileEx replaces it.
+    // Windows rename fails if the target exists, so MOVEFILE_REPLACE_EXISTING is
+    // the replace path. If it fails the destination is left exactly as it was:
+    // removing it and retrying would destroy the previous file on a path that
+    // then also fails, which is the very loss this staging exists to prevent.
     if (::MoveFileExA(staging.c_str(), destination,
-                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         return true;
-    std::remove(destination);
+    }
+    // Last resort for the "target exists" case older filesystems report. Only
+    // reached when MoveFileEx declined without touching the destination.
     if (std::rename(staging.c_str(), destination) == 0) return true;
     std::remove(staging.c_str());
     return false;
@@ -417,8 +422,10 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
             int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
             if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+            // Same code as the streaming branch so callers see one error
+            // category for "output exceeded the budget".
             if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes)
-                return JPDFIUM_ERR_IO;
+                return JPDFIUM_ERR_TOO_LARGE;
 
             const std::string staging = staging_sibling(path);
             FILE* f = safe_fopen_write(staging.c_str());

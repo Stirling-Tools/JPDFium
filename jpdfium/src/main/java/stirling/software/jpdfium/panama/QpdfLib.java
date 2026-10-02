@@ -3,6 +3,7 @@ package stirling.software.jpdfium.panama;
 import stirling.software.jpdfium.doc.PdfSecurity;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.PdfPasswordException;
 import stirling.software.jpdfium.model.SaveOptions;
 
 import java.io.IOException;
@@ -669,9 +670,15 @@ public final class QpdfLib {
             if (probe.pageCount() < 0) {
                 throw new JPDFiumException("decrypt produced an unreadable output for " + staging);
             }
-        } catch (JPDFiumException e) {
+        } catch (PdfPasswordException e) {
+            // The one failure that means the writer preserved the encryption.
             throw new JPDFiumException(
                     "qpdf decrypt left the output encrypted; refusing to publish it", e);
+        } catch (JPDFiumException e) {
+            // Corrupt output or an I/O problem is not evidence of encryption, so
+            // do not misreport it as such.
+            throw new JPDFiumException(
+                    "qpdf decrypt output failed validation; refusing to publish it", e);
         }
     }
 

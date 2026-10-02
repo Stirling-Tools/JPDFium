@@ -303,7 +303,7 @@ class MemoryBehaviorTest {
     void pathMergeMustNotMaterializeEveryInput() throws Exception {
         // Without the native file merge the inputs must be read to be merged at
         // all, so this measures a capability, not the streaming path.
-        assumeTrue(QpdfLib.isMergeSupported(),
+        assumeTrue(QpdfLib.isMergeFilesSupported(),
                 "file-backed merge requires the native qpdf file entry point");
         Path a = Files.createTempFile("mem-pathmerge-a", ".pdf");
         Path b = Files.createTempFile("mem-pathmerge-b", ".pdf");
