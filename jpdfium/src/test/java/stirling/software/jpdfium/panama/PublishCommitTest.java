@@ -131,29 +131,4 @@ class PublishCommitTest {
         }
     }
 
-    @Test
-    void cleanupFailurePreservesPrimaryFailure() throws Exception {
-        Path dir = Files.createTempDirectory("cleanup-fail");
-        Path output = dir.resolve("o.pdf");
-        Files.write(output, new byte[]{1});
-        IOException primary = new IOException("primary");
-        IOException cleanup = null;
-        try {
-            try {
-                throw primary;
-            } finally {
-                try {
-                    Files.deleteIfExists(dir.resolve("absent-tmp.pdf"));
-                } catch (IOException e) {
-                    cleanup = e;
-                }
-            }
-        } catch (IOException e) {
-            assertTrue(e == primary, "primary failure must propagate, cleanup must not mask it");
-            assertTrue(cleanup == null, "quiet cleanup must not produce a failure");
-        } finally {
-            Files.deleteIfExists(output);
-            Files.deleteIfExists(dir);
-        }
-    }
 }

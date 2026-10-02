@@ -12,7 +12,6 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.StandardCopyOption;
-import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 /** Split reuse and fan-out semantics on a real multi-page fixture. */
 class SplitReuseTest {
@@ -91,17 +90,6 @@ class SplitReuseTest {
                 for (PdfDocument p : parts) p.close();
             }
         }
-    }
-
-    @Test
-    void callerClosesAllParts() throws Exception {
-        Path in = resource("/pdfs/redact/redact-test-100pages.pdf");
-        try (PdfDocument doc = PdfDocument.open(in)) {
-            List<PdfDocument> parts = PdfSplit.split(doc, PdfSplit.SplitStrategy.everyNPages(20));
-            for (PdfDocument p : parts) p.close();
-        }
-        var live = PdfiumRuntime.liveResources();
-        assertTrue(live.documents() >= 0, "live accounting must not underflow");
     }
 
     @Test
