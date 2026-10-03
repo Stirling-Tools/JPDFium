@@ -15,8 +15,7 @@ public final class IcuLib {
     private IcuLib() {}
 
     public static String normalizeNfc(String text) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_icu_normalize_nfc(a.allocateFrom(text), ptrSeg), "icuNormalizeNfc");
@@ -25,14 +24,11 @@ public final class IcuLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String breakSentences(String text) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_icu_break_sentences(a.allocateFrom(text), ptrSeg), "icuBreakSentences");
@@ -41,14 +37,11 @@ public final class IcuLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String bidiReorder(String text) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_icu_bidi_reorder(a.allocateFrom(text), ptrSeg), "icuBidiReorder");
@@ -57,8 +50,6 @@ public final class IcuLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }

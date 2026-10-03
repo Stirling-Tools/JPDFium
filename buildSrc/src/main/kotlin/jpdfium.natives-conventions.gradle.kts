@@ -50,9 +50,16 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
         into("licenses")
     }
     into(stagedRoot)
-    // Don't fail the build when the dist dir is absent (local dev, stub builds, etc.).
-    // CI is responsible for populating it before `publish`.
-    onlyIf { distDir.asFile.isDirectory && distDir.asFile.listFiles()?.isNotEmpty() == true }
+    // Always run so the doFirst cleanup below executes even when there are no
+    // dist binaries: the licenses source keeps the task non-empty, and a
+    // missing dist dir contributes nothing instead of failing the build (local
+    // dev, stub builds, etc.). Skipping via onlyIf would leave a previous
+    // build's staged bundle in place while writeNativeManifest regenerates
+    // manifests from those stale binaries, publishing the wrong native set.
+    // Copy never removes: without this, switching real<->stub locally leaves
+    // the previous bundle's libraries beside the new ones, and the jar ships
+    // a mixed bridge/dependency set that loads (or crashes) unpredictably.
+    doFirst { stagedRoot.get().asFile.deleteRecursively() }
 }
 
 val writeNativeManifest = tasks.register("writeNativeManifest") {

@@ -7,8 +7,9 @@ import java.nio.charset.StandardCharsets;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.JpdfiumH;
-import stirling.software.jpdfium.panama.NativeGuard;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageImportBindings;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -46,20 +47,19 @@ public final class PdfPageImporter {
                                        String pageRange, int insertAt) {
         if (PageImportBindings.FPDF_ImportPages == null) return true;
         if (pageRange == null) {
-            NativeGuard.acquire();
-            try {
-                int success = (int) PageImportBindings.FPDF_ImportPages.invokeExact(
-                        destinationDocSegment, sourceDocSegment, MemorySegment.NULL, insertAt);
-                return success != 0;
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            } finally {
-                NativeGuard.release();
-            }
+            return PdfiumRuntime.execute(() -> {
+                try {
+                    int success = (int) PageImportBindings.FPDF_ImportPages.invokeExact(
+                            destinationDocSegment, sourceDocSegment, MemorySegment.NULL, insertAt);
+                    return success != 0;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException(t);
+                }
+            });
         }
         byte[] bytes = pageRange.getBytes(StandardCharsets.US_ASCII);
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment rangeStringSegment = arena.allocate(bytes.length + 1L);
                 rangeStringSegment.copyFrom(MemorySegment.ofArray(bytes));
@@ -68,11 +68,10 @@ public final class PdfPageImporter {
                         destinationDocSegment, sourceDocSegment, rangeStringSegment, insertAt);
                 return success != 0;
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException(t);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -87,8 +86,7 @@ public final class PdfPageImporter {
     public static boolean importPagesByIndex(MemorySegment destinationDocSegment, MemorySegment sourceDocSegment,
                                               int[] pageIndices, int insertAt) {
         if (PageImportBindings.FPDF_ImportPagesByIndex == null) return true;
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment indicesSegment = arena.allocate(
                         ValueLayout.JAVA_INT, pageIndices.length);
@@ -99,11 +97,10 @@ public final class PdfPageImporter {
                         destinationDocSegment, sourceDocSegment, indicesSegment, (long) pageIndices.length, insertAt);
                 return success != 0;
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException("FPDF_ImportPagesByIndex failed", t);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -114,18 +111,16 @@ public final class PdfPageImporter {
      * @return true if copy succeeded
      */
     public static boolean copyViewerPreferences(MemorySegment destinationDocSegment, MemorySegment sourceDocSegment) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try {
                 int success = (int) PageImportBindings.FPDF_CopyViewerPreferences.invokeExact(
                         destinationDocSegment, sourceDocSegment);
                 return success != 0;
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException("FPDF_CopyViewerPreferences failed", t);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -144,8 +139,7 @@ public final class PdfPageImporter {
     public static byte[] importNPagesToOne(MemorySegment sourceDocSegment,
                                             float outputWidth, float outputHeight,
                                             int cols, int rows) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment pointerSegment = arena.allocate(ADDRESS);
                 MemorySegment lengthSegment = arena.allocate(JAVA_LONG);
@@ -157,9 +151,7 @@ public final class PdfPageImporter {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
 }

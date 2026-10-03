@@ -278,10 +278,28 @@ public final class ImageCodecs {
     private static byte[] encodeFallbackView(RenderedPageView view, ImageFormat format, int quality) throws IOException {
         int width = view.width();
         int height = view.height();
-        byte[] frame = new byte[8 + (int) view.pixels().byteSize()];
+        // Fallback ImageIO path requires tight pixels: a padded stride would
+        // otherwise smuggle padding bytes as pixels. Compact row-by-row when
+        // the producer used padding (currently all producers are tight, but
+        // the contract allows padding).
+        byte[] pixels;
+        if (view.isTight()) {
+            pixels = new byte[(int) view.pixels().byteSize()];
+            view.pixels().asByteBuffer().get(pixels);
+        } else {
+            int stride = view.stride();
+            int rowBytes = width * view.bands();
+            pixels = new byte[Math.multiplyExact(Math.multiplyExact(width, height), view.bands())];
+            var src = view.pixels().asByteBuffer();
+            for (int y = 0; y < height; y++) {
+                src.position(y * stride);
+                src.get(pixels, y * rowBytes, rowBytes);
+            }
+        }
+        byte[] frame = new byte[8 + pixels.length];
         writeLeInt32(frame, 0, width);
         writeLeInt32(frame, 4, height);
-        view.pixels().asByteBuffer().get(frame, 8, (int) view.pixels().byteSize());
+        System.arraycopy(pixels, 0, frame, 8, pixels.length);
         return encodeFrame(frame, format, quality);
     }
 
@@ -352,9 +370,19 @@ public final class ImageCodecs {
     public static byte[] frameFromImage(BufferedImage img) {
         int w = img.getWidth();
         int h = img.getHeight();
-        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
-                || (long) w * h > MAX_IMAGE_PIXELS || 8L + (long) w * h * 4L > Integer.MAX_VALUE) {
+        if (w <= 0 || h <= 0 || 8L + (long) w * h * 4L > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("Image too large: " + w + "x" + h);
+        }
+        if (MAX_IMAGE_DIMENSION > 0
+                && (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION)) {
+            throw new IllegalArgumentException(
+                    "Image dimensions " + w + "x" + h + " exceed jpdfium.image.max_dimension="
+                            + MAX_IMAGE_DIMENSION);
+        }
+        if (MAX_IMAGE_PIXELS > 0 && (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException(
+                    "Image pixels " + ((long) w * h) + " exceed jpdfium.image.max_pixels="
+                            + MAX_IMAGE_PIXELS);
         }
         byte[] rgba = new byte[8 + w * h * 4];
         writeLeInt32(rgba, 0, w);
@@ -398,8 +426,21 @@ public final class ImageCodecs {
         return rgba;
     }
 
-    public static final long MAX_IMAGE_PIXELS = Long.getLong("jpdfium.image.max_pixels", 100_000_000L);
-    public static final int MAX_IMAGE_DIMENSION = Integer.getInteger("jpdfium.image.max_dimension", 30_000);
+    /** Image guards, unlimited by default; restart the JVM to change them. */
+    public static final long MAX_IMAGE_PIXELS = validatedLong("jpdfium.image.max_pixels", 0L);
+    public static final int MAX_IMAGE_DIMENSION = validatedInt("jpdfium.image.max_dimension", 0);
+
+    private static long validatedLong(String key, long def) {
+        long v = Long.getLong(key, def);
+        if (v < 0) throw new IllegalStateException("invalid " + key + "=" + v + " (use 0 for unlimited)");
+        return v;
+    }
+
+    private static int validatedInt(String key, int def) {
+        int v = Integer.getInteger(key, def);
+        if (v < 0) throw new IllegalStateException("invalid " + key + "=" + v + " (use 0 for unlimited)");
+        return v;
+    }
 
     /** Convert a bridge RGBA frame to a {@link BufferedImage} (TYPE_INT_ARGB). */
     public static BufferedImage imageFromFrame(byte[] frame) {
@@ -413,9 +454,16 @@ public final class ImageCodecs {
         }
         int w = readLeInt32(frame, 0);
         int h = readLeInt32(frame, 4);
-        if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION
-                || (long) w * h > MAX_IMAGE_PIXELS || (long) w * h * 4L > frame.length - 8L) {
+        if (w <= 0 || h <= 0 || (long) w * h * 4L > frame.length - 8L) {
             throw new IllegalArgumentException("Invalid frame dimensions or payload length: " + w + "x" + h);
+        }
+        if (MAX_IMAGE_DIMENSION > 0 && (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION)) {
+            throw new IllegalArgumentException("Invalid frame dimensions or payload length: " + w + "x" + h
+                    + " exceeds jpdfium.image.max_dimension=" + MAX_IMAGE_DIMENSION);
+        }
+        if (MAX_IMAGE_PIXELS > 0 && (long) w * h > MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException("Invalid frame dimensions or payload length: " + w + "x" + h
+                    + " exceeds jpdfium.image.max_pixels=" + MAX_IMAGE_PIXELS);
         }
         int imageType = hasAlpha ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
         BufferedImage image = new BufferedImage(w, h, imageType);

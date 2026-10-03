@@ -355,7 +355,7 @@ public final class PdfMerge {
                     deleteQuietly(staged);
                 }
             }
-            // Staging unavailable — fall back to direct copy (best-effort).
+            // Staging unavailable, fall back to direct copy (best-effort).
             Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
             return;
         }

@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.util.Arrays;
 
 class NativeLoaderTest {
 
@@ -103,7 +104,7 @@ class NativeLoaderTest {
     private static List<String> readLines(InputStream in) throws IOException {
         try (in; ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
             in.transferTo(bos);
-            return java.util.Arrays.stream(bos.toString(StandardCharsets.UTF_8).split("\\R"))
+            return Arrays.stream(bos.toString(StandardCharsets.UTF_8).split("\\R"))
                     .map(String::trim)
                     .filter(l -> !l.isEmpty() && l.charAt(0) != '#')
                     .toList();

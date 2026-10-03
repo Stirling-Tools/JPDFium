@@ -481,6 +481,18 @@ final class NativeCache {
         }
     }
 
+    /**
+     * Creates {@code dir} (with parents) and restricts it to the owner.
+     *
+     * <p>Used for the natives download directory as well as the extracted-cache
+     * tree: both hold native code, and a shared location such as the system temp
+     * directory would otherwise hand it to every local user.
+     */
+    static void requirePrivateDirectory(Path dir) throws IOException {
+        Files.createDirectories(dir);
+        requireOwnerOnly(dir, true);
+    }
+
     /** Fail-closed: a cache path readable or writable by others is not used. */
     private static void requireOwnerOnly(Path path, boolean directory) throws IOException {
         try {

@@ -83,15 +83,37 @@ public final class VipsImageCodec implements ImageCodec {
         }
         int width = readLeInt32(frame, 0);
         int height = readLeInt32(frame, 4);
-        int pixelBytes = width * height * 4;
-        if (width <= 0 || height <= 0 || pixelBytes > frame.length - 8) {
+        // Opt-in bomb ceiling (VipsDecoder defaults unlimited): reject absurd
+        // dimensions before allocating the confined copy below only when configured.
+        if (width <= 0 || height <= 0) {
+            throw new IllegalArgumentException(
+                    "Frame dimensions " + width + "x" + height + " invalid");
+        }
+        if (VipsDecoder.MAX_IMAGE_DIMENSION > 0 && (width > VipsDecoder.MAX_IMAGE_DIMENSION
+                || height > VipsDecoder.MAX_IMAGE_DIMENSION)) {
+            throw new IllegalArgumentException("Frame dimensions " + width + "x" + height
+                    + " exceed jpdfium.image.max_dimension=" + VipsDecoder.MAX_IMAGE_DIMENSION);
+        }
+        if (VipsDecoder.MAX_IMAGE_PIXELS > 0
+                && (long) width * height > VipsDecoder.MAX_IMAGE_PIXELS) {
+            throw new IllegalArgumentException("Frame dimensions " + width + "x" + height
+                    + " exceed jpdfium.image.max_pixels=" + VipsDecoder.MAX_IMAGE_PIXELS);
+        }
+        // Compute the payload size in long: width * height * 4 overflows int for
+        // large headers (32768x32768 wraps to 0), which would let a zero-byte
+        // buffer back a huge image and send libvips out of bounds.
+        long pixelBytesL = (long) width * height * 4L;
+        long strideL = (long) width * 4L;
+        if (pixelBytesL > frame.length - 8L) {
             throw new IllegalArgumentException("Invalid frame dimensions or payload length");
         }
+        int pixelBytes = (int) pixelBytesL;
+        int stride = (int) strideL;
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment pixels = arena.allocate(pixelBytes);
             pixels.copyFrom(MemorySegment.ofArray(frame).asSlice(8, pixelBytes));
             RenderedPageView view = new RenderedPageView(
-                    width, height, width * 4, 4, PixelFormat.RGBA_STRAIGHT, pixels, null);
+                    width, height, stride, 4, PixelFormat.RGBA_STRAIGHT, pixels, null);
             return encodeView(view, format, quality);
         }
     }
