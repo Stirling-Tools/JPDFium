@@ -153,6 +153,19 @@
       "type": "stirling.software.jpdfium.panama.NativeRuntime"
     },
     {
+      "type": "stirling.software.jpdfium.panama.PdfiumRuntime",
+      "methods": [
+        {
+          "name": "enterChecked",
+          "parameterTypes": []
+        },
+        {
+          "name": "exit",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
       "type": "stirling.software.jpdfium.panama.Pcre2Lib"
     },
     {

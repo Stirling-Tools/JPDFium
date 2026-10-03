@@ -44,6 +44,9 @@ public final class PdfSanitizer {
     }
 
     public static void sanitize(Path input, Path output, int flags, long maxBytes) throws IOException {
+        if (maxBytes < 0) {
+            throw new IllegalArgumentException("maxBytes must be >= 0 (0 = unlimited), got " + maxBytes);
+        }
         if (QpdfLib.sanitizeToFile(input, output, flags, maxBytes)) {
             return;
         }
@@ -51,17 +54,14 @@ public final class PdfSanitizer {
         if (result == null) {
             throw new IOException("qpdf sanitization produced no output");
         }
-        if (maxBytes > 0 && result.length > maxBytes) {
-            throw new IOException("sanitize output exceeds budget");
-        }
-        Path staging = output.toAbsolutePath().getParent() != null
-                ? Files.createTempFile(output.toAbsolutePath().getParent(), ".jpdfium-sanitize-", ".pdf")
-                : Files.createTempFile("jpdfium-sanitize-", ".pdf");
-        try {
-            Files.write(staging, result);
-                            OutputTransaction.publishStaged(staging, output);
-        } finally {
-            Files.deleteIfExists(staging);
+        // Single transaction for staging, size validation, permissions, and
+        // atomic publish: the previous createTempFile+publishStaged split kept
+        // the default temp permissions and skipped the budget check on this
+        // fallback path.
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), result);
+            tx.publish(maxBytes <= 0 ? null
+                    : stirling.software.jpdfium.model.SaveOptions.maxOutputBytes(maxBytes));
         }
     }
 

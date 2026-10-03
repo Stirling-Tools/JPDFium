@@ -103,10 +103,11 @@ class DomainConsistencyTest {
     @Test
     void rawDowncallsOnlyViaKnownFactories() throws IOException {
         Path root = mainSources();
-        List<String> hits = grep(root, "LINKER.downcallHandle");
+        List<String> hits = grep(root, ".downcallHandle(");
         hits.removeIf(hit -> hit.contains("panama/Symbols.java")
                 || hit.contains("panama/FastLinks.java")
-                || hit.contains("panama/JpdfiumH.java"));
+                || hit.contains("panama/JpdfiumH.java")
+                || hit.contains("panama/FontLib.java"));
         if (!hits.isEmpty()) {
             fail("raw downcall handles are created only in Symbols/FastLinks/JpdfiumH:\n"
                     + String.join("\n", hits));

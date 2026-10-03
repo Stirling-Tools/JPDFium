@@ -228,7 +228,11 @@ public final class PdfiumBuffers {
                             throw failure;
                         }
                     }
-                    if (callerClosed.get() || failLeaseConstruction) {
+                    // Single volatile read: the flag is test-only (false in
+                    // production), but reading it twice would cost two fences
+                    // on the hot lease path.
+                    boolean injectedFailure = failLeaseConstruction;
+                    if (callerClosed.get() || injectedFailure) {
                         // Roll back through the same primitive as every other
                         // release: if this increment was the last outstanding
                         // owner, the arena is reclaimed here, never leaked.
@@ -236,7 +240,7 @@ public final class PdfiumBuffers {
                         // failure for tests; production construction is infallible
                         // short of JVM-fatal errors.)
                         IllegalStateException failure = new IllegalStateException(
-                                failLeaseConstruction
+                                injectedFailure
                                         ? "injected lease construction failure"
                                         : "render buffer is closed");
                         try {

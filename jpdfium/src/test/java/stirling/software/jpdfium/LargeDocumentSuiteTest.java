@@ -39,6 +39,9 @@ class LargeDocumentSuiteTest {
     void largeWorkloadsAndRetention() throws Exception {
         Path big = resource("/pdfs/redact/redact-test-tj-deviation.pdf");
         Path multi = resource("/pdfs/redact/redact-test-100pages.pdf");
+        // Process-wide counters: other test classes (e.g. MemoryBehaviorTest)
+        // intentionally hold documents, so compare against a baseline, not zero.
+        var baseline = PdfiumRuntime.liveResources();
         Path dir = Files.createTempDirectory("large-suite");
         try {
             long t0 = System.nanoTime();
@@ -85,9 +88,11 @@ class LargeDocumentSuiteTest {
                 Thread.sleep(50);
             }
             var live = PdfiumRuntime.liveResources();
-            assertEquals(0, live.documents(), "documents must return to baseline");
-            assertEquals(0, live.pages(), "pages must return to baseline");
-            assertEquals(0, live.sessions(), "sessions must return to baseline");
+            assertEquals(baseline.documents(), live.documents(),
+                    "documents must return to baseline");
+            assertEquals(baseline.pages(), live.pages(), "pages must return to baseline");
+            assertEquals(baseline.sessions(), live.sessions(),
+                    "sessions must return to baseline");
             try (var s = Files.list(dir)) {
                 assertTrue(s.count() >= 3, "workload outputs must exist");
             }

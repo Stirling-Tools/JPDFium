@@ -55,7 +55,9 @@ class MutexRegistry {
 };
 
 // C: the production algorithm - open addressing, tombstones, atomics only on
-// the read path, mutex-guarded overflow set when the table fills.
+// the read path, mutex-guarded overflow set when the table fills. Mirrors
+// HandleRegistry::add (CAS claim, not load-then-store) so the measured cost
+// is the production cost.
 class LockFreeRegistry {
    public:
     static constexpr size_t kSlots = 1024;
@@ -65,8 +67,8 @@ class LockFreeRegistry {
         for (size_t i = 0; i < kSlots; i++) {
             size_t idx = (i + hash(w)) % kSlots;
             const void* cur = slots_[idx].load(std::memory_order_acquire);
-            if (cur == nullptr || cur == tombstone()) {
-                slots_[idx].store(w, std::memory_order_release);
+            if ((cur == nullptr || cur == tombstone()) &&
+                slots_[idx].compare_exchange_strong(cur, w, std::memory_order_acq_rel)) {
                 count_.fetch_add(1, std::memory_order_relaxed);
                 return;
             }

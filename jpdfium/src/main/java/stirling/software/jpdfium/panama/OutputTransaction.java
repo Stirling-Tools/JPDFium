@@ -41,7 +41,12 @@ public final class OutputTransaction implements AutoCloseable {
     public static OutputTransaction begin(Path destination) throws IOException {
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
         Path abs = destination.toAbsolutePath();
-        Path parent = abs.getParent();
+        // Stage beside the resolved target, not beside the link: a symlink can
+        // point at another filesystem, and a staging file on the other side of
+        // that boundary could only be published by a non-atomic copy, which is
+        // exactly what this transaction exists to avoid.
+        Path resolved = resolveSymlinks(abs);
+        Path parent = resolved.getParent();
         Path staging;
         if (parent != null) {
             Files.createDirectories(parent);
@@ -61,7 +66,7 @@ public final class OutputTransaction implements AutoCloseable {
                 staging = Files.createTempFile("jpdfium-save-", ".pdf");
             }
         }
-        return new OutputTransaction(abs, staging);
+        return new OutputTransaction(resolved, staging);
     }
 
     /** Validate size/cap and move into place; never leaves a partial destination. */

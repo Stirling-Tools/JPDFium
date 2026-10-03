@@ -80,6 +80,7 @@ class FastLinkFallbackTest {
 
     @Test
     void doubleCloseStillDoesNotFreeNativeStateTwice() throws Exception {
+        PdfiumRuntime.LiveResources before = PdfiumRuntime.liveResources();
         PdfDocument doc = PdfDocument.open(pdf());
         PdfPage page = doc.page(0);
         assertEquals(3, doc.pageCount());
@@ -93,9 +94,9 @@ class FastLinkFallbackTest {
         assertThrows(IllegalStateException.class, page::size);
         doc.close();
         doc.close();
-        assertEquals(0, PdfiumRuntime.liveResources().pages(),
+        assertEquals(before.pages(), PdfiumRuntime.liveResources().pages(),
                 "page accounting must not underflow on a repeated close");
-        assertEquals(0, PdfiumRuntime.liveResources().documents(),
+        assertEquals(before.documents(), PdfiumRuntime.liveResources().documents(),
                 "document accounting must not underflow on a repeated close");
     }
 
@@ -122,6 +123,7 @@ class FastLinkFallbackTest {
         // These are raw JpdfiumH calls on purpose. The runtime's live-resource
         // counters live in the JpdfiumLib wrappers, so driving the raw symbols
         // is what proves the native layer alone refuses the handle.
+        PdfiumRuntime.LiveResources before = PdfiumRuntime.liveResources();
         JpdfiumH.jpdfium_page_close(0L);
         JpdfiumH.jpdfium_page_close(999999L);
         JpdfiumH.jpdfium_page_close(-1L);
@@ -130,15 +132,16 @@ class FastLinkFallbackTest {
         JpdfiumH.jpdfium_doc_close(-1L);
         JpdfiumH.jpdfium_pcre2_free(12345L);
         JpdfiumH.jpdfium_flashtext_free(12345L);
-        assertEquals(0, PdfiumRuntime.liveResources().pages(),
+        assertEquals(before.pages(), PdfiumRuntime.liveResources().pages(),
                 "rejected closes must not change live-resource accounting");
-        assertEquals(0, PdfiumRuntime.liveResources().documents());
+        assertEquals(before.documents(), PdfiumRuntime.liveResources().documents());
         assertEquals(0, PdfiumRuntime.entryDepth());
         assertFalse(PdfiumRuntime.domainLocked());
     }
 
     @Test
     void flattenFailureDoesNotApplyTheMutationTwice() throws Exception {
+        PdfiumRuntime.LiveResources before = PdfiumRuntime.liveResources();
         try (PdfDocument doc = PdfDocument.open(pdf());
              PdfPage page = doc.page(0)) {
             // A fabricated handle must fail once and leave the document and the
@@ -149,8 +152,8 @@ class FastLinkFallbackTest {
         }
         // Every page opened here is retired by the try-with-resources above;
         // a leaked page would break later tests' lifecycle restore.
-        assertEquals(0, PdfiumRuntime.liveResources().pages(),
+        assertEquals(before.pages(), PdfiumRuntime.liveResources().pages(),
                 "this test must not leak a page registration");
-        assertEquals(0, PdfiumRuntime.liveResources().documents());
+        assertEquals(before.documents(), PdfiumRuntime.liveResources().documents());
     }
 }

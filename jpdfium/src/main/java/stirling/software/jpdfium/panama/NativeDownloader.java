@@ -161,14 +161,14 @@ final class NativeDownloader {
 
     /** Cache slot for a downloaded jar; null only when no location exists. */
     static Path downloadCachePath(String platform, String version) {
+        // Private per-user cache only: falling back to the shared system temp
+        // directory would place executable native code where other local users
+        // can pre-create or observe it (CodeQL java/local-temp-file-disclosure).
+        // When no private root exists, return null and let the caller fail
+        // closed to System.loadLibrary instead of using a shared location.
         Path root = NativeCache.resolveCacheRoot();
-        if (root == null) {
-            String tmpDir = System.getProperty("java.io.tmpdir");
-            if (tmpDir == null || tmpDir.isBlank()) return null;
-            root = Path.of(tmpDir).resolve("jpdfium-downloads");
-        } else {
-            root = root.resolve("downloads");
-        }
+        if (root == null) return null;
+        root = root.resolve("downloads");
         return root.resolve("jpdfium-natives-" + platform + "-" + version + ".jar");
     }
 

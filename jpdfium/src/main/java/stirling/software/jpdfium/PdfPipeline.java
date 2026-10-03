@@ -278,19 +278,25 @@ public final class PdfPipeline {
             results.sort(Comparator.comparingInt(ChunkResult::order));
 
             List<PdfDocument> documentsToMerge = new ArrayList<>();
+            PdfDocument merged;
             try {
                 for (var result : results) {
                     documentsToMerge.add(PdfDocument.open(result.bytes()));
                 }
-                return PdfMerge.merge(documentsToMerge);
+                merged = PdfMerge.merge(documentsToMerge);
             } finally {
                 documentsToMerge.forEach(PdfDocument::close);
             }
+            shutdownAndReport(executor, "processParallel");
+            return merged;
         } catch (Throwable t) {
             for (Future<ChunkResult> f : futures) f.cancel(true);
+            try {
+                shutdownAndReport(executor, "processParallel");
+            } catch (Throwable shutdownFailure) {
+                t.addSuppressed(shutdownFailure);
+            }
             throw t;
-        } finally {
-            shutdownAndReport(executor, "processParallel");
         }
     }
 
@@ -319,19 +325,45 @@ public final class PdfPipeline {
             collectVoidResults(futures);
         } catch (Throwable t) {
             for (Future<?> f : futures) f.cancel(true);
-            throw t;
-        } finally {
-            boolean terminated = false;
             try {
                 shutdownAndReport(executor, "forEachParallel");
-                terminated = true;
-            } finally {
-                // Ownership of doc stays with the running tasks when shutdown
-                // times out and throws: closing it here would free native
-                // handles a task that ignored interruption is still using.
-                if (terminated) doc.close();
+                // Shutdown succeeded: no task can still own doc, close inline.
+                doc.close();
+            } catch (Throwable shutdownFailure) {
+                t.addSuppressed(shutdownFailure);
+                // Shutdown gave up while a task may still be running, so
+                // closing here would free native handles it is using. Hand
+                // ownership to a daemon that waits for the pool to actually
+                // drain: skipping the close outright would leak the handle
+                // and its live-resource accounting forever.
+                closeAfterPoolDrains(executor, doc, "forEachParallel");
             }
+            throw t;
         }
+        shutdownAndReport(executor, "forEachParallel");
+        doc.close();
+    }
+
+    /**
+     * Close {@code doc} once {@code executor} has really terminated.
+     *
+     * <p>Daemon so it can never keep the JVM alive; the document is already
+     * detached from the caller by the time this runs.
+     */
+    private static void closeAfterPoolDrains(ExecutorService executor, PdfDocument doc, String op) {
+        Thread reaper = Thread.ofPlatform().daemon().name("jpdfium-" + op + "-doc-reaper").start(() -> {
+            boolean interrupted = false;
+            for (;;) {
+                try {
+                    if (executor.awaitTermination(1, TimeUnit.DAYS)) break;
+                } catch (InterruptedException e) {
+                    interrupted = true;  // keep waiting; the pool still owns doc
+                }
+            }
+            doc.close();
+            if (interrupted) Thread.currentThread().interrupt();
+        });
+        reaper.setPriority(Thread.MIN_PRIORITY);
     }
 
     /**

@@ -96,6 +96,12 @@ int writeToFile(std::shared_ptr<QPDF> qpdf, const char* out_path, int32_t flags,
         std::fprintf(stderr, "jpdfium qpdf file: %s\n", e.what());
         if (!writerOwnsFile) std::fclose(out);
         return -1;
+    } catch (...) {
+        // Non-std throws (e.g. QPDF internal) must still close the descriptor
+        // and never cross the C ABI (which would terminate the JVM).
+        std::fprintf(stderr, "jpdfium qpdf file: unknown error\n");
+        if (!writerOwnsFile) std::fclose(out);
+        return -1;
     }
 }
 
@@ -330,6 +336,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const cha
         return writeToFile(qpdf, out_path, flags, objectStreamMode, streamDataMode, decodeLevel);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf optimize file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf optimize file: unknown error\n");
         return -1;
     }
 }
@@ -583,9 +592,16 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char* in_path, const char
             std::fprintf(stderr, "jpdfium qpdf encrypt file: %s\n", e.what());
             if (!writerOwnsFile) std::fclose(out);
             return -1;
+        } catch (...) {
+            std::fprintf(stderr, "jpdfium qpdf encrypt file: unknown error\n");
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf encrypt file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf encrypt file: unknown error\n");
         return -1;
     }
 }
@@ -617,9 +633,16 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char* in_path, const char
             std::fprintf(stderr, "jpdfium qpdf decrypt file: %s\n", e.what());
             if (!writerOwnsFile) std::fclose(out);
             return -1;
+        } catch (...) {
+            std::fprintf(stderr, "jpdfium qpdf decrypt file: unknown error\n");
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf decrypt file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf decrypt file: unknown error\n");
         return -1;
     }
 }

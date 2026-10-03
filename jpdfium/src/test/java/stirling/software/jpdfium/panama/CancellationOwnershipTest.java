@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * running. A task that ignores interruption until a latch releases it models
  * a native operation that does not respond to {@code Thread.interrupt}.
  */
+@ResourceLock("qpdf-permits")
 class CancellationOwnershipTest {
 
     @Test
@@ -38,16 +40,21 @@ class CancellationOwnershipTest {
         Semaphore outerHeld = QpdfLib.acquireSlot();
         try {
             future = pool.submit(() -> {
+                boolean interrupted = false;
                 try {
                     entered.countDown();
                     while (true) {
                         try {
                             if (release.await(50, TimeUnit.MILLISECONDS)) break;
-                        } catch (InterruptedException ignored) {
-                            // Keep owning staging + permit until real exit.
+                        } catch (InterruptedException e) {
+                            // Record and keep owning staging + permit until real
+                            // exit: await() clears the flag, so isInterrupted()
+                            // after release would be false and the task would
+                            // publish despite having been cancelled.
+                            interrupted = true;
                         }
                     }
-                    if (!Thread.currentThread().isInterrupted()) {
+                    if (!interrupted && !Thread.currentThread().isInterrupted()) {
                         QpdfLib.publishNewFile(staging, output, 0);
                         published.set(true);
                     }
@@ -75,12 +82,16 @@ class CancellationOwnershipTest {
             assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS), "task must retire after release");
             // Only release the outer permit if the task never got to run it.
             if (!releasedPermit.get()) QpdfLib.releaseSlot(outerHeld);
-            QpdfLib.setMaxConcurrency(prev);
-            Files.deleteIfExists(staging);
-            Files.deleteIfExists(output);
-            Files.deleteIfExists(dir);
+            try {
+                QpdfLib.setMaxConcurrency(prev);
+            } finally {
+                Files.deleteIfExists(staging);
+                Files.deleteIfExists(output);
+                Files.deleteIfExists(dir);
+            }
         }
         assertTrue(releasedPermit.get(), "permit must retire after actual task exit");
+        assertFalse(Files.exists(output), "cancelled task must never publish, even after release");
     }
 
     @Test
@@ -89,26 +100,33 @@ class CancellationOwnershipTest {
         ExecutorService pool = Executors.newSingleThreadExecutor();
         CountDownLatch holderEntered = new CountDownLatch(1);
         CountDownLatch holderRelease = new CountDownLatch(1);
-        Future<?> holder = pool.submit(() -> {
-            Semaphore held = QpdfLib.acquireSlot();
-            try {
-                holderEntered.countDown();
-                holderRelease.await(10, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } finally {
-                QpdfLib.releaseSlot(held);
-            }
-            return null;
-        });
-        assertTrue(holderEntered.await(5, TimeUnit.SECONDS));
-        Future<?> queued = pool.submit(() -> null);
-        queued.cancel(false);
-        assertTrue(queued.isCancelled(), "queued task must cancel before starting");
-        holderRelease.countDown();
-        holder.get(10, TimeUnit.SECONDS);
-        pool.shutdown();
-        assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
-        QpdfLib.setMaxConcurrency(prev);
+        try {
+            Future<?> holder = pool.submit(() -> {
+                Semaphore held = QpdfLib.acquireSlot();
+                try {
+                    holderEntered.countDown();
+                    holderRelease.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    QpdfLib.releaseSlot(held);
+                }
+                return null;
+            });
+            assertTrue(holderEntered.await(5, TimeUnit.SECONDS));
+            Future<?> queued = pool.submit(() -> null);
+            queued.cancel(false);
+            assertTrue(queued.isCancelled(), "queued task must cancel before starting");
+            holderRelease.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+            pool.shutdown();
+            assertTrue(pool.awaitTermination(10, TimeUnit.SECONDS));
+            assertTrue(QpdfLib.maxConcurrency() == 1,
+                    "the bound must stay intact while a queued task cancels");
+        } finally {
+            QpdfLib.setMaxConcurrency(prev);
+            assertTrue(QpdfLib.maxConcurrency() == prev,
+                    "the bound must be restored even after cancellation");
+        }
     }
 }

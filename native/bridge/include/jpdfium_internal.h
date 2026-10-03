@@ -266,8 +266,11 @@ class HandleRegistry {
         for (size_t i = 0; i < kSlots; i++) {
             size_t idx = (i + hash(w)) % kSlots;
             const void* cur = slots_[idx].load(std::memory_order_acquire);
-            if (cur == nullptr || cur == tombstone()) {
-                slots_[idx].store(w, std::memory_order_release);
+            // CAS, not load-then-store: two concurrent adds could otherwise
+            // claim the same slot and the second store would overwrite (leak)
+            // the first handle. Costs almost nothing on this cold path.
+            if ((cur == nullptr || cur == tombstone()) &&
+                slots_[idx].compare_exchange_strong(cur, w, std::memory_order_acq_rel)) {
                 count_.fetch_add(1, std::memory_order_relaxed);
                 return;
             }

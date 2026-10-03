@@ -261,9 +261,10 @@ public final class JpdfiumLib {
         }
         // Unsigned long is platform-dependent (LP64 vs LLP64): PDFium uses it
         // in FPDF_FILEACCESS/FPDF_FILEWRITE and signature string lengths. The
-        // Java FFM mapping assumes the native width reported here; a mismatch
-        // would truncate save sizes on Windows. Accept 4 or 8, reject anything
-        // else.
+        // Java FFM mapping for the version-converter callback uses the
+        // canonical C long layout (see PdfVersionConverter), so it matches the
+        // native width on every platform; a mismatch would truncate save sizes
+        // on Windows. Accept 4 or 8, reject anything else.
         if (ulongSize != 4 && ulongSize != 8) {
             throw new JPDFiumException("Unsupported native unsigned long width " + ulongSize
                     + " (expected 4 or 8 on " + NativeLoader.detectPlatform() + ")");

@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import stirling.software.jpdfium.model.ProgressiveStatus;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
@@ -28,6 +29,7 @@ import java.util.concurrent.TimeUnit;
  * admission, shared buffers back retained progressive sessions, and lifecycle
  * operations route through the execution domain.
  */
+@ResourceLock("PdfiumBuffers.hooks")
 class PdfiumDomainTest {
 
     private static byte[] pdfBytes() throws IOException {

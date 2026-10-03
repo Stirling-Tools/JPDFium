@@ -10,10 +10,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Concurrency sweep for independent QPDF jobs: 1/2/4/8 workers. */
+@ResourceLock("qpdf-permits")
 class QpdfConcurrencySweepTest {
 
     @Test

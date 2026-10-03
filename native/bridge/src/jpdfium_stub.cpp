@@ -6,7 +6,9 @@
 
 #include "jpdfium.h"
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <process.h>
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -23,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <regex>
 #include <string>
@@ -391,13 +394,18 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
     if (sv.find("/Type /Pages") != std::string_view::npos) {
         auto countPos = sv.find("/Count ");
         if (countPos != std::string_view::npos) {
-            int parsedCount = 0;
+            // Saturate like stub_effective_pages: a long digit run would wrap
+            // a signed int, which is undefined behaviour and halts UBSan.
+            int64_t parsedCount = 0;
             const char* p = sv.data() + countPos + 7;
             while (p < sv.data() + sv.size() && *p >= '0' && *p <= '9') {
                 parsedCount = parsedCount * 10 + (*p - '0');
+                if (parsedCount > INT32_MAX) break;
                 ++p;
             }
-            if (parsedCount > 0) doc.pageCount = parsedCount;
+            if (parsedCount > 0 && parsedCount <= INT32_MAX) {
+                doc.pageCount = static_cast<int32_t>(parsedCount);
+            }
         }
     }
     int64_t newHandle = *handle;
@@ -434,6 +442,16 @@ int32_t jpdfium_doc_page_count(int64_t handle, int32_t* count) {
     return JPDFIUM_OK;
 }
 
+// Process id, per platform. Windows has no getpid(); _getpid() is the MSVC and
+// MinGW spelling and lives in <process.h>.
+long stub_pid() {
+#if defined(_WIN32)
+    return static_cast<long>(_getpid());
+#else
+    return static_cast<long>(::getpid());
+#endif
+}
+
 // Sibling staging + rename publish, mirroring the real bridge: a refused save
 // must never remove or truncate a file that already exists at the destination.
 bool stub_publish_staged(const char* staging, const char* destination) {
@@ -447,6 +465,13 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     if (it == g_docs.end()) return JPDFIUM_OK;
     const auto& doc = it->second;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    // Alias protection, same as the real bridge: writing over the document's
+    // own backing file would destroy the input it is still reading from. The
+    // stub tracks sourcePath, so it can express this.
+    if (!doc.path.empty() && output_path &&
+        doc.path == std::filesystem::absolute(output_path).lexically_normal().string()) {
+        return JPDFIUM_ERR_INVALID;
+    }
 
     if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
         it->second.sanitizeReport =
@@ -463,8 +488,7 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     static std::atomic<unsigned> counter{0};
     const unsigned seq = counter.fetch_add(1, std::memory_order_relaxed);
     const std::string staging = std::string(output_path) + ".jpdfium-save-" +
-                                std::to_string(static_cast<long>(::getpid())) + "-" +
-                                std::to_string(seq) + ".tmp";
+                                std::to_string(stub_pid()) + "-" + std::to_string(seq) + ".tmp";
     {
         // Sized read, like every other copy in this stub: a chunked read loop
         // leaves the analyzer unable to prove the stream position stays valid.

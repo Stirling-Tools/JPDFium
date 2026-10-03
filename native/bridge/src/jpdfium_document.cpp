@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -390,6 +391,34 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
 }
 
 }  // namespace
+namespace {
+// Alias protection helper: saving over the document's own backing file would
+// truncate/replace the input PDFium is still reading from (lazy reads).
+// String equality misses /a/../x.pdf, relative paths, and symlinks, so when
+// both files exist compare filesystem identity; otherwise compare normalized
+// absolute paths.
+bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
+    if (sourcePath.empty() || !destPath || !*destPath) return false;
+    std::error_code ec;
+    // equivalent() handles symlinks, ../, and relative paths via identity
+    // (st_dev/st_ino on POSIX). Only when both exist; a non-existent
+    // destination cannot alias the source yet.
+    if (std::filesystem::exists(sourcePath, ec) && std::filesystem::exists(destPath, ec)) {
+        std::error_code ec2;
+        if (std::filesystem::equivalent(sourcePath, destPath, ec2) && !ec2) return true;
+        if (!ec2) return false;
+        // Fall through to string compare on error.
+    }
+    try {
+        auto srcAbs = std::filesystem::absolute(sourcePath).lexically_normal().string();
+        auto dstAbs = std::filesystem::absolute(destPath).lexically_normal().string();
+        return srcAbs == dstAbs;
+    } catch (...) {
+        return sourcePath == destPath;
+    }
+}
+}  // namespace
+
 int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                  int64_t* out_bytes) {
     try {
@@ -399,6 +428,13 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
         if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         if (out_bytes) *out_bytes = 0;
+
+        // Alias protection first: both the sanitize branch (staging + rename
+        // over the source) and the streaming branch would destroy the input
+        // PDFium is still reading from. Checked before any output is opened.
+        if (isSaveAlias(w->core->sourcePath, path)) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
         // Opt-in sanitize pass needs the whole serialization post-hoc, so it
         // keeps the buffered path. The common case streams with no large buffer.
@@ -442,13 +478,6 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             }
             if (out_bytes) *out_bytes = static_cast<int64_t>(written);
             return JPDFIUM_OK;
-        }
-
-        // Alias protection: saving over the document's own backing file would
-        // truncate the input PDFium is still reading from. Checked before the
-        // output is opened, because O_TRUNC would destroy the source first.
-        if (!w->core->sourcePath.empty() && w->core->sourcePath == path) {
-            return JPDFIUM_ERR_INVALID;
         }
 
         const std::string staging = staging_sibling(path);

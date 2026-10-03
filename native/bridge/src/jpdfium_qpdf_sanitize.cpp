@@ -46,86 +46,92 @@ struct QpdfResult {
     }
 };
 
+// Single copy of the sanitize mutations so memory and file paths cannot
+// drift (a scrub rule added to only one path would leave JS/metadata in the
+// other path's output).
+static void applySanitize(QPDF& qpdf, int32_t flags) {
+    auto root = qpdf.getRoot();
+
+    // JavaScript / action removal. Scrub both the catalog and every
+    // page/annotation: a document can carry executable JS in Page /AA
+    // (or annotation /AA) with a completely clean catalog.
+    if (flags & JPDFIUM_SANITIZE_JAVASCRIPT) {
+        root.removeKey("/OpenAction");
+        root.removeKey("/AA");
+        if (root.hasKey("/Names")) {
+            auto names = root.getKey("/Names");
+            if (names.hasKey("/JavaScript")) {
+                names.removeKey("/JavaScript");
+            }
+        }
+        QPDFPageDocumentHelper pdh(qpdf);
+        for (auto& page : pdh.getAllPages()) {
+            page.getObjectHandle().removeKey("/AA");
+            for (auto& ann : page.getAnnotations()) {
+                ann.getObjectHandle().removeKey("/AA");
+            }
+        }
+    }
+
+    // Tagged-PDF structure tree
+    if (flags & JPDFIUM_SANITIZE_STRUCTURE) {
+        root.removeKey("/StructTreeRoot");
+    }
+
+    // Embedded files
+    if (flags & JPDFIUM_SANITIZE_ATTACHMENTS) {
+        QPDFEmbeddedFileDocumentHelper efdh(qpdf);
+        for (auto const& [name, spec] : efdh.getEmbeddedFiles()) {
+            efdh.removeEmbeddedFile(name);
+        }
+    }
+
+    // AcroForm: drop the catalog pointer and strip widget annotations.
+    if (flags & JPDFIUM_SANITIZE_ACROFORM) {
+        root.removeKey("/AcroForm");
+        QPDFPageDocumentHelper pdh(qpdf);
+        for (auto& page : pdh.getAllPages()) {
+            QPDFObjectHandle ph = page.getObjectHandle();
+            if (!ph.hasKey("/Annots")) continue;
+            QPDFObjectHandle annots = ph.getKey("/Annots");
+            if (!annots.isArray()) continue;
+            std::vector<QPDFObjectHandle> kept;
+            int n = annots.getArrayNItems();
+            for (int i = 0; i < n; ++i) {
+                QPDFObjectHandle a = annots.getArrayItem(i);
+                bool isWidget = a.isDictionaryOfType("/Annot", "/Widget");
+                if (!isWidget) kept.push_back(a);
+            }
+            if (kept.empty()) {
+                ph.removeKey("/Annots");
+            } else {
+                ph.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
+            }
+        }
+    }
+
+    // Annotation flattening (bakes appearances into the page content)
+    if (flags & JPDFIUM_SANITIZE_FLATTEN) {
+        QPDFPageDocumentHelper pdh(qpdf);
+        pdh.flattenAnnotations();
+    }
+
+    // Metadata / Info stripping happens just before write.
+    if (flags & JPDFIUM_SANITIZE_METADATA) {
+        root.removeKey("/Metadata");
+    }
+    if (flags & JPDFIUM_SANITIZE_INFO) {
+        qpdf.getTrailer().removeKey("/Info");
+    }
+}
+
 QpdfResult sanitize(std::span<const uint8_t> input, int32_t flags) {
     try {
         auto qpdf = QPDF::create();
         qpdf->processMemoryFile("jpdfium-sanitize-in", reinterpret_cast<const char*>(input.data()),
                                 input.size());
 
-        auto root = qpdf->getRoot();
-
-        // JavaScript / action removal. Scrub both the catalog and every
-        // page/annotation: a document can carry executable JS in Page /AA
-        // (or annotation /AA) with a completely clean catalog.
-        if (flags & JPDFIUM_SANITIZE_JAVASCRIPT) {
-            root.removeKey("/OpenAction");
-            root.removeKey("/AA");
-            if (root.hasKey("/Names")) {
-                auto names = root.getKey("/Names");
-                if (names.hasKey("/JavaScript")) {
-                    names.removeKey("/JavaScript");
-                }
-            }
-            QPDFPageDocumentHelper pdh(*qpdf);
-            for (auto& page : pdh.getAllPages()) {
-                page.getObjectHandle().removeKey("/AA");
-                for (auto& ann : page.getAnnotations()) {
-                    ann.getObjectHandle().removeKey("/AA");
-                }
-            }
-        }
-
-        // Tagged-PDF structure tree
-        if (flags & JPDFIUM_SANITIZE_STRUCTURE) {
-            root.removeKey("/StructTreeRoot");
-        }
-
-        // Embedded files
-        if (flags & JPDFIUM_SANITIZE_ATTACHMENTS) {
-            QPDFEmbeddedFileDocumentHelper efdh(*qpdf);
-            for (auto const& [name, spec] : efdh.getEmbeddedFiles()) {
-                efdh.removeEmbeddedFile(name);
-            }
-        }
-
-        // AcroForm: drop the catalog pointer and strip widget annotations.
-        if (flags & JPDFIUM_SANITIZE_ACROFORM) {
-            root.removeKey("/AcroForm");
-            QPDFAcroFormDocumentHelper afdh(*qpdf);
-            QPDFPageDocumentHelper pdh(*qpdf);
-            for (auto& page : pdh.getAllPages()) {
-                QPDFObjectHandle ph = page.getObjectHandle();
-                if (!ph.hasKey("/Annots")) continue;
-                QPDFObjectHandle annots = ph.getKey("/Annots");
-                if (!annots.isArray()) continue;
-                std::vector<QPDFObjectHandle> kept;
-                int n = annots.getArrayNItems();
-                for (int i = 0; i < n; ++i) {
-                    QPDFObjectHandle a = annots.getArrayItem(i);
-                    bool isWidget = a.isDictionaryOfType("/Annot", "/Widget");
-                    if (!isWidget) kept.push_back(a);
-                }
-                if (kept.empty()) {
-                    ph.removeKey("/Annots");
-                } else {
-                    ph.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
-                }
-            }
-        }
-
-        // Annotation flattening (bakes appearances into the page content)
-        if (flags & JPDFIUM_SANITIZE_FLATTEN) {
-            QPDFPageDocumentHelper pdh(*qpdf);
-            pdh.flattenAnnotations();
-        }
-
-        // Metadata / Info stripping happens just before write.
-        if (flags & JPDFIUM_SANITIZE_METADATA) {
-            root.removeKey("/Metadata");
-        }
-        if (flags & JPDFIUM_SANITIZE_INFO) {
-            qpdf->getTrailer().removeKey("/Info");
-        }
+        applySanitize(*qpdf, flags);
 
         QPDFWriter w(*qpdf);
         w.setOutputMemory();
@@ -144,51 +150,7 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
     try {
         auto qpdf = QPDF::create();
         qpdf->processFile(in_path);
-        auto root = qpdf->getRoot();
-        if (flags & JPDFIUM_SANITIZE_JAVASCRIPT) {
-            root.removeKey("/OpenAction");
-            root.removeKey("/AA");
-            if (root.hasKey("/Names")) {
-                auto names = root.getKey("/Names");
-                if (names.hasKey("/JavaScript")) names.removeKey("/JavaScript");
-            }
-            QPDFPageDocumentHelper pdh(*qpdf);
-            for (auto& page : pdh.getAllPages()) {
-                page.getObjectHandle().removeKey("/AA");
-                for (auto& ann : page.getAnnotations()) ann.getObjectHandle().removeKey("/AA");
-            }
-        }
-        if (flags & JPDFIUM_SANITIZE_STRUCTURE) root.removeKey("/StructTreeRoot");
-        if (flags & JPDFIUM_SANITIZE_ATTACHMENTS) {
-            QPDFEmbeddedFileDocumentHelper efdh(*qpdf);
-            for (auto const& [name, spec] : efdh.getEmbeddedFiles()) efdh.removeEmbeddedFile(name);
-        }
-        if (flags & JPDFIUM_SANITIZE_ACROFORM) {
-            root.removeKey("/AcroForm");
-            QPDFPageDocumentHelper pdh(*qpdf);
-            for (auto& page : pdh.getAllPages()) {
-                QPDFObjectHandle ph = page.getObjectHandle();
-                if (!ph.hasKey("/Annots")) continue;
-                QPDFObjectHandle annots = ph.getKey("/Annots");
-                if (!annots.isArray()) continue;
-                std::vector<QPDFObjectHandle> kept;
-                int n = annots.getArrayNItems();
-                for (int i = 0; i < n; ++i) {
-                    QPDFObjectHandle a = annots.getArrayItem(i);
-                    if (!a.isDictionaryOfType("/Annot", "/Widget")) kept.push_back(a);
-                }
-                if (kept.empty())
-                    ph.removeKey("/Annots");
-                else
-                    ph.replaceKey("/Annots", QPDFObjectHandle::newArray(kept));
-            }
-        }
-        if (flags & JPDFIUM_SANITIZE_FLATTEN) {
-            QPDFPageDocumentHelper pdh(*qpdf);
-            pdh.flattenAnnotations();
-        }
-        if (flags & JPDFIUM_SANITIZE_METADATA) root.removeKey("/Metadata");
-        if (flags & JPDFIUM_SANITIZE_INFO) qpdf->getTrailer().removeKey("/Info");
+        applySanitize(*qpdf, flags);
 
         FILE* out = nullptr;
 #ifdef _WIN32
@@ -212,9 +174,16 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
             std::fprintf(stderr, "jpdfium qpdf sanitize file: %s\n", e.what());
             if (!writerOwnsFile) std::fclose(out);
             return -1;
+        } catch (...) {
+            std::fprintf(stderr, "jpdfium qpdf sanitize file: unknown error\n");
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium qpdf sanitize file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf sanitize file: unknown error\n");
         return -1;
     }
 }

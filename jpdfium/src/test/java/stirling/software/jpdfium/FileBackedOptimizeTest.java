@@ -26,7 +26,6 @@ class FileBackedOptimizeTest {
 
     private static final ThreadMXBean BEAN =
             (ThreadMXBean) ManagementFactory.getThreadMXBean();
-    private static final long TID = Thread.currentThread().threadId();
 
     private static Path resource(String name) throws Exception {
         return Path.of(Objects.requireNonNull(
@@ -34,14 +33,18 @@ class FileBackedOptimizeTest {
     }
 
     private static double bytesPerOp(Runnable op, int warmup, int iterations) {
+        // TID must be the test thread, not the class-init thread: JUnit may run
+        // the method on another thread (parallel execution, Timeout separate
+        // thread), and measuring an idle thread would pass vacuously.
+        long tid = Thread.currentThread().threadId();
         for (int i = 0; i < warmup; i++) {
             op.run();
         }
-        long before = BEAN.getThreadAllocatedBytes(TID);
+        long before = BEAN.getThreadAllocatedBytes(tid);
         for (int i = 0; i < iterations; i++) {
             op.run();
         }
-        long after = BEAN.getThreadAllocatedBytes(TID);
+        long after = BEAN.getThreadAllocatedBytes(tid);
         return (after - before) / (double) iterations;
     }
 

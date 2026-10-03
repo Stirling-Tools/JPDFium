@@ -634,28 +634,27 @@ if(JPDFIUM_BUILD_TESTS)
 
     # Prices the validation the registries add to every handle decode, so the
     # correctness cost is a measured number rather than an assumption.
+    # Self-contained (local table + stdlib only): no bridge link needed, and
+    # it must run via CTest like handle_safety does.
     add_executable(registry_cost bridge/tests/registry_cost.cpp)
     target_include_directories(registry_cost PRIVATE bridge/include)
     if(NOT MSVC)
         target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
-    if(JPDFIUM_USE_PDFIUM)
-        target_link_libraries(registry_cost PRIVATE jpdfium)
-    else()
-        target_link_libraries(registry_cost PRIVATE jpdfium_stub)
-    endif()
+    add_test(NAME registry_cost COMMAND registry_cost)
+    # Test environment. ENVIRONMENT is a whole-property value, so every
+    # contributor has to append here: setting it twice silently drops the first
+    # assignment, which previously cost the component-build library path as soon
+    # as the UBSan options were added.
+    set(_jpdfium_test_env "")
     # Component PDFium builds: the sibling libpdfium.* lives in PDFIUM_LIB_DIR
     # and is only resolvable at test time via the library search path.
     if(JPDFIUM_USE_PDFIUM AND PDFIUM_LINK_MODE STREQUAL "component")
         if(JPDFIUM_OS STREQUAL "darwin")
-            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
-                "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
-            set_tests_properties(handle_safety PROPERTIES ENVIRONMENT
+            set(_jpdfium_test_env
                 "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
         elseif(JPDFIUM_OS STREQUAL "linux")
-            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
-                "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
-            set_tests_properties(handle_safety PROPERTIES ENVIRONMENT
+            set(_jpdfium_test_env
                 "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
         endif()
     endif()
@@ -664,9 +663,17 @@ if(JPDFIUM_BUILD_TESTS)
     if(JPDFIUM_SANITIZE AND NOT MSVC)
         string(FIND "${JPDFIUM_SANITIZE}" "undefined" _has_ubsan)
         if(NOT _has_ubsan EQUAL -1)
-            set_tests_properties(native_smoke handle_safety PROPERTIES ENVIRONMENT
-                "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+            set(_ubsan_env "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+            if(_jpdfium_test_env STREQUAL "")
+                set(_jpdfium_test_env "${_ubsan_env}")
+            else()
+                set(_jpdfium_test_env "${_jpdfium_test_env};${_ubsan_env}")
+            endif()
         endif()
+    endif()
+    if(NOT _jpdfium_test_env STREQUAL "")
+        set_tests_properties(native_smoke handle_safety PROPERTIES
+            ENVIRONMENT "${_jpdfium_test_env}")
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs
     # from the build directory, so the path must be anchored at the repo root.

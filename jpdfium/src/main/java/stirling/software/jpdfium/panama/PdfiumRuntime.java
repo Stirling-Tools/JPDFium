@@ -321,7 +321,7 @@ public final class PdfiumRuntime {
      * Refuse teardown once destruction has begun or completed. Only ever
      * called with the domain already held. A close after {@link State#STOPPED}
      * can only be harmless when its resource was already retired, in which
-     * case the wrapper-level idempotence guard returns before reaching here ,
+     * case the wrapper-level idempotence guard returns before reaching here,
      * so reaching here means an accounting defect, and failing loudly is
      * correct.
      */

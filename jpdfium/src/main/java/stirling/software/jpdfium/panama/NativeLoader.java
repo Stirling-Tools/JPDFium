@@ -126,7 +126,14 @@ public final class NativeLoader {
             installSupplementalLoader(jar);
             tryLoadFromClasspath();
             return true;
-        } catch (IOException | NativeNotFoundException e) {
+        } catch (IOException | NativeNotFoundException | NativeLoadException
+                | UnsatisfiedLinkError e) {
+            // Every failure mode of the downloaded bundle is recoverable here:
+            // a missing entry, a bad checksum, an incomplete manifest, or a
+            // missing transitive dependency. They must fall through to
+            // System.loadLibrary instead of escaping, because this runs inside
+            // ensureLoaded's catch block - an escape would skip the system-load
+            // fallback and never be cached as loadError.
             classpathMiss.addSuppressed(e);
             return false;
         }
@@ -135,8 +142,13 @@ public final class NativeLoader {
     /** Points resource lookup at a downloaded natives jar. */
     static void installSupplementalLoader(Path jar) throws IOException {
         try {
-            supplementalLoader = new URLClassLoader(new URL[]{jar.toUri().toURL()},
-                    NativeLoader.class.getClassLoader());
+            // Null parent: URLClassLoader would otherwise delegate to the app
+            // loader first and could return classpath manifests/binaries
+            // alongside the downloaded bridge, mixing two bundles in one load
+            // attempt (checksum mismatch or cross-bundle dependencies).
+            // The downloaded jar holds only natives resources, so isolation
+            // is both safe and required for single-origin loading.
+            supplementalLoader = new URLClassLoader(new URL[]{jar.toUri().toURL()}, null);
         } catch (MalformedURLException e) {
             throw new NativeLoadException("Downloaded natives jar path is not a URL.", e);
         }
@@ -144,18 +156,36 @@ public final class NativeLoader {
 
     /** Looks up a resource in the downloaded jar first, then the classpath. */
     static URL findResource(String absolutePath) {
+        return findResource(absolutePath, false);
+    }
+
+    /**
+     * Single-origin lookup for one load attempt: when {@code requireSupplemental}
+     * is true, only the downloaded jar is consulted and classpath resources are
+     * never mixed in. The whole {@code tryLoadFromClasspath} attempt passes the
+     * same flag so manifests, checksums, and binaries come from one bundle.
+     */
+    static URL findResource(String absolutePath, boolean requireSupplemental) {
         String stripped = absolutePath.startsWith("/") ? absolutePath.substring(1) : absolutePath;
         ClassLoader extra = supplementalLoader;
         if (extra != null) {
             URL url = extra.getResource(stripped);
             if (url != null) return url;
+            if (requireSupplemental) return null;
+        } else if (requireSupplemental) {
+            return null;
         }
         return NativeLoader.class.getResource(absolutePath);
     }
 
     /** Opens a resource with the same lookup order as {@link #findResource}. */
     static InputStream openResource(String absolutePath) throws IOException {
-        URL url = findResource(absolutePath);
+        return openResource(absolutePath, false);
+    }
+
+    static InputStream openResource(String absolutePath, boolean requireSupplemental)
+            throws IOException {
+        URL url = findResource(absolutePath, requireSupplemental);
         return url == null ? null : url.openStream();
     }
 
@@ -168,15 +198,23 @@ public final class NativeLoader {
 
         if (findResource(resourceBase + bridgeName) == null)
             throw new NativeNotFoundException(platform);
+        // Single-origin attempt: if the bridge resolved from the downloaded
+        // jar, every other resource (manifests, checksums, binaries) must come
+        // from that same jar. Mixing classpath manifests with a downloaded
+        // bridge would reject valid downloads or load cross-bundle deps.
+        boolean requireSupplemental = supplementalLoader != null
+                && supplementalLoader.getResource(
+                        (resourceBase + bridgeName).substring(1)) != null;
 
         try {
-            List<String> libs = readLibraryIndex(indexResource);
+            List<String> libs = readLibraryIndex(indexResource, requireSupplemental);
             for (String lib : libs) {
                 if (!NativeCache.isSafeName(lib)) {
                     throw new NativeLoadException("unsafe native entry: " + lib);
                 }
             }
-            Map<String, String> checksums = readChecksumIndex(resourceBase + "native-libs.sha256");
+            Map<String, String> checksums =
+                    readChecksumIndex(resourceBase + "native-libs.sha256", requireSupplemental);
             if (!checksums.isEmpty()) {
                 for (String lib : libs) {
                     if (!checksums.containsKey(lib)) {
@@ -199,10 +237,11 @@ public final class NativeLoader {
 
             // The verified per-user cache avoids the Windows per-JVM temp leak.
             Path tmpDir = null;
+            final boolean singleOrigin = requireSupplemental;
             if (!"false".equalsIgnoreCase(System.getProperty(NativeCache.CACHE_ENABLED_PROPERTY))
                     && !libs.isEmpty() && !checksums.isEmpty()) {
                 tmpDir = NativeCache.prepare(platform, libs, checksums,
-                        name -> openResource(resourceBase + name));
+                        name -> openResource(resourceBase + name, singleOrigin));
             }
             if (tmpDir == null) {
                 tmpDir = NativeCache.createFallbackDir();
@@ -210,13 +249,13 @@ public final class NativeLoader {
                 // Extract all libraries from the manifest to tmpDir so the dynamic
                 // linker can resolve NEEDED dependencies via RUNPATH=$ORIGIN
                 for (String lib : libs) {
-                    extractToDir(resourceBase + lib, tmpDir, checksums.get(lib));
+                    extractToDir(resourceBase + lib, tmpDir, checksums.get(lib), singleOrigin);
                 }
 
                 // If no manifest was found, fall back to extracting just libpdfium
                 if (libs.isEmpty()) {
                     failClosedOnMissingChecksums(platform);
-                    extractToDir(resourceBase + pdfiumName, tmpDir, null);
+                    extractToDir(resourceBase + pdfiumName, tmpDir, null, singleOrigin);
                 }
             }
 
@@ -249,7 +288,7 @@ public final class NativeLoader {
 
             Path bridge = tmpDir.resolve(bridgeName);
             if (!Files.exists(bridge)) {
-                bridge = extractLib(resourceBase + bridgeName, tmpDir, bridgeName);
+                bridge = extractLib(resourceBase + bridgeName, tmpDir, bridgeName, singleOrigin);
             }
             System.load(bridge.toAbsolutePath().toString());
             verifyBridgeAbi();
@@ -259,8 +298,13 @@ public final class NativeLoader {
     }
 
     private static List<String> readLibraryIndex(String resource) throws IOException {
+        return readLibraryIndex(resource, false);
+    }
+
+    private static List<String> readLibraryIndex(String resource, boolean requireSupplemental)
+            throws IOException {
         List<String> result = new ArrayList<>();
-        try (InputStream is = openResource(resource)) {
+        try (InputStream is = openResource(resource, requireSupplemental)) {
             if (is == null) return result;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(is, StandardCharsets.UTF_8))) {
@@ -293,7 +337,12 @@ public final class NativeLoader {
     }
 
     private static Map<String, String> readChecksumIndex(String resource) throws IOException {
-        try (InputStream is = openResource(resource)) {
+        return readChecksumIndex(resource, false);
+    }
+
+    private static Map<String, String> readChecksumIndex(String resource, boolean requireSupplemental)
+            throws IOException {
+        try (InputStream is = openResource(resource, requireSupplemental)) {
             if (is == null) return Map.of();  // older natives jars ship no checksums
             String text = new String(is.readAllBytes(), StandardCharsets.UTF_8);
             Map<String, String> parsed = NativeCache.parseChecksums(text);
@@ -306,7 +355,13 @@ public final class NativeLoader {
 
     private static void extractToDir(String resource, Path dir, String expectedHash)
             throws IOException {
-        try (InputStream is = openResource(resource)) {
+        extractToDir(resource, dir, expectedHash, false);
+    }
+
+    private static void extractToDir(
+            String resource, Path dir, String expectedHash, boolean requireSupplemental)
+            throws IOException {
+        try (InputStream is = openResource(resource, requireSupplemental)) {
             if (is == null) return;
             Path target = dir.resolve(resource.substring(resource.lastIndexOf('/') + 1));
             if (expectedHash == null) {
@@ -421,7 +476,13 @@ public final class NativeLoader {
     }
 
     private static Path extractLib(String resource, Path dir, String filename) throws IOException {
-        try (InputStream is = openResource(resource)) {
+        return extractLib(resource, dir, filename, false);
+    }
+
+    private static Path extractLib(
+            String resource, Path dir, String filename, boolean requireSupplemental)
+            throws IOException {
+        try (InputStream is = openResource(resource, requireSupplemental)) {
             if (is == null) throw new NativeNotFoundException(detectPlatform());
             Path target = dir.resolve(filename);
             Files.copy(is, target, StandardCopyOption.REPLACE_EXISTING);

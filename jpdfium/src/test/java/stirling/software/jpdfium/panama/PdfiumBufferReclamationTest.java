@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.panama;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -14,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * buffer's storage release sits behind a package-private seam, so the
  * failure path can be exercised directly.
  */
+@ResourceLock("PdfiumBuffers.hooks")
 class PdfiumBufferReclamationTest {
 
     @Test

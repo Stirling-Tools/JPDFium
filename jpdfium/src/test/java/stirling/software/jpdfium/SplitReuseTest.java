@@ -66,12 +66,22 @@ class SplitReuseTest {
         Path work = Files.createTempFile("split-mod", ".pdf");
         try {
             Files.copy(in, work, StandardCopyOption.REPLACE_EXISTING);
+            PdfSplit.COUNTERS.reset();
             try (PdfDocument doc = PdfDocument.open(work)) {
+                // Mutate without bumping the structural epoch (crop leaves it
+                // at zero): the split must snapshot, not reuse the pristine
+                // file, or the parts would carry pre-edit content.
+                doc.cropPage(0, 10, 10, 200, 200);
                 List<PdfDocument> parts =
                         PdfSplit.split(doc, PdfSplit.SplitStrategy.everyNPages(50));
                 try {
                     assertEquals(2, parts.size());
                     assertEquals(50, parts.get(0).pageCount());
+                    assertEquals(1, PdfSplit.COUNTERS.sourceSerializations.get(),
+                            "an edited document must snapshot once, not reuse the source file");
+                    var boxes = parts.get(0).getPageBoxes(0);
+                    assertEquals(10f, boxes.cropBox().orElseThrow().x(), 0.01f,
+                            "parts must reflect the pre-split crop, not the pristine file");
                 } finally {
                     for (PdfDocument p : parts) p.close();
                 }

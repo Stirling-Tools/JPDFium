@@ -112,6 +112,10 @@ class MemoryBehaviorTest {
         // document and dropping it without close() pins the native handle, and
         // every page opened from it, for the life of the process. Measured
         // below as a fact so a future fix is visible as a change in the number.
+        // Strong reachability via abandoned/openedPages is intentional here:
+        // this documents that unclosed handles stay pinned (no Cleaner), not
+        // that GC reclaims them. A WeakReference variant would test a
+        // reclamation path that was tried and reverted (see below).
         //
         // A document-level Cleaner was tried and reverted: it reclaims the
         // document handle but cannot decrement the pages opened from that

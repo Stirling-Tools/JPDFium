@@ -302,17 +302,22 @@ public final class QpdfLib {
     }
 
     /**
-     * Merge multiple PDF files losslessly, reading inputs from disk and
-     * writing the result straight to disk. No document bytes cross the
-     * FFI boundary, so this stays flat in Java heap regardless of size.
+     * Optimize a PDF file on disk via the bundled qpdf library, reading the
+     * input from disk and writing the result straight to disk. No document
+     * bytes cross the FFI boundary, so this stays flat in Java heap.
      *
      * <p>The native writer targets a sibling staging file; {@code output} is
      * replaced only after success plus a non-empty staging check, so a failed
-     * merge never leaves a partial destination behind.
+     * optimize never leaves a partial destination behind.
      *
-     * @param inputs  input PDF file paths
-     * @param output  destination PDF file path
-     * @return true on success, false if unsupported or failed
+     * @param input input PDF file path
+     * @param output destination PDF file path
+     * @param flags qpdf optimize flags
+     * @param objectStreamMode qpdf object-stream mode
+     * @param streamDataMode qpdf stream-data mode
+     * @param decodeLevel qpdf decode level
+     * @return true on success; false if the file operation is unavailable.
+     *         Native failures throw {@link JPDFiumException}.
      */
     public static boolean optimizeFile(Path input, Path output, int flags,
                                        int objectStreamMode, int streamDataMode,
@@ -361,15 +366,17 @@ public final class QpdfLib {
     }
 
     /**
-     * File-backed optimize: reads the input from disk and writes the result
-     * straight to a staging file, which is published over {@code output} only
-     * after a successful, non-empty write.
+     * Merge multiple PDF files losslessly, reading inputs from disk and
+     * writing the result straight to disk. No document bytes cross the
+     * FFI boundary, so this stays flat in Java heap regardless of size.
      *
-     * <p>This is the variant to use for large documents: it never holds the
-     * document in Java heap, whereas the byte[] form necessarily holds both
-     * the input and the output at once.
+     * <p>The native writer targets a sibling staging file; {@code output} is
+     * replaced only after success plus a non-empty staging check, so a failed
+     * merge never leaves a partial destination behind.
      *
-     * @return true on success; false if the file operation is unavailable
+     * @param inputs input PDF file paths
+     * @param output destination PDF file path
+     * @return true on success; false if the file operation is unavailable or failed
      */
     public static boolean mergeFiles(List<Path> inputs,
                                      Path output) {
@@ -873,10 +880,18 @@ private static void publishNoClobber(Path staging, Path output) throws IOExcepti
         // CREATE_NEW opens O_CREAT|O_EXCL atomically, so existence check and
         // creation are one step with no precheck race. See Files CREATE_NEW:
         // https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/Files.html
-        try (OutputStream out = Files.newOutputStream(
-                        output, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-                InputStream in = Files.newInputStream(staging)) {
+        // Only this call can own the file once CREATE_NEW succeeds, so a failed
+        // copy must remove it: otherwise a truncated destination would both
+        // violate "never publish a partial destination" and make retries fail
+        // with FileAlreadyExistsException on the partial file.
+        OutputStream out = Files.newOutputStream(
+                output, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        boolean ok = false;
+        try (out; InputStream in = Files.newInputStream(staging)) {
             in.transferTo(out);
+            ok = true;
+        } finally {
+            if (!ok) deleteQuietly(output);
         }
     }
 

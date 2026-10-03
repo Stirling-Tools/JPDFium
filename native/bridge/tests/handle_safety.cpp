@@ -13,6 +13,7 @@
 //
 // Build: see CMakeLists (JPDFIUM_SANITIZE=address,undefined).
 
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -81,11 +82,13 @@ static int g_failures = 0;
 //
 // Override with argv[1] to test any PDF.
 static std::vector<uint8_t> load_fixture(int argc, char** argv) {
-    // codeql[cpp/path-injection] argv[1] is the point of this harness: a
-    // developer points it at their own PDF when investigating a failure. It is
-    // a locally run test binary, never a service taking untrusted input.
+    // Locally run test harness only: argv[1] lets a developer point the
+    // sanitizer run at their own PDF when investigating a failure. Never a
+    // service taking untrusted input; the path is only opened read-only and
+    // validated as a PDF header below.
     const char* path = (argc > 1) ? argv[1] : "jpdfium/src/test/resources/pdfs/general/minimal.pdf";
-    std::FILE* f = std::fopen(path, "rb");
+    std::FILE* f = std::fopen(path, "rb");  // codeql[cpp/path-injection] test harness entry point
+                                             // lgtm[cpp/path-injection] test harness entry point
     if (!f) {
         std::printf("FIXTURE  cannot open %s\n", path);
         return {};
@@ -132,11 +135,13 @@ static void test_fabricated_handles_rejected() {
         jpdfium_pcre2_free(h);
         jpdfium_flashtext_free(h);
     }
-    if (kHasRealRegistries) {
-        CHECK(all_rejected, "fabricated handles rejected by registry, no dereference");
-    } else {
-        std::printf("skip  fabricated-handle rejection (stub build: no registry)\n");
+    // Read unconditionally: the stub validates handles too, and gating the read
+    // on kHasRealRegistries makes every store in the loop above a dead store in
+    // a stub build, which clang-analyzer treats as an error here.
+    if (!kHasRealRegistries) {
+        std::printf("note  fabricated handles are rejected by the stub as well\n");
     }
+    CHECK(all_rejected, "fabricated handles rejected by registry, no dereference");
 }
 
 // 3-5: real handle lifecycle. Registration must not leak, and a second close
@@ -215,7 +220,7 @@ static void test_writer_budget_and_failure(const std::vector<uint8_t>& pdf) {
     CHECK(written == 0, "failed save reports zero bytes");
 
     // A generous budget must succeed and produce a real file.
-    rc = jpdfium_doc_save_to_file(doc, path, 4 * 1024 * 1024, &written);
+    rc = jpdfium_doc_save_to_file(doc, path, 4LL * 1024 * 1024, &written);
     CHECK(rc == JPDFIUM_OK && written > 0, "save within budget succeeds");
 
     FILE* f = std::fopen(path, "rb");
@@ -301,14 +306,9 @@ static void test_writer_alias_rejected(const std::vector<uint8_t>& pdf) {
         std::remove(path);
         return;
     }
+    // Both bridges refuse this, so assert it unconditionally.
     int32_t rc = jpdfium_doc_save_to_file(doc, path, 0, nullptr);
-    if (kHasRealRegistries) {
-        // Alias rejection lives in the real bridge's save path. The stub has no
-        // sourcePath tracking and no streaming writer, so it cannot express this.
-        CHECK(rc == JPDFIUM_ERR_INVALID, "save over the document's own source is refused");
-    } else {
-        std::printf("skip  save-over-source refusal (stub build)\n");
-    }
+    CHECK(rc == JPDFIUM_ERR_INVALID, "save over the document's own source is refused");
 
     // The source must be untouched: same size as what we wrote.
     FILE* after = std::fopen(path, "rb");
@@ -317,10 +317,8 @@ static void test_writer_alias_rejected(const std::vector<uint8_t>& pdf) {
         std::fseek(after, 0, SEEK_END);
         long size = std::ftell(after);
         std::fclose(after);
-        if (kHasRealRegistries) {
-            CHECK(size == static_cast<long>(pdf.size()),
-                  "source file was not truncated by the refused save");
-        }
+        CHECK(size == static_cast<long>(pdf.size()),
+              "source file was not truncated by the refused save");
     }
     jpdfium_doc_close(doc);
     std::remove(path);
@@ -512,18 +510,20 @@ static void test_page_info_coarse(const std::vector<uint8_t>& pdf) {
         jpdfium_page_width(page, &w) == JPDFIUM_OK && jpdfium_page_height(page, &h) == JPDFIUM_OK;
     bool coarseOk = jpdfium_page_info(page, &cw, &ch) == JPDFIUM_OK;
     if (kHasRealRegistries) {
-        // Compare representations, not values: page_info must reproduce the
-        // same geometry the width/height leaves report, so bit equality is the
-        // contract and an epsilon would hide a real mismatch.
-        CHECK(leavesOk && coarseOk && std::memcmp(&cw, &w, sizeof(float)) == 0 &&
-                  std::memcmp(&ch, &h, sizeof(float)) == 0,
-              "page_info agrees bit-for-bit with width+height leaves");
         CHECK(jpdfium_page_info(0, &cw, &ch) != JPDFIUM_OK, "page_info rejects null handle");
         CHECK(jpdfium_page_info(page, nullptr, &ch) != JPDFIUM_OK,
               "page_info rejects null out param");
     } else {
-        CHECK(coarseOk, "stub page_info succeeds");
+        std::printf("note  null-argument rejection is a real-bridge check\n");
     }
+    // Compare the bit patterns rather than the values: page_info must reproduce
+    // exactly what the width/height leaves report, so an epsilon would hide a
+    // real mismatch. bit_cast compares integers, which keeps both the float
+    // equality and the raw-representation linters quiet.
+    CHECK(leavesOk && coarseOk &&
+              std::bit_cast<std::uint32_t>(cw) == std::bit_cast<std::uint32_t>(w) &&
+              std::bit_cast<std::uint32_t>(ch) == std::bit_cast<std::uint32_t>(h),
+          "page_info agrees bit-for-bit with width+height leaves");
     jpdfium_page_close(page);
     jpdfium_doc_close(doc);
 }

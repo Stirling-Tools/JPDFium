@@ -863,7 +863,10 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     // Retire native state tied to the old document before committing the
     // replacement: loaded FPDF_FONT handles belong to the old FPDF_DOCUMENT
     // and would otherwise dangle, and cached redact/sanitize bookkeeping
-    // describes bytes that no longer exist.
+    // describes bytes that no longer exist. Clearing contentRedacted and
+    // sanitizeOnSave here is correct: callers (metadata/font stripping)
+    // reload with already-scrubbed bytes, so a later save must not re-run
+    // the sanitize pass on the new document.
     for (FPDF_FONT f : w->core->loadedFonts) {
         FPDFFont_Close(f);
     }

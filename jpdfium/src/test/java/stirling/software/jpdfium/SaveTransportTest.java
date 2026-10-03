@@ -11,6 +11,7 @@ import stirling.software.jpdfium.panama.OutputTransaction;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.stream.Stream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.nio.channels.WritableByteChannel;
@@ -20,10 +21,13 @@ import java.util.List;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assumptions.abort;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -61,11 +65,16 @@ class SaveTransportTest {
         Path dest = Files.createTempFile("jpdfium-save-keep-", ".pdf");
         byte[] sentinel = "%PDF-1.4 sentinel\n".getBytes();
         Files.write(dest, sentinel);
-        try (PdfDocument doc = PdfDocument.open(pdfBytes())) {
-            assertThrows(Exception.class,
-                    () -> doc.saveTo(dest, SaveOptions.maxOutputBytes(10)));
+        try {
+            try (PdfDocument doc = PdfDocument.open(pdfBytes())) {
+                assertThrows(stirling.software.jpdfium.exception.JPDFiumException.class,
+                        () -> doc.saveTo(dest, SaveOptions.maxOutputBytes(10)));
+            }
+            assertArrayEquals(sentinel, Files.readAllBytes(dest),
+                    "failed save must leave destination bytes unchanged");
+        } finally {
+            Files.deleteIfExists(dest);
         }
-        assertTrue(Files.exists(dest), "failed save must not delete the destination");
     }
 
     @Test
@@ -215,17 +224,31 @@ class SaveTransportTest {
     /**
      * Concurrent saves to one destination must not share a staging file, and a
      * save must never leave staging debris next to the destination.
+     *
+     * <p>The workers rendezvous on a barrier first: without it the saves can
+     * serialise and the shared-staging bug would go unexercised.
      */
     @Test
     void concurrentSavesShareNoStagingFile(@TempDir Path dir) throws Exception {
         Path dest = dir.resolve("out.pdf");
-        ExecutorService pool = Executors.newFixedThreadPool(8);
+        int threads = 8;
+        CyclicBarrier startLine = new CyclicBarrier(threads);
+        AtomicInteger inFlight = new AtomicInteger();
+        AtomicInteger peakInFlight = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
         try {
             List<Callable<Void>> jobs = new ArrayList<>();
-            for (int i = 0; i < 16; i++) {
+            for (int i = 0; i < 2 * threads; i++) {
                 jobs.add(() -> {
-                    try (PdfDocument d = PdfDocument.open(pdfBytes())) {
-                        d.saveTo(dest);
+                    startLine.await();
+                    int now = inFlight.incrementAndGet();
+                    peakInFlight.accumulateAndGet(now, Math::max);
+                    try {
+                        try (PdfDocument d = PdfDocument.open(pdfBytes())) {
+                            d.saveTo(dest);
+                        }
+                    } finally {
+                        inFlight.decrementAndGet();
                     }
                     return null;
                 });
@@ -236,6 +259,8 @@ class SaveTransportTest {
         } finally {
             pool.shutdownNow();
         }
+        assertTrue(peakInFlight.get() >= 2,
+                "saves must genuinely overlap for this test to mean anything");
         // A shared staging file would publish another save's fragment.
         try (PdfDocument d = PdfDocument.open(dest)) {
             assertTrue(d.pageCount() > 0, "published file must be a complete PDF");
@@ -244,6 +269,43 @@ class SaveTransportTest {
             List<String> strays =
                     files.map(p -> p.getFileName().toString()).filter(n -> n.contains("jpdfium-save")).toList();
             assertTrue(strays.isEmpty(), "staging leftovers: " + strays);
+        }
+    }
+
+    @Test
+    void stagingIsCreatedBesideTheResolvedTarget() throws Exception {
+        Path linkDir = Files.createTempDirectory("stage-link");
+        Path realDir = Files.createTempDirectory("stage-real");
+        Path link = linkDir.resolve("alias.pdf");
+        Path real = realDir.resolve("target.pdf");
+        try {
+            try {
+                Files.createSymbolicLink(link, real);
+            } catch (UnsupportedOperationException | IOException e) {
+                abort("no symlink support on this host: " + e);
+                return;
+            }
+            Path realDirResolved = realDir.toRealPath();
+            try (OutputTransaction tx = OutputTransaction.begin(link)) {
+                assertEquals(realDirResolved, tx.staging().getParent().toRealPath(),
+                        "staging must be created in the resolved target's directory");
+                assertEquals(realDirResolved, tx.destination().getParent().toRealPath(),
+                        "the transaction must target the resolved path, not the link");
+                Files.write(tx.staging(), new byte[]{1, 2, 3});
+                tx.publish(null);
+            }
+            assertEquals(3, Files.size(real), "the resolved target must receive the output");
+            assertTrue(Files.isSymbolicLink(link), "the link must survive publication");
+            try (Stream<Path> stray = Files.list(realDir)) {
+                assertEquals(0,
+                        stray.filter(p -> p.getFileName().toString().contains("jpdfium-save")).count(),
+                        "successful publish must leave no staging file");
+            }
+        } finally {
+            for (Path p : Files.newDirectoryStream(linkDir)) Files.deleteIfExists(p);
+            for (Path p : Files.newDirectoryStream(realDir)) Files.deleteIfExists(p);
+            Files.deleteIfExists(linkDir);
+            Files.deleteIfExists(realDir);
         }
     }
 }
