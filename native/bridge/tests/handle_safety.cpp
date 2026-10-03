@@ -80,15 +80,12 @@ static int g_failures = 0;
 // removes that variable - if this fails, the bridge or the toolchain is at
 // fault, not the bytes.
 //
-// Override with argv[1] to test any PDF.
-static std::vector<uint8_t> load_fixture(int argc, char** argv) {
-    // Locally run test harness only: argv[1] lets a developer point the
-    // sanitizer run at their own PDF when investigating a failure. Never a
-    // service taking untrusted input; the path is only opened read-only and
-    // validated as a PDF header below.
-    const char* path = (argc > 1) ? argv[1] : "jpdfium/src/test/resources/pdfs/general/minimal.pdf";
-    std::FILE* f = std::fopen(path, "rb");  // codeql[cpp/path-injection] test harness entry point
-                                             // lgtm[cpp/path-injection] test harness entry point
+// Fixed fixture path on purpose: taking argv here would pipe unsanitized
+// user input into fopen (CodeQL cpp/path-injection) for no CI benefit.
+// Developers debugging a specific file can temporarily edit the constant.
+static std::vector<uint8_t> load_fixture() {
+    const char* path = "jpdfium/src/test/resources/pdfs/general/minimal.pdf";
+    std::FILE* f = std::fopen(path, "rb");
     if (!f) {
         std::printf("FIXTURE  cannot open %s\n", path);
         return {};
@@ -351,13 +348,13 @@ static void test_writer_rejects_bad_inputs(const std::vector<uint8_t>& pdf) {
     jpdfium_doc_close(doc);
 }
 
-int main(int argc, char** argv);  // defined at the end
+int main();  // defined at the end
 static void test_cross_type_handles_rejected(const std::vector<uint8_t>& pdf);
 static void test_aux_handles_validated();
 static void test_page_info_coarse(const std::vector<uint8_t>& pdf);
 static void test_abi_probes();
 
-int main(int argc, char** argv) {
+int main() {
     std::printf("=== jpdfium handle + writer sanitizer harness ===\n");
     // PDFium requires FPDF_InitLibrary before any document call (smoke does the
     // same). Without it FPDF_LoadMemDocument crashes in partition_alloc.
@@ -368,7 +365,7 @@ int main(int argc, char** argv) {
     // Fabricated handles need no document at all: they must be rejected purely
     // by the registry, which is exactly the property under test.
     test_fabricated_handles_rejected();
-    std::vector<uint8_t> pdf = load_fixture(argc, argv);
+    std::vector<uint8_t> pdf = load_fixture();
     test_real_handle_lifecycle(pdf);
     test_cross_type_handles_rejected(pdf);
     test_aux_handles_validated();

@@ -109,7 +109,7 @@ class DomainConsistencyTest {
                 || hit.contains("panama/JpdfiumH.java")
                 || hit.contains("panama/FontLib.java"));
         if (!hits.isEmpty()) {
-            fail("raw downcall handles are created only in Symbols/FastLinks/JpdfiumH:\n"
+            fail("raw downcall handles are created only in Symbols/FastLinks/JpdfiumH/FontLib:\n"
                     + String.join("\n", hits));
         }
     }

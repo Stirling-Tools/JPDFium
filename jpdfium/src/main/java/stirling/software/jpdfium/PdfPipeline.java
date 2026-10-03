@@ -265,6 +265,9 @@ public final class PdfPipeline {
         ExecutorService executor = Executors.newFixedThreadPool(
                 Math.min(parallelism, chunks.size()));
         List<Future<ChunkResult>> futures = new ArrayList<>();
+        // Visible to the failure path: if shutdown throws after the merge
+        // succeeds, the merged handle must be closed, not dropped.
+        PdfDocument merged = null;
         try {
             for (int chunkIndex = 0; chunkIndex < chunkBytes.size(); chunkIndex++) {
                 final byte[] currentChunkBytes = chunkBytes.get(chunkIndex);
@@ -278,7 +281,6 @@ public final class PdfPipeline {
             results.sort(Comparator.comparingInt(ChunkResult::order));
 
             List<PdfDocument> documentsToMerge = new ArrayList<>();
-            PdfDocument merged;
             try {
                 for (var result : results) {
                     documentsToMerge.add(PdfDocument.open(result.bytes()));
@@ -287,14 +289,29 @@ public final class PdfPipeline {
             } finally {
                 documentsToMerge.forEach(PdfDocument::close);
             }
-            shutdownAndReport(executor, "processParallel");
-            return merged;
+            try {
+                shutdownAndReport(executor, "processParallel");
+            } catch (Throwable shutdownFailure) {
+                // The merge already owns a native document handle: dropping it
+                // here would leak the handle and its live-resource accounting.
+                if (merged != null) {
+                    merged.close();
+                    merged = null;
+                }
+                throw shutdownFailure;
+            }
+            PdfDocument result = merged;
+            merged = null;
+            return result;
         } catch (Throwable t) {
             for (Future<ChunkResult> f : futures) f.cancel(true);
             try {
                 shutdownAndReport(executor, "processParallel");
             } catch (Throwable shutdownFailure) {
                 t.addSuppressed(shutdownFailure);
+            }
+            if (merged != null) {
+                merged.close();
             }
             throw t;
         }
@@ -340,8 +357,14 @@ public final class PdfPipeline {
             }
             throw t;
         }
-        shutdownAndReport(executor, "forEachParallel");
-        doc.close();
+        // All futures completed, so no task can still own doc: closing in a
+        // finally retires ownership even when shutdown itself throws
+        // (notably on caller interruption during awaitTermination).
+        try {
+            shutdownAndReport(executor, "forEachParallel");
+        } finally {
+            doc.close();
+        }
     }
 
     /**

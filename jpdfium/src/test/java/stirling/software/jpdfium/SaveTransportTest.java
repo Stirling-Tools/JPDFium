@@ -11,6 +11,7 @@ import stirling.software.jpdfium.panama.OutputTransaction;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -63,7 +64,7 @@ class SaveTransportTest {
     @Test
     void failedSaveLeavesDestinationUntouched() throws Exception {
         Path dest = Files.createTempFile("jpdfium-save-keep-", ".pdf");
-        byte[] sentinel = "%PDF-1.4 sentinel\n".getBytes();
+        byte[] sentinel = "%PDF-1.4 sentinel\n".getBytes(StandardCharsets.US_ASCII);
         Files.write(dest, sentinel);
         try {
             try (PdfDocument doc = PdfDocument.open(pdfBytes())) {

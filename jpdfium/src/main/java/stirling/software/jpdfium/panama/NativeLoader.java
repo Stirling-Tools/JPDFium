@@ -297,10 +297,6 @@ public final class NativeLoader {
         }
     }
 
-    private static List<String> readLibraryIndex(String resource) throws IOException {
-        return readLibraryIndex(resource, false);
-    }
-
     private static List<String> readLibraryIndex(String resource, boolean requireSupplemental)
             throws IOException {
         List<String> result = new ArrayList<>();
@@ -336,10 +332,6 @@ public final class NativeLoader {
                         + "explicitly with -Djpdfium.natives.allowUnsigned=true");
     }
 
-    private static Map<String, String> readChecksumIndex(String resource) throws IOException {
-        return readChecksumIndex(resource, false);
-    }
-
     private static Map<String, String> readChecksumIndex(String resource, boolean requireSupplemental)
             throws IOException {
         try (InputStream is = openResource(resource, requireSupplemental)) {
@@ -351,11 +343,6 @@ public final class NativeLoader {
             }
             return parsed;
         }
-    }
-
-    private static void extractToDir(String resource, Path dir, String expectedHash)
-            throws IOException {
-        extractToDir(resource, dir, expectedHash, false);
     }
 
     private static void extractToDir(
@@ -473,10 +460,6 @@ public final class NativeLoader {
         }
         // Unknown later PDFium split: load after leaves, before harfbuzz.
         return 2;
-    }
-
-    private static Path extractLib(String resource, Path dir, String filename) throws IOException {
-        return extractLib(resource, dir, filename, false);
     }
 
     private static Path extractLib(

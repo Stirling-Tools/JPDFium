@@ -142,6 +142,10 @@ jmh {
 val writeVersionProperties = tasks.register("writeVersionProperties") {
     description = "Write the library version for runtime natives resolution"
     val outDir = layout.buildDirectory.dir("generated/version")
+    // The file embeds project.version: without this input a version bump can
+    // leave the task up-to-date and package the previous version, making the
+    // runtime downloader request the wrong natives artifact.
+    inputs.property("projectVersion", project.version.toString())
     outputs.dir(outDir)
     doLast {
         val pkg = outDir.get().asFile.resolve("stirling/software/jpdfium/panama")

@@ -868,9 +868,16 @@ public final class JpdfiumLib {
      * Post-generation save-result acceptance limit ({@code jpdfium.maxSaveResultBytes},
      * 0 = disabled). It bounds the Java copy, channel write, and reinterpretation,
      * not the transient native snapshot, which already exists when checked.
+     * A negative value is a configuration bug (most often an underflowed
+     * subtraction) and would otherwise silently disable the cap.
      */
     public static long maxSaveResultBytes() {
-        return Long.getLong("jpdfium.maxSaveResultBytes", 0);
+        long v = Long.getLong("jpdfium.maxSaveResultBytes", 0);
+        if (v < 0) {
+            throw new IllegalStateException(
+                    "invalid jpdfium.maxSaveResultBytes=" + v + " (use 0 for unlimited)");
+        }
+        return v;
     }
 
     /** Overflow-safe RGBA stride with an actionable overflow error. */
