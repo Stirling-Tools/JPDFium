@@ -24,8 +24,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * {@code FLASHTEXT_FREE}) always use plain downcalls because cleanup work
  * does not satisfy the short-call contract.
  *
- * <p>These direct handles are not wrapped by combinators; callers must explicitly acquire
- * {@link NativeGuard} before invoking them.
+ * <p>These direct handles are not wrapped by combinators; callers must invoke
+ * them from inside the {@link PdfiumRuntime} execution domain
+ * ({@code execute}/{@code executeTeardown}).
  */
 public final class FastLinks {
 
@@ -73,6 +74,7 @@ public final class FastLinks {
             try {
                 return LINKER.downcallHandle(sym.get(), desc, Linker.Option.critical(false));
             } catch (Throwable _) {
+                // Critical linking is best effort; fall through to the plain downcall below.
             }
         }
         return LINKER.downcallHandle(sym.get(), desc);
