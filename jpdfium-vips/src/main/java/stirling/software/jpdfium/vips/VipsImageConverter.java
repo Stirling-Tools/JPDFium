@@ -5,6 +5,7 @@ import app.photofox.vipsffm.VImage;
 import app.photofox.vipsffm.Vips;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.panama.JpdfiumLib;
@@ -16,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 
 /**
  * Optional, vips-backed imaging facade for {@code jpdfium}.
@@ -37,6 +39,50 @@ public final class VipsImageConverter {
 
     private VipsImageConverter() {}
 
+    /**
+     * Bound for image jobs, unlimited by default. Negative is rejected.
+     *
+     * <p>{@link #IMAGE_BOUND} carries the configured bound separately from live
+     * semaphore availability: while encodes are in flight
+     * {@code availablePermits()} reports fewer free slots than were configured,
+     * and {@link #setMaxConcurrency} must still hand back the number the caller
+     * set so the documented save-and-restore pattern works.
+     */
+    private static volatile Semaphore IMAGE_PERMITS = createPermits();
+    private static volatile int IMAGE_BOUND = configuredBound();
+
+    private static int configuredBound() {
+        int configured = Integer.getInteger("jpdfium.image.maxConcurrency", 0);
+        if (configured < 0) {
+            throw new IllegalStateException(
+                    "invalid jpdfium.image.maxConcurrency=" + configured + " (use 0 for unlimited)");
+        }
+        return configured;
+    }
+
+    private static Semaphore createPermits() {
+        int configured = configuredBound();
+        return configured == 0 ? null : new Semaphore(Math.max(1, configured));
+    }
+
+    /**
+     * Set the image-job bound (0 = explicit unlimited). Negative is rejected.
+     *
+     * @return the previously configured bound, not the currently free slot count
+     */
+    public static synchronized int setMaxConcurrency(int maxJobs) {
+        if (maxJobs < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
+        int prev = IMAGE_BOUND;
+        IMAGE_BOUND = maxJobs;
+        IMAGE_PERMITS = maxJobs == 0 ? null : new Semaphore(Math.max(1, maxJobs));
+        return prev;
+    }
+
+    /** Current configured bound (0 = unlimited). */
+    public static int maxConcurrency() {
+        return IMAGE_BOUND;
+    }
+
     /** @return raw bytes of page {@code pageIndex} rendered at {@code dpi} and encoded to {@code format}. */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi, VipsFormat format) {
         return pageToBytes(doc, pageIndex, dpi, format, 75);
@@ -57,9 +103,22 @@ public final class VipsImageConverter {
 
     /** @return raw bytes of an open {@link PdfPage} rendered at {@code dpi} and encoded with custom quality. */
     public static byte[] pageToBytes(PdfPage page, int dpi, VipsFormat format, int quality) {
+        // Hold on to the semaphore that granted the slot: the bound can be
+        // swapped while this encode runs, and releasing to the new semaphore
+        // would inflate its limit while waiters stayed parked on the old one.
+        Semaphore held = null;
+        try {
+            held = IMAGE_PERMITS;
+            if (held != null) held.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("image encode interrupted while waiting for a job slot", e);
+        }
         try (RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
             VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).quality(quality).build();
             return VipsEncoder.encodeToBytes(view, encodeOptions);
+        } finally {
+            if (held != null) held.release();
         }
     }
 

@@ -113,14 +113,7 @@ public final class PdfImageConverter {
         for (int i : pages) {
             Path outputFile = outputDir.resolve(formatFilename(i, options.format()));
             try (PdfPage page = doc.page(i)) {
-                PageSize sz = page.size();
-                int effectiveDpi = options.dpi();
-                if (sz.width() > 0 && sz.height() > 0) {
-                    int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-                    int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-                    effectiveDpi = Math.min(options.dpi(), Math.min(maxDpiW, maxDpiH));
-                    if (effectiveDpi < 1) effectiveDpi = 1;
-                }
+                int effectiveDpi = effectiveDpi(page.size(), options.dpi());
                 ColorType ct = options.transparent()
                         ? (options.colorType() == null || options.colorType() == ColorType.RGB ? ColorType.ARGB : options.colorType())
                         : options.colorType();
@@ -179,15 +172,7 @@ public final class PdfImageConverter {
      * @return rendered image
      */
     public static BufferedImage pageToImage(PdfPage page, int dpi, boolean transparent) {
-        PageSize sz = page.size();
-        int effectiveDpi = dpi;
-        if (sz.width() > 0 && sz.height() > 0) {
-            int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-            int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-            effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
-            if (effectiveDpi < 1) effectiveDpi = 1;
-        }
-        RenderResult result = page.renderAt(effectiveDpi);
+        RenderResult result = page.renderAt(effectiveDpi(page.size(), dpi));
         return result.toBufferedImage(transparent);
     }
 
@@ -518,21 +503,35 @@ public final class PdfImageConverter {
 
     // Internal helpers
 
-    private static final int MAX_IMAGE_DIMENSION = 65000;
+    // DPI cap, unlimited by default; set -Djpdfium.image.max_dimension=N to bound.
+    private static final int MAX_IMAGE_DIMENSION = validatedDimension();
+
+    private static int validatedDimension() {
+        int v = Integer.getInteger("jpdfium.image.max_dimension", 0);
+        if (v < 0) throw new IllegalStateException(
+                "invalid jpdfium.image.max_dimension=" + v + " (use 0 for unlimited)");
+        return v;
+    }
+
+    /**
+     * Lower {@code dpi} so neither rendered dimension exceeds the opt-in
+     * {@code jpdfium.image.max_dimension} ceiling. Unlimited (0) returns the
+     * requested DPI untouched: clamping against a zero ceiling would collapse
+     * every render to 1 DPI.
+     */
+    private static int effectiveDpi(PageSize size, int dpi) {
+        if (MAX_IMAGE_DIMENSION <= 0 || size == null) return dpi;
+        double w = size.width();
+        double h = size.height();
+        if (w <= 0 || h <= 0) return dpi;
+        int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / w);
+        int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / h);
+        return Math.max(1, Math.min(dpi, Math.min(maxDpiW, maxDpiH)));
+    }
 
     private static BufferedImage renderPageToImage(PdfDocument doc, int pageIndex, int dpi, boolean transparent) {
         try (PdfPage page = doc.page(pageIndex)) {
-            // Cap DPI so neither rendered dimension exceeds MAX_IMAGE_DIMENSION pixels
-            PageSize sz = page.size();
-            int effectiveDpi = dpi;
-            if (sz.width() > 0 && sz.height() > 0) {
-                int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-                int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-                effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
-                if (effectiveDpi < 1) effectiveDpi = 1;
-            }
-
-            return page.renderImage(effectiveDpi, transparent);
+            return page.renderImage(effectiveDpi(page.size(), dpi), transparent);
         }
     }
 
