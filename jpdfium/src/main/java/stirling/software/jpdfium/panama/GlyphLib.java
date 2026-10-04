@@ -25,8 +25,7 @@ public final class GlyphLib {
 
     public static GlyphRedactResult redactGlyphAware(long page, String[] words,
                                                       int argb, float padding, int flags) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (words == null || words.length == 0) return new GlyphRedactResult(0, "[]");
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrs = a.allocate(ADDRESS, words.length);
@@ -43,8 +42,6 @@ public final class GlyphLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return new GlyphRedactResult(count, json);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }
