@@ -96,6 +96,15 @@ this handle, buffer, or security operation from becoming unsafe when surrounding
 - **Memory**: do not replace shared scratch or add pools without measurements (heap,
   retained native bytes, guard hold time) proving the benefit. Native tests that change
   bridge behavior must run against real natives, not just the stub.
+- **Limits are unlimited by default**: pixel, save-result, frame, and concurrency
+  bounds default to 0 = unbounded. Consumers enable them via system properties
+  (`jpdfium.maxRenderPixels`, `jpdfium.image.max_*`, `jpdfium.qpdf.maxConcurrency`,
+  `jpdfium.image.maxConcurrency`, `jpdfium.pipeline.maxParallelism`), explicit
+  options (`SaveOptions.maxOutputBytes`, `StorageOptions`, `ProcessingMode`),
+  or direct APIs (`QpdfLib.setMaxConcurrency`, `VipsImageConverter.setMaxConcurrency`,
+  `QpdfLib.withSlot`). Negative values are invalid configuration and rejected,
+  never silently treated as unlimited. Permits bound admission, not bytes;
+  `maxBytes` on publish bounds acceptance, not transient disk use during native write.
 
 ## Performance Contributions
 
@@ -105,7 +114,7 @@ PDFium-call count, crossing count, copies/peak bytes, guard hold time, allocatio
 rate/retention, native loops, and only then instruction-level tuning.
 
 - Measure with JMH (micro), component drivers, and end-to-end runs; record heap
-  bytes/op (`-prof gc`), peak RSS, guard wait/hold time (`NativeGuard.stats()`),
+  bytes/op (`-prof gc`), peak RSS, guard wait/hold time (`PdfiumRuntime.stats()`),
   calls/op, and budgets. Report intervals across forks, not single fastest runs.
 - Prefer fewer calls and fewer copies over hotter leaves: batch repetitive tiny FFM
   calls, move detached I/O outside the guard, and validate buffer capacity in both
@@ -113,16 +122,29 @@ rate/retention, native loops, and only then instruction-level tuning.
   extraction as `critical` downcalls.
 - Keep `Arena.ofConfined()` for single-call temporaries and `Arena.ofShared()` for
   cross-thread memory; never use `ofAuto()` or `global()` for bounded paths.
-- Budgets: `jpdfium.maxRenderPixels`, `jpdfium.maxSaveResultBytes` (opt-in),
-  and the caller-supplied bound in `PdfDocument.open(InputStream, long)`.
-  Stream opens have **no** default cap - consumers opt in. Checked arithmetic
-  everywhere.
+- Budgets are opt-in with no default cap: `jpdfium.maxRenderPixels` (0 = unlimited),
+  `jpdfium.maxSaveResultBytes` (0 = disabled), `jpdfium.image.max_*` (0 = unlimited),
+  `jpdfium.qpdf/image.maxConcurrency` (0 = unbounded), `jpdfium.pipeline.maxParallelism`
+  (0 = unbounded), plus the caller-supplied bound in `PdfDocument.open(InputStream, long)`
+  and `SaveOptions.maxOutputBytes`. Stream opens have **no** default cap.
+  Checked arithmetic everywhere. Concurrency permits bound admission, not memory;
+  size checks on publish bound acceptance, not transient native/disk use.
 
 ## Code Standards and Style
 
 - **Modern Java 25**: Use modern language features (records, pattern matching, switch expressions). Avoid Lombok.
 - **Imports**: Never use inline fully-qualified class names. Always add explicit imports at the top of the file.
-- **Comments**: Keep comments concise, accurate, and capped at two lines. Avoid commentary on obvious code.
+- **Comments**: Keep inline comments concise and capped at two lines. Public
+  ownership, safety, cancellation, and output-semantics contracts may use longer
+  Javadoc when the guarantee needs exact wording (what is bounded, when staging
+  publishes, what survives cancellation). Prefer fewer words over more.
+- **Cancellation**: logical cancel never releases resources still owned by
+  running native work. Arenas, leases, staging files, and permits retire on
+  actual task exit (finally), never on `Future.cancel`/`shutdownNow`.
+  Publication uses an explicit commit (`RUNNING→COMMITTING→COMMITTED` vs
+  `RUNNING→CANCELLED`); only the commit winner publishes, late cancel loses.
+  Replacement is staging + atomic rename; no-clobber is `CREATE_NEW` (O_EXCL)
+  streaming, never precheck + move.
 - **Formatting**:
   - Java: Enforced via Spotless (`./gradlew spotlessApply` and `./gradlew spotlessCheck`).
   - C++: Enforced via `.clang-format` and verified via `.clang-tidy`.
