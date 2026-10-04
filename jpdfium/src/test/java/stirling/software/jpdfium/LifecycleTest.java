@@ -8,8 +8,8 @@ import stirling.software.jpdfium.model.RenderQuality;
 import stirling.software.jpdfium.panama.BridgeAlloc;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.JpdfiumLib;
-import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 import stirling.software.jpdfium.redact.PdfRedactor;
 import stirling.software.jpdfium.redact.RedactOptions;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
@@ -315,13 +315,13 @@ class LifecycleTest {
         }
     }
 
-    // Guard counting is always on; wait/hold timing stays gated off by default.
+    // PdfiumRuntime execution domain counting is always on; wait/hold timing stays gated off by default.
     @Test
     void guardStatsAdvanceWithUse() {
-        var before = NativeGuard.stats();
-        NativeGuard.run(() -> {
+        var before = PdfiumRuntime.stats();
+        PdfiumRuntime.execute(() -> {
         });
-        var after = NativeGuard.stats();
+        var after = PdfiumRuntime.stats();
         assertTrue(after.acquisitions() >= before.acquisitions() + 1);
         assertEquals(0, after.waitNanos());
         assertEquals(0, after.holdNanos());
