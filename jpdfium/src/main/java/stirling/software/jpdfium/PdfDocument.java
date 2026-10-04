@@ -9,6 +9,7 @@ import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfNamedPages;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
@@ -643,6 +644,47 @@ public final class PdfDocument implements AutoCloseable {
     public PdfPage page(int index) {
         ensureOpen();
         return PdfPage.open(this, handle, index);
+    }
+
+    /**
+     * Get the count of named page registrations in the given tree (/Names /Pages or /Names /Templates).
+     */
+    public int namedPageCount(PdfNamedPages.Tree tree) {
+        ensureOpen();
+        return PdfNamedPages.count(rawDocSegment, tree);
+    }
+
+    /**
+     * List all entries in the given named page tree.
+     */
+    public List<PdfNamedPages.NamedPageEntry> namedPages(PdfNamedPages.Tree tree) {
+        ensureOpen();
+        return PdfNamedPages.list(rawDocSegment, tree);
+    }
+
+    /**
+     * Register a name for a page's object number in {@code /Names /Pages}.
+     */
+    public boolean setNamedPage(String name, int pageObjectNumber) {
+        ensureOpen();
+        return PdfNamedPages.setNamedPage(rawDocSegment, name, pageObjectNumber);
+    }
+
+    /**
+     * Remove a named page registration by name.
+     */
+    public boolean removeNamedPage(String name) {
+        ensureOpen();
+        return PdfNamedPages.removeNamedPage(rawDocSegment, name);
+    }
+
+    /**
+     * Return the indirect object number of the page at the given zero-based index.
+     * Returns 0 when the native build does not support the lookup.
+     */
+    public int getPageObjectNumber(int pageIndex) {
+        ensureOpen();
+        return PdfNamedPages.getPageObjectNumber(rawDocSegment, pageIndex);
     }
 
     /**
