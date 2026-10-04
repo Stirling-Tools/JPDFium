@@ -6,15 +6,26 @@
 #include <fpdf_save.h>
 #include <fpdfview.h>
 
+#include <atomic>
+#include <cerrno>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
 #include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "jpdfium.h"
@@ -22,15 +33,186 @@
 
 namespace {
 
+// Exclusive, no-follow creation for staging files. The sibling name carries
+// only the PID plus a counter, so another local user with write access to the
+// directory could pre-create it as a symlink: O_TRUNC/fopen("wb") would then
+// truncate the link target. O_EXCL|O_NOFOLLOW (and _O_EXCL on Windows, where
+// MSVCRT has no no-follow open flag) turns that into a failed open instead,
+// and every failure here fails the save closed via JPDFIUM_ERR_IO.
 FILE* safe_fopen_write(const char* path) {
 #if defined(_WIN32)
-    return std::fopen(path, "wb");
+    int fd = -1;
+    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT, _SH_DENYRW,
+                   _S_IREAD | _S_IWRITE) != 0) {
+        return nullptr;
+    }
+    FILE* f = ::_fdopen(fd, "wb");
+    if (!f) ::_close(fd);
+    return f;
 #else
-    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_TRUNC, 0600);
     if (fd < 0) return nullptr;
-    return ::fdopen(fd, "wb");
+    FILE* f = ::fdopen(fd, "wb");
+    if (!f) ::close(fd);
+    return f;
 #endif
 }
+
+// Sibling staging file for an atomic publish.
+//
+// Writing straight to the destination destroys it the moment the save fails:
+// the sink opens with O_TRUNC, and the failure path removes "the partial
+// output" - which is the user's pre-existing file. Serializing into a sibling
+// and renaming means a refused save leaves the destination byte-for-byte
+// untouched. The sibling is what makes the publish a rename rather than a
+// cross-device copy. It carries mode 0600 while partial; publish_staged
+// restores the destination mode (existing or umask default) before renaming.
+std::string staging_sibling(const char* path) {
+    static std::atomic<unsigned> counter{0};
+    const unsigned n = counter.fetch_add(1, std::memory_order_relaxed);
+#if defined(_WIN32)
+    const long pid = static_cast<long>(GetCurrentProcessId());
+#else
+    const long pid = static_cast<long>(::getpid());
+#endif
+    return std::string(path) + ".jpdfium-save-" + std::to_string(pid) + "-" + std::to_string(n) +
+           ".tmp";
+}
+
+// Attempts to open a fresh sibling staging file. Exclusive creation turns a
+// planted entry into EEXIST, but so does a stale leftover from a crashed run
+// (PID reuse plus a reset counter can regenerate the name), so retry with a
+// fresh counter suffix instead of failing the first collision. Persistent
+// contention still fails closed after a bounded number of attempts, and
+// non-collision errors fail immediately.
+constexpr int kStagingOpenAttempts = 32;
+
+FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
+    for (int attempt = 0; attempt < kStagingOpenAttempts; ++attempt) {
+        stagingOut = staging_sibling(path);
+        FILE* f = safe_fopen_write(stagingOut.c_str());
+        if (f) return f;
+        if (errno != EEXIST) return nullptr;
+    }
+    return nullptr;
+}
+
+// Rename staging over the destination. Falls back to a non-atomic replace when
+// the platform refuses (a cross-device rename cannot happen here because the
+// staging file is a sibling, but some filesystems reject rename onto an open
+// target).
+//
+// The staging file carries mode 0600 from exclusive creation, which is right
+// while it holds a partial PDF and wrong for the published artifact: a rename
+// would hand the destination owner-only permissions and silently drop the
+// mode of the file it replaced. Mirror applyDestinationPermissions on the
+// Java side - keep an existing destination's mode, otherwise the umask
+// default - so saves behave like a direct write. Windows inherits the
+// directory ACL on move, so there is nothing to copy there.
+bool publish_staged(const std::string& staging, const char* destination) {
+#if defined(_WIN32)
+    // Windows rename fails if the target exists, so MOVEFILE_REPLACE_EXISTING is
+    // the replace path. If it fails the destination is left exactly as it was:
+    // removing it and retrying would destroy the previous file on a path that
+    // then also fails, which is the very loss this staging exists to prevent.
+    if (::MoveFileExA(staging.c_str(), destination,
+                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+    // Last resort for the "target exists" case older filesystems report. Only
+    // reached when MoveFileEx declined without touching the destination.
+    if (std::rename(staging.c_str(), destination) == 0) return true;
+    std::remove(staging.c_str());
+    return false;
+#else
+    // Zeroed with memset rather than brace-init: empty-brace spacing churns
+    // between clang-format versions and this file must satisfy both.
+    struct stat st;
+    std::memset(&st, 0, sizeof(st));
+    if (::stat(destination, &st) == 0) {
+        ::chmod(staging.c_str(), st.st_mode & 07777);
+    } else {
+        // No destination yet: learn the umask default from a probe file, the
+        // way Files.createFile does on the Java side. Reading umask(2) would
+        // race process-wide with other threads creating files.
+        const std::string probe = staging + ".permmode";
+        int pfd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if (pfd >= 0) {
+            if (::fstat(pfd, &st) == 0) ::chmod(staging.c_str(), st.st_mode & 07777);
+            ::close(pfd);
+            ::remove(probe.c_str());
+        }
+        // If even the probe fails, the staging keeps 0600: restrictive beats
+        // permissive when the default cannot be determined.
+    }
+    return std::rename(staging.c_str(), destination) == 0;
+#endif
+}
+
+// Direct-to-file FPDF_FILEWRITE sink: streams PDFium serialization blocks
+// straight to a native FILE* with zero document-sized buffering. The callback
+// is allocation-free, must not let exceptions escape, and enforces the byte
+// budget inline so an unbounded save is aborted mid-write instead of after the
+// fact.
+//
+// Failure model, so the caller can tell the stages apart:
+//   - budget exhaustion / short write -> failed = true, write_errno untouched
+//     for the budget case (no I/O error occurred), set from errno otherwise.
+//   - first failure wins: once failed is set every later block short-circuits,
+//     so PDFium sees the error and stops instead of writing more.
+//   - fflush and fclose are checked separately by the caller, so a flush
+//     failure is distinguishable from a close failure.
+struct FileWriteContext : FPDF_FILEWRITE {
+    FILE* file = nullptr;
+    std::uint64_t bytes_written = 0;
+    std::uint64_t max_bytes = 0;  // 0 = unlimited
+    int write_errno = 0;
+    bool failed = false;
+    // True when the failure was the byte budget rather than the filesystem, so
+    // callers can report "output too large" instead of "I/O error".
+    bool budget_exceeded = false;
+
+    // Named Write, not WriteBlock: a member function with the same name as the
+    // inherited FPDF_FILEWRITE field would hide that field, and the
+    // assignment `ctx.WriteBlock = FileWriteContext::WriteBlock` would then try
+    // to assign a function to itself instead of to the inherited pointer.
+    //
+    // A C callback must not propagate exceptions across the ABI boundary, so
+    // this is not marked noexcept: the operations below (fwrite, errno) are
+    // C calls that cannot throw, and the body contains no throwing operation.
+    static int Write(FPDF_FILEWRITE* writer, const void* data, unsigned long size) {
+        auto* ctx = static_cast<FileWriteContext*>(writer);
+        if (!ctx || ctx->failed || !ctx->file) return 0;
+        // A zero-length block is legal and is not an error; PDFium may emit one
+        // at the end of a stream.
+        if (size == 0) return 1;
+        if (!data) {
+            ctx->failed = true;
+            return 0;
+        }
+        if (ctx->max_bytes > 0) {
+            // Subtraction form: never computes bytes_written + size, so the
+            // cumulative total cannot overflow uint64_t.
+            if (ctx->bytes_written >= ctx->max_bytes ||
+                static_cast<std::uint64_t>(size) > ctx->max_bytes - ctx->bytes_written) {
+                ctx->failed = true;
+                ctx->budget_exceeded = true;
+                return 0;
+            }
+        }
+        const size_t written = std::fwrite(data, 1, size, ctx->file);
+        if (written != size) {
+            // Partial write: the destination now holds a prefix that is not a
+            // valid PDF. Marking failed makes the caller discard the file
+            // rather than publish it.
+            ctx->failed = true;
+            ctx->write_errno = errno;
+            return 0;
+        }
+        ctx->bytes_written += size;
+        return 1;
+    }
+};
 
 }  // namespace
 
@@ -88,6 +270,34 @@ int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
             return static_cast<int64_t>(sizeof(FS_RECTF));
         case JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET:
             return static_cast<int64_t>(offsetof(FS_RECTF, right));
+        case JPDFIUM_ABI_QUERY_ULONG_SIZE:
+            return static_cast<int64_t>(sizeof(unsigned long));
+        case JPDFIUM_ABI_QUERY_RECTF_LEFT_OFFSET:
+            return static_cast<int64_t>(offsetof(FS_RECTF, left));
+        case JPDFIUM_ABI_QUERY_RECTF_BOTTOM_OFFSET:
+            return static_cast<int64_t>(offsetof(FS_RECTF, bottom));
+        case JPDFIUM_ABI_QUERY_RECTF_TOP_OFFSET:
+            return static_cast<int64_t>(offsetof(FS_RECTF, top));
+        case JPDFIUM_ABI_QUERY_MATRIX_SIZE:
+            return static_cast<int64_t>(sizeof(FS_MATRIX));
+        case JPDFIUM_ABI_QUERY_FILEWRITE_SIZE:
+            return static_cast<int64_t>(sizeof(FPDF_FILEWRITE));
+        case JPDFIUM_ABI_QUERY_FILEWRITE_VERSION:
+            // FPDF_FILEWRITE.version must be 1 per fpdf_save.h; the save path
+            // sets it explicitly and the handshake pins the expected value.
+            return 1;
+        case JPDFIUM_ABI_QUERY_HAS_SKIA:
+#ifdef JPDFIUM_HAS_SKIA
+            return 1;
+#else
+            return 0;
+#endif
+        case JPDFIUM_ABI_QUERY_HAS_QPDF:
+#ifdef JPDFIUM_HAS_QPDF
+            return 1;
+#else
+            return 0;
+#endif
         default:
             return -1;
     }
@@ -115,7 +325,9 @@ int32_t jpdfium_doc_create(int64_t* handle) {
 
         auto w = std::make_unique<DocWrapper>();
         w->core = makeDocCore(doc);
-        *handle = encodeHandle(w.release());
+        auto* raw = w.release();
+        DocHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -130,8 +342,11 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
         if (!doc) return translatePdfiumError();
 
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc);
-        *handle = encodeHandle(w.release());
+        // Record the source path so a later save can refuse to overwrite it.
+        w->core = makeDocCore(doc, nullptr, 0, path);
+        auto* raw = w.release();
+        DocHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -156,7 +371,9 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
 
         auto w = std::make_unique<DocWrapper>();
         w->core = makeDocCore(doc, copy, len);
-        *handle = encodeHandle(w.release());
+        auto* raw = w.release();
+        DocHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -180,7 +397,9 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
 
         auto w = std::make_unique<DocWrapper>();
         w->core = makeDocCore(doc, copy, len);
-        *handle = encodeHandle(w.release());
+        auto* raw = w.release();
+        DocHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -195,8 +414,13 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
         if (!doc) return translatePdfiumError();
 
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc);
-        *handle = encodeHandle(w.release());
+        // Record the source path like jpdfium_doc_open so a later save refuses
+        // to overwrite its own backing file (O_TRUNC would destroy the input
+        // PDFium is still reading).
+        w->core = makeDocCore(doc, nullptr, 0, path);
+        auto* raw = w.release();
+        DocHandleRegistry::instance().add(raw);
+        *handle = encodeHandle(raw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -235,37 +459,145 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
 }
 
 }  // namespace
-int32_t jpdfium_doc_save(int64_t doc, const char* path) {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+namespace {
+// Alias protection helper: saving over the document's own backing file would
+// truncate/replace the input PDFium is still reading from (lazy reads).
+// String equality misses /a/../x.pdf, relative paths, and symlinks, so when
+// both files exist compare filesystem identity; otherwise compare normalized
+// absolute paths.
+bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
+    if (sourcePath.empty() || !destPath || !*destPath) return false;
+    std::error_code ec;
+    // equivalent() handles symlinks, ../, and relative paths via identity
+    // (st_dev/st_ino on POSIX). Only when both exist; a non-existent
+    // destination cannot alias the source yet.
+    if (std::filesystem::exists(sourcePath, ec) && std::filesystem::exists(destPath, ec)) {
+        std::error_code ec2;
+        if (std::filesystem::equivalent(sourcePath, destPath, ec2) && !ec2) return true;
+        if (!ec2) return false;
+        // Fall through to string compare on error.
+    }
+    try {
+        auto srcAbs = std::filesystem::absolute(sourcePath).lexically_normal().string();
+        auto dstAbs = std::filesystem::absolute(destPath).lexically_normal().string();
+        return srcAbs == dstAbs;
+    } catch (...) {
+        return sourcePath == destPath;
+    }
+}
+}  // namespace
 
-    struct BufWriter : FPDF_FILEWRITE {
-        std::vector<uint8_t> buf;
-        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* bw = static_cast<BufWriter*>(self);
-            try {
-                auto* src = static_cast<const uint8_t*>(data);
-                bw->buf.insert(bw->buf.end(), src, src + size);
-                return 1;
-            } catch (...) {
-                return 0;  // never let exceptions cross the C callback
-            }
+int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (!path || !*path) return JPDFIUM_ERR_INVALID;
+        if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
+        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        if (out_bytes) *out_bytes = 0;
+
+        // Alias protection first: both the sanitize branch (staging + rename
+        // over the source) and the streaming branch would destroy the input
+        // PDFium is still reading from. Checked before any output is opened.
+        if (isSaveAlias(w->core->sourcePath, path)) {
+            return JPDFIUM_ERR_INVALID;
         }
-    } bw;
-    bw.version = 1;
-    bw.WriteBlock = BufWriter::Write;
 
-    if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+        // Opt-in sanitize pass needs the whole serialization post-hoc, so it
+        // keeps the buffered path. The common case streams with no large buffer.
+        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+            struct BufWriter : FPDF_FILEWRITE {
+                std::vector<uint8_t> buf;
+                static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+                    auto* bw = static_cast<BufWriter*>(self);
+                    try {
+                        auto* src = static_cast<const uint8_t*>(data);
+                        bw->buf.insert(bw->buf.end(), src, src + size);
+                        return 1;
+                    } catch (...) {
+                        return 0;  // never let exceptions cross the C callback
+                    }
+                }
+            } bw;
+            bw.version = 1;
+            bw.WriteBlock = BufWriter::Write;
 
-    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
-    if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+            int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+            if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+            // Same code as the streaming branch so callers see one error
+            // category for "output exceeded the budget".
+            if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes)
+                return JPDFIUM_ERR_TOO_LARGE;
 
-    FILE* f = safe_fopen_write(path);
-    if (!f) return JPDFIUM_ERR_IO;
-    size_t written = fwrite(bw.buf.data(), 1, bw.buf.size(), f);
-    fclose(f);
-    return written == bw.buf.size() ? JPDFIUM_OK : JPDFIUM_ERR_IO;
+            std::string staging;
+            FILE* f = open_staging_sibling(path, staging);
+            if (!f) return JPDFIUM_ERR_IO;
+            size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
+            int closeRc = fclose(f);
+            if (written != bw.buf.size() || closeRc != 0) {
+                std::remove(staging.c_str());
+                return JPDFIUM_ERR_IO;
+            }
+            if (!publish_staged(staging, path)) {
+                std::remove(staging.c_str());
+                return JPDFIUM_ERR_IO;
+            }
+            if (out_bytes) *out_bytes = static_cast<int64_t>(written);
+            return JPDFIUM_OK;
+        }
+
+        std::string staging;
+        FILE* f = open_staging_sibling(path, staging);
+        if (!f) return JPDFIUM_ERR_IO;
+
+        FileWriteContext ctx;
+        ctx.version = 1;
+        ctx.WriteBlock = FileWriteContext::Write;
+        ctx.file = f;
+        ctx.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
+
+        // PDFium's own outcome and the sink's are recorded separately: a save can
+        // return true while the sink failed, or fail while everything written so
+        // far was fine. Reporting only one of them would misattribute the cause.
+        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
+        const int flushRc = std::fflush(f);
+        const int closeRc = std::fclose(f);
+        ctx.file = nullptr;
+
+        if (!pdfium_ok || ctx.failed || flushRc != 0 || closeRc != 0) {
+            // Never publish a partial destination: a truncated PDF is worse than
+            // no output, so the staging file is discarded and the stage that
+            // failed is what gets reported. The destination is never opened, so
+            // an existing file at that path survives untouched.
+            std::remove(staging.c_str());
+            if (ctx.budget_exceeded) return JPDFIUM_ERR_TOO_LARGE;
+            if (!pdfium_ok) return JPDFIUM_ERR_IO;
+            if (flushRc != 0) return JPDFIUM_ERR_IO;  // flush failure
+            if (closeRc != 0) return JPDFIUM_ERR_IO;  // close failure
+            return JPDFIUM_ERR_IO;                    // sink failure
+        }
+        // An empty result is not a valid PDF, so treat it as a failure rather than
+        // reporting a zero-byte success.
+        if (ctx.bytes_written == 0) {
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        if (!publish_staged(staging, path)) {
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        if (out_bytes) *out_bytes = static_cast<int64_t>(ctx.bytes_written);
+        return JPDFIUM_OK;
+    } catch (...) {
+        // Never let a C++ exception cross the FFM boundary.
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_doc_save(int64_t doc, const char* path) {
+    return jpdfium_doc_save_to_file(doc, path, 0, nullptr);
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
@@ -307,7 +639,14 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
 }
 
 void jpdfium_doc_close(int64_t doc) noexcept {
-    delete decodeDoc(doc);
+    // Remove from the registry before deleting, and delete only what the
+    // registry vouches for. Previously this was `delete decodeDoc(doc)` with an
+    // unvalidated cast, so closing a bogus or already-closed handle reached
+    // operator delete on an arbitrary address.
+    DocWrapper* w = decodeDoc(doc);
+    if (!w) return;
+    DocHandleRegistry::instance().remove(w);
+    delete w;
 }
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
@@ -318,7 +657,9 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
         FPDF_PAGE page = FPDF_LoadPage(w->core->doc, idx);
         if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-        *handle = encodeHandle(new PageWrapper(page, w->core->doc, idx, w->core));
+        auto* pw = new PageWrapper(page, w->core->doc, idx, w->core);
+        PageHandleRegistry::instance().add(pw);
+        *handle = encodeHandle(pw);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -350,16 +691,39 @@ int32_t jpdfium_page_height(int64_t page, float* height) {
     }
 }
 
-void jpdfium_page_close(int64_t page) noexcept {
-    // Decode the raw pointer directly: decodePage() rejects a stale handle, and
-    // close must still free the wrapper of a page whose document was replaced.
-    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(page));
-    if (pw && pw->page && !pw->stale()) {
-        // A pending progressive render holds this raw page identity in its
-        // map; abandon it before the page itself is freed so a later session
-        // step or close can never operate on the freed identity.
-        jpdfium_render_abandon_progressive(pw->page);
+int32_t jpdfium_page_info(int64_t page, float* width, float* height) {
+    try {
+        PageWrapper* pw = decodePage(page);
+        if (!pw || !pw->page || !width || !height) return JPDFIUM_ERR_INVALID;
+        *width = static_cast<float>(FPDF_GetPageWidth(pw->page));
+        *height = static_cast<float>(FPDF_GetPageHeight(pw->page));
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
+}
+
+void jpdfium_page_close(int64_t page) noexcept {
+    // Validate against the registry before touching the pointer. Close must
+    // still free the wrapper of a page whose document was replaced, so the
+    // staleness check below deliberately does not gate the delete - but
+    // membership does, because an unregistered address must never be deleted.
+    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(page));
+    if (!pw || !PageHandleRegistry::instance().contains(pw)) return;
+    if (pw->page) {
+        // A pending progressive render holds this raw page identity in its
+        // map; retire it before the page itself is freed so a later session
+        // step or close can never operate on the freed identity. The stale
+        // path must not call into PDFium (its document is gone), so it only
+        // forgets the map entry and destroys the caller-owned bitmap.
+        if (!pw->stale()) {
+            jpdfium_render_abandon_progressive(pw->page);
+        } else {
+            jpdfium_render_forget_progressive(pw->page);
+        }
+    }
+    PageHandleRegistry::instance().remove(pw);
     delete pw;
 }
 
