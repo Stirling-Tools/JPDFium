@@ -40,19 +40,6 @@
       "allPublicFields": true
     },
     {
-      "type": "stirling.software.jpdfium.panama.NativeGuard",
-      "methods": [
-        {
-          "name": "acquire",
-          "parameterTypes": []
-        },
-        {
-          "name": "release",
-          "parameterTypes": []
-        }
-      ]
-    },
-    {
       "type": "stirling.software.jpdfium.panama.ActionBindings"
     },
     {
@@ -166,6 +153,19 @@
       "type": "stirling.software.jpdfium.panama.NativeRuntime"
     },
     {
+      "type": "stirling.software.jpdfium.panama.PdfiumRuntime",
+      "methods": [
+        {
+          "name": "enterChecked",
+          "parameterTypes": []
+        },
+        {
+          "name": "exit",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
       "type": "stirling.software.jpdfium.panama.Pcre2Lib"
     },
     {
@@ -189,6 +189,14 @@
             "java.lang.foreign.MemorySegment",
             "java.lang.foreign.MemorySegment",
             "long"
+          ]
+        },
+        {
+          "name": "writeBlockCallbackInt",
+          "parameterTypes": [
+            "java.lang.foreign.MemorySegment",
+            "java.lang.foreign.MemorySegment",
+            "int"
           ]
         }
       ]
@@ -1699,6 +1707,50 @@
         "parameterTypes": [
           "jint"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "jlong",
+          "void*",
+          "jlong",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "jlong",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jint"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "void*",
+          "jint",
+          "jint"
+        ]
       }
     ],
     "upcalls": [
@@ -1708,6 +1760,14 @@
           "void*",
           "void*",
           "jlong"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "jint"
         ]
       }
     ]

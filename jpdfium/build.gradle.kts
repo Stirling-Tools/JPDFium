@@ -102,15 +102,26 @@ dependencies {
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
     jmhRuntimeOnly(project(":jpdfium-vips"))
+    // The jmh source set needs the same platform natives as testRuntimeOnly.
+    // Without it every benchmark dies in JpdfiumLib's static initializer with
+    // "Symbol not found", so JMH silently measures nothing.
+    jmhRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
 }
 
 jmh {
-    // Run each benchmark for a brief warmup + 3 measurement forks so CI
-    // finishes in reasonable time. Developers can override on the command line:
-    //   ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=5 -Pjmh.iterations=5
+    // CI defaults stay fast (1 fork, 2+3 x 1s). Annotations in bench sources
+    // request the trustworthy shape (Fork 3, 5 warmup + 10 measurement) but the
+    // plugin overrides them, so pass explicit properties for a ranking you can
+    // actually compare:
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark \
+    //     -Pjmh.forks=3 -Pjmh.warmupIterations=5 -Pjmh.iterations=10
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark -Pjmh.profilers=gc
+    // Ranking rule: do not claim X faster than Y when 99.9% CIs overlap. With
+    // Cnt=3 the CI is mostly noise (t-distribution); Cnt>=15 is the minimum
+    // for a comparison, Cnt=30 (3x10) is the trustworthy default.
     warmupIterations.set((findProperty("jmh.warmupIterations") as String? ?: "2").toInt())
     iterations.set((findProperty("jmh.iterations") as String? ?: "3").toInt())
-    fork.set(1)
+    fork.set((findProperty("jmh.forks") as String? ?: findProperty("jmh.fork") as String? ?: "1").toInt())
     timeUnit.set("ms")
     resultFormat.set("JSON")
     resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
@@ -121,6 +132,31 @@ jmh {
     // Include only benchmarks in the jpdfium bench package.
     val includePattern = findProperty("jmh.include") as String? ?: "stirling.software.jpdfium.bench.*"
     includes.add(includePattern)
+}
+
+// Version stamp for the runtime natives downloader: lets a JVM that has the
+// pure-Java jar but no natives jar resolve the matching
+// com.stirling:jpdfium-natives-<platform>:<version> from Maven Central when
+// -Djpdfium.native.download=true is set. Written to the build dir (never the
+// source tree) and added to processResources below.
+val writeVersionProperties = tasks.register("writeVersionProperties") {
+    description = "Write the library version for runtime natives resolution"
+    val outDir = layout.buildDirectory.dir("generated/version")
+    // The file embeds project.version: without this input a version bump can
+    // leave the task up-to-date and package the previous version, making the
+    // runtime downloader request the wrong natives artifact.
+    inputs.property("projectVersion", project.version.toString())
+    outputs.dir(outDir)
+    doLast {
+        val pkg = outDir.get().asFile.resolve("stirling/software/jpdfium/panama")
+        pkg.mkdirs()
+        pkg.resolve("jpdfium-version.properties").writeText("version=${project.version}\n")
+    }
+}
+
+tasks.named<Copy>("processResources") {
+    dependsOn(writeVersionProperties)
+    from(writeVersionProperties)
 }
 
 // Set jpdfium.jextractHome in ~/.gradle/gradle.properties or JEXTRACT_HOME env var.
@@ -139,8 +175,9 @@ val jpdfiumFunctions = listOf(
     "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
-    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
-    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
+    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_save_to_file", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
+    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_info",
+    "jpdfium_page_close",
     "jpdfium_render_page", "jpdfium_render_page_flags", "jpdfium_render_page_into", "jpdfium_render_page_form_into",
     "jpdfium_render_page_progressive_start", "jpdfium_render_page_progressive_continue", "jpdfium_render_page_progressive_close",
     "jpdfium_free_buffer",
@@ -196,11 +233,17 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_optimize_file",
     "jpdfium_qpdf_sanitize",
+    "jpdfium_qpdf_sanitize_file",
     "jpdfium_qpdf_merge",
+    "jpdfium_qpdf_merge_files",
     "jpdfium_qpdf_extract_pages",
+    "jpdfium_qpdf_extract_pages_file",
     "jpdfium_qpdf_encrypt",
+    "jpdfium_qpdf_encrypt_file",
     "jpdfium_qpdf_decrypt",
+    "jpdfium_qpdf_decrypt_file",
     // Signatures
     "jpdfium_signature_count",
     "jpdfium_signature_revision_count",
@@ -306,7 +349,8 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
 
             // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
             val qpdfFuncs = listOf(
-                "jpdfium_qpdf_optimize", "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_file",
+                "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
                 "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
             )
             for (fn in qpdfFuncs) {

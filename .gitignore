@@ -114,3 +114,9 @@ test-output/
 **/surefire-reports/
 samples-output/
 **/samples-output/
+
+# Native sanitizer/cost build trees (reproducible from CMakeLists; see
+# BASELINE-CHECKPOINT.md)
+native/build-asan/
+native/build-asan-stub/
+native/build-cost/
