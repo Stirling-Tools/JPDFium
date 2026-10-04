@@ -126,6 +126,49 @@ class CropPdfBoxVerificationTest {
         }
     }
 
+    @Test
+    void formChildTextRemovalLeavesNoStaleStream() throws Exception {
+        // Single survivor run ("KEEP"): a stale form stream would leave
+        // "SECRETKEEP" extractable.
+        byte[] output = cropFirstPage(CropTestPdfGenerator.formNestedSingleWordPdf(),
+                new Rect(155, 0, 457, 792));
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            String text = new PDFTextStripper().getText(doc);
+            assertFalse(text.contains("SECRET"),
+                    "removed form text survived the in-place edit: " + text);
+            assertTrue(text.contains("KEEP"),
+                    "surviving form text lost in the in-place edit: " + text);
+            // Text extraction only sees referenced content: decode every stream,
+            // including unreferenced ones, so a stale form stream cannot hide.
+            // An undecodable stream falls back to raw bytes (an unsupported
+            // filter can still hide ASCII text), and at least one stream must
+            // actually be inspected or the loop proves nothing.
+            int inspected = 0;
+            for (var key : doc.getDocument().getXrefTable().keySet()) {
+                COSBase base;
+                try {
+                    base = doc.getDocument().getObjectFromPool(key).getObject();
+                } catch (Exception _) {
+                    continue;
+                }
+                if (!(base instanceof org.apache.pdfbox.cos.COSStream stream)) continue;
+                byte[] decoded;
+                try (var in = stream.createInputStream()) {
+                    decoded = in.readAllBytes();
+                } catch (Exception _) {
+                    try (var raw = stream.createRawInputStream()) {
+                        decoded = raw.readAllBytes();
+                    }
+                }
+                inspected++;
+                String body = new String(decoded, java.nio.charset.StandardCharsets.ISO_8859_1);
+                assertFalse(body.contains("SECRET"),
+                        "stream " + key + " still contains removed text");
+            }
+            assertTrue(inspected > 0, "no streams inspected");
+        }
+    }
+
     // boxes
 
     @Test

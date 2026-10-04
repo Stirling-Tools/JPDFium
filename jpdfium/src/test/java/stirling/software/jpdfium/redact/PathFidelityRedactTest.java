@@ -1,14 +1,18 @@
 package stirling.software.jpdfium.redact;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.crop.CropTestPdfGenerator;
 import stirling.software.jpdfium.model.Rect;
 
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -139,6 +143,39 @@ class PathFidelityRedactTest {
                 "sample point outside image");
         assertTrue(a.getRGB(x, y) == b.getRGB(x, y),
                 "pixel changed where no redaction applied");
+    }
+
+    @Test
+    void partialOverlapDimensionlessImageIsRemovedWithoutIncompleteError() throws Exception {
+        // Image without /Width at (280,400)-(320,500): unerodable, so a 50%
+        // overlap in redaction mode removes it. That has always meant success;
+        // REDACT_INCOMPLETE is a crop-mode signal for visible loss inside the
+        // crop, and must not fire for a fully redacted page.
+        byte[] input = CropTestPdfGenerator.dimensionlessStraddlingImagePdf();
+        byte[] saved;
+        try (var doc = PdfDocument.open(input);
+             var page = doc.page(0)) {
+            page.redactRegion(new Rect(280f, 400f, 20f, 100f), 0xFF000000);
+            page.flatten();
+            saved = doc.saveBytes();
+        }
+        try (PDDocument doc = Loader.loadPDF(saved)) {
+            int images = 0;
+            for (var key : doc.getDocument().getXrefTable().keySet()) {
+                org.apache.pdfbox.cos.COSBase base;
+                try {
+                    base = doc.getDocument().getObjectFromPool(key).getObject();
+                } catch (Exception _) {
+                    continue;
+                }
+                if (base instanceof org.apache.pdfbox.cos.COSStream stream
+                        && org.apache.pdfbox.cos.COSName.IMAGE.equals(stream
+                                .getCOSName(org.apache.pdfbox.cos.COSName.SUBTYPE))) {
+                    images++;
+                }
+            }
+            assertEquals(0, images, "partially overlapped image must be removed");
+        }
     }
 
     @Test
