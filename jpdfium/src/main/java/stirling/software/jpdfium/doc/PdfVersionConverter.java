@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -43,8 +42,16 @@ public final class PdfVersionConverter {
     );
 
     // WriteBlock signature: int (*)(FPDF_FILEWRITE* pThis, const void* pData, unsigned long size)
-    private static final FunctionDescriptor WRITE_BLOCK_DESC = FunctionDescriptor.of(
-            JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG);
+    // C unsigned long is platform-dependent (4 on Windows LLP64, 8 on LP64):
+    // JAVA_LONG would mismatch the native stack on Windows and corrupt the
+    // size argument. Use the canonical C long layout so the upcall matches the
+    // loaded bridge on every platform.
+    private static final MemoryLayout C_LONG_LAYOUT =
+            Linker.nativeLinker().canonicalLayouts().get("long");
+
+    private static FunctionDescriptor writeBlockDescriptor() {
+        return FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, C_LONG_LAYOUT);
+    }
 
     // Thread-local buffer for the upcall to write into. Short-lived and always
     // removed in finally; cold version-convert path only (not renders), so no
@@ -99,16 +106,29 @@ public final class PdfVersionConverter {
         WRITE_BUFFER.set(baos);
         try (Arena arena = Arena.ofConfined()) {
             MethodHandle writeBlockMH;
+            FunctionDescriptor writeBlockDesc = writeBlockDescriptor();
             try {
-                writeBlockMH = MethodHandles.lookup().findStatic(
-                        PdfVersionConverter.class, "writeBlockCallback",
-                        MethodType.methodType(int.class, MemorySegment.class, MemorySegment.class, long.class));
+                // Carrier must match the native width: int on LLP64 (Windows),
+                // long on LP64. A hardcoded long would pass the ABI handshake
+                // (which accepts 4 or 8) but invoke the callback with an
+                // incompatible descriptor on Windows.
+                if (C_LONG_LAYOUT.byteSize() == 4) {
+                    writeBlockMH = MethodHandles.lookup().findStatic(
+                            PdfVersionConverter.class, "writeBlockCallbackInt",
+                            MethodType.methodType(int.class, MemorySegment.class,
+                                    MemorySegment.class, int.class));
+                } else {
+                    writeBlockMH = MethodHandles.lookup().findStatic(
+                            PdfVersionConverter.class, "writeBlockCallback",
+                            MethodType.methodType(int.class, MemorySegment.class,
+                                    MemorySegment.class, long.class));
+                }
             } catch (Exception e) {
                 throw new JPDFiumException("Failed to create WriteBlock method handle", e);
             }
 
             MemorySegment writeBlockStub = Linker.nativeLinker().upcallStub(
-                    writeBlockMH, WRITE_BLOCK_DESC, arena);
+                    writeBlockMH, writeBlockDesc, arena);
 
             MemorySegment fileWrite = arena.allocate(FPDF_FILEWRITE_LAYOUT);
             fileWrite.set(JAVA_INT, 0, 1);
@@ -150,5 +170,14 @@ public final class PdfVersionConverter {
         byte[] data = pData.reinterpret(size).toArray(JAVA_BYTE);
         baos.write(data, 0, data.length);
         return 1;
+    }
+
+    /**
+     * LLP64 (Windows) variant of {@link #writeBlockCallback}: C unsigned long
+     * is 32 bits there, so the upcall carrier must be int, not long.
+     */
+    @SuppressWarnings("unused")
+    private static int writeBlockCallbackInt(MemorySegment pThis, MemorySegment pData, int size) {
+        return writeBlockCallback(pThis, pData, Integer.toUnsignedLong(size));
     }
 }

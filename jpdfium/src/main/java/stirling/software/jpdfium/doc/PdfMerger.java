@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.IOException;
@@ -30,6 +31,10 @@ public final class PdfMerger {
     /**
      * Merge multiple PDF files into a single output file.
      *
+     * <p>File-backed first: the native merge streams each input, so the common
+     * case never puts the inputs on the Java heap. The in-memory fallback only
+     * materializes them when the native path is unavailable or fails.
+     *
      * @param inputPaths list of input PDF file paths
      * @param outputPath destination PDF file path
      * @throws IOException on I/O error
@@ -42,6 +47,11 @@ public final class PdfMerger {
             throw new IllegalArgumentException("outputPath must not be null");
         }
 
+        if (QpdfLib.mergeFiles(inputPaths, outputPath)) {
+            return;
+        }
+
+        // Native file merge unavailable or failed: only now pay for the bytes.
         List<byte[]> inputBytes = new ArrayList<>(inputPaths.size());
         for (Path p : inputPaths) {
             inputBytes.add(Files.readAllBytes(p));
@@ -52,7 +62,10 @@ public final class PdfMerger {
             throw new JPDFiumException("PDF merge failed or produced empty output");
         }
 
-        Files.write(outputPath, merged);
+        try (OutputTransaction tx = OutputTransaction.begin(outputPath)) {
+            Files.write(tx.staging(), merged);
+            tx.publish(null);
+        }
     }
 
     /**
