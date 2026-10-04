@@ -558,6 +558,24 @@ void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept {
     jpdfium_render_page_progressive_close(fpdf_page);
 }
 
+void jpdfium_render_forget_progressive(void* fpdf_page) noexcept {
+    // Stale-page path: the owning document was already freed and replaced, so
+    // calling FPDF_RenderPage_Close on the dangling page would be a
+    // use-after-free. Drop the map entry and destroy only the caller-owned
+    // bitmap wrapper; the PDFium progressive context dies with its document.
+    if (!fpdf_page) return;
+    try {
+        std::lock_guard<std::mutex> lock(g_progLock);
+        auto it = g_progMap.find(fpdf_page);
+        if (it != g_progMap.end()) {
+            if (it->second.bmp) FPDFBitmap_Destroy(it->second.bmp);
+            g_progMap.erase(it);
+        }
+    } catch (...) {
+        // Best-effort cleanup in a noexcept closer.
+    }
+}
+
 void jpdfium_free_buffer(uint8_t* buffer) noexcept {
     free(buffer);
 }
