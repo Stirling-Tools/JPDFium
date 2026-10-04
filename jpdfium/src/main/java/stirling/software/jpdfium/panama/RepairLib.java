@@ -45,8 +45,7 @@ public final class RepairLib {
      * @return repair result with status, output bytes, and diagnostics
      */
     public static RepairResult repair(byte[] input, int flags) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (input == null || input.length == 0) {
                 return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
             }
@@ -81,9 +80,7 @@ public final class RepairLib {
                 String diagnostics = inspect(input);
                 return new RepairResult(status, outputBytes, diagnostics);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -93,8 +90,7 @@ public final class RepairLib {
      * @return JSON diagnostic report
      */
     public static String inspect(byte[] input) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (input == null || input.length == 0) {
                 return "{\"error\":\"empty input\"}";
             }
@@ -112,9 +108,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     // Brotli (MIT)
@@ -127,8 +121,7 @@ public final class RepairLib {
      *         fails
      */
     public static byte[] brotliDecode(byte[] compressed) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (compressed == null || compressed.length == 0)
                 return null;
 
@@ -153,9 +146,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_buffer(outPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -165,8 +156,7 @@ public final class RepairLib {
      * @return FlateDecode-compressed bytes, or null if unavailable
      */
     public static byte[] brotliToFlate(byte[] compressed) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (compressed == null || compressed.length == 0)
                 return null;
 
@@ -191,9 +181,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_buffer(outPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     // PDFio (Apache 2.0)
@@ -205,8 +193,7 @@ public final class RepairLib {
      * @return repair result with pages recovered
      */
     public static RepairResult pdfioRepair(byte[] input) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (input == null || input.length == 0) {
                 return new RepairResult(RepairResult.Status.FAILED, null, "{\"error\":\"empty input\"}");
             }
@@ -247,9 +234,7 @@ public final class RepairLib {
                 String diag = "{\"source\":\"pdfio\",\"pages_recovered\":" + pagesRecovered + "}";
                 return new RepairResult(status, outputBytes, diag);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     // lcms2 (MIT)
@@ -262,8 +247,7 @@ public final class RepairLib {
      * @return JSON validation result, or null if lcms2 is unavailable
      */
     public static String validateIccProfile(byte[] profileData, int expectedComponents) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (profileData == null || profileData.length == 0)
                 return null;
 
@@ -280,9 +264,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -292,8 +274,7 @@ public final class RepairLib {
      * @return profile bytes, or null if lcms2 is unavailable
      */
     public static byte[] generateReplacementIcc(int numComponents) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 MemorySegment outPtrSeg = arena.allocate(ADDRESS);
                 MemorySegment outLenSeg = arena.allocate(JAVA_LONG);
@@ -313,9 +294,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_buffer(outPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -325,8 +304,7 @@ public final class RepairLib {
      * @return JSON validation result, or null if OpenJPEG is unavailable
      */
     public static String validateJpxStream(byte[] jpxData) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (jpxData == null || jpxData.length == 0)
                 return null;
 
@@ -342,9 +320,7 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     // Rust (lopdf)
@@ -367,8 +343,7 @@ public final class RepairLib {
      *         success
      */
     public static RepairResult rustRepair(byte[] input) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (input == null || input.length == 0) {
                 return new RepairResult(RepairResult.Status.FAILED, null,
                         "{\"error\":\"empty input\"}");
@@ -381,9 +356,7 @@ public final class RepairLib {
             }
             return new RepairResult(RepairResult.Status.FAILED, null,
                     "{\"source\":\"rust-lopdf\",\"status\":\"failed\"}");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     /**
@@ -393,8 +366,7 @@ public final class RepairLib {
      * @return raw pixel bytes (interleaved RGB/Gray/CMYK), or null on failure
      */
     public static byte[] jpxToRaw(byte[] jpxData) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             if (jpxData == null || jpxData.length == 0)
                 return null;
 
@@ -422,8 +394,6 @@ public final class RepairLib {
                 JpdfiumH.jpdfium_free_buffer(outPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }
