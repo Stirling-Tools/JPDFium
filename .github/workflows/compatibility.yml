@@ -75,11 +75,17 @@ jobs:
           JAPICMP_VER=0.23.0
           curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
           set +e  # japicmp exits non-zero on incompatibilities; handle below
+          # Accepted breakage: NativeGuard was a deprecated facade whose
+          # documented contract no longer holds (it cannot admit the execution
+          # domain), it has no in-repo callers, and removal turns cryptic
+          # runtime failures into clear compile errors toward PdfiumRuntime.
+          # Everything else must stay compatible.
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
             --ignore-missing-classes \
+            --exclude "stirling.software.jpdfium.panama.NativeGuard" \
             --error-on-binary-incompatibility \
             --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1

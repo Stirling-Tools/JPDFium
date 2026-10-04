@@ -23,14 +23,11 @@ public final class XmpLib {
                 ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(patterns[i]));
             }
             MemorySegment countSeg = a.allocate(JAVA_INT);
-            NativeGuard.acquire();
-            try {
+            return PdfiumRuntime.execute(() -> {
                 JpdfiumLib.check(JpdfiumH.jpdfium_xmp_redact_patterns(doc, ptrs, patterns.length, countSeg),
                         "xmpRedactPatterns");
                 return countSeg.get(JAVA_INT, 0);
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
@@ -41,21 +38,15 @@ public final class XmpLib {
             for (int i = 0; i < keys.length; i++) {
                 ptrs.setAtIndex(ADDRESS, i, a.allocateFrom(keys[i]));
             }
-            NativeGuard.acquire();
-            try {
+            PdfiumRuntime.execute(() -> {
                 JpdfiumLib.check(JpdfiumH.jpdfium_metadata_strip(doc, ptrs, keys.length), "metadataStrip");
-            } finally {
-                NativeGuard.release();
-            }
+            });
         }
     }
 
     public static void metadataStripAll(long doc) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.execute(() -> {
             JpdfiumLib.check(JpdfiumH.jpdfium_metadata_strip_all(doc), "metadataStripAll");
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }
