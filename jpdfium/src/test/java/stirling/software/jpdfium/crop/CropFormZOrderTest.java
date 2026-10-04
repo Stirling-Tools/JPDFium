@@ -3,7 +3,6 @@ package stirling.software.jpdfium.crop;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
@@ -13,20 +12,17 @@ import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.awt.image.BufferedImage;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Paint-order (z-order) regression guard for the crop form descent.
+ * Form-nested fission regression guard: the removed text must not survive in
+ * the saved form stream, and the survivors must keep their paint order.
  *
- * <p>A form XObject drawn BEFORE an opaque yellow rect contains a word
- * straddling the crop boundary. After a left-half crop the surviving glyphs
- * must remain UNDER the rect - the fissioned fragments are inserted at the
- * form's own position in the page object list, never appended on top of
- * content that was drawn after the form. Rendered pixels prove the visual
- * truth: the rect region must contain no dark (text) pixels, while the
- * straddling word must still exist in the text layer (fissioned, not lost).
- *
- * <p>Run: {@code ./gradlew :jpdfium:integrationTest --tests "stirling.software.jpdfium.crop.*"}
+ * <p>A form stream only regenerates when a child is removed from it, so the
+ * single surviving run is detached from the form, promoted to the page and
+ * edited in place. An existing object serializes at its page list position,
+ * so the survivors stay under content drawn after the form.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class CropFormZOrderTest {
@@ -36,26 +32,12 @@ class CropFormZOrderTest {
     private static final int RX = 270, RY = 690, RW = 36, RH = 30;
 
     /**
-     * KNOWN DEFECT (pre-existing on main, not introduced by the ownership/lifetime
-     * work): after cropping through a Form XObject, the straddling glyphs are
-     * visible above the opaque rectangle that was drawn after the form. The text
-     * layer check above passes, so this is a paint-order problem, not data loss.
-     *
-     * <p>Not yet triaged to a single cause. The two candidates are (a) the
-     * straddling rectangle being dropped or clipped by
-     * {@code jpdfium_crop_remove_content} rather than preserved, leaving the
-     * glyphs on white background, or (b) the surviving fragments being inserted
-     * at a page index that lands after the rectangle instead of before it. Both
-     * are in {@code native/bridge/src/jpdfium_redact.cpp}; neither code path is
-     * touched by the current branch (the test and the insertion/ordering code are
-     * byte-identical to {@code main}).
-     *
-     * <p>Kept disabled rather than deleted or loosened so the gap stays visible.
+     * A single surviving run is promoted from its form and reinserted right
+     * after the form's page position, so it stays under content drawn after
+     * the form (here: the opaque rect). Fails if fission reinserts survivors
+     * above later content.
      */
     @Test
-    @Disabled("KNOWN DEFECT: straddling form text paints above the rect drawn after "
-            + "the form; cause not yet triaged between crop clipping and fragment "
-            + "insert index. See the Javadoc.")
     void straddlingFormTextStaysUnderContentDrawnAfterTheForm() throws Exception {
         byte[] output;
         try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.formStraddleUnderRectPdf())) {
@@ -64,11 +46,14 @@ class CropFormZOrderTest {
         }
 
         // The straddling word must still exist in the text layer (its surviving
-        // glyphs were fissioned out of the form, not lost).
+        // glyphs were fissioned out of the form, not lost), and the removed
+        // part must be gone from the stream.
         try (PDDocument doc = Loader.loadPDF(output)) {
             String text = new PDFTextStripper().getText(doc);
             assertTrue(text.contains("EDG"),
                     "surviving glyphs of the straddling word must exist: " + text);
+            assertFalse(text.contains("EDGE_WORD") || text.contains("E_WORD"),
+                    "the removed part of the form word must be gone from the stream: " + text);
         }
 
         // Visual truth: no dark (text) pixels may appear inside the rect that
