@@ -316,6 +316,33 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                 )
             }
 
+            // Ownership-boundary contract for the raw bindings: jextract output
+            // carries no hand documentation, so re-apply it here on every
+            // regeneration, idempotently like the C_LONG patch above. Without
+            // this the committed file drifts from regeneration and the
+            // ffm-layout CI check fails.
+            if (!text.contains("Ownership boundary: handles created through these raw")) {
+                val anchor = "public class JpdfiumH extends JpdfiumH\$shared {"
+                val ownershipNote = """
+                    /**
+                     * Raw jextract bindings to the native bridge: no execution-domain admission,
+                     * no lifecycle accounting, no argument validation.
+                     *
+                     * <p>Ownership boundary: handles created through these raw entry points bypass
+                     * {@link PdfiumRuntime} tracking, so they must never be passed to the managed
+                     * {@link JpdfiumLib} wrappers (e.g. a raw-created document given to
+                     * {@code JpdfiumLib.docClose} would consume another document's live count and
+                     * let shutdown destroy PDFium early). Normal callers use
+                     * {@link stirling.software.jpdfium.PdfDocument} and friends, which keep both
+                     * sides consistent.
+                     */
+                    """.trimIndent() + "\n"
+                if (text.contains(anchor)) {
+                    text = text.replace(anchor, ownershipNote + anchor)
+                    logger.lifecycle("Re-applied JpdfiumH ownership-boundary contract")
+                }
+            }
+
             if (text != targetMain.readText()) {
                 targetMain.writeText(text)
                 logger.lifecycle("Normalized JpdfiumH descriptors and patched optional qpdf bindings for stability")
