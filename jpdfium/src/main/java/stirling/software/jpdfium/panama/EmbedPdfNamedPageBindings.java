@@ -61,4 +61,13 @@ public final class EmbedPdfNamedPageBindings {
      */
     public static final MethodHandle EPDFDoc_RemoveNamedPagesForPage = downcallOptional("EPDFDoc_RemoveNamedPagesForPage",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
+    /**
+     * Get the indirect object number for a page by its zero-based page index.
+     * Returns 0 on failure or when the symbol is unavailable.
+     * Signature: unsigned int EPDFDoc_GetPageObjectNumberByIndex(FPDF_DOCUMENT document, int page_index)
+     */
+    public static final MethodHandle EPDFDoc_GetPageObjectNumberByIndex = downcallOptional(
+            "EPDFDoc_GetPageObjectNumberByIndex",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 }
