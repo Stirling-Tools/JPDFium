@@ -4,18 +4,22 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#include "jpdfium_registry.h"
 
 struct TransparentStringHash {
     using is_transparent = void;
@@ -85,6 +89,12 @@ struct DocCore {
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
 
+    // Filesystem path this document was opened from, or empty for in-memory
+    // documents. Retained only so save can refuse to write over its own input:
+    // O_TRUNC on the source would destroy the bytes PDFium is still reading.
+    // Never a general-purpose ownership handle.
+    std::string sourcePath{};
+
     void* redactPatternCache = nullptr;
     void (*redactPatternDeleter)(void*) = nullptr;
 
@@ -128,7 +138,7 @@ struct DocCore {
 };
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
-                                            int64_t blen = 0) {
+                                            int64_t blen = 0, const char* sourcePath = nullptr) {
     // Own the document and buffer until DocCore takes them: `new DocCore()` and
     // the shared_ptr construction below can both throw, and the caller has no
     // handle to clean up with at that point.
@@ -145,6 +155,7 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nu
     core->doc = pending.doc;
     core->buf = pending.buf;
     core->blen = blen;
+    if (sourcePath) core->sourcePath = sourcePath;
     pending.doc = nullptr;
     pending.buf = nullptr;
     return std::shared_ptr<DocCore>(core, [](DocCore* c) {
@@ -206,10 +217,152 @@ struct PageWrapper {
     }
 };
 
-// True when a decoded page handle is live for its document generation.
+// Registry of live bridge-owned handles.
+//
+// CONTRACT: membership validation does NOT pin lifetime. A handle that validates
+// may be freed by another thread the instant the atomics are read. This
+// registry rejects forged, unknown and retired handles; it does not make
+// concurrent use safe. Safe operations serialize validation through use and
+// destruction in one execution domain (see PdfiumRuntime). Raw C ABI callers
+// must serialize themselves or use a scoped operation.
+//
+// Handle validity lives in HandleRegistry (see jpdfium_registry.h), shared
+// with the cost harness so its exactness checks run against production.
+
+class PageHandleRegistry {
+   public:
+    static PageHandleRegistry& instance() {
+        static PageHandleRegistry r;
+        return r;
+    }
+    void add(const PageWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const PageWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const PageWrapper* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    // Separate table from documents: a live PageWrapper* must never validate
+    // as a DocWrapper* and vice versa. Sharing one table made cross-type
+    // confusion pass membership and then dereference the wrong layout.
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// True when a decoded page handle was issued by this bridge and is still live
+// for its document generation. Validation order is load-bearing: registry
+// membership first, because that reads no page memory, and only then the
+// generation check, which dereferences pw->core.
 inline bool pageAlive(PageWrapper* pw) {
-    return pw && !pw->stale();
+    if (!pw) return false;
+    if (!PageHandleRegistry::instance().contains(pw)) return false;
+    return !pw->stale();
 }
+
+// Typed aliases keep the call sites self-documenting: a DocWrapper* cannot be
+// passed where a PageWrapper* is expected.
+class DocHandleRegistry {
+   public:
+    static DocHandleRegistry& instance() {
+        static DocHandleRegistry r;
+        return r;
+    }
+    void add(const DocWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const DocWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const DocWrapper* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    // Separate table from pages; see PageHandleRegistry above.
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// Auxiliary handles carry a kind tag so membership also establishes type:
+// a valid FlashText handle must not validate as PCRE2 and vice versa.
+class Pcre2HandleRegistry {
+   public:
+    static Pcre2HandleRegistry& instance() {
+        static Pcre2HandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+class FlashTextHandleRegistry {
+   public:
+    static FlashTextHandleRegistry& instance() {
+        static FlashTextHandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// Backwards-compatible alias for call sites that only need "aux, not doc/page".
+// New code uses the kind-specific registries above.
+class AuxHandleRegistry {
+   public:
+    static AuxHandleRegistry& instance() {
+        static AuxHandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
 
 // Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
 // selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
@@ -234,10 +387,22 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
 // is still pending so the map never retains a dangling page identity.
 void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept;
 
+// Forget a pending progressive render without touching PDFium page state
+// (jpdfium_render.cpp). Called when the page is stale, its document was freed
+// and replaced, so FPDF_RenderPage_Close would be a use-after-free. Drops the
+// map entry and destroys only the caller-owned bitmap.
+void jpdfium_render_forget_progressive(void* fpdf_page) noexcept;
+
 // Encode heap pointers as int64_t handles for the Java-visible ABI.
 // The pointer stays alive until the matching close function deletes it.
+//
+// Returns nullptr for a handle that was never issued, has already been closed,
+// or is simply garbage. Callers already null-check the result, so a rejected
+// handle surfaces as JPDFIUM_ERR_INVALID instead of a crash.
 inline DocWrapper* decodeDoc(int64_t h) {
-    return reinterpret_cast<DocWrapper*>(static_cast<uintptr_t>(h));
+    if (h <= 0) return nullptr;
+    auto* w = reinterpret_cast<DocWrapper*>(static_cast<uintptr_t>(h));
+    return DocHandleRegistry::instance().contains(w) ? w : nullptr;
 }
 
 // Decode a page handle, rejecting one whose document was freed and replaced.
