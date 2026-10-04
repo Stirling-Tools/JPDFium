@@ -18,11 +18,11 @@ import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
-import stirling.software.jpdfium.panama.NativeGuard;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
@@ -61,7 +61,8 @@ import java.util.function.ObjIntConsumer;
  *
  * <p>Independent {@code PdfDocument} instances may be used from separate threads:
  * PDFium itself is not thread-safe even across independent documents, so every
- * native call is serialised by {@link NativeGuard}.
+ * native call is serialised by the
+ * {@link stirling.software.jpdfium.panama.PdfiumRuntime} execution domain.
  * That makes concurrent use safe, but PDFium work does not run in parallel - the
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
@@ -81,6 +82,14 @@ public final class PdfDocument implements AutoCloseable {
      * removed earlier. Volatile and cleared on close so the deletion happens once.
      */
     private volatile Path ownedTempFile;
+
+    /**
+     * Original file this document was opened from, or null for memory/stream
+     * documents. Used by bulk operations to reuse the stable file-backed
+     * source without snapshotting when the document is still at generation 0
+     * (no structural mutation since open). Never deleted by this document.
+     */
+    private volatile Path sourcePath;
 
     PdfDocument(long handle) {
         this(handle, null);
@@ -135,7 +144,9 @@ public final class PdfDocument implements AutoCloseable {
 
     public static PdfDocument open(Path path) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
-        return new PdfDocument(JpdfiumLib.docOpen(path.toAbsolutePath().toString()));
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(path.toAbsolutePath().toString()));
+        doc.sourcePath = path.toAbsolutePath();
+        return doc;
     }
 
     public static PdfDocument open(byte[] data) {
@@ -349,7 +360,15 @@ public final class PdfDocument implements AutoCloseable {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         if (password.isEmpty()) return open(path);
-        return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
+        PdfDocument doc =
+                new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
+        doc.sourcePath = path.toAbsolutePath();
+        return doc;
+    }
+
+    /** Original open path, or null when not file-backed. Never deleted here. */
+    Path sourcePath() {
+        return sourcePath;
     }
 
     public static PdfDocument fromImages(List<BufferedImage> images) {
@@ -874,32 +893,94 @@ public final class PdfDocument implements AutoCloseable {
         }
     }
 
+    /**
+     * Save to a file with bounded memory and transactional publish.
+     *
+     * <p>PDFium streams via native {@code FPDF_FILEWRITE} to a sibling staging
+     * file (no document-sized buffer), then the staging file is atomically
+     * moved into place. A failed save leaves the destination untouched.
+     */
     public void save(Path path) {
-        ensureOpen();
-        JpdfiumLib.docSave(handle, path.toAbsolutePath().toString());
+        saveTo(path, SaveOptions.fast());
     }
 
     /**
-     * Save the document directly to a {@link WritableByteChannel} without intermediate Java heap byte[] allocation.
+     * Save to a file with an explicit output policy (byte budget, optional
+     * reopen validation).
+     */
+    public void saveTo(Path destination) {
+        saveTo(destination, SaveOptions.fast());
+    }
+
+    public void saveTo(Path destination, SaveOptions options) {
+        ensureOpen();
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        // Staging, reopen validation, and publish all live in docSaveToFile
+        // (via OutputTransaction.publish); duplicating the probe here would
+        // let the two paths drift.
+        JpdfiumLib.docSaveToFile(handle, destination, opts);
+    }
+
+    /**
+     * Save the document to a {@link WritableByteChannel} with bounded memory.
+     *
+     * <p>PDFium first spools to an owned temp file (guard held only for the
+     * file write), then the temp file is transferred in bounded chunks with
+     * the guard released, so a slow channel never stalls unrelated PDFium
+     * work. Neither a document-sized native buffer nor a Java {@code byte[]}
+     * is ever materialized.
      *
      * @param channel target output channel
      * @throws IOException if an I/O error occurs
      */
     public void save(WritableByteChannel channel) throws IOException {
+        saveTo(channel, SaveOptions.fast());
+    }
+
+    public void saveTo(WritableByteChannel channel) throws IOException {
+        saveTo(channel, SaveOptions.fast());
+    }
+
+    public void saveTo(WritableByteChannel channel, SaveOptions options) throws IOException {
         ensureOpen();
-        JpdfiumLib.docSaveTo(handle, channel);
+        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
     }
 
     /**
-     * Save the document directly to an {@link OutputStream}.
+     * Save the document to an {@link OutputStream} (delegates to the bounded
+     * channel-spool path).
      *
      * @param out target output stream
      * @throws IOException if an I/O error occurs
      */
     public void save(OutputStream out) throws IOException {
+        saveTo(out, SaveOptions.fast());
+    }
+
+    public void saveTo(OutputStream out) throws IOException {
+        saveTo(out, SaveOptions.fast());
+    }
+
+    public void saveTo(OutputStream out, SaveOptions options) throws IOException {
         ensureOpen();
+        if (out == null) throw new IllegalArgumentException("out must not be null");
         WritableByteChannel channel = Channels.newChannel(out);
-        JpdfiumLib.docSaveTo(handle, channel);
+        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
+     * Save to an owned temporary file; the caller owns deletion.
+     * Useful when the caller needs a file path without choosing one.
+     */
+    public Path saveToTempFile() {
+        ensureOpen();
+        return JpdfiumLib.docSaveToTempFile(handle, SaveOptions.fast());
+    }
+
+    public Path saveToTempFile(SaveOptions options) {
+        ensureOpen();
+        return JpdfiumLib.docSaveToTempFile(handle, options == null ? SaveOptions.fast() : options);
     }
 
     public byte[] saveBytes() {
@@ -1098,7 +1179,15 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <p><strong>Lifetime:</strong> zero-length view owned by this {@code PdfDocument}.
      * Must not outlive {@link #close()}, must stay on the owning thread, and native
-     * calls using it must hold {@code NativeGuard}.
+     * calls using it must run inside the PdfiumRuntime execution domain
+     * (via the {@code *Bindings} or {@code JpdfiumLib} helpers).
+     *
+     * <p><strong>Outside the execution-domain guarantee:</strong> direct use of
+     * this handle bypasses the admission, batching, and lifecycle ordering that
+     * {@link stirling.software.jpdfium.panama.PdfiumRuntime} enforces for all
+     * built-in operations. It keeps working, but the domain makes no promise
+     * about it; prefer the typed API, which is the migration target for scoped
+     * advanced access in a future major version.
      */
     public MemorySegment rawHandle() {
         ensureOpen();
