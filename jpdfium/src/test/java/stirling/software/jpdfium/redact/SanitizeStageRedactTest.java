@@ -4,6 +4,7 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -176,6 +177,30 @@ class SanitizeStageRedactTest {
             assertTrue(text.contains("EMBEDDED") && text.contains("LINE"),
                     "embedded-font survivors lost: " + text);
         }
+    }
+
+    @Test
+    void sanitizeStageStillRunsAfterMetadataReload() throws Exception {
+        Path pdf = testPdf("redact-test-sanitize-remnants.pdf");
+        String report;
+        try (var doc = PdfDocument.open(pdf)) {
+            doc.setSanitizeOnSave(true);
+            try (var page = doc.page(0)) {
+                int n = page.redactWordsEx(new String[]{"SECRET"}, 0xFF000000, 0f,
+                        false, false, true, false);
+                assertTrue(n >= 1, "SECRET must match on the page");
+            }
+            // Reload-generating op: it must not drop the sanitize-on-save
+            // intent or the redaction audit trail (literals/zones) that the
+            // save-time pass scrubs XMP against.
+            XmpRedactor.stripAll(doc);
+            doc.saveBytes();
+            report = doc.sanitizeReport();
+        }
+
+        assertTrue(report != null && !report.isEmpty(),
+                "sanitize report missing: reload dropped the sanitize stage");
+        assertFalse(report.contains("\"error\""), "sanitize failed: " + report);
     }
 
     @Test
