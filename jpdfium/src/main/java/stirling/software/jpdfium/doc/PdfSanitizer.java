@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.model.SaveOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.IOException;
@@ -39,11 +41,28 @@ public final class PdfSanitizer {
     }
 
     public static void sanitize(Path input, Path output, int flags) throws IOException {
+        sanitize(input, output, flags, 0);
+    }
+
+    public static void sanitize(Path input, Path output, int flags, long maxBytes) throws IOException {
+        if (maxBytes < 0) {
+            throw new IllegalArgumentException("maxBytes must be >= 0 (0 = unlimited), got " + maxBytes);
+        }
+        if (QpdfLib.sanitizeToFile(input, output, flags, maxBytes)) {
+            return;
+        }
         byte[] result = sanitize(input, flags);
         if (result == null) {
             throw new IOException("qpdf sanitization produced no output");
         }
-        Files.write(output, result);
+        // Single transaction for staging, size validation, permissions, and
+        // atomic publish: the previous createTempFile+publishStaged split kept
+        // the default temp permissions and skipped the budget check on this
+        // fallback path.
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), result);
+            tx.publish(maxBytes <= 0 ? null : SaveOptions.maxOutputBytes(maxBytes));
+        }
     }
 
     /** Check if in-process QPDF sanitization is available. */

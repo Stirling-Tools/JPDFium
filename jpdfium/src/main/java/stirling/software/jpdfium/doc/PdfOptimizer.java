@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.io.IOException;
@@ -52,14 +53,41 @@ public final class PdfOptimizer {
                 objectStreamMode, streamDataMode, decodeLevel);
     }
 
+    /**
+     * Optimize file-to-file, keeping no document-sized buffer in Java heap.
+     *
+     * <p>Preferred over the byte[] route for anything large: that form reads
+     * the whole input with {@code Files.readAllBytes} and also materializes the
+     * output, so peak heap is roughly input + output. This form streams through
+     * native code and holds only the paths.
+     *
+     * <p>Falls back to the buffered path when the native file route is
+     * unavailable (non-qpdf or stub builds), so callers do not have to branch
+     * on capability.
+     */
     public static void optimize(Path input, Path output, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) throws IOException {
+        // The file route takes no compression level: using it here would
+        // silently replace an explicit level with qpdf's default. Only take it
+        // when no level was requested; the buffered path honors the level.
+        if (compressionLevel == DEFAULT && QpdfLib.optimizeFile(input, output, flags,
+                objectStreamMode, streamDataMode, decodeLevel)) {
+            return;
+        }
         byte[] result = optimize(input, flags, compressionLevel,
                 objectStreamMode, streamDataMode, decodeLevel);
         if (result == null) {
             throw new IOException("qpdf optimization produced no output");
         }
-        Files.write(output, result);
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), result);
+            tx.publish(null);
+        }
+    }
+
+    /** True when the file-backed optimize route is usable in this build. */
+    public static boolean isFileOptimizeSupported() {
+        return QpdfLib.isOptimizeFileSupported();
     }
 
     /**

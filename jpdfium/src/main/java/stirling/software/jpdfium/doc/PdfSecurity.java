@@ -7,6 +7,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
@@ -111,12 +112,18 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void encrypt(Path input, Path output, String userPassword, String ownerPassword, int permissions, int keyLength) throws IOException {
+        if (QpdfLib.encryptToFile(input, output, userPassword, ownerPassword, permissions, keyLength)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] encBytes = encryptBytes(inBytes, userPassword, ownerPassword, permissions, keyLength);
         if (encBytes == null) {
             throw new JPDFiumException("PDF encryption failed");
         }
-        Files.write(output, encBytes);
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), encBytes);
+            tx.publish(null);
+        }
     }
 
     /**
@@ -155,12 +162,18 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void decrypt(Path input, Path output, String password) throws IOException {
+        if (QpdfLib.decryptToFile(input, output, password)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] decBytes = decryptBytes(inBytes, password);
         if (decBytes == null) {
             throw new JPDFiumException("PDF decryption failed");
         }
-        Files.write(output, decBytes);
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), decBytes);
+            tx.publish(null);
+        }
     }
 
     /**
