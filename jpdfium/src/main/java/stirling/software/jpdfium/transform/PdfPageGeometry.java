@@ -272,7 +272,7 @@ public final class PdfPageGeometry {
                     throw new JPDFiumException(t);
                 }
             }
-        } catch (JPDFiumException | RuntimeException | Error e) {
+        } catch (RuntimeException | Error e) {
             try {
                 FormFillBindings.EPDFForm_CloseModel.invokeExact(model);
             } catch (Throwable closeEx) {
