@@ -13,7 +13,7 @@ import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.JpdfiumLib;
-import stirling.software.jpdfium.panama.NativeGuard;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 import stirling.software.jpdfium.panama.RenderBindings;
 
 /**
@@ -57,8 +57,7 @@ public final class PdfFormRenderer {
         }
         // The form environment and page must stay on one thread for the whole
         // open/render/draw/teardown sequence: PDFium form state is process-wide.
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             MemorySegment rawDoc = document.rawHandle();
             PdfFormFiller.FormEnv env = PdfFormFiller.initFormEnvironment(rawDoc);
             try (PdfPage page = document.page(pageIndex)) {
@@ -75,9 +74,7 @@ public final class PdfFormRenderer {
                 }
                 env.arena().close();
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     private static RenderResult render(PdfFormFiller.FormEnv env, MemorySegment rawPage,
