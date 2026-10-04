@@ -39,21 +39,23 @@ class PdfNamedPagesTest {
             try {
                 PageEditBindings.FPDF_ClosePage.invokeExact(rawPage);
             } catch (Throwable t) {
-                // ignore
+                throw new AssertionError("FPDF_ClosePage failed", t);
             }
-            int pageObjNum = 1; // standard initial object number or positive id
+            // Resolve the actual indirect object number for page index 0 via FPDF_GetPageObject
+            // rather than assuming it is always 1; native trees vary by build.
+            int pageObjNum = doc.getPageObjectNumber(0);
             boolean set = doc.setNamedPage("cover-page", pageObjNum);
-            if (set) {
-                assertEquals(1, doc.namedPageCount(PdfNamedPages.Tree.PAGES));
-                List<PdfNamedPages.NamedPageEntry> entries = doc.namedPages(PdfNamedPages.Tree.PAGES);
-                assertEquals(1, entries.size());
-                assertEquals("cover-page", entries.getFirst().name());
-                assertEquals(pageObjNum, entries.getFirst().objectNumber());
-                assertEquals(PdfNamedPages.Kind.PAGE, entries.getFirst().kind());
+            assumeTrue(set, "setNamedPage rejected object number " + pageObjNum + " – skipping");
 
-                assertTrue(doc.removeNamedPage("cover-page"));
-                assertEquals(0, doc.namedPageCount(PdfNamedPages.Tree.PAGES));
-            }
+            assertEquals(1, doc.namedPageCount(PdfNamedPages.Tree.PAGES));
+            List<PdfNamedPages.NamedPageEntry> entries = doc.namedPages(PdfNamedPages.Tree.PAGES);
+            assertEquals(1, entries.size());
+            assertEquals("cover-page", entries.getFirst().name());
+            assertEquals(pageObjNum, entries.getFirst().objectNumber());
+            assertEquals(PdfNamedPages.Kind.PAGE, entries.getFirst().kind());
+
+            assertTrue(doc.removeNamedPage("cover-page"));
+            assertEquals(0, doc.namedPageCount(PdfNamedPages.Tree.PAGES));
         }
     }
 }
