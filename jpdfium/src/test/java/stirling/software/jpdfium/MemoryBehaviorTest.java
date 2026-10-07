@@ -6,16 +6,21 @@ import org.junit.jupiter.api.Timeout;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
 import stirling.software.jpdfium.panama.QpdfLib;
+import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfMerger;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
+import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -350,6 +355,134 @@ class MemoryBehaviorTest {
         }
     }
 
+    /**
+     * Applying the merged outline must keep the merged document on disk: the
+     * outline is appended to a file, never round-tripped through a byte[].
+     */
+    @Test
+    @Timeout(600)
+    void mergeWithBookmarksDoesNotMaterializeTheMergedDocument() throws Exception {
+        assumeTrue(QpdfLib.isMergeFilesSupported(),
+                "file-backed merge requires the native qpdf file entry point");
+        assumeTrue(NativeRuntime.isFull(), "bookmark content assertions need real PDFium natives");
+        Path a = Files.createTempFile("mem-bm-merge-a", ".pdf");
+        Path b = Files.createTempFile("mem-bm-merge-b", ".pdf");
+        try {
+            Files.write(a, bookmarkedPdf(10, 2_000_000, 1));
+            Files.write(b, bookmarkedPdf(10, 2_000_000, 2));
+            long combined = Files.size(a) + Files.size(b);
+
+            try (PdfDocument da = PdfDocument.open(a); PdfDocument db = PdfDocument.open(b)) {
+                for (StorageOptions options : List.of(StorageOptions.defaults(),
+                        StorageOptions.builder().file().build())) {
+                    double perOp = bytesPerOp(() -> {
+                        try (PdfDocument merged = PdfMerge.merge(List.of(da, db), options)) {
+                            assertEquals(20, merged.pageCount());
+                            assertEquals(20, merged.bookmarks().size());
+                        }
+                    }, 2, 5);
+                    System.out.printf("MEM merge(%s) with bookmarks %.1f MB input -> %.1f KB/op Java heap%n",
+                            options.mode(), combined / 1e6, perOp / 1024);
+                    assertTrue(perOp < combined / 4,
+                            "merge with bookmarks allocated " + perOp + " B/op for " + combined
+                                    + " B of input - the merged document was materialized");
+                }
+            }
+        } finally {
+            Files.deleteIfExists(a);
+            Files.deleteIfExists(b);
+        }
+    }
+
+    /** The page-import fallback must publish through a temp file unless MEMORY was asked for. */
+    @Test
+    @Timeout(600)
+    void importFallbackKeepsTheMergedDocumentOnDisk() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "bookmark content assertions need real PDFium natives");
+        Path big = Files.createTempFile("mem-bm-detach", ".pdf");
+        try {
+            Files.write(big, bookmarkedPdf(10, 2_000_000, 3));
+            long size = Files.size(big);
+            List<Bookmark> outline;
+            try (PdfDocument doc = PdfDocument.open(big)) {
+                outline = doc.bookmarks();
+            }
+            for (StorageOptions options : List.of(StorageOptions.defaults(),
+                    StorageOptions.builder().memory().build())) {
+                double perOp = bytesPerOp(() -> {
+                    try (PdfDocument detached = PdfMerge.detachWithBookmarks(PdfDocument.open(big), outline, options)) {
+                        assertEquals(10, detached.pageCount());
+                        assertEquals(10, detached.bookmarks().size());
+                    }
+                }, 2, 5);
+                System.out.printf("MEM import fallback (%s) with bookmarks %.1f MB -> %.1f KB/op Java heap%n",
+                        options.mode(), size / 1e6, perOp / 1024);
+                if (options.mode() != StorageOptions.Mode.MEMORY) {
+                    assertTrue(perOp < size / 4,
+                            "import fallback allocated " + perOp + " B/op for a " + size + " B document");
+                }
+            }
+        } finally {
+            Files.deleteIfExists(big);
+        }
+    }
+
+    /** Incompressible filler and one outline item per page, so QPDF cannot shrink the output. */
+    private static byte[] bookmarkedPdf(int pages, int fillerBytes, long seed) {
+        Random random = new Random(seed);
+        int firstPage = 4;
+        int firstContent = firstPage + pages;
+        int firstItem = firstContent + pages;
+        int total = firstItem + pages;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        long[] offsets = new long[total];
+        StringBuilder kids = new StringBuilder();
+        for (int i = 0; i < pages; i++) kids.append(firstPage + i).append(" 0 R ");
+        writeAscii(out, "%PDF-1.4\n");
+        offsets[1] = out.size();
+        writeAscii(out, "1 0 obj<</Type/Catalog/Pages 2 0 R/Outlines 3 0 R>>endobj\n");
+        offsets[2] = out.size();
+        writeAscii(out, "2 0 obj<</Type/Pages/Kids[" + kids.toString().trim() + "]/Count " + pages + ">>endobj\n");
+        offsets[3] = out.size();
+        writeAscii(out, "3 0 obj<</Type/Outlines/First " + firstItem + " 0 R/Last " + (total - 1)
+                + " 0 R/Count " + pages + ">>endobj\n");
+        for (int i = 0; i < pages; i++) {
+            offsets[firstPage + i] = out.size();
+            writeAscii(out, (firstPage + i) + " 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents "
+                    + (firstContent + i) + " 0 R>>endobj\n");
+        }
+        byte[] filler = new byte[fillerBytes];
+        for (int i = 0; i < pages; i++) {
+            random.nextBytes(filler);
+            offsets[firstContent + i] = out.size();
+            writeAscii(out, (firstContent + i) + " 0 obj<</Length " + fillerBytes + ">>\nstream\n");
+            out.writeBytes(filler);
+            writeAscii(out, "\nendstream\nendobj\n");
+        }
+        for (int i = 0; i < pages; i++) {
+            int obj = firstItem + i;
+            offsets[obj] = out.size();
+            writeAscii(out, obj + " 0 obj<</Title(Item " + i + ")/Parent 3 0 R"
+                    + (i > 0 ? "/Prev " + (obj - 1) + " 0 R" : "")
+                    + (i < pages - 1 ? "/Next " + (obj + 1) + " 0 R" : "")
+                    + "/Dest[" + (firstPage + i) + " 0 R/Fit]>>endobj\n");
+        }
+        long xref = out.size();
+        StringBuilder table = new StringBuilder(64 + total * 20);
+        table.append("xref\n0 ").append(total).append("\n0000000000 65535 f \n");
+        for (int i = 1; i < total; i++) {
+            table.append(String.format(Locale.ROOT, "%010d 00000 n \n", offsets[i]));
+        }
+        table.append("trailer<</Size ").append(total).append("/Root 1 0 R>>\nstartxref\n")
+                .append(xref).append("\n%%EOF\n");
+        writeAscii(out, table.toString());
+        return out.toByteArray();
+    }
+
+    private static void writeAscii(ByteArrayOutputStream out, String s) {
+        out.writeBytes(s.getBytes(StandardCharsets.ISO_8859_1));
+    }
+
     /** Same builder with a filler payload, so a whole-document copy would dominate. */
     private static byte[] bigPdf(int pages, int fillerBytes) {
         StringBuilder sb = new StringBuilder();
@@ -379,7 +512,7 @@ class MemoryBehaviorTest {
         int total = firstContent + pages;
         sb.append("xref\n0 ").append(total).append("\n0000000000 65535 f \n");
         for (int i = 1; i < total; i++) {
-            sb.append(String.format(java.util.Locale.ROOT, "%010d 00000 n \n", offsets.get(i)));
+            sb.append(String.format(Locale.ROOT, "%010d 00000 n \n", offsets.get(i)));
         }
         sb.append("trailer<</Size ").append(total).append("/Root 1 0 R>>\nstartxref\n")
                 .append(xref).append("\n%%EOF");

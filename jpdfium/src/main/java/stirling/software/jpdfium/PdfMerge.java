@@ -147,14 +147,7 @@ public final class PdfMerge {
 
         // FPDF_ImportPages leaves imported pages referencing objects owned by source documents;
         // serialize and reload while sources remain open so the returned document is standalone.
-        byte[] mergedPdfBytes = destinationDoc.saveBytes();
-        destinationDoc.close();
-
-        if (!mergedBookmarks.isEmpty()) {
-            mergedPdfBytes = PdfBookmarkEditor.setBookmarks(mergedPdfBytes, mergedBookmarks);
-        }
-
-        return PdfDocument.open(mergedPdfBytes);
+        return detachWithBookmarks(destinationDoc, mergedBookmarks, options);
     }
 
     /**
@@ -286,15 +279,9 @@ public final class PdfMerge {
                 PdfPageImporter.importPages(rawDestination, sourceDoc.rawHandle(), null, insertIndex);
                 insertIndex = destinationDoc.pageCount();
             }
-            byte[] mergedPdfBytes = destinationDoc.saveBytes();
-            destinationDoc.close();
+            PdfDocument detached = detachWithBookmarks(destinationDoc, mergedBookmarks, options);
             destinationDoc = null;
-
-            if (!mergedBookmarks.isEmpty()) {
-                mergedPdfBytes = PdfBookmarkEditor.setBookmarks(mergedPdfBytes, mergedBookmarks);
-            }
-
-            return PdfDocument.open(mergedPdfBytes);
+            return detached;
         } finally {
             if (destinationDoc != null) {
                 try { destinationDoc.close(); } catch (RuntimeException _) {}
@@ -404,6 +391,32 @@ public final class PdfMerge {
             return true;
         } finally {
             deleteQuietly(staged);
+        }
+    }
+
+    /**
+     * Serialize an import-merged document with its outline and reopen it standalone,
+     * closing {@code merged}. Outside MEMORY mode the result never becomes a byte[].
+     */
+    static PdfDocument detachWithBookmarks(PdfDocument merged, List<Bookmark> bookmarks, StorageOptions options) {
+        try (merged) {
+            if (options.mode() == StorageOptions.Mode.MEMORY) {
+                return PdfDocument.open(bookmarks.isEmpty()
+                        ? merged.saveBytes()
+                        : PdfBookmarkEditor.setBookmarks(merged, bookmarks));
+            }
+            Path tmp = options.createTempFile("jpdfium-merge-bm", ".pdf");
+            boolean done = false;
+            try {
+                PdfBookmarkEditor.setBookmarks(merged, bookmarks, tmp);
+                PdfDocument owned = PdfDocument.openTemp(tmp);
+                done = true;
+                return owned;
+            } finally {
+                if (!done) deleteQuietly(tmp);
+            }
+        } catch (IOException e) {
+            throw new JPDFiumException("Failed to write the merged document", e);
         }
     }
 
