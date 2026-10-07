@@ -85,6 +85,7 @@ public final class PdfBookmarkEditor {
         // never leave a half-written outline on the destination.
         SaveOptions policy = durable ? SaveOptions.fast() : SaveOptions.ephemeral();
         try (OutputTransaction tx = OutputTransaction.begin(output, durable)) {
+            // PDFium writes a classic xref table, which the appended outline extends.
             doc.saveTo(tx.staging(), SaveOptions.ephemeral());
             OutlineMetadata metadata = readOutlineMetadata(tx.staging());
             long appendOffset = Files.size(tx.staging());
@@ -144,6 +145,9 @@ public final class PdfBookmarkEditor {
     /**
      * Set the bookmark tree on raw PDF bytes and return the updated PDF bytes.
      *
+     * <p>The input is re-saved through PDFium first, so inputs with cross-reference
+     * or object streams (QPDF, PDFBox 3) keep their catalog and pages.
+     *
      * @param pdfBytes  input PDF bytes
      * @param bookmarks the list of bookmarks
      * @return updated PDF bytes with bookmarks
@@ -156,18 +160,9 @@ public final class PdfBookmarkEditor {
         try {
             tempPdf = Files.createTempFile("jpdfium-bookmarks-bytes-", ".pdf");
             Files.write(tempPdf, pdfBytes);
-            OutlineMetadata metadata = readOutlineMetadata(tempPdf);
-            long appendOffset = Files.size(tempPdf);
-            int pageCount;
-            try (PdfDocument openDoc = PdfDocument.open(tempPdf)) {
-                pageCount = openDoc.pageCount();
+            try (PdfDocument doc = PdfDocument.open(tempPdf)) {
+                return setBookmarks(doc, bookmarks);
             }
-            byte[] appendix = buildOutlineAppendix(bookmarks, pageCount, metadata, appendOffset);
-            if (appendix.length == 0) return pdfBytes;
-            try (OutputStream outputStream = Files.newOutputStream(tempPdf, StandardOpenOption.APPEND)) {
-                outputStream.write(appendix);
-            }
-            return Files.readAllBytes(tempPdf);
         } catch (IOException e) {
             throw new JPDFiumException("Failed to set bookmarks on PDF bytes", e);
         } finally {
@@ -222,24 +217,31 @@ public final class PdfBookmarkEditor {
 
     private record HeadingCandidate(String text, int pageIndex, float fontSize) {}
 
-    private record OutlineMetadata(int prevXrefStart, int trailerSize, int rootObjNum, String rootDict) {}
+    private record OutlineMetadata(long prevXrefStart, int trailerSize, int rootObjNum, String rootDict) {}
 
+    /**
+     * Reads the trailer and catalog the appendix must extend. Only a classic xref
+     * table is supported; anything else fails instead of writing a catalog without pages.
+     */
     private static OutlineMetadata readOutlineMetadata(Path file) throws IOException {
         long fileSize = Files.size(file);
         int tailLen = (int) Math.min(fileSize, 8192L);
         String tail = readWindow(file, fileSize - tailLen, tailLen);
 
-        int prevXrefStart = findPreviousXref(tail);
+        long prevXrefStart = findPreviousXref(tail);
         int trailerSize = findTrailerSize(tail);
         int rootObjNum = findRootObjectNumber(tail);
 
         long rootOffset = readXrefEntryOffset(file, prevXrefStart, rootObjNum);
-        String rootDict;
         if (rootOffset < 0) {
-            rootDict = "<< /Type /Catalog >>";
-        } else {
-            String objWindow = readWindow(file, rootOffset, (int) Math.min(fileSize - rootOffset, 8192L));
-            rootDict = extractDictFromWindow(objWindow);
+            throw new JPDFiumException("Catalog object " + rootObjNum + " not found in a classic xref table");
+        }
+        String rootDict = extractDictFromWindow(readWindow(file, rootOffset, (int) Math.min(fileSize - rootOffset, 8192L)));
+        if (rootDict == null) {
+            rootDict = extractDictFromWindow(readWindow(file, rootOffset, (int) Math.min(fileSize - rootOffset, 1L << 20)));
+        }
+        if (rootDict == null) {
+            throw new JPDFiumException("Catalog object " + rootObjNum + " is not a readable dictionary");
         }
         return new OutlineMetadata(prevXrefStart, trailerSize, rootObjNum, rootDict);
     }
@@ -256,7 +258,7 @@ public final class PdfBookmarkEditor {
         return new String(buf, StandardCharsets.ISO_8859_1);
     }
 
-    private static long readXrefEntryOffset(Path file, int xrefStart, int wantedObj) throws IOException {
+    private static long readXrefEntryOffset(Path file, long xrefStart, int wantedObj) throws IOException {
         long fileSize = Files.size(file);
         if (xrefStart <= 0 || xrefStart >= fileSize) return -1;
 
@@ -314,7 +316,7 @@ public final class PdfBookmarkEditor {
 
     private static String extractDictFromWindow(String window) {
         int dictStart = window.indexOf("<<");
-        if (dictStart < 0) return "<< /Type /Catalog >>";
+        if (dictStart < 0) return null;
         int depth = 0;
         int pos = dictStart;
         while (pos < window.length() - 1) {
@@ -331,7 +333,7 @@ public final class PdfBookmarkEditor {
                 pos++;
             }
         }
-        return "<< /Type /Catalog >>";
+        return null;
     }
 
     private static final class OutlineNode {
@@ -604,14 +606,14 @@ public final class PdfBookmarkEditor {
         return result;
     }
 
-    private static int findPreviousXref(String pdf) {
+    private static long findPreviousXref(String pdf) {
         int idx = pdf.lastIndexOf("startxref");
         if (idx < 0) return 0;
         String after = pdf.substring(idx + "startxref".length()).strip();
         int end = 0;
         while (end < after.length() && Character.isDigit(after.charAt(end))) end++;
         try {
-            return Integer.parseInt(after.substring(0, end));
+            return Long.parseLong(after.substring(0, end));
         } catch (NumberFormatException _) {
             return 0;
         }
