@@ -1,178 +1,117 @@
 # JPDFium
 
-Java 25 FFM bindings for PDFium (EmbedPDF fork).
+[![Maven Central](https://img.shields.io/maven-central/v/com.stirling/jpdfium.svg)](https://central.sonatype.com/artifact/com.stirling/jpdfium)
+[![Java 25](https://img.shields.io/badge/java-25-ED8B00.svg)](https://jdk.java.net/25/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Stirling-Tools/JPDFium/actions/workflows/ci.yml/badge.svg)](https://github.com/Stirling-Tools/JPDFium/actions/workflows/ci.yml)
 
-- Linux x64/arm64, macOS x64/arm64, Windows x64/arm64 (+ Linux musl builds)
-- MIT licensed; bundled natives carry their own licenses (see NOTICE)
-- Skia is the default renderer (AGG fallback)
-- Image I/O prefers the optional libvips natives when `jpdfium-vips` is present
+JPDFium is a Java 25 library for rendering, editing, and redacting PDFs. It uses PDFium, the rendering engine in Chromium, through Java's Foreign Function and Memory API, and provides prebuilt native binaries for Linux, macOS, and Windows.
 
-Requires the JVM flag `--enable-native-access=ALL-UNNAMED`.
+The binaries are built from the [EmbedPDF PDFium fork](https://github.com/embedpdf/runtime), pinned per release.
 
-## Quick Start
+Image reading and writing use ImageIO, with optional libvips support.
 
-```java
-try (var doc = PdfDocument.open(Path.of("input.pdf"))) {
-    try (var page = doc.page(0)) {
-        // Render page to image via active codec (libvips when present)
-        page.renderTo(Path.of("page0.png"), 150);
-        page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
-        page.flatten();
-    }
-    doc.save(Path.of("output.pdf"));
+> Requires Java 25 and `--enable-native-access=ALL-UNNAMED`. CPU rendering only.
+
+## Quick start
+
+Windows x64, using Gradle Kotlin DSL:
+
+```kotlin
+dependencies {
+    implementation(platform("com.stirling:jpdfium-bom:1.1.5"))
+    implementation("com.stirling:jpdfium")
+    runtimeOnly("com.stirling:jpdfium-natives-windows-x64")
 }
 ```
 
-More examples live in `jpdfium/src/test/java/stirling/software/jpdfium/samples/` (`S01_Render` through `S95_RedactPipelinePerf`). Full API reference is in the Javadoc.
-
-## Native libraries
-
-`jpdfium` itself is pure Java. At runtime it needs exactly one platform natives
-jar for every OS it runs on (decide at packaging time, not build time):
-
-| Run platform | Runtime dependency |
-|---|---|
-| Linux x64 / arm64 | `com.stirling:jpdfium-natives-linux-x64` / `-linux-arm64` |
-| Alpine / musl x64 / arm64 | `com.stirling:jpdfium-natives-linux-musl-x64` / `-linux-musl-arm64` |
-| macOS x64 / arm64 | `com.stirling:jpdfium-natives-darwin-x64` / `-darwin-arm64` |
-| Windows x64 / arm64 | `com.stirling:jpdfium-natives-windows-x64` / `-windows-arm64` |
-
-```groovy
-// Gradle (same version as jpdfium, preferably via jpdfium-bom)
-runtimeOnly "com.stirling:jpdfium-natives-windows-x64:${jpdfiumVersion}"
-```
-
-```xml
-<!-- Maven -->
-<dependency>
-    <groupId>com.stirling</groupId>
-    <artifactId>jpdfium-natives-windows-x64</artifactId>
-    <version>${jpdfium.version}</version>
-    <scope>runtime</scope>
-</dependency>
-```
-
-Ship the jar for the machine that runs the code, not the one that builds it.
-A jar assembled on Linux (including Docker builds) contains only the platforms
-declared there, so running that same jar on Windows fails with
-`NativeNotFoundException: windows-x64`. Bundle every target OS, or one
-per distribution artifact.
-
-Missing natives at runtime can instead be fetched once from Maven Central
-and cached with the extracted libraries. This is strictly opt-in and off by
-default; enable it only when runtime network access to Central is acceptable:
-
 ```bash
-java -Djpdfium.native.download=true --enable-native-access=ALL-UNNAMED -jar app.jar
+./gradlew jar
+java --enable-native-access=ALL-UNNAMED -jar app.jar input.pdf page-1.png
 ```
 
-The downloader resolves `com.stirling:jpdfium-natives-<platform>:<version>`
-from the running jar's stamped version (override with
-`-Djpdfium.native.version=<version>`, mirror with
-`-Djpdfium.native.repo=<https-url>`), refuses plain HTTP except for loopback
-test servers, rejects snapshot versions, and still SHA-256 verifies every
-extracted file against the jar manifest. Downloaded jars are reused offline
-from later runs. TLS authenticates the repository; per-file checksums attest
-the contents, the same split of duties as build-time dependency resolution.
-
-## Image I/O
-
-JPDFium provides familiar PDFBox-style and ImageIO-style APIs:
+Package `app.jar` with `Main-Class: Main` and the runtime classpath included, for example with the Gradle `application` plugin or a shadow JAR. The command above assumes `input.pdf` exists in the working directory and `page-1.png` is the output file.
 
 ```java
-// PDFBox-style rendering:
-var renderer = new PdfRenderer(doc);
-BufferedImage image = renderer.renderImageWithDPI(0, 150);
+import java.io.IOException;
+import java.nio.file.Path;
 
-// ImageIO-style read/write (backed by libvips when present, else ImageIO):
-PdfImageIO.write(image, "PNG", Path.of("page0.png"));
-BufferedImage photo = PdfImageIO.read(Path.of("photo.heic"));
+import stirling.software.jpdfium.PdfDocument;
+
+public class Main {
+    public static void main(String[] args) throws IOException {
+        Path input = Path.of(args[0]);
+        Path output = Path.of(args[1]);
+        try (var document = PdfDocument.open(input);
+             var page = document.page(0)) {
+            page.renderTo(output, 150);
+        }
+    }
+}
 ```
 
-Add `stirling.software.jpdfium:jpdfium-vips` (+ a `jpdfium-natives-vips-<platform>` jar) and its libvips-backed `ImageCodec` registers through the service loader as the default for `PdfImageIO`, `PdfRenderer`, `PdfImageConverter`, `SvgConverter`, `Watermark`, and `ExtractedImage`: more formats (HEIC/HEIF/AVIF/JXL/JPEG2000) and WebP writes without ImageIO plugins. Without the module, `javax.imageio` is used. `-Djpdfium.renderer=agg|skia|auto` (or `JPDFIUM_RENDERER`) selects the renderer; Skia is the default.
+Documents and pages are `AutoCloseable`, so use try-with-resources. The output format comes from the file extension and the second argument is the DPI.
 
-## Native Loading
+`PdfRenderer` renders to `BufferedImage` in the style of PDFBox, and `PdfImageIO` reads and writes images with ImageIO-style signatures.
 
-Natives are extracted once per content revision into a per-user cache, then reused by every JVM:
-`%LOCALAPPDATA%\jpdfium\native` (Windows), `~/Library/Caches/jpdfium/native` (macOS),
-`$XDG_CACHE_HOME/jpdfium/native` (Linux). Extraction is SHA-256 verified, published atomically, and safe
-across concurrent JVMs; when the cache is not writable (containers, read-only home) the loader falls back to
-`java.io.tmpdir`. Stale per-JVM temp dirs and obsolete cache entries are swept best-effort.
+Maven coordinates, other platforms, and Spring Boot: [docs/installation.md](docs/installation.md).
 
-Every load re-checks the SHA-256 of each cached file; `-Djpdfium.native.verify=marker` skips that check for
-speed. `-Djpdfium.native.cacheDir=<dir>` overrides the root, `-Djpdfium.native.cache=false` forces temp
-extraction, and `-Djpdfium.native.sweep=false` disables the stale-dir sweep.
+## Platform artifacts
 
-## Project Structure
+Declare one native module per platform your application runs on. All are published for `x64` and `arm64`.
 
-```
-native/bridge/          C++ bridge: document, render, text, redact, PII pipeline,
-                        repair, image, Brotli, OpenJPEG, PDFio, ICC, Unicode
-native/build-real.sh    build the real PDFium bridge
-native/build-stub.sh    build a stub bridge (unit tests without PDFium)
-native/setup-pdfium.sh  download and build the EmbedPDF PDFium fork
-native/rust/            optional Rust modules (lopdf + zopfli compression, repair, resize)
-jpdfium/                Java API (stirling.software.jpdfium): core API, panama/ FFM
-                        bindings, doc/ inspection & editing, text/, redact/, transform/,
-                        fonts/, model/, util/, spi/, plus runnable samples
-jpdfium-natives-<platform>/  native JARs: linux/darwin/windows × x64/arm64
-                        (+ linux-musl-{x64,arm64} for Alpine / musl runtimes)
-jpdfium-vips/         optional libvips image conversions (HEIC, AVIF, JXL, WebP, PNG, JPEG)
-jpdfium-spring/         Spring Boot auto-configuration
-jpdfium-bom/            Maven BOM for dependency management
-```
+| Runtime platform | Native module |
+|---|---|
+| Linux, glibc | `jpdfium-natives-linux-x64`, `jpdfium-natives-linux-arm64` |
+| Linux musl, such as Alpine | `jpdfium-natives-linux-musl-x64`, `jpdfium-natives-linux-musl-arm64` |
+| macOS | `jpdfium-natives-darwin-x64`, `jpdfium-natives-darwin-arm64` |
+| Windows | `jpdfium-natives-windows-x64`, `jpdfium-natives-windows-arm64` |
 
-## Building
+All modules use the `com.stirling` group. Include and package a native module for each target operating system and architecture. The build host does not determine platform support.
 
-### Prerequisites
+Verify that your runtime classpath, application distribution, or container includes the required modules. Missing native modules cause `NativeNotFoundException` unless runtime downloading is enabled.
 
-- Java 25, https://jdk.java.net/25/
-- C++23 compiler (`gcc-c++` / `g++` / Xcode CLT / MSVC)
-- CMake 3.20+
-- Gradle 9.8 (via wrapper)
-- jextract 25 (optional, to regenerate FFM bindings)
+Optional: `com.stirling:jpdfium-vips` with a matching `jpdfium-natives-vips-<platform>` adds WebP, HEIC, AVIF, JXL, and JPEG 2000. `com.stirling:jpdfium-spring` provides Spring Boot auto-configuration.
 
-### Build via Gradle
+## Editing and thread safety
 
-```bash
-./gradlew quickTry            # stub bridge, runs all samples, no PDFium needed
-./gradlew fullBuildAndTest    # real PDFium: download, build, test, run samples
-./gradlew test                # unit tests
-./gradlew :jpdfium:integrationTest
-./gradlew runAllSamples
-./gradlew runSample -Psample=01   # run a specific sample (01..95)
-./gradlew :jpdfium:generateBindings  # regenerate FFM bindings from jpdfium.h
-```
+`redactPattern` removes matched page content and audits extracted page text. The audit does not inspect metadata or form field values. Optional sanitization removes additional document data on save. See [redaction and sanitization](docs/editing.md#redaction) for the scope and limitations.
 
-Set `jpdfium.jextractHome` in `~/.gradle/gradle.properties` or `JEXTRACT_HOME` before regenerating bindings (defaults to `~/Downloads/jextract-25`).
+`flatten` incorporates annotations and form fields into page content. Existing page text remains selectable. Flattened elements are no longer interactive annotations or form fields.
 
-### Manual build (real PDFium)
+`save` writes a full new file. Incremental save is refused after redaction, because an appended revision leaves the original content recoverable. `save` does not preserve linearization. Run `PdfLinearizer` separately when linearized output is required.
 
-```bash
-./gradlew buildPdfium       # build EmbedPDF PDFium fork (~15 GB, first build 15-60 min)
-./gradlew buildRealBridge   # compile native bridge with CMake
-./gradlew test
-./gradlew :jpdfium:integrationTest
-```
+A document may be used by different threads sequentially, but access must not overlap, and do not close a document another thread is using. PDFium calls are serialized within a process, so adding threads does not parallelize rendering.
 
-For Java-only development, `./gradlew buildStubBridge` provides a pass-through stub.
+## Configuration and limits
 
-## Thread Safety
+PDFs are untrusted input. JPDFium validates buffers on both sides of the FFM boundary, but it does not bound what a hostile document consumes.
 
-- Use a `PdfDocument` (and its pages) from one thread at a time.
-- Native calls are serialized internally, so separate documents on separate threads are fine.
-- `FPDF_InitLibrary` / `FPDF_DestroyLibrary` run once globally.
+| Property | Default | Description |
+|---|---|---|
+| `jpdfium.renderer` | `auto` | `skia`, `agg`, or `auto`. Prefers Skia. Read once per JVM. |
+| `jpdfium.maxRenderPixels` | unlimited | Maximum pixels per rendered page. |
+| `jpdfium.maxSaveResultBytes` | disabled | Maximum size of a saved document. |
+| `jpdfium.native.download` | `false` | Fetch a missing native module at runtime instead of bundling it. |
 
-## Testing
+Set render and save limits before processing untrusted PDFs. These limits do not bound total memory usage. Apply a process-level memory limit, and use a terminable worker process when an enforceable timeout is required.
 
-```bash
-./gradlew :jpdfium:integrationTest
-./gradlew :jpdfium:integrationTest --tests "stirling.software.jpdfium.CorpusRedactTest"
-./gradlew :jpdfium:integrationTest --tests "stirling.software.jpdfium.redact.ObjectFissionCoordinateTest"
-```
+A hard native ceiling of 268,435,456 pixels per page applies regardless of `jpdfium.maxRenderPixels`.
 
-HTML reports are written to `samples-output/`.
+## Not supported
+
+- Creating or verifying digital signatures. Signatures can be enumerated and a digest computed over each `/ByteRange`.
+- Creating form fields. Forms can be read, filled, and flattened.
+- GPU rendering.
+
+## Documentation
+
+[docs/](docs/README.md) covers installation, native loading, deployment, configuration, rendering, images, editing, concurrency, compatibility, and troubleshooting.
+
+- [API reference on javadoc.io](https://javadoc.io/doc/com.stirling/jpdfium)
+- Vulnerabilities: [SECURITY.md](SECURITY.md)
+- Contributions: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
-MIT. PDFium and bundled natives carry their own licenses; see NOTICE and `native/licenses/`.
+MIT. See [LICENSE](LICENSE). PDFium and the bundled native binaries carry their own licenses, listed in [NOTICE](NOTICE).
