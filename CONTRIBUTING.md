@@ -153,6 +153,89 @@ rate/retention, native loops, and only then instruction-level tuning.
   prefixes. Keep one concern per commit and fold import-only churn into the commit
   that needs it instead of a separate style commit.
 
+## Documentation Policy
+
+`README.md` and `docs/` are written to this policy. The goal is accurate, concise
+documentation that helps a reader finish a task. Write to this standard directly;
+it does not depend on any particular authoring method.
+
+### Accuracy
+
+Review technical accuracy before style. Prose edits never substitute for verification.
+
+- Verify API names, overloads, artifact coordinates, configuration keys, defaults,
+  requirements, and failure behavior against the source or the released artifact.
+- Do not invent capabilities, guarantees, benchmarks, or compatibility.
+- Distinguish verified behavior from recommendations. Where behavior is unknown,
+  record an open question in the pull request rather than guessing in the text.
+- State prerequisites and limitations next to the instruction they affect.
+- Do not silently broaden support or security claims.
+- Keep concurrent safety separate from parallel execution. JPDFium serializes every
+  PDFium call, so "safe from multiple threads" does not mean "runs in parallel".
+- Treat redaction, signing, and save behavior as security-relevant. Describe the exact
+  operation and what it does not change.
+- Distinguish a published artifact from a tested platform. Publication proves a binary
+  exists, not that it has been executed.
+- Treat destructive operations as requiring explicit verification: full rewrites,
+  signature invalidation, metadata removal, and cache mutation.
+
+### Examples
+
+- Use public APIs only.
+- Make quick-start examples runnable, including `throws` clauses for checked
+  exceptions and any imports they need.
+- Use a concrete released version, or a placeholder with instructions to replace it.
+  Remove unexplained placeholders from examples labeled complete. An explicit
+  placeholder such as `<version>` is acceptable in reference documentation.
+- Show required resource cleanup in the first example that needs it.
+- Label incomplete snippets as excerpts.
+- Verify examples against the version the document describes.
+- Do not invent package names or overloads to complete an example.
+
+### Language
+
+- Start with the subject or the task.
+- Use concrete nouns and direct verbs. Prefer "use" to "leverage".
+- Remove unsupported adjectives such as seamless, powerful, robust, cutting-edge,
+  effortless, and enterprise-grade.
+- Do not open with scene-setting or an empty purpose statement.
+- Do not use "not just X, but Y" constructions.
+- Do not invent capability ranges or comparisons. Concrete ranges backed by
+  measurement are fine.
+- Do not force items into groups of three.
+- Do not append filler clauses about improving the user experience.
+- Do not repeat a section's introduction in its conclusion.
+- Do not add conversational prompts or closing questions.
+- Do not start every bullet with a bold label unless the label aids lookup.
+- Keep technical terminology consistent. Call it a page, not a sheet or a surface.
+- Do not use semicolons to make prose sound formal.
+
+### Punctuation
+
+- Never use unnecesary special characters such emojis, arrows, etc.
+- Write ranges as "Java 25 to 26".
+- Use ASCII quotation marks in prose and examples.
+- Preserve exact syntax in commands, identifiers, paths, and literal output. For
+  example `--enable-native-access=ALL-UNNAMED` must remain unchanged.
+- Use three backticks with a language identifier for every fenced block.
+
+### Formatting
+
+- Headings name content or tasks.
+- Bullets for independent items, numbered lists only where order matters, tables
+  for genuinely comparable information.
+- Use bold sparingly.
+- Badges are limited to release version, CI, license, and required runtime.
+- Keep reference material out of the README when it obstructs setup. Link it instead.
+
+### Before opening a pull request
+
+- Check every strong claim: always, never, all, safe, secure, automatic, guaranteed,
+  lossless, thread-safe.
+- Remove unresolved placeholders.
+- Validate relative links, code fence languages, and banned characters.
+- Confirm the examples match the documented release.
+
 ## Running Samples and Benchmarks
 
 - Run all samples: `./gradlew runAllSamples`
