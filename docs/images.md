@@ -26,7 +26,7 @@ Format names are case-insensitive and match the `ImageFormat` enum.
 
 ## Formats without `jpdfium-vips`
 
-By default JPDFium delegates to `javax.imageio`, so the available formats are the ones your JDK supports. A stock JDK 25 typically provides PNG, JPEG, and BMP. Additional formats require ImageIO plugins on the classpath.
+By default JPDFium delegates to `javax.imageio`, so the available formats are the ones your JDK supports. A stock JDK 25 typically provides PNG, JPEG, BMP, and TIFF. Additional formats require ImageIO plugins on the classpath.
 
 ## Formats with `jpdfium-vips`
 

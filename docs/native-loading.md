@@ -41,7 +41,7 @@ Override the root with `-Djpdfium.native.cacheDir=<dir>`. When no user-private c
 ## Extraction guarantees
 
 - Extraction is SHA-256 verified.
-- Results are published atomically, so a JVM never observes a partially extracted directory.
+- Results are published with `StandardCopyOption.ATOMIC_MOVE` where the filesystem supports it and fall back to a non-atomic `Files.move` otherwise. Readers validate the marker and checksums before loading, so an incomplete entry is rejected and re-extracted rather than loaded.
 - Concurrent JVMs may extract simultaneously; each verifies the result independently.
 - Stale per-JVM temp directories and obsolete cache entries are swept on a best-effort basis. Set `-Djpdfium.native.sweep=false` to disable the sweep.
 

@@ -4,7 +4,10 @@
 
 `flatten()` bakes annotations and form fields into the page content stream.
 
+Excerpt, requires an open `PdfDocument`:
+
 ```java
+// Excerpt: requires an open PdfDocument named document.
 document.flatten();
 ```
 
@@ -32,7 +35,10 @@ Rasterization invalidates pages you opened beforehand; reopen them afterwards. S
 
 Redaction in JPDFium removes content from the document. It is not a drawing operation.
 
+Excerpt, requires an open `PdfPage`:
+
 ```java
+// Excerpt: requires an open PdfPage named page.
 page.redactPattern("\\d{3}-\\d{2}-\\d{4}", 0xFF000000);
 ```
 
@@ -69,7 +75,10 @@ Annotations overlapping a redacted region are removed rather than inspected, so 
 
 Sanitization removes additional document data on save. It is opt-in:
 
+Excerpt, requires an open `PdfDocument`:
+
 ```java
+// Excerpt: requires an open PdfDocument named document.
 document.setSanitizeOnSave(true);
 ```
 
@@ -87,7 +96,10 @@ Incremental save appends a new revision and leaves the original content recovera
 
 Password-protected documents open through overloads that accept a password:
 
+Excerpt:
+
 ```java
+// Excerpt: opening a password-protected document.
 try (var document = PdfDocument.open(Path.of("secure.pdf"), "secret")) {
     // ...
 }
@@ -99,7 +111,10 @@ try (var document = PdfDocument.open(Path.of("secure.pdf"), "secret")) {
 
 Encryption is applied file to file with the bundled qpdf component:
 
+Excerpt:
+
 ```java
+// Excerpt: encrypting one file and reopening it with a password.
 PdfEncryption.encrypt(
         Path.of("plain.pdf"), Path.of("secure.pdf"), "user123", "owner456");
 
@@ -119,7 +134,10 @@ To encrypt a document that is already open, `PdfEncryption.setEncryption` applie
 
 Signatures are read-only. JPDFium can enumerate them, read their metadata, and compute a digest over the bytes each signature covers.
 
+Excerpt, requires an open `PdfDocument`:
+
 ```java
+// Excerpt: requires an open PdfDocument named document.
 // SHA-256 digest of the bytes in this signature's /ByteRange.
 byte[] digest = document.signatureDigest(0, 1); // 1 = SHA-256
 ```

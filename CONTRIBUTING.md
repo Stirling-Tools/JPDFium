@@ -212,7 +212,7 @@ Review technical accuracy before style. Prose edits never substitute for verific
 
 ### Punctuation
 
-- Never use unnecesary special characters such emojis, arrows, etc.
+- Avoid unnecessary special characters, such as emojis and arrows.
 - Write ranges as "Java 25 to 26".
 - Use ASCII quotation marks in prose and examples.
 - Preserve exact syntax in commands, identifiers, paths, and literal output. For

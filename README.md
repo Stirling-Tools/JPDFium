@@ -26,8 +26,11 @@ dependencies {
 ```
 
 ```bash
-java --enable-native-access=ALL-UNNAMED -jar app.jar
+./gradlew jar
+java --enable-native-access=ALL-UNNAMED -jar app.jar input.pdf page-1.png
 ```
+
+Package `app.jar` with `Main-Class: Main` and the runtime classpath included, for example with the Gradle `application` plugin or a shadow JAR. The command above assumes `input.pdf` exists in the working directory and `page-1.png` is the output file.
 
 ```java
 import java.io.IOException;
@@ -35,12 +38,15 @@ import java.nio.file.Path;
 
 import stirling.software.jpdfium.PdfDocument;
 
-Path renderFirstPage(Path input, Path output) throws IOException {
-    try (var document = PdfDocument.open(input);
-         var page = document.page(0)) {
-        page.renderTo(output, 150);
+public class Main {
+    public static void main(String[] args) throws IOException {
+        Path input = Path.of(args[0]);
+        Path output = Path.of(args[1]);
+        try (var document = PdfDocument.open(input);
+             var page = document.page(0)) {
+            page.renderTo(output, 150);
+        }
     }
-    return output;
 }
 ```
 

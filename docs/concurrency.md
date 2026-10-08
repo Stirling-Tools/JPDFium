@@ -39,7 +39,7 @@ Java work that does not enter PDFium is unaffected. Text processing, image encod
 
 ## Observing contention
 
-`PdfiumRuntime.stats()` reports native-call wait and hold times. Enable the counters with `-Djpdfium.nativeGuard.telemetry=true`. Wait time well above hold time indicates threads are waiting on the lock.
+`PdfiumRuntime.stats()` reports the acquisition count unconditionally, plus native-call wait and hold times. Enable wait/hold timing with `-Djpdfium.nativeGuard.telemetry=true`. Wait time well above hold time indicates threads are waiting on the lock.
 
 ## Parallel work
 
