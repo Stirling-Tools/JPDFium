@@ -112,17 +112,32 @@ public final class PdfPipeline {
     /**
      * Process a PDF and return the modified document.
      * The caller must close the returned document.
+     *
+     * <p>File-backed: parallel and streaming modes stage chunks through temporary files, so peak
+     * heap tracks chunk size, not input size. The {@code byte[]} overload stays in-memory.
      */
     public static PdfDocument process(Path input, ProcessingMode mode, PageOperation op) {
         if (!mode.isParallel() && !mode.isStreaming()) {
             PdfDocument doc = PdfDocument.open(input);
-            int pages = doc.pageCount();
-            for (int i = 0; i < pages; i++) {
-                op.apply(doc, i);
+            try {
+                int pages = doc.pageCount();
+                for (int i = 0; i < pages; i++) {
+                    op.apply(doc, i);
+                }
+                return doc;
+            } catch (Throwable t) {
+                try {
+                    doc.close();
+                } catch (Throwable c) {
+                    t.addSuppressed(c);
+                }
+                throw t;
             }
-            return doc;
         }
-        return process(readBytes(input), mode, op);
+        if (mode.isParallel()) {
+            return processParallelFromFile(input, mode, op);
+        }
+        return processStreamingPath(input, mode, op);
     }
 
     /**
@@ -149,11 +164,13 @@ public final class PdfPipeline {
 
     /**
      * Read-only iteration over pages from a file path.
+     *
+     * <p>File-backed in every mode: the document is opened from the path, never copied to the heap.
      */
     public static void forEach(Path input, ProcessingMode mode,
                                BiConsumer<PdfDocument, Integer> consumer) {
         if (mode.isParallel()) {
-            forEachParallel(readBytes(input), mode, consumer);
+            forEachParallelOnDoc(PdfDocument.open(input), mode, consumer);
         } else {
             try (PdfDocument doc = PdfDocument.open(input)) {
                 int pages = doc.pageCount();
@@ -195,27 +212,57 @@ public final class PdfPipeline {
 
     private static PdfDocument processSequential(byte[] input, PageOperation op) {
         PdfDocument doc = PdfDocument.open(input);
-        int pages = doc.pageCount();
-        for (int i = 0; i < pages; i++) {
-            op.apply(doc, i);
+        try {
+            int pages = doc.pageCount();
+            for (int i = 0; i < pages; i++) {
+                op.apply(doc, i);
+            }
+            return doc;
+        } catch (Throwable t) {
+            try {
+                doc.close();
+            } catch (Throwable c) {
+                t.addSuppressed(c);
+            }
+            throw t;
         }
-        return doc;
     }
 
     private static PdfDocument processStreaming(byte[] input, ProcessingMode mode, PageOperation op) {
-        PdfDocument doc = PdfDocument.open(input);
-        int pages = doc.pageCount();
-        int flushInterval = mode.flushInterval();
+        return processStreamingOwned(PdfDocument.open(input), mode, op);
+    }
 
-        for (int i = 0; i < pages; i++) {
-            op.apply(doc, i);
+    private static PdfDocument processStreamingPath(Path input, ProcessingMode mode, PageOperation op) {
+        return processStreamingOwned(PdfDocument.open(input), mode, op);
+    }
 
-            // Periodic flush: save and reopen to release PDFium internal caches.
-            if ((i + 1) % flushInterval == 0 && (i + 1) < pages) {
-                doc = flushViaTempFile(doc);
+    /**
+     * Shared streaming loop over an already-opened document. Takes ownership of {@code doc}: it is
+     * closed on any failure and returned open on success.
+     */
+    private static PdfDocument processStreamingOwned(PdfDocument doc, ProcessingMode mode,
+            PageOperation op) {
+        try {
+            int pages = doc.pageCount();
+            int flushInterval = mode.flushInterval();
+
+            for (int i = 0; i < pages; i++) {
+                op.apply(doc, i);
+
+                // Periodic flush: save and reopen to release PDFium internal caches.
+                if ((i + 1) % flushInterval == 0 && (i + 1) < pages) {
+                    doc = flushViaTempFile(doc);
+                }
             }
+            return doc;
+        } catch (Throwable t) {
+            try {
+                doc.close();
+            } catch (Throwable c) {
+                t.addSuppressed(c);
+            }
+            throw t;
         }
-        return doc;
     }
 
     private static PdfDocument flushViaTempFile(PdfDocument doc) {
@@ -225,10 +272,122 @@ public final class PdfPipeline {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create pipeline flush temp file", e);
         }
-        tempPipelineFile.toFile().deleteOnExit();
         doc.save(tempPipelineFile);
         doc.close();
-        return PdfDocument.open(tempPipelineFile);
+        // Owned temp: close() deletes the file, so periodic flushes cannot
+        // accumulate on disk in long-running processes.
+        return PdfDocument.openTemp(tempPipelineFile);
+    }
+
+    /**
+     * Parallel split-process-merge staged through temporary files, so peak heap is bounded by one
+     * chunk per worker plus merge staging. Chunk extraction uses default storage settings, so
+     * callers needing a hard memory bound should pre-split in FILE mode.
+     */
+    private static PdfDocument processParallelFromFile(Path input, ProcessingMode mode, PageOperation op) {
+        // One handle serves both the page-count probe and the per-chunk
+        // extraction, so the input is parsed a single time.
+        PdfDocument probe = PdfDocument.open(input);
+        int totalPages;
+        try {
+            totalPages = probe.pageCount();
+        } catch (Throwable t) {
+            try {
+                probe.close();
+            } catch (Throwable closeError) {
+                t.addSuppressed(closeError);
+            }
+            throw t;
+        }
+        if (totalPages == 0) {
+            return probe;
+        }
+
+        int parallelism = mode.parallelism();
+        int pagesPerChunk = mode.chunkSize() > 0
+                ? mode.chunkSize()
+                : Math.max(1, (totalPages + parallelism - 1) / parallelism);
+
+        List<int[]> chunks = new ArrayList<>();
+        for (int start = 0; start < totalPages; start += pagesPerChunk) {
+            int end = Math.min(start + pagesPerChunk - 1, totalPages - 1);
+            chunks.add(new int[]{start, end});
+        }
+
+        List<Path> chunkFiles = new ArrayList<>();
+        List<Path> resultFiles = new ArrayList<>();
+        try {
+            try {
+                for (int[] chunk : chunks) {
+                    Path chunkFile = createPipelineTemp("chunk-");
+                    chunkFiles.add(chunkFile);
+                    try (PdfDocument part = PdfSplit.extractPageRange(probe, chunk[0], chunk[1])) {
+                        part.save(chunkFile);
+                    }
+                    resultFiles.add(createPipelineTemp("result-"));
+                }
+            } finally {
+                probe.close();
+            }
+
+            ExecutorService executor = Executors.newFixedThreadPool(
+                    Math.min(parallelism, chunks.size()));
+            List<Future<?>> futures = new ArrayList<>();
+            // Visible to the failure path: if shutdown throws after the merge
+            // succeeds, the merged handle must be closed, not dropped.
+            PdfDocument merged = null;
+            boolean shutdownAttempted = false;
+            try {
+                for (int chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex++) {
+                    final Path currentChunkFile = chunkFiles.get(chunkIndex);
+                    final Path currentResultFile = resultFiles.get(chunkIndex);
+                    futures.add(executor.submit(
+                            () -> processChunkFile(currentChunkFile, currentResultFile, mode, op)));
+                }
+                collectVoidResults(futures);
+
+                List<PdfDocument> documentsToMerge = new ArrayList<>();
+                try {
+                    for (Path resultFile : resultFiles) {
+                        documentsToMerge.add(PdfDocument.open(resultFile));
+                    }
+                    merged = PdfMerge.merge(documentsToMerge);
+                } finally {
+                    documentsToMerge.forEach(PdfDocument::close);
+                }
+                shutdownAttempted = true;
+                try {
+                    shutdownAndReport(executor, "processParallelFromFile");
+                } catch (Throwable shutdownFailure) {
+                    // The merge already owns a native document handle: dropping it
+                    // here would leak the handle and its live-resource accounting.
+                    if (merged != null) {
+                        merged.close();
+                        merged = null;
+                    }
+                    throw shutdownFailure;
+                }
+                PdfDocument result = merged;
+                merged = null;
+                return result;
+            } catch (Throwable t) {
+                for (Future<?> f : futures) f.cancel(true);
+                if (!shutdownAttempted) {
+                    try {
+                        shutdownAndReport(executor, "processParallelFromFile");
+                    } catch (Throwable shutdownFailure) {
+                        t.addSuppressed(shutdownFailure);
+                    }
+                }
+                if (merged != null) {
+                    merged.close();
+                }
+                throw t;
+            }
+        } finally {
+            deleteQuietly(chunkFiles);
+            deleteQuietly(resultFiles);
+        }
     }
 
     private static PdfDocument processParallel(byte[] sourceBytes, ProcessingMode mode, PageOperation op) {
@@ -321,15 +480,37 @@ public final class PdfPipeline {
         }
     }
 
+    /** Read-only parallel iteration over a document opened from bytes. */
+    private static void forEachParallel(byte[] sourceBytes, ProcessingMode mode,
+                                        BiConsumer<PdfDocument, Integer> consumer) {
+        forEachParallelOnDoc(PdfDocument.open(sourceBytes), mode, consumer);
+    }
+
     /**
      * Opens a single shared document and dispatches per-page tasks to a pool.
      * Native calls serialize via the PdfiumRuntime execution domain; consumers add no locking.
+     *
+     * <p>Takes ownership of {@code doc}: it is closed on every path, so
+     * callers can hand over a document opened from bytes or from a path
+     * without duplicating the pool logic.
      */
-    private static void forEachParallel(byte[] sourceBytes, ProcessingMode mode,
-                                        BiConsumer<PdfDocument, Integer> consumer) {
-        PdfDocument doc = PdfDocument.open(sourceBytes);
-        int totalPages = doc.pageCount();
-        if (totalPages == 0) { doc.close(); return; }
+    private static void forEachParallelOnDoc(PdfDocument doc, ProcessingMode mode,
+                                             BiConsumer<PdfDocument, Integer> consumer) {
+        int totalPages;
+        try {
+            totalPages = doc.pageCount();
+        } catch (Throwable t) {
+            try {
+                doc.close();
+            } catch (Throwable c) {
+                t.addSuppressed(c);
+            }
+            throw t;
+        }
+        if (totalPages == 0) {
+            doc.close();
+            return;
+        }
 
         int parallelism = Math.min(mode.parallelism(), totalPages);
 
@@ -418,6 +599,32 @@ public final class PdfPipeline {
         }
     }
 
+    /**
+     * File-backed twin of {@link #processChunkBytes}: opens the chunk from
+     * disk and saves the processed result back to disk, so workers never hold
+     * chunk bytes on the heap.
+     */
+    private static void processChunkFile(Path chunkFile, Path resultFile,
+                                         ProcessingMode mode, PageOperation op) {
+        PdfDocument doc = PdfDocument.open(chunkFile);
+        try {
+            int pages = doc.pageCount();
+            boolean streaming = mode.isStreaming();
+            int flushInterval = mode.flushInterval();
+
+            for (int i = 0; i < pages; i++) {
+                op.apply(doc, i);
+
+                if (streaming && (i + 1) % flushInterval == 0 && (i + 1) < pages) {
+                    doc = flushViaTempFile(doc);
+                }
+            }
+            doc.save(resultFile);
+        } finally {
+            doc.close();
+        }
+    }
+
     private static <T> List<T> collectResults(List<Future<T>> futures) {
         List<T> results = new ArrayList<>();
         for (Future<T> future : futures) {
@@ -480,11 +687,23 @@ public final class PdfPipeline {
         }
     }
 
-    private static byte[] readBytes(Path path) {
+    private static Path createPipelineTemp(String infix) {
         try {
-            return Files.readAllBytes(path);
+            Path tmp = Files.createTempFile("jpdfium-pipeline-" + infix, ".pdf");
+            tmp.toFile().deleteOnExit();
+            return tmp;
         } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            throw new UncheckedIOException("Failed to create pipeline temp file", e);
+        }
+    }
+
+    private static void deleteQuietly(List<Path> paths) {
+        for (Path p : paths) {
+            try {
+                Files.deleteIfExists(p);
+            } catch (IOException _) {
+                // Best-effort: deleteOnExit is the backstop.
+            }
         }
     }
 }

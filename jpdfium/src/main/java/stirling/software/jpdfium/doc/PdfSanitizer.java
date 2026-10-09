@@ -32,10 +32,12 @@ public final class PdfSanitizer {
 
     private PdfSanitizer() {}
 
+    /** Sanitize PDF bytes in memory; prefer {@link #sanitize(Path, Path, int, long)}. */
     public static byte[] sanitize(byte[] input, int flags) {
         return QpdfLib.sanitize(input, flags);
     }
 
+    /** Sanitize a PDF file into a new byte array; prefer {@link #sanitize(Path, Path, int, long)}. */
     public static byte[] sanitize(Path input, int flags) throws IOException {
         return sanitize(Files.readAllBytes(input), flags);
     }
@@ -55,10 +57,7 @@ public final class PdfSanitizer {
         if (result == null) {
             throw new IOException("qpdf sanitization produced no output");
         }
-        // Single transaction for staging, size validation, permissions, and
-        // atomic publish: the previous createTempFile+publishStaged split kept
-        // the default temp permissions and skipped the budget check on this
-        // fallback path.
+        // One transaction for staging, size validation, permissions and atomic publish.
         try (OutputTransaction tx = OutputTransaction.begin(output)) {
             Files.write(tx.staging(), result);
             tx.publish(maxBytes <= 0 ? null : SaveOptions.maxOutputBytes(maxBytes));
