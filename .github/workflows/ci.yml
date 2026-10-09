@@ -117,7 +117,31 @@ jobs:
 
       - name: detectPlatform() must return linux-musl-* on Alpine
         run: |
-          docker run --rm -i -v "$PWD":/src -w /src eclipse-temurin:25-jdk-alpine sh -s <<'INNER'
+          # Anonymous Docker Hub pulls are rate limited ("toomanyrequests"),
+          # which used to fail this job in seconds during busy windows. Prefer
+          # the AWS ECR Public mirror of the official image, fall back to Docker
+          # Hub, and retry each with backoff before giving up.
+          IMAGES=(
+            public.ecr.aws/docker/library/eclipse-temurin:25-jdk-alpine
+            eclipse-temurin:25-jdk-alpine
+          )
+          IMG=""
+          for img in "${IMAGES[@]}"; do
+            for attempt in 1 2 3 4 5; do
+              if docker pull "$img" >/dev/null 2>&1; then IMG="$img"; break 2; fi
+              # Back off only while another attempt remains, so the fallback
+              # image (or the failure) is not delayed by a final pointless sleep.
+              if [ "$attempt" -lt 5 ]; then
+                echo "docker pull $img failed (attempt $attempt); backing off"
+                sleep $((attempt * 15))
+              fi
+            done
+          done
+          if [ -z "$IMG" ]; then
+            echo "FAIL: could not pull an Alpine JDK image from any registry"; exit 1
+          fi
+          echo "Using Alpine JDK image: $IMG"
+          docker run --rm -i -v "$PWD":/src -w /src "$IMG" sh -s <<'INNER'
           set -e
           mkdir -p /tmp/m
           # Compile the whole main source tree: NativeLoader calls
