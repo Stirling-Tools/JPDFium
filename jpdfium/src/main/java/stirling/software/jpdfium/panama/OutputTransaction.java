@@ -25,11 +25,13 @@ public final class OutputTransaction implements AutoCloseable {
 
     private final Path destination;
     private final Path staging;
+    private final boolean durable;
     private boolean published;
 
-    private OutputTransaction(Path destination, Path staging) {
+    private OutputTransaction(Path destination, Path staging, boolean durable) {
         this.destination = destination;
         this.staging = staging;
+        this.durable = durable;
     }
 
     public Path staging() {
@@ -41,6 +43,14 @@ public final class OutputTransaction implements AutoCloseable {
     }
 
     public static OutputTransaction begin(Path destination) throws IOException {
+        return begin(destination, true);
+    }
+
+    /**
+     * Open a transaction for a destination whose durability is optional: {@code durable=false} is
+     * for internal staging files, where the page cache already serves the bytes.
+     */
+    public static OutputTransaction begin(Path destination, boolean durable) throws IOException {
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
         Path abs = destination.toAbsolutePath();
         // Stage beside the resolved target, not beside the link: a symlink can
@@ -68,7 +78,7 @@ public final class OutputTransaction implements AutoCloseable {
                 staging = Files.createTempFile("jpdfium-save-", ".pdf");
             }
         }
-        return new OutputTransaction(resolved, staging);
+        return new OutputTransaction(resolved, staging, durable);
     }
 
     /**
@@ -106,7 +116,7 @@ public final class OutputTransaction implements AutoCloseable {
     public void publish(SaveOptions options) throws IOException {
         if (published) return;
         validateStaged(staging, options);
-        publishStaged(staging, destination);
+        publishStaged(staging, destination, durable);
         published = true;
     }
 
@@ -130,6 +140,23 @@ public final class OutputTransaction implements AutoCloseable {
      * @throws IOException on any failure; the staging file is left in place
      */
     public static void publishStaged(Path staging, Path destination) throws IOException {
+        publishStaged(staging, destination, true);
+    }
+
+    /**
+     * Fast path for internal staging files: an atomic rename with no permission mirroring and no
+     * fsync, since the same process reopens and deletes the file.
+     */
+    public static void publishStaged(Path staging, Path destination, boolean durable)
+            throws IOException {
+        if (durable) {
+            publishDurable(staging, destination);
+            return;
+        }
+        moveIntoPlace(staging, resolveSymlinks(destination));
+    }
+
+    private static void publishDurable(Path staging, Path destination) throws IOException {
         Path target = resolveSymlinks(destination);
         applyDestinationPermissions(staging, target);
         // Flush file content before the rename: without this a power loss can
@@ -138,12 +165,7 @@ public final class OutputTransaction implements AutoCloseable {
         try (FileChannel channel = FileChannel.open(staging, StandardOpenOption.WRITE)) {
             channel.force(true);
         }
-        try {
-            Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE,
-                    StandardCopyOption.REPLACE_EXISTING);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
-        }
+        moveIntoPlace(staging, target);
         // Flush the directory entry so the rename itself survives a crash.
         // Windows cannot open directories: NTFS journals renames, so skip there.
         Path dir = target.getParent();
@@ -153,6 +175,15 @@ public final class OutputTransaction implements AutoCloseable {
             } catch (IOException | UnsupportedOperationException ignored) {
                 // Best effort durability only; the bytes are already correct.
             }
+        }
+    }
+
+    private static void moveIntoPlace(Path staging, Path target) throws IOException {
+        try {
+            Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

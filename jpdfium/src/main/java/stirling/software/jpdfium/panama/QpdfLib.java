@@ -378,6 +378,15 @@ public final class QpdfLib {
      */
     public static boolean mergeFiles(List<Path> inputs,
                                      Path output) {
+        return mergeFiles(inputs, output, true);
+    }
+
+    /**
+     * Merge files into {@code output}. {@code durable=false} skips fsync and permission mirroring
+     * for internal staging outputs the caller reopens and deletes itself.
+     */
+    public static boolean mergeFiles(List<Path> inputs,
+                                     Path output, boolean durable) {
         if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty() || output == null) {
             return false;
         }
@@ -394,7 +403,7 @@ public final class QpdfLib {
         // owner-only permissions; publication below keeps the existing
         // commit, empty-file and budget checks.
         try (QpdfCall call = new QpdfCall();
-                OutputTransaction tx = OutputTransaction.begin(output)) {
+                OutputTransaction tx = OutputTransaction.begin(output, durable)) {
             int count = inputs.size();
             MemorySegment pathsArraySeg = call.arena.allocate(ADDRESS, count);
             for (int i = 0; i < count; i++) {
@@ -413,7 +422,7 @@ public final class QpdfLib {
             if (rc != 0) {
                 return false;
             }
-            publish(staging, output);
+            publish(staging, output, durable);
             staging = null;
             return true;
         } catch (Throwable t) {
@@ -439,6 +448,12 @@ public final class QpdfLib {
      */
     public static boolean extractPagesToFile(Path input, int[] pageIndices,
                                              Path output) {
+        return extractPagesToFile(input, pageIndices, output, true);
+    }
+
+    /** Extract pages to {@code output}. {@code durable=false} is for internal staging outputs. */
+    public static boolean extractPagesToFile(Path input, int[] pageIndices,
+                                             Path output, boolean durable) {
         if (EXTRACT_PAGES_FILE_HANDLE == null || input == null || output == null
                 || pageIndices == null || pageIndices.length == 0) {
             return false;
@@ -452,7 +467,7 @@ public final class QpdfLib {
         }
         Path staging = null;
         try (QpdfCall call = new QpdfCall();
-                OutputTransaction tx = OutputTransaction.begin(output)) {
+                OutputTransaction tx = OutputTransaction.begin(output, durable)) {
             MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
             MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
             rejectAlias(List.of(input), output);
@@ -463,7 +478,7 @@ public final class QpdfLib {
             if (rc != 0) {
                 return false;
             }
-            publish(staging, output);
+            publish(staging, output, durable);
             staging = null;
             return true;
         } catch (Throwable t) {
@@ -760,6 +775,10 @@ public final class QpdfLib {
         publish(staging, output, 0);
     }
 
+    private static void publish(Path staging, Path output, boolean durable) throws IOException {
+        publish(staging, output, 0, new PublishCommit(), durable);
+    }
+
     /**
      * Post-write acceptance check: rejects empty output and outputs over
      * maxBytes. Bounds publication, not transient disk use during native
@@ -777,18 +796,28 @@ public final class QpdfLib {
      */
     static void publish(Path staging, Path output, long maxBytes, PublishCommit commit)
             throws IOException {
+        publish(staging, output, maxBytes, commit, true);
+    }
+
+    static void publish(Path staging, Path output, long maxBytes, PublishCommit commit,
+            boolean durable) throws IOException {
         if (Thread.currentThread().isInterrupted()) {
             throw new IOException("interrupted before publish; staging discarded for " + output);
         }
         if (commit != null && !commit.tryCommit()) {
             throw new IOException("publication cancelled for " + output);
         }
-        publishCommitted(staging, output, maxBytes, false);
+        publishCommitted(staging, output, maxBytes, false, durable);
         if (commit != null) commit.committed();
     }
 
     private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber)
             throws IOException {
+        publishCommitted(staging, output, maxBytes, noClobber, true);
+    }
+
+    private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber,
+            boolean durable) throws IOException {
         requireNonNegativeBudget(maxBytes);
         long size = Files.size(staging);
         if (size <= 0) {
@@ -802,7 +831,7 @@ public final class QpdfLib {
             publishNoClobber(staging, output);
             return;
         }
-                    OutputTransaction.publishStaged(staging, output);
+        OutputTransaction.publishStaged(staging, output, durable);
     }
 
     /**

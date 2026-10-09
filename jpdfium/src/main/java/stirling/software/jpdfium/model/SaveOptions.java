@@ -18,10 +18,12 @@ public final class SaveOptions {
 
     private final long maxOutputBytes;
     private final boolean verifyReopen;
+    private final boolean durable;
 
     private SaveOptions(Builder b) {
         this.maxOutputBytes = b.maxOutputBytes;
         this.verifyReopen = b.verifyReopen;
+        this.durable = b.durable;
     }
 
     /** Maximum accepted output size in bytes; {@code 0} disables the bound. */
@@ -34,9 +36,22 @@ public final class SaveOptions {
         return verifyReopen;
     }
 
+    /**
+     * Whether the published file must survive a crash (fsync + directory flush). Internal staging
+     * files pass {@code false}, since the page cache already serves their bytes.
+     */
+    public boolean durable() {
+        return durable;
+    }
+
     /** Low-overhead file save without reopen validation. */
     public static SaveOptions fast() {
         return builder().build();
+    }
+
+    /** Internal staging save: no reopen validation and no crash-durability flush. */
+    public static SaveOptions ephemeral() {
+        return builder().durable(false).build();
     }
 
     /** Save with a reopen validation pass before publish. */
@@ -54,12 +69,14 @@ public final class SaveOptions {
     }
 
     public Builder toBuilder() {
-        return new Builder().maxOutputBytes(maxOutputBytes).verifyReopen(verifyReopen);
+        return new Builder().maxOutputBytes(maxOutputBytes).verifyReopen(verifyReopen)
+                .durable(durable);
     }
 
     public static final class Builder {
         private long maxOutputBytes;
         private boolean verifyReopen;
+        private boolean durable = true;
 
         private Builder() {}
 
@@ -77,6 +94,15 @@ public final class SaveOptions {
         /** Reopen the staged file before publish (extra I/O, stronger guarantee). */
         public Builder verifyReopen(boolean verify) {
             this.verifyReopen = verify;
+            return this;
+        }
+
+        /**
+         * Require the published file to survive a crash (fsync + directory flush). Defaults to
+         * {@code true}; set {@code false} only for internal staging files.
+         */
+        public Builder durable(boolean durable) {
+            this.durable = durable;
             return this;
         }
 

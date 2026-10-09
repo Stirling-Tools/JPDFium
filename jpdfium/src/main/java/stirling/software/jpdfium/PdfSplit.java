@@ -17,6 +17,7 @@ import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -122,7 +123,7 @@ public final class PdfSplit {
                 } else {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
-                    doc.save(reusable);
+                    doc.saveTo(reusable, SaveOptions.ephemeral());
                     COUNTERS.sourceSerializations.incrementAndGet();
                 }
             } catch (RuntimeException e) {
@@ -229,7 +230,7 @@ public final class PdfSplit {
                 // The source file behind an open document may be stale after
                 // in-memory edits; serialize the live document first.
                 materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.save(materialized);
+                doc.saveTo(materialized, SaveOptions.ephemeral());
                 PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
                 if (fileDoc != null) return fileDoc;
             } catch (Exception _) {
@@ -318,7 +319,7 @@ public final class PdfSplit {
                 // The source file behind an open document may be stale after
                 // in-memory edits; serialize the live document first.
                 materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.save(materialized);
+                doc.saveTo(materialized, SaveOptions.ephemeral());
                 PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
                 if (fileDoc != null) return fileDoc;
             } catch (Exception _) {
@@ -500,13 +501,13 @@ public final class PdfSplit {
         try {
             Path staging = options.createTempFile("jpdfium-split", ".pdf");
             cleanup.add(staging);
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging)) return null;
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging, false)) return null;
             Path result = staging;
             if (!remappedBookmarks.isEmpty()) {
                 Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
                 cleanup.add(tmpBookmarks);
                 try (PdfDocument part = PdfDocument.open(staging)) {
-                    PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks);
+                    PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, tmpBookmarks, false);
                 }
                 result = tmpBookmarks;
             }
