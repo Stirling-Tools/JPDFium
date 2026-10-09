@@ -148,7 +148,6 @@ tasks.register<JavaExec>("runSample") {
         "66" to "S66_PdfDiff",
         "67" to "S67_AutoDeskew",
         "68" to "S68_FontAudit",
-        "69" to "S69_PdfAConversion",
         "70" to "S70_PageScaling",
         "71" to "S71_MarginAdjust",
         "72" to "S72_SelectiveFlatten",

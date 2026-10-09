@@ -125,4 +125,14 @@ public final class PdfOptimizer {
     public static boolean isSupported() {
         return QpdfLib.isOptimizeSupported();
     }
+
+    /**
+     * True if {@link #optimize} can downsample embedded images. False: the qpdf
+     * writer has no image step; use {@link PdfImageOptimizer} for that.
+     *
+     * @return true once the native optimize path performs image optimization
+     */
+    public static boolean isImageOptimizationSupported() {
+        return false;
+    }
 }

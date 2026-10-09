@@ -133,7 +133,6 @@ public class RunAllSamples {
             new Sample("S66_PdfDiff",       () -> S66_PdfDiff.main(a)),
             new Sample("S67_AutoDeskew",    () -> S67_AutoDeskew.main(a)),
             new Sample("S68_FontAudit",     () -> S68_FontAudit.main(a)),
-            new Sample("S69_PdfAConversion", () -> S69_PdfAConversion.main(a)),
             new Sample("S70_PageScaling",   () -> S70_PageScaling.main(a)),
             new Sample("S71_MarginAdjust",  () -> S71_MarginAdjust.main(a)),
             new Sample("S72_SelectiveFlatten", () -> S72_SelectiveFlatten.main(a)),
