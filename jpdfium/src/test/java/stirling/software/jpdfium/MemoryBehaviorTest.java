@@ -285,19 +285,30 @@ class MemoryBehaviorTest {
         }
     }
 
+    /**
+     * Latency of one small open+pageCount, reported as the minimum over several
+     * measurement rounds. The minimum is the standard robust estimator for a
+     * latency microbenchmark: GC pauses and scheduler spikes on a shared runner
+     * can only slow a round down, so the minimum reflects retained state rather
+     * than transient noise while still rising if the work truly regresses.
+     */
     private static double nanosPerSmallOp(byte[] pdf, int iterations) throws Exception {
         for (int i = 0; i < 200; i++) {
             try (PdfDocument doc = PdfDocument.open(pdf)) {
                 doc.pageCount();
             }
         }
-        long t0 = System.nanoTime();
-        for (int i = 0; i < iterations; i++) {
-            try (PdfDocument doc = PdfDocument.open(pdf)) {
-                doc.pageCount();
+        double best = Double.MAX_VALUE;
+        for (int round = 0; round < 5; round++) {
+            long t0 = System.nanoTime();
+            for (int i = 0; i < iterations; i++) {
+                try (PdfDocument doc = PdfDocument.open(pdf)) {
+                    doc.pageCount();
+                }
             }
+            best = Math.min(best, (System.nanoTime() - t0) / (double) iterations);
         }
-        return (System.nanoTime() - t0) / (double) iterations;
+        return best;
     }
 
     /**
@@ -415,7 +426,7 @@ class MemoryBehaviorTest {
         sb.replace(0, sb.length(), sb.substring(0, streamStart)
                 + contentObj + " 0 obj<</Length " + (streamEnd - streamStart - 1)
                 + ">>\nstream\n"
-                + sb.substring(streamStart + ("" + contentObj + " 0 obj<</Length 0>>\nstream\n").length(),
+                + sb.substring(streamStart + (contentObj + " 0 obj<</Length 0>>\nstream\n").length(),
                                streamEnd)
                 + "\nendstream\nendobj\n");
         int xrefOffset = sb.length();

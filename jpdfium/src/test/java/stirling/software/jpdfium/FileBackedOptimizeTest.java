@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.nio.charset.StandardCharsets;
@@ -126,7 +127,7 @@ class FileBackedOptimizeTest {
             // same contract mergeFiles uses - not an exception. What matters is
             // that the destination is left untouched either way.
             boolean result = QpdfLib.optimizeFile(missing, out, 0, 1, 1, 0);
-            assertTrue(!result, "an unreadable input must not report success");
+            assertFalse(result, "an unreadable input must not report success");
             assertEquals(before, Files.size(out),
                     "a refused run must not publish anything over the destination");
         } finally {

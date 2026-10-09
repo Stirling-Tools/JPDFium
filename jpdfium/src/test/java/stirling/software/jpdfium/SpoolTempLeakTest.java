@@ -58,7 +58,7 @@ class SpoolTempLeakTest {
         }
 
         doc.close();
-        assertTrue(spools().equals(before), "spool must be deleted on close");
+        assertEquals(spools(), before, "spool must be deleted on close");
     }
 
     @Test
@@ -71,7 +71,7 @@ class SpoolTempLeakTest {
         // the bound does not silently pass.
         assertThrows(IllegalArgumentException.class,
                 () -> PdfDocument.open(new ByteArrayInputStream(bytes), 10));
-        assertTrue(spools().equals(before), "a rejected stream must leave no spool behind");
+        assertEquals(spools(), before, "a rejected stream must leave no spool behind");
     }
 
     @Test
@@ -85,6 +85,6 @@ class SpoolTempLeakTest {
         } catch (RuntimeException expected) {
             // PDFium refused the content
         }
-        assertTrue(spools().equals(before), "a failed open must leave no spool behind");
+        assertEquals(spools(), before, "a failed open must leave no spool behind");
     }
 }
