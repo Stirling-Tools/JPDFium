@@ -3,6 +3,8 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.internal.ImageCodecs;
+import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.JpdfiumH;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -16,12 +18,20 @@ import java.awt.image.ComponentSampleModel;
 import java.awt.image.DataBufferByte;
 import java.awt.image.DataBufferInt;
 import java.awt.image.SinglePixelPackedSampleModel;
+import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 
+import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * In-process image downsampling: images above {@code maxImageDpi} are resampled from their native
@@ -49,6 +59,22 @@ public final class PdfImageOptimizer {
     private static final boolean NATIVE_UNPACK =
             Symbols.find("jpdfium_rust_unpack_pixels").isPresent();
 
+    // Resolved once; the JPEG loader binds the handle to each image's file access.
+    private static final MethodHandle GET_BLOCK = getBlockHandle();
+    private static final FunctionDescriptor GET_BLOCK_DESCRIPTOR =
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG);
+
+    private static MethodHandle getBlockHandle() {
+        try {
+            return MethodHandles.lookup().findVirtual(
+                    JpegFileAccess.class, "getBlock",
+                    MethodType.methodType(int.class, MemorySegment.class, long.class,
+                            MemorySegment.class, long.class));
+        } catch (NoSuchMethodException | IllegalAccessException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     private static final int CS_DEVICE_GRAY = 1;
     private static final int CS_DEVICE_RGB = 2;
     private static final int CS_DEVICE_CMYK = 3;
@@ -68,6 +94,37 @@ public final class PdfImageOptimizer {
                 && ImageObjBindings.FPDFImageObj_GetBitmap != null;
     }
 
+    /** True if any page holds an image object; {@link #optimize} cannot change a document without one. */
+    public static boolean hasImages(PdfDocument doc) {
+        if (!isSupported()) return false;
+        for (int p = 0; p < doc.pageCount(); p++) {
+            try (PdfPage page = doc.page(p)) {
+                MemorySegment rawPage = page.rawHandle();
+                int objCount;
+                try {
+                    objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    continue;
+                }
+                for (int i = 0; i < objCount; i++) {
+                    try {
+                        MemorySegment obj =
+                                (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
+                        if (obj.equals(MemorySegment.NULL)) continue;
+                        if ((int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj)
+                                == FPDF_PAGEOBJ_IMAGE) {
+                            return true;
+                        }
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Downsamples images above {@code maxImageDpi}; images at or below it are left byte-for-byte
      * untouched, and lossy re-encoding without downsampling never happens.
@@ -77,6 +134,14 @@ public final class PdfImageOptimizer {
      * @return number of image objects rewritten
      */
     public static int optimize(PdfDocument doc, int maxImageDpi) {
+        return optimize(doc, maxImageDpi, -1);
+    }
+
+    /**
+     * Downsamples images above {@code maxImageDpi}; JPEG originals are re-encoded as JPEG at
+     * {@code jpegQuality} ({@code <= 0} keeps the flate path). Returns the number rewritten.
+     */
+    public static int optimize(PdfDocument doc, int maxImageDpi, int jpegQuality) {
         if (!isSupported() || maxImageDpi <= 0) return 0;
         MemorySegment rawDoc = doc.rawHandle();
         int rewritten = 0;
@@ -112,7 +177,7 @@ public final class PdfImageOptimizer {
                     }
                     if (type != FPDF_PAGEOBJ_IMAGE) continue;
 
-                    if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi)) {
+                    if (optimizeImage(rawDoc, rawPage, obj, maxImageDpi, jpegQuality)) {
                         pageChanged = true;
                         rewritten++;
                     }
@@ -137,7 +202,7 @@ public final class PdfImageOptimizer {
 
     // Returns true when the image object was rewritten.
     private static boolean optimizeImage(MemorySegment rawDoc, MemorySegment rawPage,
-                                         MemorySegment imgObj, int maxImageDpi) {
+                                         MemorySegment imgObj, int maxImageDpi, int jpegQuality) {
         ImageMeta meta = readMeta(imgObj, rawPage);
         if (meta == null || meta.dpi() <= 0f || meta.dpi() <= maxImageDpi) return false;
         // Skip anything that cannot round-trip safely through a PDFium bitmap:
@@ -153,7 +218,13 @@ public final class PdfImageOptimizer {
         int targetH = Math.max(1, (int) Math.round(src.height() * scale));
         if (targetW >= src.width() || targetH >= src.height()) return false;
 
-        return embedBitmap(imgObj, scale(src.image(), targetW, targetH));
+        BufferedImage scaled = scale(src.image(), targetW, targetH);
+        if (jpegQuality > 0 && isJpegOriginal(imgObj)) {
+            byte[] jpeg = encodeJpeg(scaled, jpegQuality);
+            if (jpeg != null && embedJpegInline(imgObj, jpeg)) return true;
+            // Fall through to the bitmap path if JPEG encoding or embedding fails.
+        }
+        return embedBitmap(imgObj, scaled);
     }
 
     // Reads width/height/bpp/colorspace/dpi without decoding pixels, so an
@@ -582,6 +653,78 @@ public final class PdfImageOptimizer {
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
             }
+        }
+    }
+
+    // True when the image object's stream is JPEG (DCTDecode), so it can be re-encoded as JPEG.
+    private static boolean isJpegOriginal(MemorySegment imgObj) {
+        if (ImageObjBindings.FPDFImageObj_GetImageFilterCount == null
+                || ImageObjBindings.FPDFImageObj_GetImageFilter == null) {
+            return false;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            int filters =
+                    (int) ImageObjBindings.FPDFImageObj_GetImageFilterCount.invokeExact(imgObj);
+            for (int i = 0; i < filters; i++) {
+                MemorySegment buf = arena.allocate(16);
+                long n = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(
+                        imgObj, i, buf, 16L);
+                if (n > 0 && "DCTDecode".equals(buf.getString(0))) return true;
+            }
+            return false;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
+    }
+
+    private static byte[] encodeJpeg(BufferedImage img, int quality) {
+        try {
+            return ImageCodecs.encode(
+                    img, ImageFormat.JPEG, Math.min(100, Math.max(1, quality)));
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Replaces the object's content with {@code jpeg} via {@code FPDFImageObj_LoadJpegFileInline}.
+     * PDFium copies the data during the call, so the file access need only outlive it.
+     */
+    private static boolean embedJpegInline(MemorySegment imgObj, byte[] jpeg) {
+        if (jpeg == null || jpeg.length == 0) return false;
+        try (Arena arena = Arena.ofConfined()) {
+            JpegFileAccess access = new JpegFileAccess(jpeg);
+            MemorySegment stub = Linker.nativeLinker().upcallStub(
+                    GET_BLOCK.bindTo(access), GET_BLOCK_DESCRIPTOR, arena);
+            // FPDF_FILEACCESS: { unsigned long m_FileLen; GetBlock* m_GetBlock; void* m_Param; }
+            MemorySegment fileAccess = arena.allocate(24);
+            fileAccess.set(JAVA_LONG, 0, (long) jpeg.length);
+            fileAccess.set(ADDRESS, 8, stub);
+            fileAccess.set(ADDRESS, 16, MemorySegment.NULL);
+            int ok = (int) PageEditBindings.FPDFImageObj_LoadJpegFileInline.invokeExact(
+                    MemorySegment.NULL, 0, imgObj, fileAccess);
+            return ok != 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
+    }
+
+    /** Backs the {@code FPDF_FILEACCESS.m_GetBlock} callback used by the inline JPEG load. */
+    private static final class JpegFileAccess {
+        private final byte[] data;
+
+        JpegFileAccess(byte[] data) {
+            this.data = data;
+        }
+
+        int getBlock(MemorySegment param, long position, MemorySegment pBuf, long size) {
+            if (position < 0 || size < 0 || position > data.length
+                    || size > data.length - position) return 0;
+            MemorySegment.copy(
+                    data, (int) position, pBuf.reinterpret(size), JAVA_BYTE, 0, (int) size);
+            return 1;
         }
     }
 

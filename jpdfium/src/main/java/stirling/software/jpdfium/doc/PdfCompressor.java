@@ -1,7 +1,6 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
-import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.RustBridgeBindings;
 
@@ -252,16 +251,25 @@ public final class PdfCompressor {
         int imagesOptimized = 0;
         int expectedPages = doc.pageCount();
 
+        // Bytes carrying every pass applied so far. Passes run on working copies
+        // opened from these bytes, never on the caller's live document, so its open
+        // pages stay valid.
+        byte[] baseBytes = openStateBytes;
+
         // 2. Remove metadata if requested, before serializing.
         if (removeMetadata) {
-            PdfSecurity.Result sec = PdfSecurity.builder()
-                    .removeXmpMetadata(true)
-                    .removeDocumentMetadata(true)
-                    .build()
-                    .execute(doc);
-            metadataRemoved = sec.xmpMetadataFieldsRemoved() + sec.documentMetadataFieldsRemoved();
-            if (metadataRemoved > 0) {
-                actions.add("Removed %d metadata fields".formatted(metadataRemoved));
+            try (PdfDocument working = PdfDocument.open(baseBytes)) {
+                PdfSecurity.Result sec = PdfSecurity.builder()
+                        .removeXmpMetadata(true)
+                        .removeDocumentMetadata(true)
+                        .build()
+                        .execute(working);
+                metadataRemoved =
+                        sec.xmpMetadataFieldsRemoved() + sec.documentMetadataFieldsRemoved();
+                if (metadataRemoved > 0) {
+                    baseBytes = working.saveBytes();
+                    actions.add("Removed %d metadata fields".formatted(metadataRemoved));
+                }
             }
         }
 
@@ -273,20 +281,20 @@ public final class PdfCompressor {
         //    snapshot also lets a failed pass fall back to the pre-image bytes.
         byte[] imageRollbackBytes = null;
         byte[] imagePostBytes = null;
-        if (wantImagePass && PdfImageOptimizer.isSupported()) {
+        if (wantImagePass && PdfImageOptimizer.isSupported() && PdfImageOptimizer.hasImages(doc)) {
             boolean verify = mode.lossyAllowed() && mode.maxMeanAbsDiff() < 255.0;
             // The pre-image captures every pass so far (e.g. metadata removal).
             // The image pass runs on a working copy opened from that snapshot so
             // a rejected pass can never leave the caller's live document holding
             // images the result reports as rolled back.
-            byte[] preImage = doc.saveBytes();
+            byte[] preImage = baseBytes;
             int n = 0;
             try (PdfDocument working = PdfDocument.open(preImage)) {
-                n = PdfImageOptimizer.optimize(working, opts.maxImageDpi());
+                n = PdfImageOptimizer.optimize(working, opts.maxImageDpi(), opts.imageQuality());
                 if (n > 0) {
                     imagePostBytes = working.saveBytes();
                 }
-            } catch (JPDFiumException ex) {
+            } catch (RuntimeException ex) {
                 imageRollbackBytes = preImage;
                 imagePostBytes = null;
                 warnings.add("image pass failed: " + ex.getMessage());
@@ -331,7 +339,7 @@ public final class PdfCompressor {
         } else if (imagePostBytes != null) {
             resultBytes = imagePostBytes;
         } else {
-            resultBytes = doc.saveBytes();
+            resultBytes = baseBytes;
         }
         boolean streamsOptimized = false;
 
@@ -752,21 +760,24 @@ public final class PdfCompressor {
         return -1;
     }
 
-    // Renders two documents at a low DPI and returns the largest per-page mean
-    // absolute per-channel difference. Used to verify (and roll back) the lossy
-    // image pass. Returns positive infinity when there is nothing to compare or
-    // rendering fails, so an unverifiable pass always fails safe (rolls back)
-    // rather than silently passing every tolerance.
+    // Renders two documents and returns the worst per-tile mean absolute per-channel
+    // difference across their pages. Used to verify (and roll back) the lossy image
+    // pass. A page-count mismatch fails outright, and a localized change (a destroyed
+    // logo) is measured on its own tile rather than averaged away. Returns positive
+    // infinity when there is nothing to compare or rendering fails, so an unverifiable
+    // pass always fails safe (rolls back) rather than silently passing every tolerance.
     private static double maxPreviewMeanAbsDiff(byte[] before, byte[] after, int expectedPages) {
         if (before == null || after == null) {
             return Double.POSITIVE_INFINITY;
         }
         try (PdfDocument db = PdfDocument.open(before);
              PdfDocument da = PdfDocument.open(after)) {
-            int n = Math.min(Math.min(db.pageCount(), da.pageCount()), expectedPages);
+            if (db.pageCount() != da.pageCount() || db.pageCount() != expectedPages) {
+                return Double.POSITIVE_INFINITY;
+            }
             double max = 0.0;
-            for (int i = 0; i < n; i++) {
-                double d = meanAbsDiff(
+            for (int i = 0; i < expectedPages; i++) {
+                double d = worstTileMeanAbsDiff(
                         db.renderImage(i, PREVIEW_DPI), da.renderImage(i, PREVIEW_DPI));
                 if (d > max) {
                     max = d;
@@ -779,21 +790,41 @@ public final class PdfCompressor {
         }
     }
 
-    private static final int PREVIEW_DPI = 48;
+    private static final int PREVIEW_DPI = 96;
 
-    private static double meanAbsDiff(BufferedImage a, BufferedImage b) {
+    // Worst per-tile mean absolute difference over a page, so a localized change is
+    // not averaged away. A size mismatch fails outright (falling back to the
+    // pre-image), never a merely large finite value.
+    private static double worstTileMeanAbsDiff(BufferedImage a, BufferedImage b) {
         if (a == null || b == null) {
             return Double.POSITIVE_INFINITY;
         }
         if (a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight()) {
-            return Double.MAX_VALUE;
+            return Double.POSITIVE_INFINITY;
         }
         int w = a.getWidth();
         int h = a.getHeight();
+        int tile = Math.max(16, Math.min(64, Math.min(w, h)));
+        double worst = 0.0;
+        for (int ty = 0; ty < h; ty += tile) {
+            int th = Math.min(tile, h - ty);
+            for (int tx = 0; tx < w; tx += tile) {
+                int tw = Math.min(tile, w - tx);
+                double d = meanAbsDiff(a, b, tx, ty, tw, th);
+                if (d > worst) {
+                    worst = d;
+                }
+            }
+        }
+        return worst;
+    }
+
+    private static double meanAbsDiff(
+            BufferedImage a, BufferedImage b, int x0, int y0, int tw, int th) {
         long sum = 0;
         long count = 0;
-        for (int y = 0; y < h; y++) {
-            for (int x = 0; x < w; x++) {
+        for (int y = y0; y < y0 + th; y++) {
+            for (int x = x0; x < x0 + tw; x++) {
                 int pa = a.getRGB(x, y);
                 int pb = b.getRGB(x, y);
                 sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
