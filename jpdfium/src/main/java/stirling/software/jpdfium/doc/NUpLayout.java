@@ -1,8 +1,18 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.OutputTransaction;
+import stirling.software.jpdfium.panama.PageImportBindings;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
+import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -77,13 +87,98 @@ public final class NUpLayout {
     }
 
     /**
-     * Render the N-up layout and write it to {@code path}.
+     * Render the N-up layout to {@code path}, streamed to a staging file and atomically published.
      *
      * @param path destination file
      * @throws IOException if the file cannot be written
      */
     public void save(Path path) throws IOException {
-        Files.write(path, toBytes());
+        try (OutputTransaction tx = OutputTransaction.begin(path);
+             OutputStream out = new BufferedOutputStream(
+                     Files.newOutputStream(tx.staging()))) {
+            saveTo(out);
+            out.flush();
+            tx.publish(null);
+        }
+    }
+
+    /**
+     * Render the N-up layout to {@code out}; prefer this over {@link #toBytes()} for large outputs.
+     */
+    public void saveTo(OutputStream out) throws IOException {
+        if (out == null) throw new IllegalArgumentException("out must not be null");
+        if (PageImportBindings.FPDF_ImportNPagesToOne == null
+                || DocBindings.FPDF_SaveAsCopy == null
+                || DocBindings.FPDF_CloseDocument == null) {
+            // Direct FFM route unavailable (stub natives): fall back to the
+            // bridge path, which materializes the whole document on the heap.
+            out.write(toBytes());
+            return;
+        }
+        IOException[] ioFailure = new IOException[1];
+        RuntimeException[] failure = new RuntimeException[1];
+        PdfiumRuntime.execute(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment nupDoc;
+                try {
+                    nupDoc = (MemorySegment) PageImportBindings.FPDF_ImportNPagesToOne
+                            .invokeExact(doc.rawHandle(), outputWidth, outputHeight,
+                                    (long) cols, (long) rows);
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    failure[0] = new JPDFiumException("FPDF_ImportNPagesToOne failed", t);
+                    return;
+                }
+                if (nupDoc == null || nupDoc.equals(MemorySegment.NULL)) {
+                    failure[0] = new JPDFiumException("FPDF_ImportNPagesToOne produced no document");
+                    return;
+                }
+                try {
+                    streamSaveAsCopy(nupDoc, out, ioFailure, arena);
+                } finally {
+                    try {
+                        DocBindings.FPDF_CloseDocument.invokeExact(nupDoc);
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                        if (failure[0] == null) {
+                            failure[0] = new JPDFiumException("FPDF_CloseDocument failed", t);
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (failure[0] == null) {
+                    failure[0] = new JPDFiumException("N-up streaming save failed", t);
+                }
+            }
+        });
+        if (failure[0] != null) throw failure[0];
+        if (ioFailure[0] != null) throw ioFailure[0];
+    }
+
+    private static void streamSaveAsCopy(MemorySegment nupDoc, OutputStream out,
+            IOException[] ioFailure, Arena arena) {
+        FileWriteSink.begin(out);
+        try {
+            MemorySegment fileWrite = FileWriteSink.allocateStruct(arena);
+            int ok;
+            try {
+                ok = (int) DocBindings.FPDF_SaveAsCopy.invokeExact(nupDoc, fileWrite, 0);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("FPDF_SaveAsCopy failed", t);
+            }
+            IOException sinkFailure = FileWriteSink.failure();
+            if (sinkFailure != null) {
+                ioFailure[0] = sinkFailure;
+                return;
+            }
+            if (ok == 0) {
+                throw new JPDFiumException("FPDF_SaveAsCopy returned failure");
+            }
+        } finally {
+            FileWriteSink.end();
+        }
     }
 
     /** Number of source-page columns per output page. */
