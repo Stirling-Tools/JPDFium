@@ -81,7 +81,7 @@ void configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode, int
 // Write an already-parsed document straight to a file. QPDFWriter takes
 // ownership of the FILE* once setOutputFile returns, so an exception before
 // that point closes it here rather than leaking the descriptor.
-int writeToFile(std::shared_ptr<QPDF> qpdf, const char* out_path, int32_t flags,
+int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path, int32_t flags,
                 int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel) {
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;

@@ -229,6 +229,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_compress_pdf",
     "jpdfium_rust_repair_lopdf",
     "jpdfium_rust_resize_pixels",
+    "jpdfium_rust_unpack_pixels",
     "jpdfium_rust_svg_to_rgba",
     "jpdfium_rust_free",
     // QPDF in-process functions
@@ -360,6 +361,20 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                 )
             }
 
+            // jextract emits a plain downcall, which routes heap pointers through
+            // SharedUtils.checkNative and rejects them; only critical(true) allows heap.
+            val plainUnpackBinding =
+                "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);"
+            val criticalUnpackBinding =
+                "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));"
+            // Fail loudly if jextract changes the emitted shape: silently skipping the
+            // rewrite would leave the plain (heap-rejecting) binding in place.
+            check(text.contains(plainUnpackBinding) || text.contains(criticalUnpackBinding)) {
+                "jpdfium_rust_unpack_pixels binding is neither the plain nor the critical form; " +
+                    "jextract output changed, update this patch"
+            }
+            text = text.replace(plainUnpackBinding, criticalUnpackBinding)
+
             // Ownership-boundary contract for the raw bindings: jextract output
             // carries no hand documentation, so re-apply it here on every
             // regeneration, idempotently like the C_LONG patch above. Without
@@ -422,14 +437,16 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.integration", "true")
-    // Forward -Djpdfium.bench.* from gradle invocation to the test JVM.
+    // Forward -Djpdfium.bench.* / -Djpdfium.compress.* from the invocation.
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.bench")) systemProperty(key, v.toString())
+        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")) {
+            systemProperty(key, v.toString())
+        }
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Xmx4g")
     maxHeapSize = "4g"
-    setForkEvery(20)
+    forkEvery = 20
 }
 
 // Run: ./gradlew :jpdfium:corpusTest -Pjpdfium.testNatives=<platform>
