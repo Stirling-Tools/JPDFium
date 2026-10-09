@@ -135,8 +135,7 @@ class CancellationOwnershipTest {
             }
         } finally {
             QpdfLib.setMaxConcurrency(prev);
-            assertTrue(QpdfLib.maxConcurrency() == prev,
-                    "the bound must be restored even after cancellation");
+            assertEquals(prev, QpdfLib.maxConcurrency(), "the bound must be restored even after cancellation");
         }
     }
 }

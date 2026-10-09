@@ -499,10 +499,11 @@ public final class PdfBookmarkEditor {
             OutlineNode node = new OutlineNode(
                     bookmark.title(),
                     bookmark.pageIndex(),
-                    currentObjNum++,
+                currentObjNum,
                     bookmark.actionType(),
                     bookmark.uri().orElse(null)
             );
+            currentObjNum++;
             node.parentObjNum = parentObjNum;
             currentLevel.add(node);
             allNodes.add(node);

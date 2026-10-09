@@ -188,8 +188,7 @@ class OwnerTransportTest {
         // The cause must survive, not just the wrapper message: a native writer
         // failure that loses its cause is undiagnosable.
         assertEquals("writer failed", seen.getMessage());
-        assertTrue(seen.getCause() instanceof IOException,
-                "the underlying I/O failure must be preserved as the cause");
+        assertInstanceOf(IOException.class, seen.getCause(), "the underlying I/O failure must be preserved as the cause");
         assertEquals("disk gone", seen.getCause().getMessage());
     }
 

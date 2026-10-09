@@ -684,7 +684,8 @@ public final class JpdfiumLib {
                 while (buf.hasRemaining()) {
                     int w = channel.write(buf);
                     if (w == 0) {
-                        if (++zeroSpins > 10_000) {
+                        ++zeroSpins;
+                        if (zeroSpins > 10_000) {
                             throw new IOException("channel is not making progress");
                         }
                     } else if (w > 0) {
@@ -925,8 +926,8 @@ public final class JpdfiumLib {
         double scale = dpi / 72.0;
         float pw = pageWidth0(page);
         float ph = pageHeight0(page);
-        long w = Math.max(1, Math.round(pw * scale));
-        long h = Math.max(1, Math.round(ph * scale));
+        long w = Math.max(1, (long) Math.floor(pw * scale));
+        long h = Math.max(1, (long) Math.floor(ph * scale));
         long pixels = w * h;
         if (pixels > maxPixels) {
             throw new JPDFiumException(String.format(

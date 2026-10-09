@@ -11,11 +11,13 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import java.io.IOException;
 
 /** Commit boundary and no-clobber publication races. */
 class PublishCommitTest {
@@ -59,7 +61,7 @@ class PublishCommitTest {
         Path staging = dir.resolve("staging.pdf");
         Path output = dir.resolve("output.pdf");
         Files.write(staging, new byte[]{9, 9, 9});
-        byte[] existing = new byte[]{1, 2, 3, 4};
+        byte[] existing = {1, 2, 3, 4};
         CountDownLatch publisherReady = new CountDownLatch(1);
         CountDownLatch creatorDone = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(2);
@@ -109,11 +111,11 @@ class PublishCommitTest {
     void publicationFailurePreservesDestination(@TempDir Path dir) throws Exception {
         Path staging = dir.resolve("missing.pdf");
         Path output = dir.resolve("o.pdf");
-        byte[] before = new byte[]{8, 8};
+        byte[] before = {8, 8};
         Files.write(output, before);
         try {
             QpdfLib.publish(staging, output, 0, new QpdfLib.PublishCommit());
-            assertTrue(false, "missing staging must fail");
+            fail("missing staging must fail");
         } catch (IOException expected) {
             assertArrayEquals(before, Files.readAllBytes(output),
                     "failed publication must leave destination untouched");

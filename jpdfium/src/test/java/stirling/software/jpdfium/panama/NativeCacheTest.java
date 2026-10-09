@@ -1,12 +1,5 @@
 package stirling.software.jpdfium.panama;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -36,6 +29,14 @@ import javax.security.auth.Subject;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NativeCacheTest {
 
@@ -93,7 +94,7 @@ class NativeCacheTest {
         second.put("b", "22");
         second.put("a", "11");
         assertEquals(NativeCache.cacheKey(first), NativeCache.cacheKey(second));
-        assertFalse(NativeCache.cacheKey(first).equals(NativeCache.cacheKey(Map.of("a", "11", "b", "33"))));
+        assertNotEquals(NativeCache.cacheKey(first), NativeCache.cacheKey(Map.of("a", "11", "b", "33")));
     }
 
     @Test
@@ -377,12 +378,7 @@ class NativeCacheTest {
                         aclEntry("Everyone", AclEntryPermission.READ_DATA))), system, admins));
     }
 
-    private static final class NamePrincipal implements UserPrincipal {
-        private final String name;
-
-        NamePrincipal(String name) {
-            this.name = name;
-        }
+    private record NamePrincipal(String name) implements UserPrincipal {
 
         @Override
         public String getName() {
@@ -393,26 +389,9 @@ class NativeCacheTest {
         public boolean implies(Subject subject) {
             return false;
         }
-
-        @Override
-        public boolean equals(Object other) {
-            return other instanceof NamePrincipal principal && name.equals(principal.name);
-        }
-
-        @Override
-        public int hashCode() {
-            return name.hashCode();
-        }
     }
 
-    private static final class FakeAclView implements AclFileAttributeView {
-        private final UserPrincipal owner;
-        private final List<AclEntry> acl;
-
-        FakeAclView(UserPrincipal owner, List<AclEntry> acl) {
-            this.owner = owner;
-            this.acl = acl;
-        }
+    private record FakeAclView(UserPrincipal owner, List<AclEntry> acl) implements AclFileAttributeView {
 
         @Override
         public String name() {

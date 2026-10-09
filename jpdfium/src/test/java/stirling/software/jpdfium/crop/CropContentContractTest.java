@@ -217,8 +217,7 @@ class CropContentContractTest {
         try (PdfDocument doc = PdfDocument.open(output); PdfPage page = doc.page(0)) {
             Rect mb = page.boxes().mediaBox();
             int row = Math.round(mb.y() + mb.height() - 250);
-            assertTrue((img.getRGB(150, row) & 0xFFFFFF) == 0xFF0000,
-                    "visible image content lost");
+            assertEquals(0xFF0000, (img.getRGB(150, row) & 0xFFFFFF), "visible image content lost");
         }
     }
 
@@ -302,6 +301,6 @@ class CropContentContractTest {
                 if (ia.getRGB(x, y) != ib.getRGB(x, y)) diff++;
             }
         }
-        assertTrue(diff == 0, message + " (" + diff + " pixels differ)");
+        assertEquals(0, diff, message + " (" + diff + " pixels differ)");
     }
 }

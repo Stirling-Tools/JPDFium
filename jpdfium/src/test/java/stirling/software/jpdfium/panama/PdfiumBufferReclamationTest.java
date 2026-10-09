@@ -3,12 +3,14 @@ package stirling.software.jpdfium.panama;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Storage-reclamation behavior that needs no live PDFium operation: the
@@ -98,7 +100,7 @@ class PdfiumBufferReclamationTest {
             PdfiumBuffers.failLeaseConstruction = false;
         }
         Throwable failure = seen.get();
-        assertTrue(failure instanceof IllegalStateException, "expected rejection, got: " + failure);
+        assertInstanceOf(IllegalStateException.class, failure, "expected rejection, got: " + failure);
         assertTrue(failure.getMessage().contains("lease construction failure"),
                 "acquisition failure must stay primary: " + failure.getMessage());
         assertTrue(failure.getSuppressed().length > 0,

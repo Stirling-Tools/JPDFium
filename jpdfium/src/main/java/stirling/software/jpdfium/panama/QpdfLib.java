@@ -283,7 +283,7 @@ public final class QpdfLib {
                 } else {
                     MemorySegment buf = call.copyBytes(inputBytes);
                     inputsArraySeg.setAtIndex(ADDRESS, i, buf);
-                    lensArraySeg.setAtIndex(JAVA_LONG, i, (long) inputBytes.length);
+                    lensArraySeg.setAtIndex(JAVA_LONG, i, inputBytes.length);
                 }
             }
 

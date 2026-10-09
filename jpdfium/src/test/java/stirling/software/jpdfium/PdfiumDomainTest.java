@@ -13,9 +13,6 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
@@ -24,6 +21,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Domain-level behavior against real PDFium: coarse geometry queries cost one
@@ -85,7 +87,8 @@ class PdfiumDomainTest {
             try {
                 ProgressiveStatus status = session.step();
                 int steps = 0;
-                while (status == ProgressiveStatus.TO_BE_CONTINUED && steps++ < 1000) {
+                while (status == ProgressiveStatus.TO_BE_CONTINUED && steps < 1000) {
+                    steps++;
                     status = session.step();
                 }
                 assertEquals(ProgressiveStatus.DONE, status);
@@ -189,8 +192,7 @@ class PdfiumDomainTest {
         } finally {
             PdfiumBuffers.acquirePostIncrementHook = null;
         }
-        assertTrue(failure.get() instanceof IllegalStateException,
-                "rolled-back acquisition must reject, got: " + failure.get());
+        assertInstanceOf(IllegalStateException.class, failure.get(), "rolled-back acquisition must reject, got: " + failure.get());
         assertEquals(before, PdfiumBuffers.liveSharedBytes(),
                 "rollback to zero must reclaim the arena");
         assertThrows(IllegalStateException.class,
@@ -320,7 +322,8 @@ class PdfiumDomainTest {
                 PdfPage.ProgressiveSession session = page.startProgressiveRender(buf, 0);
                 ProgressiveStatus status = session.step();
                 int steps = 0;
-                while (status == ProgressiveStatus.TO_BE_CONTINUED && steps++ < 2000) {
+                while (status == ProgressiveStatus.TO_BE_CONTINUED && steps < 2000) {
+                    steps++;
                     status = session.step();
                 }
                 assertEquals(ProgressiveStatus.DONE, status);

@@ -155,7 +155,7 @@ final class NativeDownloader {
                         "Cannot create a private natives download directory.", e);
             }
         }
-        if (cached != null && isUsableJar(cached, platform)) return cached;
+        if (isUsableJar(cached, platform)) return cached;
         Path downloaded = download(jarUrl(platform, version, repo), cached);
         if (!isUsableJar(downloaded, platform)) {
             try {

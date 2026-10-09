@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -43,7 +44,7 @@ class QpdfConcurrencySweepTest {
                     }
                     long ms = (System.nanoTime() - t0) / 1_000_000;
                     System.out.printf("SWEEP workers=%d ok=%d/8 %d ms%n", workers, ok, ms);
-                    assertTrue(ok == 8, "all sweep jobs must succeed");
+                    assertEquals(8, ok, "all sweep jobs must succeed");
                 } finally {
                     pool.shutdownNow();
                     QpdfLib.setMaxConcurrency(prev);
