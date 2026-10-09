@@ -96,6 +96,43 @@ public final class PdfCompressor {
             "/SubFilter".getBytes(StandardCharsets.US_ASCII),
     };
 
+    // Every marker needed by the signed/PDF-A decisions, located in ONE forward
+    // sweep of the source instead of one full pass per marker. The marker order
+    // is fixed so the scan can record first offsets by index.
+    private static final int N_PDFA_PART = 0;
+    private static final int N_PDFA_PART_ATTR = 1;
+    private static final int N_PDFA_CONF = 2;
+    private static final int N_PDFA_CONF_ATTR = 3;
+    private static final int N_GTS_PDFA1 = 4;
+    private static final int N_PDFA1_PART = 5;
+    private static final int N_PDFA1_PART_ATTR = 6;
+    private static final int N_METADATA = 7;
+    private static final int N_BYTE_RANGE = 8;
+    private static final int N_TYPE_SIG = 9;
+    private static final int N_TYPE_SPACE_SIG = 10;
+    private static final int N_SUBFILTER = 11;
+    private static final int N_NEEDLES = 12;
+
+    private static final byte[][] SCAN_NEEDLES = {
+            PDFA_MARKERS[0],
+            PDFA_MARKERS[1],
+            PDFA_MARKERS[2],
+            PDFA_MARKERS[3],
+            PDFA_MARKERS[4],
+            PDFA_PART1_MARKERS[0],
+            PDFA_PART1_MARKERS[1],
+            METADATA_MARKER,
+            BYTE_RANGE,
+            SIG_MARKERS[0],
+            SIG_MARKERS[1],
+            SIG_MARKERS[2],
+    };
+
+    private static final int[] NO_NEEDLES = new int[0];
+    // First-byte dispatch: only needles whose first byte matches are tested at a
+    // position, so the sweep stays a single cache-friendly pass.
+    private static final int[][] NEEDLES_BY_FIRST = buildFirstIndex();
+
     private PdfCompressor() {}
 
     /**
@@ -146,8 +183,10 @@ public final class PdfCompressor {
 
         // 0. Signed documents are never rewritten: recompression would
         //    invalidate the signature's /ByteRange coverage.
+        //    One marker sweep answers both the signed and PDF/A checks.
+        Markers markers = scanMarkers(sourceBytes);
         int pdfiumSignatures = signatureCount(doc);
-        boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(sourceBytes);
+        boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(markers);
         if (signed && originalBytesKnown && doc.contentGeneration() == 0) {
             // The true original bytes are available and the document has not
             // been structurally modified since it was opened, so return them
@@ -184,7 +223,7 @@ public final class PdfCompressor {
         // 1. A PDF/A conformance claim pins the file's structure and colour
         //    handling; lossy image passes and metadata removal would break it,
         //    so preserve conformance instead.
-        int pdfPart = pdfaPart(sourceBytes);
+        int pdfPart = pdfaPart(sourceBytes, markers);
         boolean pdfA = pdfPart >= 1;
         boolean pdfA1 = pdfPart == 1;
         if (pdfA) {
@@ -423,35 +462,40 @@ public final class PdfCompressor {
     // catalog's /Metadata stream is inflated, never the whole file, so a large
     // embedded image is not decompressed just to look for a claim.
     static int pdfaPart(byte[] pdf) {
+        return pdfaPart(pdf, scanMarkers(pdf));
+    }
+
+    private static int pdfaPart(byte[] pdf, Markers m) {
         if (pdf == null) {
             return -1;
         }
+        boolean rawPdfa = m.first[N_PDFA_PART] >= 0 || m.first[N_PDFA_PART_ATTR] >= 0
+                || m.first[N_PDFA_CONF] >= 0 || m.first[N_PDFA_CONF_ATTR] >= 0
+                || m.first[N_GTS_PDFA1] >= 0;
         byte[] xmp = null;
-        if (!containsAny(pdf, PDFA_MARKERS)) {
-            xmp = catalogMetadata(pdf);
+        if (!rawPdfa) {
+            xmp = catalogMetadata(pdf, m);
             if (xmp == null || !containsAny(xmp, PDFA_MARKERS)) {
                 return -1;
             }
         }
-        if (containsAny(pdf, PDFA_PART1_MARKERS)
-                || (xmp != null && containsAny(xmp, PDFA_PART1_MARKERS))) {
-            return 1;
-        }
-        return 2;
+        boolean part1 = m.first[N_PDFA1_PART] >= 0 || m.first[N_PDFA1_PART_ATTR] >= 0
+                || m.first[N_GTS_PDFA1] >= 0
+                || (xmp != null && containsAny(xmp, PDFA_PART1_MARKERS));
+        return part1 ? 1 : 2;
     }
 
     // Reads only the catalog's /Metadata stream: resolves the "/Metadata N 0 R"
     // reference, extracts that object's stream, and inflates it if Flate-encoded.
     // Returns null when it cannot be read (missing, encrypted, or filtered with
     // an unsupported codec), in which case the file is not treated as PDF/A.
-    private static byte[] catalogMetadata(byte[] pdf) {
+    private static byte[] catalogMetadata(byte[] pdf, Markers m) {
         // A page, image or font /Metadata entry can precede the catalog's, so scan
         // every /Metadata reference and return the first stream that carries a
         // PDF/A claim, falling back to the first decodable stream.
         byte[] firstDecoded = null;
-        int at = indexOf(pdf, METADATA_MARKER);
-        while (at >= 0) {
-            byte[] decoded = decodeMetadata(pdf, at);
+        for (int k = 0; k < m.metadataCount(); k++) {
+            byte[] decoded = decodeMetadata(pdf, m.metadata()[k]);
             if (decoded != null) {
                 if (containsAny(decoded, PDFA_MARKERS)) {
                     return decoded;
@@ -460,7 +504,6 @@ public final class PdfCompressor {
                     firstDecoded = decoded;
                 }
             }
-            at = indexOf(pdf, METADATA_MARKER, at + 1);
         }
         return firstDecoded;
     }
@@ -599,9 +642,77 @@ public final class PdfCompressor {
         }
     }
 
+    // Marker sweep over the raw bytes: one forward pass records the first offset
+    // of every needle and every /Metadata offset. -1 means absent.
+    private record Markers(int[] first, int[] metadata, int metadataCount) {}
+
+    private static Markers scanMarkers(byte[] pdf) {
+        if (pdf == null) {
+            int[] none = new int[N_NEEDLES];
+            Arrays.fill(none, -1);
+            return new Markers(none, NO_NEEDLES, 0);
+        }
+        int[] first = new int[N_NEEDLES];
+        Arrays.fill(first, -1);
+        int[] metadata = NO_NEEDLES;
+        int metadataCount = 0;
+        int n = pdf.length;
+        for (int i = 0; i < n; i++) {
+            int[] ids = NEEDLES_BY_FIRST[pdf[i] & 0xFF];
+            for (int id : ids) {
+                byte[] needle = SCAN_NEEDLES[id];
+                if (i + needle.length <= n && matchesAt(pdf, i, needle)) {
+                    if (first[id] < 0) {
+                        first[id] = i;
+                    }
+                    if (id == N_METADATA) {
+                        if (metadataCount == metadata.length) {
+                            metadata = Arrays.copyOf(metadata, Math.max(4, metadataCount * 2));
+                        }
+                        metadata[metadataCount++] = i;
+                    }
+                }
+            }
+        }
+        return new Markers(first, metadata, metadataCount);
+    }
+
+    private static boolean matchesAt(byte[] pdf, int at, byte[] needle) {
+        for (int j = 1; j < needle.length; j++) {
+            if (pdf[at + j] != needle[j]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int[][] buildFirstIndex() {
+        int[] counts = new int[256];
+        for (byte[] needle : SCAN_NEEDLES) {
+            counts[needle[0] & 0xFF]++;
+        }
+        int[][] index = new int[256][];
+        int[] fill = new int[256];
+        for (int b = 0; b < 256; b++) {
+            index[b] = counts[b] == 0 ? NO_NEEDLES : new int[counts[b]];
+        }
+        for (int id = 0; id < SCAN_NEEDLES.length; id++) {
+            int b = SCAN_NEEDLES[id][0] & 0xFF;
+            index[b][fill[b]++] = id;
+        }
+        return index;
+    }
+
     // Signature-dictionary detection over the raw bytes (see SIG_MARKERS).
-    private static boolean looksSignedByBytes(byte[] pdf) {
-        return pdf != null && indexOf(pdf, BYTE_RANGE) >= 0 && containsAny(pdf, SIG_MARKERS);
+    private static boolean looksSignedByBytes(Markers m) {
+        return m.first[N_BYTE_RANGE] >= 0 && (m.first[N_TYPE_SIG] >= 0
+                || m.first[N_TYPE_SPACE_SIG] >= 0 || m.first[N_SUBFILTER] >= 0);
+    }
+
+    // Package-private byte[] seam for the detection tests, mirroring pdfaPart(byte[]):
+    // it exercises the same single-pass marker scan the compress pipeline uses.
+    static boolean looksSignedByBytes(byte[] pdf) {
+        return looksSignedByBytes(scanMarkers(pdf));
     }
 
     private static boolean containsAny(byte[] haystack, byte[][] needles) {
