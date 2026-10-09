@@ -75,17 +75,25 @@ jobs:
           JAPICMP_VER=0.23.0
           curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
           set +e  # japicmp exits non-zero on incompatibilities; handle below
-          # Accepted breakage: NativeGuard was a deprecated facade whose
-          # documented contract no longer holds (it cannot admit the execution
-          # domain), it has no in-repo callers, and removal turns cryptic
-          # runtime failures into clear compile errors toward PdfiumRuntime.
-          # Everything else must stay compatible.
+          # Accepted breakage (whole-class removals only): NativeGuard was a
+          # deprecated facade whose documented contract no longer holds (it
+          # cannot admit the execution domain), it has no in-repo callers, and
+          # removal turns cryptic runtime failures into clear compile errors
+          # toward PdfiumRuntime. PdfAConverter was a Ghostscript-backed helper
+          # removed together with the Ghostscript dependency; PDF/A conformance
+          # handling now lives in the in-process compression pipeline (see
+          # PdfCompressor). Both are removed classes, so a class-level exclude is
+          # exact. The compression members and PdfEncryption.isQpdfAvailable()
+          # that the overhaul had dropped were restored for binary compatibility,
+          # so they are no longer excluded — every remaining type and member must
+          # stay compatible.
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
             --ignore-missing-classes \
             --exclude "stirling.software.jpdfium.panama.NativeGuard" \
+            --exclude "stirling.software.jpdfium.doc.PdfAConverter" \
             --error-on-binary-incompatibility \
             --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1

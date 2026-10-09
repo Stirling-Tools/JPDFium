@@ -107,8 +107,8 @@ public class S92_RustCompress {
             System.out.println(result.summary());
         }
 
-        // 4. Full pipeline: Ghostscript + qpdf + zopfli (maximum compression)
-        SampleBase.section("Full pipeline: GS + qpdf + Rust/zopfli (maximum)");
+        // 4. Full pipeline: images + qpdf + zopfli (maximum compression)
+        SampleBase.section("Full pipeline: images + qpdf + Rust/zopfli (maximum)");
         try (PdfDocument doc = PdfDocument.open(input)) {
             CompressResultWithBytes result = PdfCompressor.compress(doc,
                     CompressOptions.builder()

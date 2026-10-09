@@ -356,9 +356,13 @@ jobs:
           echo ""
           echo "Regressions detected - re-running benchmarks once to rule out"
           echo "transient runner noise before failing the job..."
+          # --rerun-tasks forces a fresh measurement: without it Gradle sees the
+          # first :jpdfium:jmh output as UP-TO-DATE and the retry just re-reads
+          # the same results.json, so a noisy first pass can never be recovered.
           ./gradlew :jpdfium:jmh \
             -Pjmh.warmupIterations=4 \
             -Pjmh.iterations=5 \
+            --rerun-tasks \
             --no-daemon
           python3 .github/scripts/compare-jmh.py
 
