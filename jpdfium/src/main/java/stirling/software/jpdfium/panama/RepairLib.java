@@ -1,9 +1,19 @@
 package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.doc.RepairResult;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.util.Objects;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -29,6 +39,11 @@ public final class RepairLib {
     private static final int REPAIR_PARTIAL = 2;
     private static final int REPAIR_FAILED = -1;
     private static final int ERR_NATIVE = -5;
+
+    /** File-backed repair entry point; {@code null} on natives without it. */
+    private static final MethodHandle REPAIR_PDF_FILE = Symbols.downcallOptional(
+            "jpdfium_repair_pdf_file",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
 
     static {
         NativeLoader.ensureLoaded();
@@ -79,6 +94,79 @@ public final class RepairLib {
 
                 String diagnostics = inspect(input);
                 return new RepairResult(status, outputBytes, diagnostics);
+            }
+        });
+    }
+
+    /** Whether the loaded native exposes the file-backed repair entry point. */
+    public static boolean isFileRepairSupported() {
+        return REPAIR_PDF_FILE != null;
+    }
+
+    /**
+     * Repair a PDF file straight to another file. With the native file entry point the document is
+     * not materialized on the Java heap; without it this falls back to the {@code byte[]} route,
+     * which holds the whole input and output on the heap.
+     */
+    public static RepairResult.Status repairToFile(Path input, Path output, int flags)
+            throws IOException {
+        Objects.requireNonNull(input, "input");
+        Objects.requireNonNull(output, "output");
+        MethodHandle handle = REPAIR_PDF_FILE;
+        if (handle == null) {
+            // No file entry point in this native: repair in memory (whole input on the heap).
+            RepairResult result = repair(Files.readAllBytes(input), flags);
+            byte[] bytes = result.repairedPdf();
+            if (bytes != null) {
+                // Publish atomically: stage a sibling temp file, then move it over the
+                // destination, so a partial write never truncates an existing output.
+                Path tmp =
+                        Files.createTempFile(
+                                output.toAbsolutePath().getParent(), ".jpdfium-repair-", ".tmp");
+                try {
+                    Files.write(tmp, bytes);
+                    // createTempFile is 0600; when replacing an existing file keep its
+                    // mode so a fallback repair does not drop permissions.
+                    if (Files.exists(output)
+                            && Files.getFileStore(tmp)
+                                    .supportsFileAttributeView(PosixFileAttributeView.class)) {
+                        try {
+                            Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(output));
+                        } catch (UnsupportedOperationException _) {
+                            // Destination is not on a POSIX filesystem; keep the temp mode.
+                        }
+                    }
+                    try {
+                        Files.move(
+                                tmp,
+                                output,
+                                StandardCopyOption.REPLACE_EXISTING,
+                                StandardCopyOption.ATOMIC_MOVE);
+                    } catch (AtomicMoveNotSupportedException e) {
+                        Files.move(tmp, output, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } finally {
+                    Files.deleteIfExists(tmp);
+                }
+            }
+            return result.status();
+        }
+        return PdfiumRuntime.execute(() -> {
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment in = arena.allocateFrom(input.toAbsolutePath().toString());
+                MemorySegment out = arena.allocateFrom(output.toAbsolutePath().toString());
+                int rc = (int) handle.invokeExact(in, out, flags);
+                return switch (rc) {
+                    case REPAIR_CLEAN -> RepairResult.Status.CLEAN;
+                    case REPAIR_FIXED -> RepairResult.Status.FIXED;
+                    case REPAIR_PARTIAL -> RepairResult.Status.PARTIAL;
+                    default -> RepairResult.Status.FAILED;
+                };
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("jpdfium_repair_pdf_file failed", t);
             }
         });
     }

@@ -92,9 +92,21 @@ public final class PdfRepair {
         return RepairLib.inspect(pdfBytes);
     }
 
-    /** Inspect a PDF file for damage without modifying it. */
+    /**
+     * Inspects a PDF file for damage without modifying it; prefer {@link #repairFile(Path, Path, int)}
+     * for large files.
+     */
     public static String inspect(Path path) throws IOException {
         return inspect(Files.readAllBytes(path));
+    }
+
+    /**
+     * Repairs a PDF straight to another file without materializing it, falling back to the
+     * {@code byte[]} route on natives without the file entry point. Core stage only.
+     */
+    public static RepairResult.Status repairFile(Path input, Path output, int flags)
+            throws IOException {
+        return RepairLib.repairToFile(input, output, flags);
     }
 
     /**
@@ -177,7 +189,10 @@ public final class PdfRepair {
             return this;
         }
 
-        /** Set the input PDF file. */
+        /**
+         * Set the input PDF file; read into the heap, or use {@link PdfRepair#repairFile} for a
+         * flat-heap file-to-file repair.
+         */
         public Builder input(Path path) throws IOException {
             this.inputBytes = Files.readAllBytes(path);
             return this;
