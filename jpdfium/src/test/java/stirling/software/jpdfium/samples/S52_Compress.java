@@ -16,7 +16,7 @@ import java.util.List;
  *
  * <p>Demonstrates the complete compression pipeline with ALL features:
  * <ul>
- *   <li>Ghostscript (image resampling, font subsetting)</li>
+ *   <li>In-process image optimization (resampling, recompression)</li>
  *   <li>qpdf (structural optimization, object streams)</li>
  *   <li>Metadata stripping</li>
  *   <li>Rust/zopfli FlateDecode enhancement (10-25% better than standard DEFLATE)</li>
@@ -25,7 +25,7 @@ import java.util.List;
  * <h3>Compression Presets</h3>
  * <ul>
  *   <li>{@link CompressPreset#LOSSLESS} - Structural optimization only, no quality loss</li>
- *   <li>{@link CompressPreset#WEB} - Ghostscript ebook + qpdf (balanced for web)</li>
+ *   <li>{@link CompressPreset#WEB} - image optimization + qpdf (balanced for web)</li>
  *   <li>{@link CompressPreset#SCREEN} - Aggressive compression (96 DPI, max quality 40)</li>
  *   <li>{@link CompressPreset#MAXIMUM} - Maximum compression (all optimizations)</li>
  * </ul>
@@ -101,8 +101,8 @@ public class S52_Compress {
             System.out.printf("  Actions: %s%n", result.toJson());
         }
 
-        // 2. Web preset (Ghostscript ebook + qpdf)
-        SampleBase.section("Web preset (GS ebook + qpdf, balanced for web)");
+        // 2. Web preset (image optimization + qpdf)
+        SampleBase.section("Web preset (images + qpdf, balanced for web)");
         try (PdfDocument doc = PdfDocument.open(input)) {
             CompressResultWithBytes result = PdfCompressor.compress(doc,
                     CompressOptions.builder().preset(CompressPreset.WEB).build());
@@ -196,8 +196,8 @@ public class S52_Compress {
             System.out.println(result.summary());
         }
 
-        // 8. Full pipeline: Ghostscript + qpdf + zopfli (maximum compression)
-        SampleBase.section("Full pipeline: GS + qpdf + Rust/zopfli (maximum)");
+        // 8. Full pipeline: images + qpdf + zopfli (maximum compression)
+        SampleBase.section("Full pipeline: images + qpdf + Rust/zopfli (maximum)");
         try (PdfDocument doc = PdfDocument.open(input)) {
             CompressResultWithBytes result = PdfCompressor.compress(doc,
                     CompressOptions.builder()
