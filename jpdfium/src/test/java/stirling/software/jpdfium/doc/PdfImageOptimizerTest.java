@@ -4,12 +4,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.lang.foreign.MemorySegment;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Random;
 
+import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.abort;
 
@@ -82,5 +88,34 @@ class PdfImageOptimizerTest {
         }
         assertTrue(ok, "native unpack failed, padded stride");
         assertArrayEquals(exp, got, "padded stride");
+    }
+
+    // JPEG originals are re-encoded as JPEG (not flate RGB) when a quality is supplied.
+    @Test
+    @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
+    void jpegOriginalsAreReencodedAsJpegWhenDownsampled() throws Exception {
+        URL url = PdfImageOptimizerTest.class.getResource("/pdfs/general/irs_1099m.pdf");
+        assertNotNull(url, "irs_1099m.pdf test resource missing");
+        Path src = Path.of(url.toURI());
+        long originalSize = Files.size(src);
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            // dpi=1 forces every image through the downsample path, so the JPEG branch
+            // (re-encode through FPDFImageObj_LoadJpegFileInline) actually runs.
+            int rewritten = PdfImageOptimizer.optimize(doc, 1, 60);
+            assertTrue(rewritten > 0, "expected at least one image to be rewritten");
+            byte[] out = doc.saveBytes();
+            assertTrue(out.length > 0, "optimized document must serialize");
+            // The input holds one JPEG image; the JPEG branch must keep it a JPEG stream
+            // rather than falling back to flate-compressed RGB.
+            assertTrue(new String(out, StandardCharsets.ISO_8859_1)
+                            .contains("DCTDecode"),
+                    "rewritten image must stay a DCTDecode (JPEG) stream");
+            assertTrue(out.length <= originalSize,
+                    "JPEG re-encode must not inflate the file: "
+                            + out.length + " > " + originalSize);
+            try (PdfDocument reopened = PdfDocument.open(out)) {
+                assertTrue(reopened.pageCount() > 0, "output must still be a valid PDF");
+            }
+        }
     }
 }
