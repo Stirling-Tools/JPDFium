@@ -111,15 +111,24 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
         return JPDFIUM_ERR_NATIVE;
     }
 
-    // Copy pixel data to PDFium bitmap
+    // PDFium bitmaps are always BGRA, so swap R/B when publishing raw RGBA frames.
     void* bmp_buf = FPDFBitmap_GetBuffer(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
 
-    // Copy row-by-row (PDFium bitmap stride may differ from tight pixel packing)
     int row_bytes = img_width * channels;
     for (int row = 0; row < img_height; ++row) {
-        memcpy(static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride,
-               pixels + static_cast<std::ptrdiff_t>(row) * row_bytes, row_bytes);
+        uint8_t* dst = static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride;
+        const uint8_t* src = pixels + static_cast<std::ptrdiff_t>(row) * row_bytes;
+        if (image_format == 3 && channels == 4) {
+            for (int x = 0; x < img_width; ++x) {
+                uint32_t px;
+                memcpy(&px, src + static_cast<std::ptrdiff_t>(x) * 4, sizeof(px));
+                px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+                memcpy(dst + static_cast<std::ptrdiff_t>(x) * 4, &px, sizeof(px));
+            }
+        } else {
+            memcpy(dst, src, static_cast<std::size_t>(row_bytes));
+        }
     }
 
     if (pixels_owned) free(pixels);
@@ -281,7 +290,7 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
             return result;
         }
 
-        dw.release();
+        (void)dw.release();
         provisional = nullptr;
         *doc_handle = encodeHandle(raw);
         return JPDFIUM_OK;
