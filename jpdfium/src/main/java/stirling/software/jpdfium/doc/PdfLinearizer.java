@@ -2,7 +2,6 @@ package stirling.software.jpdfium.doc;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -19,7 +18,8 @@ public final class PdfLinearizer {
     private PdfLinearizer() {}
 
     /**
-     * Linearize a PDF file for fast web view.
+     * Linearize a PDF file for fast web view. Uses the native file route when available (peak heap
+     * stays flat); otherwise falls back to the buffered path in {@link PdfOptimizer}.
      *
      * @param input  path to the input PDF
      * @param output path for the linearized output PDF
@@ -27,17 +27,12 @@ public final class PdfLinearizer {
      */
     public static void linearize(Path input, Path output) {
         try {
-            byte[] out = PdfOptimizer.optimize(
-                    Files.readAllBytes(input),
+            PdfOptimizer.optimize(input, output,
                     PdfOptimizer.LINEARIZE,
                     PdfOptimizer.DEFAULT,
                     PdfOptimizer.OBJECT_STREAMS_GENERATE,
                     PdfOptimizer.DEFAULT,
                     PdfOptimizer.DEFAULT);
-            if (out == null) {
-                throw new JPDFiumException("qpdf linearization produced no output");
-            }
-            Files.write(output, out);
         } catch (IOException e) {
             throw new JPDFiumException("qpdf linearization failed", e);
         }
