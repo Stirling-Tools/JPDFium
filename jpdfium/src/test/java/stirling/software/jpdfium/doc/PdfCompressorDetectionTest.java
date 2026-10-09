@@ -7,6 +7,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.zip.Deflater;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * PDF/A claim detection over raw bytes. Covers the attribute form
@@ -79,6 +81,35 @@ class PdfCompressorDetectionTest {
         byte[] pdf = ("%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Metadata 9 9 R >>\nendobj\n%%EOF")
                 .getBytes(StandardCharsets.ISO_8859_1);
         assertEquals(-1, PdfCompressor.pdfaPart(pdf));
+    }
+
+    @Test
+    void byteRangeWithTypeSigIsSignedByBytes() {
+        byte[] pdf = ("%PDF-1.7\n5 0 obj\n<< /Type /Sig /ByteRange [0 1 2 3] >>\nendobj\n%%EOF")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertTrue(PdfCompressor.looksSignedByBytes(pdf));
+    }
+
+    @Test
+    void byteRangeWithSubFilterIsSignedByBytes() {
+        byte[] pdf = ("%PDF-1.7\n5 0 obj\n<< /ByteRange [0 1 2 3] /SubFilter /adbe.pkcs7.detached >>")
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertTrue(PdfCompressor.looksSignedByBytes(pdf));
+    }
+
+    @Test
+    void byteRangeAloneIsNotSignedByBytes() {
+        byte[] pdf = "%PDF-1.7\n<< /ByteRange [0 1 2 3] >>\n%%EOF"
+                .getBytes(StandardCharsets.ISO_8859_1);
+        assertFalse(PdfCompressor.looksSignedByBytes(pdf));
+    }
+
+    @Test
+    void signatureNeedleAtLastValidOffsetIsSignedByBytes() {
+        // "/ByteRange" then "/Type/Sig" ending exactly at the last byte: the
+        // scan accepts a needle whose last byte is the final buffer byte.
+        byte[] pdf = "%PDF-1.7\n/ByteRange\n/Type/Sig".getBytes(StandardCharsets.ISO_8859_1);
+        assertTrue(PdfCompressor.looksSignedByBytes(pdf));
     }
 
     private static byte[] pdfWithMetadata(String claim, String filter, boolean flate)
