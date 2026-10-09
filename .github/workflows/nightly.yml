@@ -173,7 +173,7 @@ jobs:
         uses: actions/cache/save@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-main
+          key: jmh-baseline-v2-main
 
       - name: Upload baseline artifact (long-term retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

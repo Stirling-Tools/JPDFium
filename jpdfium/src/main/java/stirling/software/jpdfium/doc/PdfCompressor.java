@@ -37,9 +37,11 @@ import java.util.zip.Inflater;
  *       {@link CompressOptions.Builder#useZopfliDeflate(boolean)}.</li>
  * </ol>
  *
- * <p>The result is <strong>monotonic</strong>: it is never larger than the input,
- * and every skipped or downgraded step is reported in
- * {@link CompressResult#warnings()}.
+ * <p>The result is <strong>monotonic</strong> for a document that has not been
+ * modified since it was opened: the returned bytes are never larger than the
+ * input. If in-memory edits make the serialized document exceed the input, the
+ * larger bytes are returned and a warning is recorded. Every skipped or
+ * downgraded step is reported in {@link CompressResult#warnings()}.
  *
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("large.pdf"))) {
@@ -98,7 +100,8 @@ public final class PdfCompressor {
 
     /**
      * Compress a document using the given options. See the class documentation
-     * for the pipeline; the result is never larger than the input.
+     * for the pipeline; for a document that has not been modified since it was
+     * opened the result is never larger than the input.
      *
      * @param doc  the source document
      * @param opts compression options
@@ -145,7 +148,7 @@ public final class PdfCompressor {
         //    invalidate the signature's /ByteRange coverage.
         int pdfiumSignatures = signatureCount(doc);
         boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(sourceBytes);
-        if (signed && originalBytesKnown && doc.structureEpoch() == 0) {
+        if (signed && originalBytesKnown && doc.contentGeneration() == 0) {
             // The true original bytes are available and the document has not
             // been structurally modified since it was opened, so return them
             // byte-for-byte.
@@ -378,7 +381,7 @@ public final class PdfCompressor {
         // has not been structurally edited; otherwise report the shortfall
         // instead of silently returning more bytes than the caller supplied.
         if (resultBytes.length > originalSize && sourceBytes != null) {
-            if (doc.structureEpoch() == 0) {
+            if (doc.contentGeneration() == 0) {
                 resultBytes = sourceBytes;
                 streamsOptimized = false;
                 imagesOptimized = 0;

@@ -71,7 +71,14 @@ class OwnerTransportTest {
         assertTrue(sameThroughout.get(), "every command must run on the same thread");
         assertEquals(t.ownerThreadId(), firstId.get());
         assertEquals(t.ownerThreadName(), firstName.get());
-        assertEquals(25, t.executedCount());
+        // The owner records the execution just after handing our result back, so
+        // on a loaded machine the counter can still lag the last submit() return.
+        // Wait briefly for the final increment rather than racing it.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (t.executedCount() != 25 && System.nanoTime() < deadline) {
+            Thread.onSpinWait();
+        }
+        assertEquals(25, t.executedCount(), "all submitted commands must have been executed");
     }
 
     @Test

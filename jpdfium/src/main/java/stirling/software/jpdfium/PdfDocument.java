@@ -75,6 +75,14 @@ public final class PdfDocument implements AutoCloseable {
     private final AtomicInteger structureEpoch = new AtomicInteger(0);
 
     /**
+     * Bumped by every successful content mutation: annotation flattening, cropping,
+     * attachment and named-page edits, and any reload/raster pass that replaces the
+     * native handle. Zero means the live document still matches the bytes it was
+     * opened with, so retained open-time source bytes stay valid.
+     */
+    private final AtomicInteger contentGeneration = new AtomicInteger(0);
+
+    /**
      * Temporary file this document owns, deleted on {@link #close()}.
      *
      * <p>Set both when a document is opened from a stream (which spools to a
@@ -129,11 +137,26 @@ public final class PdfDocument implements AutoCloseable {
     public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
         structureEpoch.incrementAndGet();
+        contentGeneration.incrementAndGet();
     }
 
     /** Returns the current structural epoch, bumped by every reload/raster operation. */
     public int structureEpoch() {
         return structureEpoch.get();
+    }
+
+    /**
+     * Returns the content mutation generation, bumped by every successful edit that
+     * changes the document's bytes. Zero means the live document still matches its
+     * open-time source bytes and they can be reused verbatim.
+     */
+    public int contentGeneration() {
+        return contentGeneration.get();
+    }
+
+    /** Records a successful content mutation so retained open-time bytes are not reused. */
+    void markContentModified() {
+        contentGeneration.incrementAndGet();
     }
 
     /**
@@ -152,21 +175,31 @@ public final class PdfDocument implements AutoCloseable {
         return doc;
     }
 
+    /**
+     * Open raw PDF bytes.
+     *
+     * <p>The array is retained by reference for the life of the document so a
+     * signed document can be returned byte-for-byte; the caller must therefore
+     * not modify it until the document is closed. {@link #sourceBytes()} returns
+     * a defensive copy for callers that need the open-time bytes.
+     */
     public static PdfDocument open(byte[] data) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenBytes(data));
-        // Retain the open-time bytes by reference: an eager whole-document copy
-        // here cost more than the document open itself on hot paths, and
-        // sourceBytes() already hands callers a defensive copy. Callers must
-        // not mutate the array while the document is open.
+        // Retained by reference (not copied): an eager whole-document copy cost
+        // more than the open itself on hot paths and regressed the byte-open
+        // benchmark, so the snapshot contract moves to the caller: do not mutate
+        // the array until the document is closed. sourceBytes() still clones.
         doc.sourceBytes = data;
         return doc;
     }
 
     /**
      * Open password-protected raw PDF bytes (see {@link #open(Path, String)} for
-     * the shared null/empty password contract).
+     * the shared null/empty password contract). Like {@link #open(byte[])}, the
+     * array is retained by reference and must not be mutated while the document
+     * is open.
      */
     public static PdfDocument open(byte[] data, String password) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
@@ -386,7 +419,9 @@ public final class PdfDocument implements AutoCloseable {
      * or {@code null} otherwise (file-backed and stream documents never
      * materialise the whole document on the heap; for those, read the original
      * lazily via {@link #sourcePath()}). A defensive copy is returned so callers
-     * can rely on the retained bytes being immutable.
+     * can rely on the retained bytes being immutable; the retained array itself
+     * is the one passed to {@link #open(byte[])} and remains the caller's
+     * responsibility not to mutate while the document is open.
      */
     public byte[] sourceBytes() {
         byte[] s = sourceBytes;
@@ -688,7 +723,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public boolean setNamedPage(String name, int pageObjectNumber) {
         ensureOpen();
-        return PdfNamedPages.setNamedPage(rawDocSegment, name, pageObjectNumber);
+        boolean set = PdfNamedPages.setNamedPage(rawDocSegment, name, pageObjectNumber);
+        if (set) markContentModified();
+        return set;
     }
 
     /**
@@ -696,7 +733,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     public boolean removeNamedPage(String name) {
         ensureOpen();
-        return PdfNamedPages.removeNamedPage(rawDocSegment, name);
+        boolean removed = PdfNamedPages.removeNamedPage(rawDocSegment, name);
+        if (removed) markContentModified();
+        return removed;
     }
 
     /**
@@ -908,6 +947,7 @@ public final class PdfDocument implements AutoCloseable {
                 } finally {
                     JpdfiumLib.pageClose(pageHandle);
                 }
+                markContentModified();
             }
             case FULL -> convertPageToImage(pageIndex, dpi);
         }
@@ -950,6 +990,7 @@ public final class PdfDocument implements AutoCloseable {
                     } finally {
                         JpdfiumLib.pageClose(pageHandle);
                     }
+                    markContentModified();
                 }
                 case FULL -> convertPageToImage(i, dpi);
             }
@@ -1370,7 +1411,9 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean addAttachment(String name, byte[] contents) {
-        return PdfAttachments.add(rawHandle(), name, contents);
+        boolean added = PdfAttachments.add(rawHandle(), name, contents);
+        if (added) markContentModified();
+        return added;
     }
 
     /**
@@ -1380,7 +1423,9 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean deleteAttachment(int index) {
-        return PdfAttachments.delete(rawHandle(), index);
+        boolean deleted = PdfAttachments.delete(rawHandle(), index);
+        if (deleted) markContentModified();
+        return deleted;
     }
 
     /**

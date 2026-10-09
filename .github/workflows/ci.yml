@@ -337,8 +337,8 @@ jobs:
         uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-${{ github.base_ref || 'main' }}
-          restore-keys: jmh-baseline-
+          key: jmh-baseline-v2-${{ github.base_ref || 'main' }}
+          restore-keys: jmh-baseline-v2-
 
       - name: Compare results against baseline (warn if regressed >15%)
         run: |
@@ -371,7 +371,7 @@ jobs:
         uses: actions/cache/save@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-main
+          key: jmh-baseline-v2-main
 
       - name: Upload benchmark results
         if: always()

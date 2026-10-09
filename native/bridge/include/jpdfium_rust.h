@@ -71,6 +71,12 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(const uint8_t* src_pixels, int
                                                   int32_t dst_height, uint8_t** out_ptr,
                                                   int64_t* out_len);
 
+// Unpack decoded samples into opaque ARGB u32s. format: 1=gray8 2=rgb24 3=cmyk32
+// 4=bgr24 5=bgrx32/bgra32; rows advance by src_stride. Returns 0 or -1.
+JPDFIUM_EXPORT int32_t jpdfium_rust_unpack_pixels(const uint8_t* src, int32_t width, int32_t height,
+                                                  int64_t src_stride, int32_t format, uint32_t* dst,
+                                                  int64_t dst_len);
+
 // Optimise a standalone PNG byte stream using oxipng (lossless).
 //
 // Useful for PNG images extracted from a PDF before re-embedding. oxipng

@@ -6783,6 +6783,72 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_rust_unpack_pixels {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_unpack_pixels");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_unpack_pixels(const uint8_t *src, int32_t width, int32_t height, int64_t src_stride, int32_t format, uint32_t *dst, int64_t dst_len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_rust_unpack_pixels$descriptor() {
+        return jpdfium_rust_unpack_pixels.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_unpack_pixels(const uint8_t *src, int32_t width, int32_t height, int64_t src_stride, int32_t format, uint32_t *dst, int64_t dst_len)
+     * }
+     */
+    public static MethodHandle jpdfium_rust_unpack_pixels$handle() {
+        return jpdfium_rust_unpack_pixels.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_unpack_pixels(const uint8_t *src, int32_t width, int32_t height, int64_t src_stride, int32_t format, uint32_t *dst, int64_t dst_len)
+     * }
+     */
+    public static MemorySegment jpdfium_rust_unpack_pixels$address() {
+        return jpdfium_rust_unpack_pixels.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_unpack_pixels(const uint8_t *src, int32_t width, int32_t height, int64_t src_stride, int32_t format, uint32_t *dst, int64_t dst_len)
+     * }
+     */
+    public static int jpdfium_rust_unpack_pixels(MemorySegment src, int width, int height, long src_stride, int format, MemorySegment dst, long dst_len) {
+        var mh$ = jpdfium_rust_unpack_pixels.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_rust_unpack_pixels", src, width, height, src_stride, format, dst, dst_len);
+            }
+            return (int)mh$.invokeExact(src, width, height, src_stride, format, dst, dst_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_rust_svg_to_rgba {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
