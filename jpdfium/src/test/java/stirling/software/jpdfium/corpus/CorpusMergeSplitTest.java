@@ -20,6 +20,7 @@ import stirling.software.jpdfium.PdfSplit;
 import stirling.software.jpdfium.PdfVerifier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -51,7 +52,7 @@ class CorpusMergeSplitTest {
     @Test
     @Timeout(value = 20, unit = TimeUnit.MINUTES)
     void mergeEntireCorpusInChunksThenSplitBack() throws Exception {
-        assertTrue(!corpus.isEmpty(), "no corpus PDFs available (offline and no cache)");
+        assertFalse(corpus.isEmpty(), "no corpus PDFs available (offline and no cache)");
 
         List<String> report = new ArrayList<>();
         report.add("chunk;files;inputPages;mergedBytes;timeMs;allocB");
@@ -96,7 +97,7 @@ class CorpusMergeSplitTest {
         List<Path> extractables = corpus.stream()
                 .filter(p -> CorpusTestSupport.pageCount(p) > 0)
                 .toList();
-        assertTrue(!extractables.isEmpty(), "corpus must contain at least one openable PDF");
+        assertFalse(extractables.isEmpty(), "corpus must contain at least one openable PDF");
 
         int extracted = 0;
         long splitMs = 0;

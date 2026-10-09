@@ -91,6 +91,7 @@ public final class PdfDocument implements AutoCloseable {
      * (no structural mutation since open). Never deleted by this document.
      */
     private volatile Path sourcePath;
+    private volatile byte[] sourceBytes;
 
     PdfDocument(long handle) {
         this(handle, null);
@@ -131,7 +132,7 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /** Returns the current structural epoch, bumped by every reload/raster operation. */
-    int structureEpoch() {
+    public int structureEpoch() {
         return structureEpoch.get();
     }
 
@@ -145,15 +146,22 @@ public final class PdfDocument implements AutoCloseable {
 
     public static PdfDocument open(Path path) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
-        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(path.toAbsolutePath().toString()));
-        doc.sourcePath = path.toAbsolutePath();
+        Path abs = path.toAbsolutePath();
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
+        doc.sourcePath = abs;
         return doc;
     }
 
     public static PdfDocument open(byte[] data) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
-        return new PdfDocument(JpdfiumLib.docOpenBytes(data));
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenBytes(data));
+        // Retain the open-time bytes by reference: an eager whole-document copy
+        // here cost more than the document open itself on hot paths, and
+        // sourceBytes() already hands callers a defensive copy. Callers must
+        // not mutate the array while the document is open.
+        doc.sourceBytes = data;
+        return doc;
     }
 
     /**
@@ -164,10 +172,11 @@ public final class PdfDocument implements AutoCloseable {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
         if (password == null) throw new IllegalArgumentException("password must not be null");
-        if (password.isEmpty()) {
-            return new PdfDocument(JpdfiumLib.docOpenBytes(data));
-        }
-        return new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
+        PdfDocument doc = password.isEmpty()
+                ? new PdfDocument(JpdfiumLib.docOpenBytes(data))
+                : new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
+        doc.sourceBytes = data;
+        return doc;
     }
 
     /**
@@ -368,8 +377,20 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /** Original open path, or null when not file-backed. Never deleted here. */
-    Path sourcePath() {
+    public Path sourcePath() {
         return sourcePath;
+    }
+
+    /**
+     * Retained open-time bytes when the document was opened from a byte array,
+     * or {@code null} otherwise (file-backed and stream documents never
+     * materialise the whole document on the heap; for those, read the original
+     * lazily via {@link #sourcePath()}). A defensive copy is returned so callers
+     * can rely on the retained bytes being immutable.
+     */
+    public byte[] sourceBytes() {
+        byte[] s = sourceBytes;
+        return s == null ? null : s.clone();
     }
 
     public static PdfDocument fromImages(List<BufferedImage> images) {

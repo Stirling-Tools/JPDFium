@@ -6,7 +6,7 @@ import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.RenderQuality;
 import stirling.software.jpdfium.panama.BridgeAlloc;
-import stirling.software.jpdfium.panama.JpdfiumH;
+import stirling.software.jpdfium.panama.JpdfiumH$shared;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
@@ -267,7 +267,7 @@ class LifecycleTest {
     void directBufferTransportEquivalence() throws Exception {
         assumeTrue(NativeRuntime.isFull(), "transport equivalence requires real native library");
         byte[] bytes = pdfBytes();
-        byte[] prefix = new byte[] {0x00, 0x01, 0x02, 0x03};
+        byte[] prefix = {0x00, 0x01, 0x02, 0x03};
         ByteBuffer direct = ByteBuffer.allocateDirect(prefix.length + bytes.length);
         direct.put(prefix);
         direct.put(bytes);
@@ -292,8 +292,8 @@ class LifecycleTest {
         assertEquals(JpdfiumLib.EXPECTED_RECTF_SIZE, JpdfiumLib.abiQuery(1));
         assertEquals(JpdfiumLib.EXPECTED_RECTF_RIGHT_OFFSET, JpdfiumLib.abiQuery(2));
         assertEquals(-1, JpdfiumLib.abiQuery(999));
-        assertEquals(8, JpdfiumH.C_LONG.byteSize());
-        assertEquals(8, JpdfiumH.C_LONG.byteAlignment());
+        assertEquals(8, JpdfiumH$shared.C_LONG.byteSize());
+        assertEquals(8, JpdfiumH$shared.C_LONG.byteAlignment());
         assertDoesNotThrow(JpdfiumLib::checkAbiCompatible);
     }
 
@@ -415,7 +415,7 @@ class LifecycleTest {
         try (PdfDocument doc = PdfDocument.open(pdfPath());
              PdfPage page = doc.page(0);
              Arena arena = Arena.ofConfined()) {
-            var result = page.renderAt(72, false, (RenderQuality) null);
+            var result = page.renderAt(72, false, null);
             int w = result.width();
             int h = result.height();
             MemorySegment first = arena.allocate((long) w * h * 4);

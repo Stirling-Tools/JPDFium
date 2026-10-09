@@ -146,7 +146,7 @@ public final class DiversePdfGenerator {
         return manifestPath;
     }
 
-    public static void main(String[] args) throws Exception {
+    static void main(String[] args) throws Exception {
         Path outDir = Path.of(args.length > 0 ? args[0] : "pdfs");
         int count = args.length > 1 ? Integer.parseInt(args[1]) : 300;
         long seed = args.length > 2 ? Long.parseLong(args[2]) : 42L;
