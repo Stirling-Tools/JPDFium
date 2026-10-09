@@ -156,6 +156,13 @@ public final class PdfPage implements AutoCloseable {
 
     public BufferedImage renderImage(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
+        requirePositiveDpi(dpi);
+        // Real native: render straight into the raster (one int[] instead of a
+        // byte[] plus an int[] and no Java pack loop). Stub: keep the RGBA path.
+        if (NativeRuntime.isFull()) {
+            int flags = quality != null ? quality.flags() : 0;
+            return JpdfiumLib.renderPageImage(handle, dpi, transparent, flags);
+        }
         RenderResult result = renderAt(dpi, transparent, quality);
         return result.toBufferedImage(transparent);
     }

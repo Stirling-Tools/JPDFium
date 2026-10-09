@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.panama;
 
+import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 import java.util.concurrent.atomic.AtomicBoolean;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
@@ -1098,6 +1100,53 @@ public final class JpdfiumLib {
         });
     }
 
+    /**
+     * Render a page straight into a new {@link BufferedImage}'s raster, skipping the RGBA
+     * {@code byte[]} pack loop of {@link #renderPage}. Real native only; the stub falls back.
+     */
+    public static BufferedImage renderPageImage(long page, int dpi, boolean transparent, int flags) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+        if (RENDER_PAGE_INTO == null) {
+            // Stub or older native without the direct render entry point.
+            return renderPage(page, dpi, transparent, flags).toBufferedImage(transparent);
+        }
+        return PdfiumRuntime.execute(() -> {
+            checkRenderBounds(page, dpi);
+            // Same truncation and one-pixel floor as jpdfium_render_page_flags. Compute in long
+            // first: without a pixel cap a huge page at high dpi would overflow int unchecked.
+            long lw = Math.max(1L, (long) Math.floor(pageWidth0(page) * (double) dpi / 72.0));
+            long lh = Math.max(1L, (long) Math.floor(pageHeight0(page) * (double) dpi / 72.0));
+            if (lw > Integer.MAX_VALUE / 4 || lw * lh > Integer.MAX_VALUE - 8) {
+                throw new JPDFiumException("render too large: " + lw + "x" + lh);
+            }
+            int w = (int) lw;
+            int h = (int) lh;
+            int type = transparent ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB;
+            BufferedImage image = new BufferedImage(w, h, type);
+            int[] raster = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+            int effective = flags != 0
+                    ? flags
+                    : (transparent ? RenderBindings.FPDF_ANNOT
+                                   : RenderBindings.FPDF_ANNOT | RenderBindings.FPDF_LCD_TEXT);
+            // Straight BGRA (no byte swap) maps directly onto the int raster.
+            effective &= ~RenderBindings.FPDF_REVERSE_BYTE_ORDER;
+            long byteLen = (long) w * h * 4;
+            // Renders into native memory, so a plain downcall; pixels are bulk-copied into
+            // the raster, skipping renderPage's intermediate RGBA byte[] and per-pixel pack loop.
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment nativeTarget = arena.allocate(byteLen);
+                if (!transparent) {
+                    // Match jpdfium_render_page_flags, which fills the bitmap opaque white
+                    // before drawing so uncovered pixels are white rather than transparent.
+                    nativeTarget.fill((byte) 0xFF);
+                }
+                doRenderIntoNative(pageRawHandle0(page), nativeTarget, w, h, effective);
+                MemorySegment.copy(nativeTarget, 0, MemorySegment.ofArray(raster), 0, byteLen);
+            }
+            return image;
+        });
+    }
+
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,
                                                 int width, int height, int stride, int flags,
                                                 MemorySegment cancelFlag) {
@@ -1178,11 +1227,33 @@ public final class JpdfiumLib {
 
     private static final boolean HAS_RENDER_PAGE_INTO = initHasRenderPageInto();
 
+    /**
+     * Handle for {@code jpdfium_render_page_into}: a plain downcall into native memory, left
+     * unguarded because the caller already holds the {@code PdfiumRuntime} domain.
+     */
+    private static final MethodHandle RENDER_PAGE_INTO =
+            Symbols.downcallOptionalUnguarded("jpdfium_render_page_into",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG,
+                            JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
+
     private static boolean initHasRenderPageInto() {
         try {
             return Symbols.find("jpdfium_render_page_into").isPresent();
         } catch (Throwable ignored) {
             return false;
+        }
+    }
+
+    private static void doRenderIntoNative(MemorySegment rawPage, MemorySegment nativeTarget,
+                                           int width, int height, int flags) {
+        try {
+            check((int) RENDER_PAGE_INTO.invokeExact(rawPage, nativeTarget,
+                    nativeTarget.byteSize(), width, height, width * 4, flags), "renderPageImage");
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("renderPageImage failed", t);
         }
     }
 
