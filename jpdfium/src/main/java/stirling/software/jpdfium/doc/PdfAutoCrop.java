@@ -12,6 +12,8 @@ import stirling.software.jpdfium.transform.PdfPageBoxes;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteOrder;
+
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -200,14 +202,17 @@ public final class PdfAutoCrop {
                 int whiteVal = (int) (whiteThreshold * 255);
                 int minX = bmpW, minY = bmpH, maxX = -1, maxY = -1;
 
+                // BGRx read as one 32-bit word; little-endian, since the masks assume the low byte is B.
+                ValueLayout.OfInt pixelLayout =
+                        ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
                 for (int y = 0; y < bmpH; y++) {
                     long rowOffset = (long) y * stride;
                     for (int x = 0; x < bmpW; x++) {
-                        // BGRx format: B, G, R, x
-                        long pixOffset = rowOffset + (long) x * 4;
-                        int b = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset));
-                        int g = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset + 1));
-                        int r = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset + 2));
+                        // low byte = B, then G, then R. One access beats three.
+                        int pixel = buffer.get(pixelLayout, rowOffset + (long) x * 4);
+                        int b = pixel & 0xFF;
+                        int g = (pixel >>> 8) & 0xFF;
+                        int r = (pixel >>> 16) & 0xFF;
 
                         // Quick luminance check
                         if (r < whiteVal || g < whiteVal || b < whiteVal) {
