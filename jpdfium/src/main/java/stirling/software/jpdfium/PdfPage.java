@@ -1024,6 +1024,7 @@ public final class PdfPage implements AutoCloseable {
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -1106,6 +1107,7 @@ public final class PdfPage implements AutoCloseable {
     public void setCropBox(Rect box) {
         ensureOpen();
         PdfPageBoxes.setCropBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**

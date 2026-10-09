@@ -713,10 +713,8 @@ void jpdfium_page_close(int64_t handle) noexcept {
 int32_t jpdfium_render_page(int64_t, int32_t dpi, uint8_t** rgba, int32_t* w, int32_t* h) {
     if (!rgba || !w || !h || dpi == INT32_MIN) return JPDFIUM_ERR_INVALID;
     int32_t target_dpi = dpi < 0 ? -dpi : (dpi > 0 ? dpi : 72);
-    int32_t width =
-        static_cast<int32_t>(std::round(595.0f * static_cast<float>(target_dpi) / 72.0f));
-    int32_t height =
-        static_cast<int32_t>(std::round(842.0f * static_cast<float>(target_dpi) / 72.0f));
+    int32_t width = static_cast<int32_t>(595.0f * static_cast<float>(target_dpi) / 72.0f);
+    int32_t height = static_cast<int32_t>(842.0f * static_cast<float>(target_dpi) / 72.0f);
     if (width <= 0) width = 1;
     if (height <= 0) height = 1;
     *w = width;
@@ -1317,6 +1315,11 @@ int32_t jpdfium_rust_repair_lopdf(const uint8_t*, int64_t, uint8_t** out_ptr, in
 int32_t jpdfium_rust_resize_pixels(const uint8_t*, int64_t, int32_t, int32_t, int32_t, int32_t,
                                    int32_t, uint8_t** out_ptr, int64_t* out_len) {
     return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_rust_unpack_pixels(const uint8_t*, int32_t, int32_t, int64_t, int32_t, uint32_t*,
+                                   int64_t) {
+    return JPDFIUM_ERR_NATIVE;
 }
 
 int32_t jpdfium_rust_compress_png(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,

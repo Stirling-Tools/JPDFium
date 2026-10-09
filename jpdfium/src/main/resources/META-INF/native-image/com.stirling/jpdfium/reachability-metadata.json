@@ -233,6 +233,23 @@
       {
         "returnType": "jint",
         "parameterTypes": [
+          "void*",
+          "jint",
+          "jint",
+          "jlong",
+          "jint",
+          "void*",
+          "jlong"
+        ],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
           "jlong",
           "jint",
           "jint",

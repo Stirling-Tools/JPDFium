@@ -6,6 +6,8 @@ import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
+import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -18,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class ImageToPdfApiTest {
 
@@ -193,6 +196,87 @@ class ImageToPdfApiTest {
             assertNotNull(doc);
             assertEquals(1, doc.pageCount());
             assertArrayEquals(originalCopy, frame, "embedRgbaImages must not mutate caller frame");
+        }
+    }
+
+    private static byte[] solidRgbaFrame(int w, int h, int r, int g, int b, int a) {
+        byte[] frame = new byte[8 + w * h * 4];
+        frame[0] = (byte) w;
+        frame[1] = (byte) (w >> 8);
+        frame[2] = (byte) (w >> 16);
+        frame[3] = (byte) (w >> 24);
+        frame[4] = (byte) h;
+        frame[5] = (byte) (h >> 8);
+        frame[6] = (byte) (h >> 16);
+        frame[7] = (byte) (h >> 24);
+        for (int i = 0; i < w * h; i++) {
+            frame[8 + i * 4] = (byte) r;
+            frame[8 + i * 4 + 1] = (byte) g;
+            frame[8 + i * 4 + 2] = (byte) b;
+            frame[8 + i * 4 + 3] = (byte) a;
+        }
+        return frame;
+    }
+
+    /** A raw RGBA frame must survive the round trip without swapping red and blue. */
+    @Test
+    void rgbaFrameKeepsRedAndBlueChannelOrder() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "raw RGBA rendering requires real PDFium natives");
+        byte[] frame = solidRgbaFrame(8, 8, 200, 100, 50, 255);
+        ImageToPdfOptions options =
+                ImageToPdfOptions.builder().pageSize(new PageSize(0, 0)).margin(0f).build();
+        try (PdfDocument doc = PdfImageConverter.embedRgbaImages(List.of(frame), options)) {
+            BufferedImage rendered =
+                    PdfImageIO.read(PdfImageConverter.convertFromPdf(
+                            doc, ImageFormat.PNG, ColorType.RGB, false, 72));
+            int rgb = rendered.getRGB(rendered.getWidth() / 2, rendered.getHeight() / 2);
+            int r = (rgb >> 16) & 0xFF;
+            int g = (rgb >> 8) & 0xFF;
+            int b = rgb & 0xFF;
+            assertTrue(r > b, "red must not be swapped with blue: r=" + r + " b=" + b);
+            assertEquals(200, r, 30);
+            assertEquals(100, g, 30);
+            assertEquals(50, b, 30);
+        }
+    }
+
+    /** Pure red must render back as ~0xFF0000, never blue (0x0000FF). */
+    @Test
+    void pureRedRgbaFrameRendersAsRed() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "raw RGBA rendering requires real PDFium natives");
+        byte[] frame = solidRgbaFrame(16, 16, 255, 0, 0, 255);
+        ImageToPdfOptions options =
+                ImageToPdfOptions.builder().pageSize(new PageSize(0, 0)).margin(0f).build();
+        try (PdfDocument doc = PdfImageConverter.embedRgbaImages(List.of(frame), options)) {
+            BufferedImage rendered =
+                    PdfImageIO.read(PdfImageConverter.convertFromPdf(
+                            doc, ImageFormat.PNG, ColorType.RGB, false, 72));
+            int rgb = rendered.getRGB(rendered.getWidth() / 2, rendered.getHeight() / 2);
+            assertTrue(((rgb >> 16) & 0xFF) >= 250 && ((rgb >> 8) & 0xFF) <= 5
+                            && (rgb & 0xFF) <= 5,
+                    "pure red must render as 0xFF0000, got 0x"
+                            + Integer.toHexString(rgb & 0xFFFFFF));
+        }
+    }
+
+    /**
+     * A fractional page size at 2x must truncate to the PDFBox/pdf.js viewport, not round up.
+     * 595.25 x 841.5 pt at 144 dpi is 1190 x 1683 px, not 1191 x 1684.
+     */
+    @Test
+    void renderTruncatesFractionalPageSize() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "raw RGBA rendering requires real PDFium natives");
+        byte[] frame = solidRgbaFrame(794, 1122, 10, 20, 30, 255);
+        ImageToPdfOptions options = ImageToPdfOptions.builder()
+                .pageSize(new PageSize(595.25f, 841.5f))
+                .margin(0f)
+                .build();
+        try (PdfDocument doc = PdfImageConverter.embedRgbaImages(List.of(frame), options)) {
+            BufferedImage rendered =
+                    PdfImageIO.read(PdfImageConverter.convertFromPdf(
+                            doc, ImageFormat.PNG, ColorType.RGB, false, 144));
+            assertEquals(1190, rendered.getWidth());
+            assertEquals(1683, rendered.getHeight());
         }
     }
 }

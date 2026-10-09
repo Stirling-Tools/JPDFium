@@ -297,6 +297,15 @@ public class PdfOperationBenchmark {
         }
     }
 
+    /**
+     * Optimizer CPU work only, so a regression in the optimizer stays under the
+     * gate even though {@link #optimizeFileToFile} is dominated by the disk.
+     */
+    @Benchmark
+    public long optimizeInMemory() {
+        return PdfOptimizer.optimize(inputBytes, 0, 0, 0, 0, 0).length;
+    }
+
 
     /**
      * Redaction on page 0. Runs against a document reopened per invocation

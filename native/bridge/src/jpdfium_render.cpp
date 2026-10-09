@@ -4,6 +4,7 @@
 #include <fpdf_formfill.h>
 #include <fpdfview.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -298,13 +299,17 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
     // explicitly before the floating-point to integer conversion below.
     if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0)
         return JPDFIUM_ERR_INVALID;
-    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0 + 0.5;
-    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0 + 0.5;
-    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d < 1.0 || h_px_d < 1.0 ||
+    // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
+    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
+    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
+    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
         w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels)
         return JPDFIUM_ERR_INVALID;
-    int w_px = static_cast<int>(w_px_d);
-    int h_px = static_cast<int>(h_px_d);
+    // Clamp positive dimensions to at least one pixel: truncation alone would
+    // reject a page that rounds to one pixel, which PDFBox and the Java bounds
+    // check both accept.
+    int w_px = std::max(1, static_cast<int>(w_px_d));
+    int h_px = std::max(1, static_cast<int>(h_px_d));
 
     const int fmt = bitmapFormatForRenderer();
     uint8_t* out = allocRgbaChecked(w_px, h_px);
@@ -597,14 +602,18 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
             dpi <= 0) {
             return JPDFIUM_ERR_INVALID;
         }
-        const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0 + 0.5;
-        const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0 + 0.5;
-        if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d < 1.0 || h_px_d < 1.0 ||
+        // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
+        const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
+        const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
+        if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
             w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels) {
             return JPDFIUM_ERR_INVALID;
         }
-        int w_px = static_cast<int>(w_px_d);
-        int h_px = static_cast<int>(h_px_d);
+        // Clamp positive dimensions to at least one pixel: truncation alone would
+        // reject a page that rounds to one pixel, which PDFBox and the Java bounds
+        // check both accept.
+        int w_px = std::max(1, static_cast<int>(w_px_d));
+        int h_px = std::max(1, static_cast<int>(h_px_d));
 
         // Own the bitmap immediately: for a large page this is megabytes, and
         // every later failure path must release it.

@@ -6,6 +6,7 @@
 //   jpdfium_rust_compress_pdf   - lopdf + zopfli superior DEFLATE, flate2 fallback decompression
 //   jpdfium_rust_repair_lopdf   - lopdf tolerant XRef rebuild / repair
 //   jpdfium_rust_resize_pixels  - fast_image_resize SIMD pixel scaling (Lanczos3)
+//   jpdfium_rust_unpack_pixels  - gray/rgb/cmyk/bgr samples -> opaque ARGB u32
 //   jpdfium_rust_compress_png   - oxipng lossless PNG optimisation
 //   jpdfium_rust_free           - free buffers allocated by any of the above
 //
@@ -23,6 +24,7 @@ use zopfli::{Format, Options, compress as zopfli_compress};
 
 // Return codes matching jpdfium.h / jpdfium_rust.h
 const JPDFIUM_OK: i32 = 0;
+const JPDFIUM_ERR_INVALID: i32 = -1;
 const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
@@ -324,6 +326,119 @@ fn resize_pixels_impl(
     resizer.resize(&src_image, &mut dst_image, Some(&options))?;
 
     Ok(dst_image.into_vec())
+}
+
+
+/// Unpack raw samples into opaque ARGB u32s. Formats: 1=gray8, 2=rgb24, 3=cmyk32, 4=bgr24, 5=bgrx/bgra.
+///
+/// # Safety
+///
+/// `src` must be readable for `src_stride * (height - 1) + width * bpp` bytes,
+/// where `bpp` is the per-format bytes-per-pixel; `dst` must be writable for
+/// `width * height` u32s.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
+    src: *const u8,
+    width: i32,
+    height: i32,
+    src_stride: i64,
+    format: i32,
+    dst: *mut u32,
+    dst_len: i64,
+) -> i32 {
+    if src.is_null() || dst.is_null() || width <= 0 || height <= 0 {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let bpp: i64 = match format {
+        1 => 1,
+        2 | 4 => 3,
+        3 | 5 => 4,
+        _ => return JPDFIUM_ERR_INVALID,
+    };
+    let pixels = (width as i64) * (height as i64);
+    if dst_len < pixels || src_stride < (width as i64) * bpp {
+        return JPDFIUM_ERR_INVALID;
+    }
+    // Reject strides whose row-major extent overflows or exceeds the addressable
+    // range, so the `y * stride` indexing below can never wrap.
+    let Some(stride_extent) = src_stride.checked_mul(height as i64) else {
+        return JPDFIUM_ERR_INVALID;
+    };
+    if stride_extent > isize::MAX as i64 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let w = width as usize;
+    let h = height as usize;
+    let stride = src_stride as usize;
+
+    match format {
+        1 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (di, &sv) in d.iter_mut().zip(s) {
+                    let v = sv as u32;
+                    *di = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+                }
+            }
+        }
+        2 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 3;
+                    *di = 0xFF00_0000
+                        | ((s[o] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o + 2] as u32);
+                }
+            }
+        }
+        3 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 4);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 4;
+                    let k = s[o + 3] as u32;
+                    let c = 255 - (s[o] as u32 + k).min(255);
+                    let m = 255 - (s[o + 1] as u32 + k).min(255);
+                    let yy = 255 - (s[o + 2] as u32 + k).min(255);
+                    *di = 0xFF00_0000 | (c << 16) | (m << 8) | yy;
+                }
+            }
+        }
+        4 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 3;
+                    *di = 0xFF00_0000
+                        | ((s[o + 2] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o] as u32);
+                }
+            }
+        }
+        5 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 4);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 4;
+                    *di = ((s[o + 3] as u32) << 24)
+                        | ((s[o + 2] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o] as u32);
+                }
+            }
+        }
+        _ => return JPDFIUM_ERR_INVALID,
+    }
+    JPDFIUM_OK
 }
 
 

@@ -35,6 +35,28 @@ MAX_REGRESSION_PCT = 15.0
 # well above the floor and are gated normally.
 NOISE_FLOOR_MS = 0.05
 
+# Whole-document filesystem benchmarks are reported but never gated. Their
+# absolute latency is a property of the runner's disk, not of the code under
+# test: across two GitHub-hosted runners the same unchanged benchmark
+# (splitEveryTenPages) measured +51% while every CPU-bound benchmark in the same
+# run measured about -50%. A cached baseline recorded on a different runner
+# instance is therefore not a sound reference for whole-document I/O. These stay
+# in the report for trend visibility; the FFM/CPU gate is unaffected.
+#
+# optimizeFileToFile is included because its timed region is dominated by the
+# file write (it tracks saveToPath run for run), so a cached cross-runner
+# baseline cannot resolve its optimizer CPU work. That CPU cost is gated
+# separately and deterministically by PdfOperationBenchmark.optimizeInMemory.
+IO_BOUND_BENCHMARKS = {
+    "openFromPath",
+    "saveToPath",
+    "saveToTempFile",
+    "splitEveryTenPages",
+    "splitMultiRangeEveryTenPages",
+    "splitMultiRangeReusingSource",
+    "optimizeFileToFile",
+}
+
 
 def load(path: str) -> dict:
     with open(path) as f:
@@ -49,8 +71,10 @@ def main() -> int:
     baseline = load(baseline_path)
 
     regressions = []
+    missing = []
     for name, m in results.items():
         if name not in baseline:
+            missing.append(name)
             continue
         b = baseline[name]
         base = b["score"]
@@ -60,8 +84,11 @@ def main() -> int:
 
         pct = (score - base) / base * 100.0
         conservative = (score - err - (base + base_err)) / (base + base_err) * 100.0
+        short = name.rsplit(".", 1)[-1]
         if base < NOISE_FLOOR_MS:
             status = "OK (noise)"
+        elif short in IO_BOUND_BENCHMARKS:
+            status = "OK (io)"
         elif conservative > MAX_REGRESSION_PCT:
             status = "REGRESSED"
         else:
@@ -69,6 +96,14 @@ def main() -> int:
         print(f"  {status:10s}  {name}: {base:.3f} -> {score:.3f} ms  ({pct:+.1f}%)")
         if status == "REGRESSED":
             regressions.append((name, pct))
+
+    if missing:
+        print(
+            f"\n{len(missing)} benchmark(s) have no baseline entry and are not gated "
+            f"this run:"
+        )
+        for name in sorted(missing):
+            print(f"  {name}")
 
     if regressions:
         print(
@@ -79,7 +114,7 @@ def main() -> int:
             print(f"  {name}: +{pct:.1f}%")
         return 1
 
-    print(f"\nAll benchmarks within {MAX_REGRESSION_PCT}% of baseline (error-adjusted).")
+    print(f"\nAll gated benchmarks within {MAX_REGRESSION_PCT}% of baseline (error-adjusted).")
     return 0
 
 
