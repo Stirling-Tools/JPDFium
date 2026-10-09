@@ -23,13 +23,15 @@ import org.junit.jupiter.api.io.TempDir;
 
 import stirling.software.jpdfium.exception.NativeLoadException;
 
+import com.sun.net.httpserver.HttpHandler;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import com.sun.net.httpserver.HttpHandler;
 
 /** Covers the opt-in Maven natives download without touching the real network. */
 class NativeDownloaderTest {
@@ -188,7 +190,7 @@ class NativeDownloaderTest {
         Path second = NativeDownloader.fetchNativesJar(PLATFORM);
         assertTrue(NativeDownloader.isUsableJar(second, PLATFORM));
         assertEquals(1, secondHits.get(), "a new repository authority must be contacted");
-        assertFalse(first.equals(second), "different authorities must use different cache slots");
+        assertNotEquals(first, second, "different authorities must use different cache slots");
     }
 
     @Test
@@ -278,7 +280,7 @@ class NativeDownloaderTest {
     }
 
     private static byte[] nativesJar(String platform, boolean zipSlip) throws IOException {
-        byte[] payload = new byte[]{0x7F, 0x45, 0x4C, 0x46};
+        byte[] payload = {0x7F, 0x45, 0x4C, 0x46};
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(bos, StandardCharsets.UTF_8)) {
             addEntry(zip, "natives/" + platform + "/native-libs.txt", "libtest.so\n");

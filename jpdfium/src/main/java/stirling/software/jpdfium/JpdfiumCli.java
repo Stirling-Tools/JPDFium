@@ -312,7 +312,8 @@ public final class JpdfiumCli {
                 if (i + 1 >= args.length) {
                     throw new UsageError(opName + ": missing value for --" + name);
                 }
-                flags.put(name, args[++i]);
+                ++i;
+                flags.put(name, args[i]);
             } else if (BOOLEAN_FLAGS.contains(name)) {
                 flags.put(name, "true");
             } else {

@@ -5,7 +5,7 @@ public final class NativeCacheProbeMain {
 
     private NativeCacheProbeMain() {}
 
-    public static void main(String[] args) {
+    static void main(String[] args) {
         NativeLoader.ensureLoaded();
     }
 }

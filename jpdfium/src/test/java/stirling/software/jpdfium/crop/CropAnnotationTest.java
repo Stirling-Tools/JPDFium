@@ -29,6 +29,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -153,8 +154,7 @@ class CropAnnotationTest {
             assertNoDecodedValue(output, "SHARED_VALUE");
             for (var page : doc.getPages()) {
                 for (PDAnnotation a : page.getAnnotations()) {
-                    assertFalse("Widget".equals(a.getSubtype()),
-                            "outside widgets must be removed");
+                    assertNotEquals("Widget", a.getSubtype(), "outside widgets must be removed");
                 }
             }
         }
@@ -166,8 +166,7 @@ class CropAnnotationTest {
         try (PDDocument doc = Loader.loadPDF(out.toFile())) {
             List<PDAnnotation> annots = doc.getPage(0).getAnnotations();
             for (PDAnnotation a : annots) {
-                assertFalse("Widget".equals(a.getSubtype()),
-                        "signature widget outside the crop must be removed");
+                assertNotEquals("Widget", a.getSubtype(), "signature widget outside the crop must be removed");
             }
         }
         assertQpdfClean(out);

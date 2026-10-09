@@ -104,7 +104,7 @@ class CropApiVariantsTest {
         try (PdfDocument doc = PdfDocument.open(minimal())) {
             // Empty page set.
             assertThrows(IllegalArgumentException.class,
-                    () -> PdfPageGeometry.cropAndRemoveContent(doc, RECT_A, new int[0]));
+                    () -> PdfPageGeometry.cropAndRemoveContent(doc, RECT_A));
             // Out-of-range index.
             assertThrows(IndexOutOfBoundsException.class,
                     () -> PdfPageGeometry.cropAndRemoveContent(doc, RECT_A, 0, 999));

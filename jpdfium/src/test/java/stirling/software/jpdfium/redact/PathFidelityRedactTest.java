@@ -141,8 +141,7 @@ class PathFidelityRedactTest {
     private static void assertEqualsSafe(BufferedImage a, BufferedImage b, int x, int y) {
         assertTrue(x < a.getWidth() && x < b.getWidth() && y < a.getHeight() && y < b.getHeight(),
                 "sample point outside image");
-        assertTrue(a.getRGB(x, y) == b.getRGB(x, y),
-                "pixel changed where no redaction applied");
+        assertEquals(a.getRGB(x, y), b.getRGB(x, y), "pixel changed where no redaction applied");
     }
 
     @Test

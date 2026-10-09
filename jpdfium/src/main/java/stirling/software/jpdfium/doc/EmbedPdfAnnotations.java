@@ -342,7 +342,7 @@ public final class EmbedPdfAnnotations {
         if (EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont == null) {
             throw new JPDFiumException("EPDFAnnot_SetDefaultAppearanceRegisteredFont not in this native build");
         }
-        PdfiumRuntime.execute((Runnable) () -> {
+        PdfiumRuntime.execute(() -> {
             MemorySegment annot = openAnnot(page, index);
             try {
                 int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetDefaultAppearanceRegisteredFont.invokeExact(

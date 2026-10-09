@@ -25,7 +25,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -75,7 +74,7 @@ class StirlingPdfVipsIntegrationTest {
         try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
             assertTrue(doc.pageCount() > 0, "Sample document must contain pages");
 
-            ImageFormat[] testFormats = new ImageFormat[] {
+            ImageFormat[] testFormats = {
                     ImageFormat.PNG,
                     ImageFormat.JPEG,
                     ImageFormat.WEBP,
@@ -155,7 +154,7 @@ class StirlingPdfVipsIntegrationTest {
 
         try {
             for (int i = 0; i < threadCount * tasksPerThread; i++) {
-                futures.add(executor.submit((Callable<Integer>) () -> {
+                futures.add(executor.submit(() -> {
                     try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
                         byte[] rendered = PdfImageConverter.pageToBytes(doc, 0, 100, ImageFormat.PNG);
                         return rendered != null ? rendered.length : 0;
@@ -200,14 +199,14 @@ class StirlingPdfVipsIntegrationTest {
         assumeVips();
 
         // Corrupt frame payload shorter than 8-byte header
-        byte[] shortFrame = new byte[] {0, 1, 2};
+        byte[] shortFrame = {0, 1, 2};
         ImageCodec codec = ImageCodecs.codec();
         assertNotNull(codec);
         assertThrows(IllegalArgumentException.class, () ->
                 codec.encodeFrame(shortFrame, ImageFormat.PNG, 75));
 
         // Corrupted image byte array decoding must not crash the JVM
-        byte[] garbage = new byte[] {0x42, 0x43, 0x44, 0x45, 0x46};
+        byte[] garbage = {0x42, 0x43, 0x44, 0x45, 0x46};
         assertThrows(RuntimeException.class, () -> VipsDecoder.decodeToRgba(garbage));
     }
 

@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -203,7 +204,7 @@ class DomainEntryStackTest {
         t.start();
         t.join(10_000);
         assertFalse(t.isAlive(), "second thread must terminate");
-        assertEquals(null, failure.get(), "second thread failed: " + failure.get());
+        assertNull(failure.get(), "second thread failed: " + failure.get());
         assertEquals("entered", other.get());
     }
 

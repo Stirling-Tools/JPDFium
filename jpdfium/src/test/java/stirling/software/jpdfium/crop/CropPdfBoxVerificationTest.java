@@ -28,6 +28,8 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -101,8 +103,8 @@ class CropPdfBoxVerificationTest {
             }
             // Contract: the fully-outside image must not be drawn; it may also be fully
             // dropped from the page Resources (PDFium resource GC) - both are acceptable.
-            assertTrue(insideName != null, "fully-inside image must survive");
-            assertTrue(straddleName != null, "straddling image must survive");
+            assertNotNull(insideName, "fully-inside image must survive");
+            assertNotNull(straddleName, "straddling image must survive");
 
             Set<String> drawn = drawnXObjectNames(page);
             assertTrue(drawn.contains(insideName), "fully-inside image must still be drawn");
@@ -245,8 +247,7 @@ class CropPdfBoxVerificationTest {
 
     private static void assertNoWord(List<Glyph> glyphs, String word) {
         for (Glyph g : glyphs) {
-            assertFalse(g.text().trim().equals(word),
-                    "word '" + word + "' must be gone but found at x=" + g.x() + " y=" + g.y());
+            assertNotEquals(g.text().trim(), word, "word '" + word + "' must be gone but found at x=" + g.x() + " y=" + g.y());
         }
     }
 

@@ -559,8 +559,8 @@ final class NativeCache {
     private static boolean isTrustedPrincipal(UserPrincipal principal, UserPrincipal owner,
                                               UserPrincipal system, UserPrincipal administrators) {
         if (principal.equals(owner)) return true;
-        if (system != null && principal.equals(system)) return true;
-        if (administrators != null && principal.equals(administrators)) return true;
+        if (principal.equals(system)) return true;
+        if (principal.equals(administrators)) return true;
         // S-1-3-0 and S-1-3-4 have no account name to resolve; compare exactly.
         String name = principal.getName().toUpperCase(Locale.ROOT);
         int slash = name.lastIndexOf('\\');

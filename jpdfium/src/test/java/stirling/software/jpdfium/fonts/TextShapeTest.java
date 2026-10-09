@@ -14,6 +14,7 @@ import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -69,7 +70,7 @@ class TextShapeTest {
         // "ffi" ligature: three chars may shape to fewer glyphs, but every
         // glyph carries the byte index it came from.
         List<ShapedGlyph> glyphs = FontLib.shapeText(bytes, "office", 12f);
-        assertTrue(!glyphs.isEmpty(), "must shape to glyphs");
+        assertFalse(glyphs.isEmpty(), "must shape to glyphs");
         for (ShapedGlyph g : glyphs) {
             assertTrue(g.cluster() >= 0 && g.cluster() < "office".length(), "cluster in range");
         }

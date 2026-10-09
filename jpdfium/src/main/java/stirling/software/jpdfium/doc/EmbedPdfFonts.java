@@ -68,7 +68,7 @@ public final class EmbedPdfFonts {
     /** Drop all registered fonts and the fallback order. */
     public static void clearRegisteredFonts() {
         requireAvailable(EmbedPdfFontBindings.EPDFFont_ClearRegisteredFonts, "EPDFFont_ClearRegisteredFonts");
-        PdfiumRuntime.execute((Runnable) () -> {
+        PdfiumRuntime.execute(() -> {
             try {
                 EmbedPdfFontBindings.EPDFFont_ClearRegisteredFonts.invokeExact();
             } catch (Throwable t) {
@@ -181,7 +181,7 @@ public final class EmbedPdfFonts {
     /** Set how much of a registered font generated appearances carry. */
     public static void setEmbeddingPolicy(MemorySegment rawDoc, int policy) {
         requireAvailable(EmbedPdfFontBindings.EPDFDoc_SetFontEmbeddingPolicy, "EPDFDoc_SetFontEmbeddingPolicy");
-        PdfiumRuntime.execute((Runnable) () -> {
+        PdfiumRuntime.execute(() -> {
             try {
                 int ok = (int) EmbedPdfFontBindings.EPDFDoc_SetFontEmbeddingPolicy.invokeExact(rawDoc, policy);
                 if (ok == 0) throw new JPDFiumException("embedding policy rejected");
@@ -210,7 +210,7 @@ public final class EmbedPdfFonts {
     /** Append a registered font to the fallback order. */
     public static void addFallbackFont(int fontId) {
         requireAvailable(EmbedPdfFontBindings.EPDFFont_AddFallbackFont, "EPDFFont_AddFallbackFont");
-        PdfiumRuntime.execute((Runnable) () -> {
+        PdfiumRuntime.execute(() -> {
             try {
                 int ok = (int) EmbedPdfFontBindings.EPDFFont_AddFallbackFont.invokeExact(fontId);
                 if (ok == 0) throw new JPDFiumException("fallback font rejected");
@@ -226,7 +226,7 @@ public final class EmbedPdfFonts {
     /** Clear the fallback order without unregistering fonts. */
     public static void clearFallbackFonts() {
         requireAvailable(EmbedPdfFontBindings.EPDFFont_ClearFallbackFonts, "EPDFFont_ClearFallbackFonts");
-        PdfiumRuntime.execute((Runnable) () -> {
+        PdfiumRuntime.execute(() -> {
             try {
                 EmbedPdfFontBindings.EPDFFont_ClearFallbackFonts.invokeExact();
             } catch (Throwable t) {

@@ -102,11 +102,11 @@ public final class PdfPage implements AutoCloseable {
     }
 
     public RenderResult renderAt(int dpi) {
-        return renderAt(dpi, false, (RenderQuality) null);
+        return renderAt(dpi, false, null);
     }
 
     public RenderResult renderAt(int dpi, boolean transparent) {
-        return renderAt(dpi, transparent, (RenderQuality) null);
+        return renderAt(dpi, transparent, null);
     }
 
     public RenderResult renderAt(int dpi, RenderQuality quality) {
