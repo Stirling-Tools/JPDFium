@@ -2,6 +2,8 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.SaveOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
@@ -69,20 +71,31 @@ public final class PdfBookmarkEditor {
      * @param output    destination file (overwritten if it exists)
      */
     public static void setBookmarks(PdfDocument doc, List<Bookmark> bookmarks, Path output) throws IOException {
-        doc.save(output);
+        setBookmarks(doc, bookmarks, output, true);
+    }
 
+    /** Staging-output variant: {@code durable=false} skips the fsync/permission-mirroring pass. */
+    public static void setBookmarks(PdfDocument doc, List<Bookmark> bookmarks, Path output,
+            boolean durable) throws IOException {
         if (bookmarks == null || bookmarks.isEmpty()) {
+            doc.saveTo(output, durable ? SaveOptions.fast() : SaveOptions.ephemeral());
             return;
         }
-
-        OutlineMetadata metadata = readOutlineMetadata(output);
-        long appendOffset = Files.size(output);
-        byte[] appendix = buildOutlineAppendix(bookmarks, doc.pageCount(), metadata, appendOffset);
-
-        if (appendix.length == 0) return;
-
-        try (OutputStream outputStream = Files.newOutputStream(output, StandardOpenOption.APPEND)) {
-            outputStream.write(appendix);
+        // Stage the base, append the outline, then publish once, so a crash can
+        // never leave a half-written outline on the destination.
+        SaveOptions policy = durable ? SaveOptions.fast() : SaveOptions.ephemeral();
+        try (OutputTransaction tx = OutputTransaction.begin(output, durable)) {
+            doc.saveTo(tx.staging(), SaveOptions.ephemeral());
+            OutlineMetadata metadata = readOutlineMetadata(tx.staging());
+            long appendOffset = Files.size(tx.staging());
+            byte[] appendix = buildOutlineAppendix(bookmarks, doc.pageCount(), metadata, appendOffset);
+            if (appendix.length != 0) {
+                try (OutputStream outputStream =
+                        Files.newOutputStream(tx.staging(), StandardOpenOption.APPEND)) {
+                    outputStream.write(appendix);
+                }
+            }
+            tx.publish(policy);
         }
     }
 
@@ -119,7 +132,7 @@ public final class PdfBookmarkEditor {
         Path tempPdf = null;
         try {
             tempPdf = Files.createTempFile("jpdfium-bookmarks-", ".pdf");
-            setBookmarks(doc, bookmarks, tempPdf);
+            setBookmarks(doc, bookmarks, tempPdf, false);
             return Files.readAllBytes(tempPdf);
         } catch (IOException e) {
             throw new JPDFiumException("Failed to write temporary PDF with bookmarks", e);

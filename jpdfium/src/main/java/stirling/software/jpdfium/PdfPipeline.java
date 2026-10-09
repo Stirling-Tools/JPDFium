@@ -13,6 +13,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.SaveOptions;
+import stirling.software.jpdfium.model.StorageOptions;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -113,8 +115,7 @@ public final class PdfPipeline {
      * Process a PDF and return the modified document.
      * The caller must close the returned document.
      *
-     * <p>File-backed: parallel and streaming modes stage chunks through temporary files, so peak
-     * heap tracks chunk size, not input size. The {@code byte[]} overload stays in-memory.
+     * <p>File-backed modes stage chunks through temp files, so heap tracks chunk size only.
      */
     public static PdfDocument process(Path input, ProcessingMode mode, PageOperation op) {
         if (!mode.isParallel() && !mode.isStreaming()) {
@@ -236,10 +237,7 @@ public final class PdfPipeline {
         return processStreamingOwned(PdfDocument.open(input), mode, op);
     }
 
-    /**
-     * Shared streaming loop over an already-opened document. Takes ownership of {@code doc}: it is
-     * closed on any failure and returned open on success.
-     */
+    /** Shared streaming loop over an already-opened document; takes ownership of {@code doc}. */
     private static PdfDocument processStreamingOwned(PdfDocument doc, ProcessingMode mode,
             PageOperation op) {
         try {
@@ -272,7 +270,7 @@ public final class PdfPipeline {
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to create pipeline flush temp file", e);
         }
-        doc.save(tempPipelineFile);
+        doc.saveTo(tempPipelineFile, SaveOptions.ephemeral());
         doc.close();
         // Owned temp: close() deletes the file, so periodic flushes cannot
         // accumulate on disk in long-running processes.
@@ -280,9 +278,7 @@ public final class PdfPipeline {
     }
 
     /**
-     * Parallel split-process-merge staged through temporary files, so peak heap is bounded by one
-     * chunk per worker plus merge staging. Chunk extraction uses default storage settings, so
-     * callers needing a hard memory bound should pre-split in FILE mode.
+     * Parallel split-process-merge staged through temp files, so heap is one chunk per worker.
      */
     private static PdfDocument processParallelFromFile(Path input, ProcessingMode mode, PageOperation op) {
         // One handle serves both the page-count probe and the per-chunk
@@ -321,8 +317,15 @@ public final class PdfPipeline {
                 for (int[] chunk : chunks) {
                     Path chunkFile = createPipelineTemp("chunk-");
                     chunkFiles.add(chunkFile);
-                    try (PdfDocument part = PdfSplit.extractPageRange(probe, chunk[0], chunk[1])) {
-                        part.save(chunkFile);
+                    // Reuse the probe's source file so the qpdf route does not
+                    // re-save the whole document once per chunk.
+                    try (PdfDocument part =
+                            PdfSplit.extractPageRange(
+                                    probe,
+                                    chunk[0],
+                                    chunk[1],
+                                    StorageOptions.builder().reuseSourceFile(true).build())) {
+                        part.saveTo(chunkFile, SaveOptions.ephemeral());
                     }
                     resultFiles.add(createPipelineTemp("result-"));
                 }
@@ -353,7 +356,21 @@ public final class PdfPipeline {
                     }
                     merged = PdfMerge.merge(documentsToMerge);
                 } finally {
-                    documentsToMerge.forEach(PdfDocument::close);
+                    RuntimeException closeFailure = null;
+                    for (PdfDocument document : documentsToMerge) {
+                        try {
+                            document.close();
+                        } catch (RuntimeException e) {
+                            if (closeFailure == null) {
+                                closeFailure = e;
+                            } else {
+                                closeFailure.addSuppressed(e);
+                            }
+                        }
+                    }
+                    if (closeFailure != null) {
+                        throw closeFailure;
+                    }
                 }
                 shutdownAttempted = true;
                 try {
@@ -490,9 +507,7 @@ public final class PdfPipeline {
      * Opens a single shared document and dispatches per-page tasks to a pool.
      * Native calls serialize via the PdfiumRuntime execution domain; consumers add no locking.
      *
-     * <p>Takes ownership of {@code doc}: it is closed on every path, so
-     * callers can hand over a document opened from bytes or from a path
-     * without duplicating the pool logic.
+     * <p>Takes ownership of {@code doc}: it is closed on every path.
      */
     private static void forEachParallelOnDoc(PdfDocument doc, ProcessingMode mode,
                                              BiConsumer<PdfDocument, Integer> consumer) {
@@ -599,11 +614,7 @@ public final class PdfPipeline {
         }
     }
 
-    /**
-     * File-backed twin of {@link #processChunkBytes}: opens the chunk from
-     * disk and saves the processed result back to disk, so workers never hold
-     * chunk bytes on the heap.
-     */
+    /** File-backed twin of {@link #processChunkBytes}: chunk in from disk, result back to disk. */
     private static void processChunkFile(Path chunkFile, Path resultFile,
                                          ProcessingMode mode, PageOperation op) {
         PdfDocument doc = PdfDocument.open(chunkFile);
@@ -619,10 +630,16 @@ public final class PdfPipeline {
                     doc = flushViaTempFile(doc);
                 }
             }
-            doc.save(resultFile);
-        } finally {
-            doc.close();
+            doc.saveTo(resultFile, SaveOptions.ephemeral());
+        } catch (Throwable t) {
+            try {
+                doc.close();
+            } catch (Throwable c) {
+                t.addSuppressed(c);
+            }
+            throw t;
         }
+        doc.close();
     }
 
     private static <T> List<T> collectResults(List<Future<T>> futures) {

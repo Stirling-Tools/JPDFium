@@ -587,7 +587,7 @@ public final class JpdfiumLib {
      */
     public static void docSaveToFile(long doc, Path destination, SaveOptions options) {
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
-        try (OutputTransaction tx = OutputTransaction.begin(destination)) {
+        try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
             docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
             tx.publish(opts);
         } catch (IOException e) {

@@ -14,6 +14,7 @@ import stirling.software.jpdfium.doc.PdfBookmarkEditor;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -82,18 +83,18 @@ public final class PdfMerge {
                     for (PdfDocument sourceDoc : documents) {
                         Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
                         cleanup.add(materialized);
-                        sourceDoc.save(materialized);
+                        sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
                         filePaths.add(materialized);
                     }
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     cleanup.add(tmp);
-                    if (QpdfLib.mergeFiles(filePaths, tmp)) {
+                    if (QpdfLib.mergeFiles(filePaths, tmp, false)) {
                         Path result = tmp;
                         if (!mergedBookmarks.isEmpty()) {
                             Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
                             cleanup.add(tmpBookmarks);
                             try (PdfDocument merged = PdfDocument.open(tmp)) {
-                                PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks);
+                                PdfBookmarkEditor.setBookmarks(merged, mergedBookmarks, tmpBookmarks, false);
                             }
                             result = tmpBookmarks;
                         }
@@ -200,7 +201,7 @@ public final class PdfMerge {
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     boolean done = false;
                     try {
-                        if (QpdfLib.mergeFiles(paths, tmp)) {
+                        if (QpdfLib.mergeFiles(paths, tmp, false)) {
                             try (PdfDocument verify = PdfDocument.open(tmp)) {
                                 if (verify.pageCount() == expectedPages) {
                                     PdfDocument owned = PdfDocument.openTemp(tmp);
