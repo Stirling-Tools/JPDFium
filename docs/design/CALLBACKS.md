@@ -29,6 +29,9 @@ locks cannot deadlock.
 
 ## Java
 
-Java keeps its own lock only until it migrates to the safe API (see
-[JAVA_MIGRATION.md](JAVA_MIGRATION.md)). Until then the authority latch prevents the Java lock
-and the native domain from both owning PDFium in one process.
+Java holds no PDFium lock; every PDFium call is a guarded native call. Two binding-internal
+upcalls still run while a guarded PDFium call is in progress: the `FPDF_FILEWRITE` sink behind
+`FileWriteSink` (it writes to a caller `OutputStream`) and the JPEG `GetBlock` reader in
+`PdfImageOptimizer`. Neither calls PDFium; if one did, its guard would refuse with
+`JPDF_E_REENTRANT` instead of deadlocking. Moving the save sink to the native file writer is a
+listed follow-up in [JAVA_MIGRATION.md](JAVA_MIGRATION.md).

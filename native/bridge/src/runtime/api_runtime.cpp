@@ -22,7 +22,7 @@ struct Capability {
 constexpr Capability kCapabilities[] = {
     {"runtime.lifecycle", JPDF_CAP_IMPLEMENTED},  {"pdf.open", JPDF_CAP_IMPLEMENTED},
     {"pdf.render", JPDF_CAP_IMPLEMENTED},         {"image.png_write", JPDF_CAP_IMPLEMENTED},
-    {"output.transaction", JPDF_CAP_IMPLEMENTED},
+    {"output.transaction", JPDF_CAP_IMPLEMENTED}, {"legacy.guards", JPDF_CAP_IMPLEMENTED},
 };
 
 }  // namespace
@@ -174,6 +174,14 @@ jpdf_status jpdf_runtime_quiesce(void) noexcept {
 
 jpdf_status jpdf_runtime_shutdown(void) noexcept {
     return jpdf::guarded([] { return jpdf::Domain::instance().shutdown(); });
+}
+
+jpdf_status jpdf_runtime_shutdown_within(uint32_t timeout_ms) noexcept {
+    return jpdf::guarded([&] { return jpdf::Domain::instance().shutdown(timeout_ms); });
+}
+
+jpdf_status jpdf_runtime_resume(void) noexcept {
+    return jpdf::guarded([] { return jpdf::Domain::instance().resume(); });
 }
 
 }  // extern "C"

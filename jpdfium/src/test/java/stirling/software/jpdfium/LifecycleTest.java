@@ -317,14 +317,15 @@ class LifecycleTest {
 
     // PdfiumRuntime execution domain counting is always on; wait/hold timing stays gated off by default.
     @Test
-    void guardStatsAdvanceWithUse() {
+    void guardStatsAdvanceWithUse() throws Exception {
         var before = PdfiumRuntime.stats();
-        PdfiumRuntime.execute(() -> {
-        });
+        try (PdfDocument doc = PdfDocument.open(pdfPath())) {
+            doc.pageCount();
+        }
         var after = PdfiumRuntime.stats();
-        assertTrue(after.acquisitions() >= before.acquisitions() + 1);
-        assertEquals(0, after.waitNanos());
-        assertEquals(0, after.holdNanos());
+        assertTrue(after.acquisitions() > before.acquisitions());
+        // The native domain always records hold time; there is no telemetry switch.
+        assertTrue(after.holdNanos() > before.holdNanos());
     }
 
     // Over-budget saves fail before the Java copy exists.

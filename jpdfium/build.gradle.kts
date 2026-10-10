@@ -367,9 +367,12 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                 "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);"
             val criticalUnpackBinding =
                 "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));"
+            val routedUnpackBinding =
+                "public static final MemorySegment ADDR = NativeDomain.symbol(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = NativeDomain.downcall(ADDR, DESC, Linker.Option.critical(true));"
             // Fail loudly if jextract changes the emitted shape: silently skipping the
             // rewrite would leave the plain (heap-rejecting) binding in place.
-            check(text.contains(plainUnpackBinding) || text.contains(criticalUnpackBinding)) {
+            check(text.contains(plainUnpackBinding) || text.contains(criticalUnpackBinding)
+                    || text.contains(routedUnpackBinding)) {
                 "jpdfium_rust_unpack_pixels binding is neither the plain nor the critical form; " +
                     "jextract output changed, update this patch"
             }
@@ -384,8 +387,9 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                 val anchor = "public class JpdfiumH extends JpdfiumH\$shared {"
                 val ownershipNote = """
                     /**
-                     * Raw jextract bindings to the native bridge: no execution-domain admission,
-                     * no lifecycle accounting, no argument validation.
+                     * jextract bindings to the native bridge. PDFium entry points bind their
+                     * jpdf_guard_* shim through {@link NativeDomain}, so the native domain admits
+                     * every call; there is no lifecycle accounting or argument validation here.
                      *
                      * <p>Ownership boundary: handles created through these raw entry points bypass
                      * {@link PdfiumRuntime} tracking, so they must never be passed to the managed
@@ -401,6 +405,12 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                     logger.lifecycle("Re-applied JpdfiumH ownership-boundary contract")
                 }
             }
+
+            // Route every binding through NativeDomain so PDFium calls bind their native guard.
+            text = text.replace("SYMBOL_LOOKUP.findOrThrow(", "NativeDomain.symbol(")
+            text = Regex("""SYMBOL_LOOKUP\.find\(("[a-z0-9_]+")\)\.orElse\(null\)""")
+                .replace(text, "NativeDomain.optionalSymbol(\$1)")
+            text = text.replace("Linker.nativeLinker().downcallHandle(ADDR, DESC", "NativeDomain.downcall(ADDR, DESC")
 
             if (text != targetMain.readText()) {
                 targetMain.writeText(text)

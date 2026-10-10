@@ -27,6 +27,20 @@ A mutation that replaced the domain mutex with a per-thread lock failed 11 check
 mismatches, close-race failures, corrupted accounting), so these tests detect a missing
 serializer.
 
+## `api_guards` coverage
+
+Guarded legacy calls refused before init with the refusal reported, one admission per guarded
+call, a guarded call from inside a PDFium callback refused as re-entry, ordinary calls refused but
+closes admitted while quiescing, resume, legacy and safe-API callers rendering byte-identically
+on 8 threads in one process (the Java plus Python case), and bounded shutdown timing out behind a
+busy domain.
+
+## Java suite against real natives
+
+With the Java lock removed, the full `:jpdfium:test` suite runs against real linux-x64 natives
+with the same two failures as unchanged `main` (`FileBackedOptimizeTest`,
+`SaveTransportTest`, both environment-dependent).
+
 ## Running real-native tests locally
 
 ```bash
@@ -54,4 +68,3 @@ TSan needs the `personality` syscall, which Docker's default seccomp profile blo
 
 - Windows (MSVC) and macOS builds of the safe API: written for both, compiled on neither yet.
 - Render and save performance baselines on real-world PDFs.
-- The rest of the Java suite against real natives.

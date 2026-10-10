@@ -205,6 +205,15 @@ JPDF_API jpdf_status jpdf_runtime_get_info(jpdf_runtime_info* out) JPDF_NOEXCEPT
 JPDF_API jpdf_status jpdf_runtime_quiesce(void) JPDF_NOEXCEPT;
 // Quiesce, then destroy PDFium. JPDF_E_BUSY while documents or pages remain; STOPPED is final.
 JPDF_API jpdf_status jpdf_runtime_shutdown(void) JPDF_NOEXCEPT;
+// As jpdf_runtime_shutdown, but JPDF_E_TIMEOUT if the domain stays busy past timeout_ms.
+JPDF_API jpdf_status jpdf_runtime_shutdown_within(uint32_t timeout_ms) JPDF_NOEXCEPT;
+// Back to RUNNING after a quiesce or refused shutdown. Never leaves STOPPED or FAILED.
+JPDF_API jpdf_status jpdf_runtime_resume(void) JPDF_NOEXCEPT;
+
+// --- Legacy surface. jpdf_guard_<name> admits jpdfium_* and raw PDFium calls to the domain. ---
+
+// A refused jpdf_guard_* call returns a zero value; this reports and clears why, per thread.
+JPDF_API jpdf_status jpdf_guard_take_refusal(void) JPDF_NOEXCEPT;
 
 // --- Documents and pages. All PDFium work runs inside the native domain. ---
 

@@ -328,6 +328,10 @@ void jpdfium_destroy() noexcept {
     jpdfium_destroy_pdfium_core();
 }
 
+bool jpdfium_core_uses_skia() noexcept {
+    return g_jpdfiumUseSkia;
+}
+
 void jpdfium_destroy_pdfium_core() noexcept {
     FPDF_DestroyLibrary();
     g_libraryInitialized = false;

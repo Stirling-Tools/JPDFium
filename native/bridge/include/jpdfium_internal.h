@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "jpdfium_core.h"
 #include "jpdfium_registry.h"
 
 struct TransparentStringHash {
@@ -373,14 +374,6 @@ extern bool g_jpdfiumUseSkia;
 // uses the same renderer configuration. Returns JPDFIUM_OK, or
 // JPDFIUM_ERR_INVALID when Skia is requested from a non-Skia build.
 int jpdfium_init_library(int renderer);
-
-// Which serializer owns PDFium in this process; the first claim wins for the process lifetime.
-enum class PdfiumAuthority : int { None = 0, Legacy = 1, Safe = 2 };
-bool jpdfium_claim_authority(PdfiumAuthority who) noexcept;
-
-// FPDF_InitLibrary/FPDF_DestroyLibrary without the authority claim; callers serialize.
-int jpdfium_init_pdfium_core(int renderer);
-void jpdfium_destroy_pdfium_core() noexcept;
 
 // renderIntoBuffer for the safe API: same Skia unpremultiply and byte-order handling.
 int32_t jpdfium_render_into_buffer(FPDF_PAGE page, uint8_t* target, uint64_t target_capacity,

@@ -10,7 +10,7 @@
 
 namespace jpdf {
 
-enum class State : int32_t {
+enum class State : uint8_t {
     Uninitialized = JPDF_STATE_UNINITIALIZED,
     Running = JPDF_STATE_RUNNING,
     Quiescing = JPDF_STATE_QUIESCING,
@@ -20,7 +20,7 @@ enum class State : int32_t {
 };
 
 // Ordinary work needs RUNNING; teardown of existing resources is also allowed while QUIESCING.
-enum class Purpose { Ordinary, Teardown };
+enum class Purpose : uint8_t { Ordinary, Teardown };
 
 struct DomainStats {
     uint64_t acquisitions;
@@ -44,7 +44,10 @@ class Domain {
 
     jpdf_status init(int32_t renderer) noexcept;
     jpdf_status quiesce() noexcept;
-    jpdf_status shutdown() noexcept;
+    // QUIESCING back to RUNNING, for callers that abandon a refused shutdown.
+    jpdf_status resume() noexcept;
+    // timeout_ms < 0 waits for the domain indefinitely.
+    jpdf_status shutdown(int64_t timeout_ms = -1) noexcept;
     DomainStats stats() const noexcept;
 
     // Live PDFium resource accounting; only called while admitted.
@@ -57,7 +60,7 @@ class Domain {
     friend class Admission;
     Domain() = default;
 
-    std::mutex mutex_;
+    std::timed_mutex mutex_;
     std::atomic<State> state_{State::Uninitialized};
     std::atomic<int32_t> renderer_{-1};
     std::atomic<uint64_t> live_documents_{0};
@@ -83,7 +86,7 @@ class Admission {
     }
 
    private:
-    std::unique_lock<std::mutex> lock_;
+    std::unique_lock<std::timed_mutex> lock_;
     std::chrono::steady_clock::time_point acquired_at_{};
     jpdf_status status_ = JPDF_E_INTERNAL;
 };

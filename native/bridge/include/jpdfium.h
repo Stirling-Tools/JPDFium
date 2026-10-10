@@ -50,7 +50,8 @@ extern "C" {
 // combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
-#define JPDFIUM_ABI_VERSION (1)
+// 2: Java binds PDFium only through jpdf_guard_* shims and starts the jpdf_* runtime.
+#define JPDFIUM_ABI_VERSION (2)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
 #define JPDFIUM_ABI_QUERY_PTR_SIZE (0)
@@ -96,6 +97,10 @@ JPDFIUM_EXPORT int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT;
 #define JPDFIUM_POSITION_BOTTOM_RIGHT 8
 
 JPDFIUM_EXPORT int32_t jpdfium_init(void) JPDFIUM_NOEXCEPT;
+
+// File-backed repair (jpdfium_repair.cpp); returns a JPDFIUM_REPAIR_* status.
+JPDFIUM_EXPORT int32_t jpdfium_repair_pdf_file(const char* inputPath, const char* outputPath,
+                                               int32_t flags);
 
 // Renderer selection for jpdfium_init_ex().
 // AUTO prefers Skia when the build includes it, else AGG.

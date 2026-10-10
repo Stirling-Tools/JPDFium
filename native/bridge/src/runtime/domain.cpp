@@ -2,11 +2,12 @@
 
 #include "domain.h"
 
+#include <new>
 #include <string>
 #include <system_error>
 
 #include "api_status.h"
-#include "jpdfium_internal.h"
+#include "jpdfium_core.h"
 
 namespace jpdf {
 
@@ -46,7 +47,8 @@ bool in_domain() noexcept {
 
 Domain& Domain::instance() noexcept {
     // Never destroyed: worker threads may still be leaving the domain during static teardown.
-    static Domain* domain = new Domain();
+    alignas(Domain) static unsigned char storage[sizeof(Domain)];
+    static Domain* domain = ::new (storage) Domain();
     return *domain;
 }
 
@@ -56,7 +58,7 @@ jpdf_status Domain::init(int32_t renderer) noexcept {
         renderer != JPDF_RENDERER_SKIA) {
         return fail(JPDF_E_INVALID_ARGUMENT, "unknown renderer");
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::timed_mutex> lock(mutex_);
     switch (state()) {
         case State::Running:
             if (renderer == JPDF_RENDERER_AUTO || renderer == renderer_.load()) return JPDF_OK;
@@ -69,10 +71,10 @@ jpdf_status Domain::init(int32_t renderer) noexcept {
     if (!jpdfium_claim_authority(PdfiumAuthority::Safe)) {
         return fail(JPDF_E_AUTHORITY, "the legacy jpdfium_* bridge already owns PDFium here");
     }
-    if (jpdfium_init_pdfium_core(renderer) != JPDFIUM_OK) {
+    if (jpdfium_init_pdfium_core(renderer) != 0) {
         return fail(JPDF_E_UNSUPPORTED, "requested renderer is not in this build");
     }
-    renderer_.store(g_jpdfiumUseSkia ? JPDF_RENDERER_SKIA : JPDF_RENDERER_AGG);
+    renderer_.store(jpdfium_core_uses_skia() ? JPDF_RENDERER_SKIA : JPDF_RENDERER_AGG);
     state_.store(State::Running, std::memory_order_release);
     return JPDF_OK;
 }
@@ -90,9 +92,22 @@ jpdf_status Domain::quiesce() noexcept {
     }
 }
 
-jpdf_status Domain::shutdown() noexcept {
+jpdf_status Domain::resume() noexcept {
+    State expected = State::Quiescing;
+    if (state_.compare_exchange_strong(expected, State::Running)) return JPDF_OK;
+    if (expected == State::Running) return JPDF_OK;
+    return reject_for_state(expected, Purpose::Ordinary);
+}
+
+jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
     if (t_in_domain) return fail(JPDF_E_REENTRANT, "shutdown called from inside the domain");
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    if (timeout_ms < 0) {
+        lock.lock();
+    } else if (!lock.try_lock_for(std::chrono::milliseconds(timeout_ms))) {
+        // Bounded so a JVM exit hook never parks behind a long-running operation.
+        return fail(JPDF_E_TIMEOUT, "PDFium domain stayed busy; shutdown skipped");
+    }
     switch (state()) {
         case State::Stopped:
             return JPDF_OK;
@@ -162,7 +177,7 @@ Admission::Admission(Purpose purpose) noexcept {
     Domain& domain = Domain::instance();
     const auto requested = std::chrono::steady_clock::now();
     try {
-        lock_ = std::unique_lock<std::mutex>(domain.mutex_);
+        lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_);
     } catch (const std::system_error&) {
         status_ = fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
         return;

@@ -117,11 +117,39 @@ endif()
 #   cmake -DJPDFIUM_USE_PDFIUM=ON -DPDFIUM_DIR=/path/to/pdfium-linux-x64 ..
 option(JPDFIUM_USE_PDFIUM "Build against real PDFium (requires PDFIUM_DIR)" OFF)
 
+# Identity reported by jpdf_runtime_get_info; bindings check it to detect mismatched cores.
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE _jpdfium_git_rev
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT _jpdfium_git_rev)
+    set(_jpdfium_git_rev "unknown")
+endif()
+file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pdfium-")
+
+# The native domain and the jpdf_guard_* shims for jpdfium_* exist in both bridges, so the
+# stub serializes exactly like the real build.
+set(JPDFIUM_DOMAIN_SOURCES
+    bridge/src/runtime/api_status.cpp
+    bridge/src/runtime/domain.cpp
+    bridge/src/runtime/api_runtime.cpp
+    bridge/src/runtime/guard.cpp
+    bridge/src/objects/objects.cpp
+    bridge/src/legacy/guards_bridge.cpp)
+
 # Stub library (always built for testing).
 # jpdfium_stub.cpp contains inline stubs for every jpdfium_rust_* function
 # (they return JPDFIUM_ERR_NATIVE so unit tests run without PDFium/Rust).
-add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp)
-target_include_directories(jpdfium_stub PUBLIC bridge/include)
+add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp
+    ${JPDFIUM_DOMAIN_SOURCES}
+    bridge/src/runtime/pdfium_core_stub.cpp)
+target_include_directories(jpdfium_stub PUBLIC bridge/include PRIVATE bridge/src)
+target_compile_definitions(jpdfium_stub PRIVATE
+    JPDF_BUILDING_CORE
+    JPDFIUM_STUB_GUARDS
+    "JPDFIUM_BUILD_ID=\"jpdfium-stub ${_jpdfium_git_rev} ${JPDFIUM_PLATFORM}\"")
 if(MSVC)
     target_compile_options(jpdfium_stub PRIVATE /W4 /WX)
 else()
@@ -204,10 +232,8 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_openjpeg.cpp
         bridge/src/jpdfium_signature.cpp
         # Safe jpdf_* API (jpdfium_api.h): native domain, generation-checked handles.
-        bridge/src/runtime/api_status.cpp
-        bridge/src/runtime/domain.cpp
-        bridge/src/runtime/api_runtime.cpp
-        bridge/src/objects/objects.cpp
+        ${JPDFIUM_DOMAIN_SOURCES}
+        bridge/src/legacy/guards_pdfium.cpp
         bridge/src/pdf/api_document.cpp
         bridge/src/pdf/api_render.cpp
         bridge/src/images/pixels.cpp
@@ -217,17 +243,6 @@ if(JPDFIUM_USE_PDFIUM)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
-    # Identity reported by jpdf_runtime_get_info; bindings check it to detect mismatched cores.
-    execute_process(
-        COMMAND git rev-parse --short=12 HEAD
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        OUTPUT_VARIABLE _jpdfium_git_rev
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-    if(NOT _jpdfium_git_rev)
-        set(_jpdfium_git_rev "unknown")
-    endif()
-    file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pdfium-")
     target_compile_definitions(jpdfium PRIVATE
         JPDF_BUILDING_CORE
         "JPDFIUM_BUILD_ID=\"jpdfium ${_jpdfium_git_rev} ${JPDFIUM_PLATFORM} ${_jpdfium_pdfium_pin}\"")
@@ -686,6 +701,16 @@ if(JPDFIUM_BUILD_TESTS)
         endif()
         target_link_libraries(api_safety PRIVATE jpdfium)
         add_test(NAME api_safety COMMAND api_safety)
+
+        add_executable(api_guards bridge/tests/api_guards.cpp)
+        target_include_directories(api_guards PRIVATE bridge/include "${PDFIUM_INCLUDE_DIR}")
+        if(MSVC)
+            target_compile_options(api_guards PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_guards PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_guards PRIVATE jpdfium)
+        add_test(NAME api_guards COMMAND api_guards)
     endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
@@ -720,7 +745,7 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety PROPERTIES ENVIRONMENT "${_jpdfium_test_env}")
+            set_tests_properties(api_safety api_guards PROPERTIES ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs

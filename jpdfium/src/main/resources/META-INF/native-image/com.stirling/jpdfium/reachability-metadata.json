@@ -153,17 +153,16 @@
       "type": "stirling.software.jpdfium.panama.NativeRuntime"
     },
     {
-      "type": "stirling.software.jpdfium.panama.PdfiumRuntime",
+      "type": "stirling.software.jpdfium.panama.NativeDomain$Guards",
       "methods": [
         {
-          "name": "enterChecked",
-          "parameterTypes": []
-        },
-        {
-          "name": "exit",
+          "name": "checkRefusal",
           "parameterTypes": []
         }
       ]
+    },
+    {
+      "type": "stirling.software.jpdfium.panama.PdfiumRuntime"
     },
     {
       "type": "stirling.software.jpdfium.panama.Pcre2Lib"
@@ -230,6 +229,21 @@
   ],
   "foreign": {
     "downcalls": [
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "jint"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [],
+        "options": {
+          "critical": {
+            "allowHeapAccess": false
+          }
+        }
+      },
       {
         "returnType": "jint",
         "parameterTypes": [

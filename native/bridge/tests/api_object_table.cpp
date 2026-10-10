@@ -107,6 +107,7 @@ void test_concurrent_churn() {
     constexpr int kThreads = 8;
     constexpr int kRounds = 20000;
     std::vector<std::thread> threads;
+    threads.reserve(kThreads);
     std::vector<int> errors(kThreads, 0);
     for (int t = 0; t < kThreads; ++t) {
         threads.emplace_back([&, t] {

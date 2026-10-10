@@ -73,18 +73,19 @@ public final class JpdfiumLib {
     public static final int POSITION_BOTTOM_CENTER = 7;
     public static final int POSITION_BOTTOM_RIGHT  = 8;
 
-    // Shared scratch outputs for leaf downcalls. Every access runs inside the
-    // PdfiumRuntime domain, which is reentrant: a value must be consumed before
-    // any reentrant call that reuses the same slot. Distinct slots (INT vs FLOAT
-    // vs ADDR) may nest; the same slot must never be live across a nested
-    // JpdfiumLib call.
-    private static final Arena GLOBAL = Arena.global();
-    private static final MemorySegment INT_SCRATCH    = GLOBAL.allocate(JAVA_INT);
-    private static final MemorySegment INT2_SCRATCH   = GLOBAL.allocate(JAVA_INT);
-    private static final MemorySegment LONG_SCRATCH   = GLOBAL.allocate(JAVA_LONG);
-    private static final MemorySegment FLOAT_SCRATCH  = GLOBAL.allocate(JAVA_FLOAT);
-    private static final MemorySegment FLOAT2_SCRATCH = GLOBAL.allocate(JAVA_FLOAT);
-    private static final MemorySegment ADDR_SCRATCH   = GLOBAL.allocate(ADDRESS);
+    // Scratch outputs for leaf downcalls, one set per thread: Java holds no PDFium lock, so a
+    // shared slot would race. Consume a value before any nested JpdfiumLib call reuses its slot.
+    private static final class Scratch {
+        private final Arena arena = Arena.ofAuto();
+        final MemorySegment int1 = arena.allocate(JAVA_INT);
+        final MemorySegment int2 = arena.allocate(JAVA_INT);
+        final MemorySegment long1 = arena.allocate(JAVA_LONG);
+        final MemorySegment float1 = arena.allocate(JAVA_FLOAT);
+        final MemorySegment float2 = arena.allocate(JAVA_FLOAT);
+        final MemorySegment addr = arena.allocate(ADDRESS);
+    }
+
+    private static final ThreadLocal<Scratch> SCRATCH = ThreadLocal.withInitial(Scratch::new);
 
     /**
      * Unlimited by default. Set a finite budget for untrusted documents.
@@ -93,32 +94,8 @@ public final class JpdfiumLib {
     private static final long DEFAULT_MAX_RENDER_PIXELS = 0L;
 
     static {
-        NativeLoader.ensureLoaded();
-        // Renderer selection is fixed for the JVM lifetime. Skia is the default
-        // when the native build includes it; -Djpdfium.renderer=agg (or
-        // JPDFIUM_RENDERER=agg) forces the legacy AGG backend, =skia forces
-        // Skia with an AGG fallback on builds that lack it.
-        String renderer = System.getProperty(
-                "jpdfium.renderer", System.getenv().getOrDefault("JPDFIUM_RENDERER", ""));
-        int rc;
-        if ("agg".equalsIgnoreCase(renderer)) {
-            rc = JpdfiumH.jpdfium_init_ex(0);
-        } else if ("skia".equalsIgnoreCase(renderer)) {
-            rc = JpdfiumH.jpdfium_init_ex(1);
-            if (rc != OK) {
-                System.err.println(
-                        "jpdfium: Skia renderer requested but this native build has no Skia; using AGG");
-                rc = JpdfiumH.jpdfium_init();
-            }
-        } else {
-            rc = JpdfiumH.jpdfium_init();
-        }
-        if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
-        // JVM-exit teardown quiesces first, then destroys only when no live
-        // resources remain (the OS reclaims the rest). Never force-destroys an
-        // active library for cosmetic teardown.
-        // Platform thread required: virtual threads cannot be shutdown hooks.
-        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(PdfiumRuntime::shutdownOnJvmExit));
+        // Class init of NativeDomain starts the native runtime once per process.
+        NativeDomain.ensureStarted();
     }
 
     private JpdfiumLib() {}
@@ -150,7 +127,7 @@ public final class JpdfiumLib {
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
-    public static final int EXPECTED_ABI_VERSION = 1;
+    public static final int EXPECTED_ABI_VERSION = 2;
     /** Expected native pointer width: all supported targets are 64-bit. */
     public static final long EXPECTED_PTR_SIZE = 8;
     /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
@@ -355,8 +332,8 @@ public final class JpdfiumLib {
         if (fast != null) {
             return pageWidth0Fast(fast, page);
         }
-        check(JpdfiumH.jpdfium_page_width(page, FLOAT_SCRATCH), "pageWidth");
-        return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
+        check(JpdfiumH.jpdfium_page_width(page, SCRATCH.get().float1), "pageWidth");
+        return SCRATCH.get().float1.get(JAVA_FLOAT, 0);
     }
 
     /**
@@ -368,9 +345,9 @@ public final class JpdfiumLib {
      */
     private static float pageWidth0Fast(MethodHandle fast, long page) {
         try {
-            int rc = (int) fast.invokeExact(page, FLOAT_SCRATCH);
+            int rc = (int) fast.invokeExact(page, SCRATCH.get().float1);
             check(rc, "pageWidth");
-            return FLOAT_SCRATCH.get(JAVA_FLOAT, 0);
+            return SCRATCH.get().float1.get(JAVA_FLOAT, 0);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             if (t instanceof JPDFiumException jpdfiumException) {
@@ -384,9 +361,9 @@ public final class JpdfiumLib {
         MethodHandle fast = FastLinks.PAGE_HEIGHT;
         if (fast != null) {
             try {
-                int rc = (int) fast.invokeExact(page, FLOAT2_SCRATCH);
+                int rc = (int) fast.invokeExact(page, SCRATCH.get().float2);
                 check(rc, "pageHeight");
-                return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
+                return SCRATCH.get().float2.get(JAVA_FLOAT, 0);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 if (t instanceof JPDFiumException jpdfiumException) {
@@ -395,8 +372,8 @@ public final class JpdfiumLib {
                 throw new JPDFiumException("pageHeight fast-path invocation failed", t);
             }
         }
-        check(JpdfiumH.jpdfium_page_height(page, FLOAT2_SCRATCH), "pageHeight");
-        return FLOAT2_SCRATCH.get(JAVA_FLOAT, 0);
+        check(JpdfiumH.jpdfium_page_height(page, SCRATCH.get().float2), "pageHeight");
+        return SCRATCH.get().float2.get(JAVA_FLOAT, 0);
     }
 
     private static MemorySegment pageRawHandle0(long page) {
@@ -411,8 +388,8 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(path);
             return PdfiumRuntime.executeLong(() -> {
-                check(JpdfiumH.jpdfium_doc_open(cPath, LONG_SCRATCH), "docOpen: " + path);
-                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                check(JpdfiumH.jpdfium_doc_open(cPath, SCRATCH.get().long1), "docOpen: " + path);
+                long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
                 PdfiumRuntime.documentOpened();
                 return handle;
             });
@@ -421,8 +398,8 @@ public final class JpdfiumLib {
 
     public static long docCreate() {
         return PdfiumRuntime.executeLong(() -> {
-            check(JpdfiumH.jpdfium_doc_create(LONG_SCRATCH), "docCreate");
-            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            check(JpdfiumH.jpdfium_doc_create(SCRATCH.get().long1), "docCreate");
+            long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
             PdfiumRuntime.documentOpened();
             return handle;
         });
@@ -432,8 +409,8 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, data);
             return PdfiumRuntime.executeLong(() -> {
-                check(JpdfiumH.jpdfium_doc_open_bytes(cData, data.length, LONG_SCRATCH), "docOpenBytes");
-                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                check(JpdfiumH.jpdfium_doc_open_bytes(cData, data.length, SCRATCH.get().long1), "docOpenBytes");
+                long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
                 PdfiumRuntime.documentOpened();
                 return handle;
             });
@@ -453,8 +430,8 @@ public final class JpdfiumLib {
      */
     public static long docOpenSegment(MemorySegment data, long len) {
         return PdfiumRuntime.executeLong(() -> {
-            check(JpdfiumH.jpdfium_doc_open_bytes(data, len, LONG_SCRATCH), "docOpenBytes");
-            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            check(JpdfiumH.jpdfium_doc_open_bytes(data, len, SCRATCH.get().long1), "docOpenBytes");
+            long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
             PdfiumRuntime.documentOpened();
             return handle;
         });
@@ -468,8 +445,8 @@ public final class JpdfiumLib {
             MemorySegment cData = a.allocateFrom(JAVA_BYTE, data);
             MemorySegment cPass = a.allocateFrom(password);
             return PdfiumRuntime.executeLong(() -> {
-                check(JpdfiumH.jpdfium_doc_open_bytes_protected(cData, data.length, cPass, LONG_SCRATCH), "docOpenBytesProtected");
-                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                check(JpdfiumH.jpdfium_doc_open_bytes_protected(cData, data.length, cPass, SCRATCH.get().long1), "docOpenBytesProtected");
+                long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
                 PdfiumRuntime.documentOpened();
                 return handle;
             });
@@ -481,8 +458,8 @@ public final class JpdfiumLib {
             MemorySegment cPath = a.allocateFrom(path);
             MemorySegment cPass = a.allocateFrom(password);
             return PdfiumRuntime.executeLong(() -> {
-                check(JpdfiumH.jpdfium_doc_open_protected(cPath, cPass, LONG_SCRATCH), "docOpenProtected: " + path);
-                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                check(JpdfiumH.jpdfium_doc_open_protected(cPath, cPass, SCRATCH.get().long1), "docOpenProtected: " + path);
+                long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
                 PdfiumRuntime.documentOpened();
                 return handle;
             });
@@ -490,33 +467,26 @@ public final class JpdfiumLib {
     }
 
     public static int docPageCount(long doc) {
-        // Leaf admission rather than executeInt: this runs in tight document
-        // loops, and a captured lambda stays a 24-byte allocation per call
-        // until C2 compiles this method, which breaks the zero-allocation
-        // budget. Same admission semantics, no closure on the stack.
-        PdfiumRuntime.enterLeaf();
-        try {
-            // Binding chosen before invocation; see pageWidth0 for why a fast
-            // call must never be retried through the slow binding on failure.
-            MethodHandle fast = FastLinks.DOC_PAGE_COUNT;
-            if (fast != null) {
-                try {
-                    int rc = (int) fast.invokeExact(doc, INT_SCRATCH);
-                    check(rc, "docPageCount");
-                    return INT_SCRATCH.get(JAVA_INT, 0);
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                    if (t instanceof JPDFiumException jpdfiumException) {
-                        throw jpdfiumException;
-                    }
-                    throw new JPDFiumException("docPageCount fast-path invocation failed", t);
+        // No lambda here: this runs in tight document loops and must stay allocation-free.
+        // Binding chosen before invocation; see pageWidth0 for why a fast
+        // call must never be retried through the slow binding on failure.
+        MemorySegment out = SCRATCH.get().int1;
+        MethodHandle fast = FastLinks.DOC_PAGE_COUNT;
+        if (fast != null) {
+            try {
+                int rc = (int) fast.invokeExact(doc, out);
+                check(rc, "docPageCount");
+                return out.get(JAVA_INT, 0);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (t instanceof JPDFiumException jpdfiumException) {
+                    throw jpdfiumException;
                 }
+                throw new JPDFiumException("docPageCount fast-path invocation failed", t);
             }
-            check(JpdfiumH.jpdfium_doc_page_count(doc, INT_SCRATCH), "docPageCount");
-            return INT_SCRATCH.get(JAVA_INT, 0);
-        } finally {
-            PdfiumRuntime.exitLeaf();
         }
+        check(JpdfiumH.jpdfium_doc_page_count(doc, out), "docPageCount");
+        return out.get(JAVA_INT, 0);
     }
 
     public static void docSave(long doc, String path) {
@@ -635,12 +605,12 @@ public final class JpdfiumLib {
 
     public static byte[] docSaveBytes(long doc) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_doc_save_bytes(doc, SCRATCH.get().addr, SCRATCH.get().long1), "docSaveBytes");
+            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
             // Acquire the pointer in its own try-finally so the buffer is freed even when
             // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
             try {
-                long byteLen = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "docSaveBytes", true);
+                long byteLen = checkNativeBuffer(nativePtr, SCRATCH.get().long1.get(JAVA_LONG, 0), "docSaveBytes", true);
                 BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
                 try {
                     return byteLen == 0 ? new byte[0] : nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
@@ -739,8 +709,8 @@ public final class JpdfiumLib {
 
     public static long pageOpen(long doc, int idx) {
         return PdfiumRuntime.executeLong(() -> {
-            check(JpdfiumH.jpdfium_page_open(doc, idx, LONG_SCRATCH), "pageOpen: " + idx);
-            long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+            check(JpdfiumH.jpdfium_page_open(doc, idx, SCRATCH.get().long1), "pageOpen: " + idx);
+            long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
             PdfiumRuntime.pageOpened();
             return handle;
         });
@@ -769,10 +739,10 @@ public final class JpdfiumLib {
             MethodHandle coarse = PageInfoHandle.HANDLE;
             if (coarse != null) {
                 try {
-                    int rc = (int) coarse.invokeExact(page, FLOAT_SCRATCH, FLOAT2_SCRATCH);
+                    int rc = (int) coarse.invokeExact(page, SCRATCH.get().float1, SCRATCH.get().float2);
                     if (rc == OK) {
                         return new PageInfo(
-                                FLOAT_SCRATCH.get(JAVA_FLOAT, 0), FLOAT2_SCRATCH.get(JAVA_FLOAT, 0));
+                                SCRATCH.get().float1.get(JAVA_FLOAT, 0), SCRATCH.get().float2.get(JAVA_FLOAT, 0));
                     }
                     // Native rejection (e.g. stale handle) is authoritative;
                     // do not fall back to leaves that would re-validate.
@@ -1007,11 +977,11 @@ public final class JpdfiumLib {
             MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
             return PdfiumRuntime.execute(() -> {
                 check(JpdfiumH.jpdfium_rust_svg_to_rgba(cSvg, svg.length, width, height,
-                        ADDR_SCRATCH, LONG_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "svgToNative");
-                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
-                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "svgToNative", false);
-                int w = INT_SCRATCH.get(JAVA_INT, 0);
-                int h = INT2_SCRATCH.get(JAVA_INT, 0);
+                        SCRATCH.get().addr, SCRATCH.get().long1, SCRATCH.get().int1, SCRATCH.get().int2), "svgToNative");
+                MemorySegment ptr = SCRATCH.get().addr.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, SCRATCH.get().long1.get(JAVA_LONG, 0), "svgToNative", false);
+                int w = SCRATCH.get().int1.get(JAVA_INT, 0);
+                int h = SCRATCH.get().int2.get(JAVA_INT, 0);
                 if (ptr == null) {
                     throw new JPDFiumException("svgToNative returned no buffer");
                 }
@@ -1056,10 +1026,10 @@ public final class JpdfiumLib {
         return PdfiumRuntime.execute(() -> {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
-            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
-            int w = INT_SCRATCH.get(JAVA_INT, 0);
-            int h = INT2_SCRATCH.get(JAVA_INT, 0);
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, SCRATCH.get().addr, SCRATCH.get().int1, SCRATCH.get().int2), "renderPage");
+            int w = SCRATCH.get().int1.get(JAVA_INT, 0);
+            int h = SCRATCH.get().int2.get(JAVA_INT, 0);
+            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
             long byteLen = (long) w * h * 4;
             BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
             try {
@@ -1085,10 +1055,10 @@ public final class JpdfiumLib {
         return PdfiumRuntime.execute(() -> {
             checkRenderBounds(page, dpi);
             int nativeDpi = transparent ? -dpi : dpi;
-            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, ADDR_SCRATCH, INT_SCRATCH, INT2_SCRATCH), "renderPage");
-            int w = INT_SCRATCH.get(JAVA_INT, 0);
-            int h = INT2_SCRATCH.get(JAVA_INT, 0);
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_render_page_flags(page, nativeDpi, flags, SCRATCH.get().addr, SCRATCH.get().int1, SCRATCH.get().int2), "renderPage");
+            int w = SCRATCH.get().int1.get(JAVA_INT, 0);
+            int h = SCRATCH.get().int2.get(JAVA_INT, 0);
+            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
             long byteLen = (long) w * h * 4;
             MemorySegment pixels = nativePtr.reinterpret(byteLen);
             BridgeAlloc.alloc(BridgeAlloc.Tag.RENDER_OUTPUT, byteLen);
@@ -1209,30 +1179,21 @@ public final class JpdfiumLib {
      */
     public static void renderPageIntoSegment(MemorySegment rawPage, MemorySegment targetBitmap,
                                       int width, int height, int flags) {
-        // Leaf admission: four captured arguments made this a per-call
-        // allocation on the certified zero-allocation render path.
-        PdfiumRuntime.enterLeaf();
-        try {
-            if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
-                if (NativeRuntime.isStub()) {
-                    return;
-                }
-                throw new JPDFiumException("Direct render bindings not available");
+        // No lambda: four captured arguments would allocate on the zero-allocation render path.
+        if (PageEditBindings.FPDFBitmap_CreateEx == null || RenderBindings.FPDF_RenderPageBitmap == null) {
+            if (NativeRuntime.isStub()) {
+                return;
             }
-            doRenderLocked(rawPage, targetBitmap, width, height, flags);
-        } finally {
-            PdfiumRuntime.exitLeaf();
+            throw new JPDFiumException("Direct render bindings not available");
         }
+        doRenderLocked(rawPage, targetBitmap, width, height, flags);
     }
 
     private static final boolean HAS_RENDER_PAGE_INTO = initHasRenderPageInto();
 
-    /**
-     * Handle for {@code jpdfium_render_page_into}: a plain downcall into native memory, left
-     * unguarded because the caller already holds the {@code PdfiumRuntime} domain.
-     */
+    /** Handle for {@code jpdfium_render_page_into}: a plain downcall into native memory. */
     private static final MethodHandle RENDER_PAGE_INTO =
-            Symbols.downcallOptionalUnguarded("jpdfium_render_page_into",
+            Symbols.downcallOptional("jpdfium_render_page_into",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG,
                             JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
 
@@ -1291,8 +1252,8 @@ public final class JpdfiumLib {
     /** JSON report of the last sanitize stage ("" when none has run). */
     public static String docSanitizeReport(long doc) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_doc_sanitize_report(doc, ADDR_SCRATCH), "docSanitizeReport");
-            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_doc_sanitize_report(doc, SCRATCH.get().addr), "docSanitizeReport");
+            MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
@@ -1308,8 +1269,8 @@ public final class JpdfiumLib {
 
     public static String textGetChars(long page) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_text_get_chars(page, ADDR_SCRATCH), "textGetChars");
-            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_text_get_chars(page, SCRATCH.get().addr), "textGetChars");
+            MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
@@ -1320,8 +1281,8 @@ public final class JpdfiumLib {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cQuery = a.allocateFrom(query);
             return PdfiumRuntime.execute(() -> {
-                check(JpdfiumH.jpdfium_text_find(page, cQuery, ADDR_SCRATCH), "textFind");
-                MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+                check(JpdfiumH.jpdfium_text_find(page, cQuery, SCRATCH.get().addr), "textFind");
+                MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
                 String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
@@ -1352,14 +1313,8 @@ public final class JpdfiumLib {
      * @param h    crop rect height
      */
     public static void cropRemoveContent(long page, float x, float y, float w, float h) {
-        // Leaf admission: five captured arguments made this one of the hottest
-        // allocating call sites (see docPageCount).
-        PdfiumRuntime.enterLeaf();
-        try {
-            check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
-        } finally {
-            PdfiumRuntime.exitLeaf();
-        }
+        // No lambda: five captured arguments made this a hot allocating call site.
+        check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
     }
 
     public static void redactPattern(long page, String pattern, int argb, boolean removeContent) {
@@ -1403,8 +1358,8 @@ public final class JpdfiumLib {
         return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_redact_words_ex(page, wordsPtrs, wordCount, argb, padding,
                     wholeWord ? 1 : 0, useRegex ? 1 : 0, removeContent ? 1 : 0,
-                    caseSensitive ? 1 : 0, INT_SCRATCH), "redactWordsEx");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+                    caseSensitive ? 1 : 0, SCRATCH.get().int1), "redactWordsEx");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
@@ -1443,8 +1398,8 @@ public final class JpdfiumLib {
 
     public static String textGetCharPositions(long page) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_text_get_char_positions(page, ADDR_SCRATCH), "textGetCharPositions");
-            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_text_get_char_positions(page, SCRATCH.get().addr), "textGetCharPositions");
+            MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
@@ -1466,8 +1421,8 @@ public final class JpdfiumLib {
      */
     public static int annotCreateRedact(long page, float x, float y, float w, float h, int argb) {
         return PdfiumRuntime.executeInt(() -> {
-            check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, INT_SCRATCH), "annotCreateRedact");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+            check(JpdfiumH.jpdfium_annot_create_redact(page, x, y, w, h, argb, SCRATCH.get().int1), "annotCreateRedact");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
@@ -1484,8 +1439,8 @@ public final class JpdfiumLib {
         return PdfiumRuntime.executeInt(() -> {
             check(JpdfiumH.jpdfium_redact_mark_words(page, wordsPtrs, wordCount, padding,
                     wholeWord ? 1 : 0, useRegex ? 1 : 0, caseSensitive ? 1 : 0,
-                    argb, INT_SCRATCH), "redactMarkWords");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+                    argb, SCRATCH.get().int1), "redactMarkWords");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
@@ -1503,16 +1458,16 @@ public final class JpdfiumLib {
     /** Returns the number of pending REDACT annotations on the page. */
     public static int annotCountRedacts(long page) {
         return PdfiumRuntime.executeInt(() -> {
-            check(JpdfiumH.jpdfium_annot_count_redacts(page, INT_SCRATCH), "annotCountRedacts");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+            check(JpdfiumH.jpdfium_annot_count_redacts(page, SCRATCH.get().int1), "annotCountRedacts");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
     /** Returns JSON array of all REDACT annotation rects. */
     public static String annotGetRedactsJson(long page) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_annot_get_redacts_json(page, ADDR_SCRATCH), "annotGetRedactsJson");
-            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_annot_get_redacts_json(page, SCRATCH.get().addr), "annotGetRedactsJson");
+            MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
@@ -1542,8 +1497,8 @@ public final class JpdfiumLib {
      */
     public static int redactCommit(long page, int argb, boolean removeContent) {
         return PdfiumRuntime.executeInt(() -> {
-            check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, INT_SCRATCH), "redactCommit");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+            check(JpdfiumH.jpdfium_redact_commit(page, argb, removeContent ? 1 : 0, SCRATCH.get().int1), "redactCommit");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
@@ -1553,12 +1508,12 @@ public final class JpdfiumLib {
      */
     public static byte[] docSaveIncremental(long doc) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_doc_save_incremental(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveIncremental");
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_doc_save_incremental(doc, SCRATCH.get().addr, SCRATCH.get().long1), "docSaveIncremental");
+            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
             // Acquire the pointer in its own try-finally so the buffer is freed even when
             // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
             try {
-                long byteLen = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "docSaveIncremental", true);
+                long byteLen = checkNativeBuffer(nativePtr, SCRATCH.get().long1.get(JAVA_LONG, 0), "docSaveIncremental", true);
                 BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
                 try {
                     return nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
@@ -1615,8 +1570,8 @@ public final class JpdfiumLib {
             return PdfiumRuntime.executeLong(() -> {
                 check(JpdfiumH.jpdfium_image_to_pdf(
                         cData, imageData.length,
-                        pageWidth, pageHeight, margin, position, imageFormat, LONG_SCRATCH), "imageToPdf");
-                long handle = LONG_SCRATCH.get(JAVA_LONG, 0);
+                        pageWidth, pageHeight, margin, position, imageFormat, SCRATCH.get().long1), "imageToPdf");
+                long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
                 PdfiumRuntime.documentOpened();
                 return handle;
             });
@@ -1651,23 +1606,23 @@ public final class JpdfiumLib {
 
     public static int signatureCount(long doc) {
         return PdfiumRuntime.executeInt(() -> {
-            check(JpdfiumH.jpdfium_signature_count(doc, INT_SCRATCH), "signatureCount");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+            check(JpdfiumH.jpdfium_signature_count(doc, SCRATCH.get().int1), "signatureCount");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
     public static int signatureRevisionCount(long doc) {
         return PdfiumRuntime.executeInt(() -> {
-            check(JpdfiumH.jpdfium_signature_revision_count(doc, INT_SCRATCH), "signatureRevisionCount");
-            return INT_SCRATCH.get(JAVA_INT, 0);
+            check(JpdfiumH.jpdfium_signature_revision_count(doc, SCRATCH.get().int1), "signatureRevisionCount");
+            return SCRATCH.get().int1.get(JAVA_INT, 0);
         });
     }
 
     /** Flat JSON info for one signature field. */
     public static String signatureInfo(long doc, int index) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_signature_info(doc, index, ADDR_SCRATCH), "signatureInfo");
-            MemorySegment strPtr = ADDR_SCRATCH.get(ADDRESS, 0);
+            check(JpdfiumH.jpdfium_signature_info(doc, index, SCRATCH.get().addr), "signatureInfo");
+            MemorySegment strPtr = SCRATCH.get().addr.get(ADDRESS, 0);
             String result = FfmHelper.readNativeString(strPtr, StandardCharsets.UTF_8);
             JpdfiumH.jpdfium_free_string(strPtr);
             return result;
@@ -1677,10 +1632,10 @@ public final class JpdfiumLib {
     /** Digest of the signature /ByteRange (0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512). */
     public static byte[] signatureDigest(long doc, int index, int algorithm) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, ADDR_SCRATCH, LONG_SCRATCH),
+            check(JpdfiumH.jpdfium_signature_digest(doc, index, algorithm, SCRATCH.get().addr, SCRATCH.get().long1),
                     "signatureDigest");
-            MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
-            long len = checkNativeBuffer(nativePtr, LONG_SCRATCH.get(JAVA_LONG, 0), "signatureDigest", false);
+            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
+            long len = checkNativeBuffer(nativePtr, SCRATCH.get().long1.get(JAVA_LONG, 0), "signatureDigest", false);
             byte[] result = nativePtr == null ? new byte[0] : nativePtr.reinterpret(len).toArray(JAVA_BYTE);
             if (nativePtr != null) {
                 JpdfiumH.jpdfium_free_buffer(nativePtr);

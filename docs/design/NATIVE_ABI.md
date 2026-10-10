@@ -71,5 +71,14 @@ cleanup cannot overwrite the cause. Read it before making another call on the sa
 | `build_id`, status names | Static, owned by the library |
 | Error detail | Copied into the caller's buffer |
 
+## Legacy guards
+
+`jpdf_guard_<name>` exists for every legacy `jpdfium_*` export except the QPDF, Rust, ABI-probe
+and legacy-init functions, and for every PDFium symbol the Java bindings use. Each has the
+signature of `<name>`. A refused admission returns a zero value (or nothing for `void`) without
+running `<name>`; `jpdf_guard_take_refusal()` then returns the status for the calling thread and
+clears it. Bindings must check it after every guarded call, because a zero `int32_t` status is
+indistinguishable from `JPDFIUM_OK`.
+
 No C++ exception crosses the ABI: every entry point is `noexcept` and runs its body inside an
 exception firewall that maps failures to status codes.

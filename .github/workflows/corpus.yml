@@ -121,13 +121,21 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
-            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf
+            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf clang-format
 
       - name: Fetch prebuilt PDFium (pinned)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash native/fetch-prebuilt-pdfium.sh linux-x64
+
+      # The guard shims are generated from the pinned PDFium headers; a pin bump must regenerate them.
+      - name: Guard shims match the pinned PDFium
+        run: |
+          nm -D --defined-only native/pdfium/lib/libpdfium.so | awk '{print $3}' > "$RUNNER_TEMP/pdfium.exports"
+          python3 native/tools/gen_guards.py --pdfium-include native/pdfium/include \
+            --pdfium-exports "$RUNNER_TEMP/pdfium.exports"
+          git diff --exit-code native/bridge/src/legacy
 
       - name: Build real bridge
         run: bash native/build-real.sh

@@ -15,6 +15,9 @@ UNINITIALIZED --init--> RUNNING --quiesce/shutdown--> QUIESCING --> DESTROYING -
 - `jpdf_runtime_shutdown` quiesces, then destroys PDFium only when no documents or pages remain.
   Otherwise it returns `JPDF_E_BUSY` with the counts and stays `QUIESCING` so the caller can
   close what is open and retry.
+- `jpdf_runtime_resume` returns `QUIESCING` to `RUNNING`, for callers that abandon a shutdown.
+- `jpdf_runtime_shutdown_within(ms)` gives up with `JPDF_E_TIMEOUT` if the domain stays busy, so
+  an exit hook never waits behind a long operation.
 - `STOPPED` and `FAILED` are terminal for the process. There is no silent reinitialization.
 
 ## Admission
@@ -32,6 +35,11 @@ The runtime state is checked inside the mutex, so admission and shutdown cannot 
 The mutex is not recursive. Internal helpers run under the caller's admission and never admit
 again; a public entry point reached from inside the domain gets `JPDF_E_REENTRANT` instead of a
 deadlock.
+
+Legacy entry points are admitted the same way through their `jpdf_guard_<name>` shim, one call
+per admission. Close and free functions are teardown and stay admitted while quiescing. A refused
+shim returns a zero value and records the status for `jpdf_guard_take_refusal`, which bindings
+check after every guarded call.
 
 Only PDFium work runs admitted. Pixel conversion, PNG encoding and file publication run after
 leaving the domain, and bitmap operations never enter it.

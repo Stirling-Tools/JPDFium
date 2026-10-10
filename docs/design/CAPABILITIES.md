@@ -15,6 +15,7 @@
 | `pdf.render` | implemented; qualification needs the OCRmyPDF raster parity suite |
 | `image.png_write` | implemented |
 | `output.transaction` | implemented |
+| `legacy.guards` | implemented |
 
 Reserved names, absent until their phase lands: `fonts.shape_explicit`, `fonts.subset`,
 `image.rectify`, `ocr.recognize`, `ocr.word_geometry`, `text_layer.write`, `pdf.optimize`,
