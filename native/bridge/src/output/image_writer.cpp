@@ -31,9 +31,10 @@ int32_t transaction_sink(void* ctx, const uint8_t* data, size_t len) noexcept {
     return sink->status == JPDF_OK ? 0 : 1;
 }
 
+// Pillow's formula, int(dpi / 0.0254 + 0.5), so pHYs matches the OCRmyPDF reference exactly.
 uint32_t pixels_per_meter(double dpi) noexcept {
     if (!std::isfinite(dpi) || dpi <= 0 || dpi > 1e6) return 0;
-    return static_cast<uint32_t>(std::lround(dpi / 0.0254));
+    return static_cast<uint32_t>(dpi / 0.0254 + 0.5);
 }
 
 }  // namespace
@@ -64,16 +65,23 @@ jpdf_status write_image_file(const PixelStorage& pixels, const char* path_utf8,
                              const WriteRequest& request) noexcept {
     const int32_t channels = channels_for(pixels.pixel_format);
     if (channels == 0 || !pixels.data) return fail(JPDF_E_INTERNAL, "bitmap has no pixels");
+    return write_png_file(PngImage{pixels.data.get(), pixels.width, pixels.height, pixels.stride,
+                                   channels, pixels.dpi_x, pixels.dpi_y},
+                          path_utf8, request);
+}
 
+jpdf_status write_png_file(const PngImage& image, const char* path_utf8,
+                           const WriteRequest& request) noexcept {
+    if (!image.data) return fail(JPDF_E_INTERNAL, "image has no pixels");
     std::unique_ptr<OutputTransaction> tx;
     jpdf_status st = OutputTransaction::begin(path_utf8, request.durable, request.max_bytes, &tx);
     if (st != JPDF_OK) return st;
 
     SinkContext sink{tx.get(), JPDF_OK};
-    const int32_t rc = jpdfium_rust_write_png(
-        pixels.data.get(), pixels.width, pixels.height, pixels.stride, channels,
-        pixels_per_meter(pixels.dpi_x), pixels_per_meter(pixels.dpi_y), request.png_compression,
-        transaction_sink, &sink);
+    const int32_t rc =
+        jpdfium_rust_write_png(image.data, image.width, image.height, image.stride, image.channels,
+                               pixels_per_meter(image.dpi_x), pixels_per_meter(image.dpi_y),
+                               request.png_compression, transaction_sink, &sink);
     if (rc != 0) {
         // The sink already recorded why it stopped (I/O or max_bytes); keep that cause.
         if (sink.status != JPDF_OK) return sink.status;

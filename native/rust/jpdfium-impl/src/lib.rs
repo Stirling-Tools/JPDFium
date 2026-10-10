@@ -741,15 +741,17 @@ fn encode_png(
     out: &mut SinkWriter,
 ) -> std::io::Result<()> {
     out.emit(b"\x89PNG\r\n\x1a\n")?;
+    // channels 0 is 1-bit grayscale, packed most significant bit first, 1 = white.
     let color_type: u8 = match channels {
-        1 => 0,
+        0 | 1 => 0,
         3 => 2,
         _ => 6,
     };
+    let bit_depth: u8 = if channels == 0 { 1 } else { 8 };
     let mut ihdr = Vec::with_capacity(13);
     ihdr.extend_from_slice(&(width as u32).to_be_bytes());
     ihdr.extend_from_slice(&(height as u32).to_be_bytes());
-    ihdr.extend_from_slice(&[8, color_type, 0, 0, 0]);
+    ihdr.extend_from_slice(&[bit_depth, color_type, 0, 0, 0]);
     out.chunk(b"IHDR", &ihdr)?;
     if ppm.0 > 0 && ppm.1 > 0 {
         let mut phys = Vec::with_capacity(9);
@@ -758,7 +760,7 @@ fn encode_png(
         phys.push(1);
         out.chunk(b"pHYs", &phys)?;
     }
-    let row_len = width * channels;
+    let row_len = packed_row_len(width, channels);
     let zero_row = vec![0u8; row_len];
     let mut filtered = Vec::with_capacity(row_len + 1);
     let mut scratch: [Vec<u8>; 5] = Default::default();
@@ -770,7 +772,7 @@ fn encode_png(
         let row = &pixels[y * stride..y * stride + row_len];
         let prev = if y == 0 { &zero_row[..] } else { &pixels[(y - 1) * stride..(y - 1) * stride + row_len] };
         filtered.clear();
-        filter_row(row, prev, channels, &mut filtered, &mut scratch);
+        filter_row(row, prev, channels.max(1), &mut filtered, &mut scratch);
         std::io::Write::write_all(&mut encoder, &filtered)?;
     }
     let mut idat = encoder.finish()?;
@@ -778,7 +780,15 @@ fn encode_png(
     out.chunk(b"IEND", &[])
 }
 
-/// Streams 8-bit gray (1), RGB (3) or straight RGBA (4) pixels as PNG through `sink`.
+fn packed_row_len(width: usize, channels: usize) -> usize {
+    if channels == 0 {
+        width.div_ceil(8)
+    } else {
+        width * channels
+    }
+}
+
+/// Streams 1-bit gray (0), 8-bit gray (1), RGB (3) or straight RGBA (4) pixels as PNG.
 ///
 /// `ppm_x`/`ppm_y` > 0 add a pHYs chunk. Returns 0, -1 invalid args, -2 sink abort, -3 internal.
 ///
@@ -798,11 +808,14 @@ pub unsafe extern "C" fn jpdfium_rust_write_png(
     ctx: *mut libc::c_void,
 ) -> i32 {
     let Some(sink) = sink else { return PNG_ERR_INVALID };
-    if pixels.is_null() || width <= 0 || height <= 0 || !matches!(channels, 1 | 3 | 4) {
+    if pixels.is_null() || width <= 0 || height <= 0 || !matches!(channels, 0 | 1 | 3 | 4) {
         return PNG_ERR_INVALID;
     }
     let (w, h, s, ch) = (width as usize, height as usize, stride as usize, channels as usize);
-    let Some(row_len) = w.checked_mul(ch) else { return PNG_ERR_INVALID };
+    if w.checked_mul(ch.max(1)).is_none() {
+        return PNG_ERR_INVALID;
+    }
+    let row_len = packed_row_len(w, ch);
     if stride <= 0 || s < row_len {
         return PNG_ERR_INVALID;
     }

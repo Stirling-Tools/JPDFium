@@ -1,14 +1,19 @@
 // api_bitmap.cpp - jpdf_bitmap_* and jpdf_view_*: owned pixels, never inside the PDFium domain.
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 
 #include "jpdfium_api.h"
 #include "objects/objects.h"
 #include "output/image_writer.h"
+#include "rectify.h"
 #include "runtime/api_status.h"
 
 namespace {
+
+// Same ceiling as rendering: 256 MiP.
+constexpr uint64_t kDefaultMaxPixels = 268435456ull;
 
 jpdf_status resolve_bitmap(jpdf_handle bitmap, std::shared_ptr<jpdf::BitmapObject>* out) {
     jpdf_status st = jpdf::objects().resolve_as(bitmap, jpdf::ObjectType::Bitmap, out);
@@ -100,6 +105,71 @@ jpdf_status jpdf_bitmap_write_file(jpdf_handle bitmap, const char* path_utf8,
         std::shared_ptr<jpdf::BitmapObject> object;
         if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
         return jpdf::write_image_file(*object->pixels, path_utf8, request);
+    });
+}
+
+jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
+                                const jpdf_rectify_options* options, jpdf_handle* out_bitmap,
+                                jpdf_rectify_result* out_result) noexcept {
+    return jpdf::guarded([&] {
+        if (!quad || !out_bitmap) return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "null argument");
+        jpdf_status st = JPDF_OK;
+        if (out_result &&
+            (st = jpdf::check_output_struct(out_result->struct_size, sizeof(jpdf_rectify_result),
+                                            "jpdf_rectify_result")) != JPDF_OK) {
+            return st;
+        }
+        jpdf_rectify_options o{};
+        o.struct_size = sizeof(o);
+        o.interpolation = JPDF_INTERP_BILINEAR;
+        if (options) {
+            st = jpdf::check_input_struct(options, options->struct_size,
+                                          sizeof(jpdf_rectify_options),
+                                          sizeof(jpdf_rectify_options), "jpdf_rectify_options");
+            if (st != JPDF_OK) return st;
+            o = *options;
+        }
+        if (o.flags != 0) return jpdf::fail(JPDF_E_UNSUPPORTED, "rectify flags must be 0");
+        if (o.interpolation < JPDF_INTERP_NEAREST || o.interpolation > JPDF_INTERP_BICUBIC ||
+            (o.border != JPDF_BORDER_WHITE && o.border != JPDF_BORDER_REPLICATE)) {
+            return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "unknown interpolation or border mode");
+        }
+        if (o.width < 0 || o.height < 0 || (o.width == 0) != (o.height == 0)) {
+            return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "width and height must both be set or 0");
+        }
+        std::shared_ptr<jpdf::BitmapObject> object;
+        if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
+
+        jpdf::Quad ordered{};
+        if ((st = jpdf::normalize_quad(quad, &ordered)) != JPDF_OK) return st;
+        int32_t width = o.width, height = o.height;
+        if (width == 0) jpdf::derived_size(ordered, &width, &height);
+        const uint64_t budget = o.max_pixels == 0 ? kDefaultMaxPixels : o.max_pixels;
+        if (static_cast<uint64_t>(width) * static_cast<uint64_t>(height) > budget) {
+            return jpdf::fail(JPDF_E_LIMIT, "rectified size exceeds the pixel budget");
+        }
+        jpdf::Homography to_source{};
+        if ((st = jpdf::solve_homography(ordered, width, height, &to_source)) != JPDF_OK) {
+            return st;
+        }
+        auto pixels = std::make_shared<jpdf::PixelStorage>();
+        if ((st = jpdf::warp(*object->pixels, to_source, width, height, o.interpolation, o.border,
+                             pixels.get())) != JPDF_OK) {
+            return st;
+        }
+        jpdf_handle token = 0;
+        st =
+            jpdf::objects().insert(std::make_shared<jpdf::BitmapObject>(std::move(pixels)), &token);
+        if (st != JPDF_OK) return jpdf::fail(st, "object table rejected the bitmap");
+        *out_bitmap = token;
+        if (out_result) {
+            out_result->width = width;
+            out_result->height = height;
+            out_result->reserved0 = 0;
+            std::copy(ordered.begin(), ordered.end(), out_result->quad);
+            std::copy(to_source.begin(), to_source.end(), out_result->to_source);
+        }
+        return JPDF_OK;
     });
 }
 

@@ -16,7 +16,9 @@
 | `image.png_write` | implemented |
 | `output.transaction` | implemented |
 | `legacy.guards` | implemented |
+| `pdf.raster` | implemented; matches the OCRmyPDF reference on linux-x64 ([RASTER.md](RASTER.md)) |
+| `image.rectify` | implemented |
 
 Reserved names, absent until their phase lands: `fonts.shape_explicit`, `fonts.subset`,
-`image.rectify`, `ocr.recognize`, `ocr.word_geometry`, `text_layer.write`, `pdf.optimize`,
+`ocr.recognize`, `ocr.word_geometry`, `text_layer.write`, `pdf.optimize`,
 `svg.render`. Unknown names report absent.

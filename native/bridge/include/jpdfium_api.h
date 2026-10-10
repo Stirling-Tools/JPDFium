@@ -22,7 +22,7 @@ extern "C" {
 
 // API version: a binding requires an equal major and a minor >= the one it was compiled against.
 #define JPDF_API_VERSION_MAJOR 1
-#define JPDF_API_VERSION_MINOR 0
+#define JPDF_API_VERSION_MINOR 1
 
 typedef int32_t jpdf_status;
 // Opaque generation-checked token; 0 is never valid. The bit layout is private.
@@ -78,6 +78,10 @@ typedef uint64_t jpdf_handle;
 #define JPDF_STRUCT_BITMAP_INFO 6
 #define JPDF_STRUCT_BITMAP_VIEW 7
 #define JPDF_STRUCT_WRITE_OPTIONS 8
+#define JPDF_STRUCT_RASTER_OPTIONS 9
+#define JPDF_STRUCT_RASTER_RESULT 10
+#define JPDF_STRUCT_RECTIFY_OPTIONS 11
+#define JPDF_STRUCT_RECTIFY_RESULT 12
 
 typedef struct jpdf_runtime_options {
     uint32_t struct_size;
@@ -182,6 +186,67 @@ typedef struct jpdf_write_options {
     uint64_t max_bytes;       // 0 = unlimited
 } jpdf_write_options;
 
+// Raster devices for jpdf_rasterize_page_file, named after the Ghostscript devices OCRmyPDF uses.
+#define JPDF_RASTER_MONO 1       // pngmono: 1-bit, Floyd-Steinberg from a gray render
+#define JPDF_RASTER_MONOD 2      // pngmonod: same pixels as MONO
+#define JPDF_RASTER_GRAY 3       // pnggray
+#define JPDF_RASTER_INDEXED 4    // png256: written as 24-bit RGB, no palette quantization
+#define JPDF_RASTER_RGB 5        // png16m
+#define JPDF_RASTER_RGB_ALPHA 6  // pngalpha: opaque white background, so written as RGB
+
+// Render the CropBox instead of expanding it to the MediaBox.
+#define JPDF_RASTER_USE_CROPBOX 0x0001u
+// Ghostscript -dFILTERVECTOR; not implemented, so setting it is JPDF_E_UNSUPPORTED.
+#define JPDF_RASTER_FILTER_VECTOR 0x0002u
+
+typedef struct jpdf_raster_options {
+    uint32_t struct_size;
+    uint32_t flags;  // JPDF_RASTER_* flags
+    double raster_dpi_x;
+    double raster_dpi_y;
+    double output_dpi_x;  // DPI written to the file; 0 uses the raster DPI
+    double output_dpi_y;
+    int32_t rotation_ccw;  // 0, 90, 180 or 270, applied on top of the page's /Rotate
+    int32_t device;        // JPDF_RASTER_MONO ... JPDF_RASTER_RGB_ALPHA
+    uint64_t max_pixels;   // 0 selects the library budget
+    const char* password;  // may be NULL
+} jpdf_raster_options;
+
+typedef struct jpdf_raster_result {
+    uint32_t struct_size;
+    int32_t width;
+    int32_t height;
+    int32_t bits_per_pixel;  // 1, 8 or 24
+    double dpi_x;            // as written to the file
+    double dpi_y;
+} jpdf_raster_result;
+
+#define JPDF_INTERP_NEAREST 0
+#define JPDF_INTERP_BILINEAR 1
+#define JPDF_INTERP_BICUBIC 2  // OpenCV INTER_CUBIC kernel (a = -0.75)
+
+#define JPDF_BORDER_WHITE 0      // samples outside the source are white (transparent for RGBA)
+#define JPDF_BORDER_REPLICATE 1  // clamp to the nearest edge pixel
+
+typedef struct jpdf_rectify_options {
+    uint32_t struct_size;
+    uint32_t flags;  // reserved, must be 0
+    int32_t width;   // output size; 0 derives it from the quad's longer opposite edges
+    int32_t height;
+    int32_t interpolation;
+    int32_t border;
+    uint64_t max_pixels;  // 0 selects the library budget
+} jpdf_rectify_options;
+
+typedef struct jpdf_rectify_result {
+    uint32_t struct_size;
+    int32_t width;
+    int32_t height;
+    int32_t reserved0;
+    double quad[8];  // the input corners reordered top-left, top-right, bottom-right, bottom-left
+    double to_source[9];  // row-major homography mapping output pixel centres to source pixels
+} jpdf_rectify_result;
+
 // --- Identity, errors, capabilities. Callable in every runtime state. ---
 
 // (major << 16) | minor of the loaded library.
@@ -248,6 +313,21 @@ JPDF_API jpdf_status jpdf_bitmap_write_file(jpdf_handle bitmap, const char* path
                                             const jpdf_write_options* options) JPDF_NOEXCEPT;
 // Retires the handle; pixels pinned by views are freed when the last view is released.
 JPDF_API jpdf_status jpdf_bitmap_close(jpdf_handle bitmap) JPDF_NOEXCEPT;
+// Perspective-correct the quad (8 source-pixel coordinates, any corner order) into a new bitmap.
+JPDF_API jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
+                                         const jpdf_rectify_options* options,
+                                         jpdf_handle* out_bitmap,
+                                         jpdf_rectify_result* out_result) JPDF_NOEXCEPT;
+
+// --- Rasterization for OCR pipelines (the OCRmyPDF rasterize_pdf_page contract). ---
+
+// Opens path_utf8, rasterizes page_index (0-based) and publishes a PNG through an output
+// transaction. out_result may be NULL. See docs/design/RASTER.md for the reference contract.
+JPDF_API jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
+                                              const jpdf_raster_options* options,
+                                              const char* output_path_utf8,
+                                              const jpdf_write_options* write,
+                                              jpdf_raster_result* out_result) JPDF_NOEXCEPT;
 
 #ifdef __cplusplus
 }

@@ -23,6 +23,7 @@ constexpr Capability kCapabilities[] = {
     {"runtime.lifecycle", JPDF_CAP_IMPLEMENTED},  {"pdf.open", JPDF_CAP_IMPLEMENTED},
     {"pdf.render", JPDF_CAP_IMPLEMENTED},         {"image.png_write", JPDF_CAP_IMPLEMENTED},
     {"output.transaction", JPDF_CAP_IMPLEMENTED}, {"legacy.guards", JPDF_CAP_IMPLEMENTED},
+    {"pdf.raster", JPDF_CAP_IMPLEMENTED},         {"image.rectify", JPDF_CAP_IMPLEMENTED},
 };
 
 }  // namespace
@@ -51,6 +52,14 @@ int64_t jpdf_abi_struct_size(int32_t struct_id) noexcept {
             return sizeof(jpdf_bitmap_view);
         case JPDF_STRUCT_WRITE_OPTIONS:
             return sizeof(jpdf_write_options);
+        case JPDF_STRUCT_RASTER_OPTIONS:
+            return sizeof(jpdf_raster_options);
+        case JPDF_STRUCT_RASTER_RESULT:
+            return sizeof(jpdf_raster_result);
+        case JPDF_STRUCT_RECTIFY_OPTIONS:
+            return sizeof(jpdf_rectify_options);
+        case JPDF_STRUCT_RECTIFY_RESULT:
+            return sizeof(jpdf_rectify_result);
         default:
             return -1;
     }

@@ -236,7 +236,10 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/legacy/guards_pdfium.cpp
         bridge/src/pdf/api_document.cpp
         bridge/src/pdf/api_render.cpp
+        bridge/src/pdf/api_raster.cpp
         bridge/src/images/pixels.cpp
+        bridge/src/images/dither.cpp
+        bridge/src/images/rectify.cpp
         bridge/src/images/api_bitmap.cpp
         bridge/src/output/output_transaction.cpp
         bridge/src/output/image_writer.cpp)
@@ -711,6 +714,16 @@ if(JPDFIUM_BUILD_TESTS)
         endif()
         target_link_libraries(api_guards PRIVATE jpdfium)
         add_test(NAME api_guards COMMAND api_guards)
+
+        add_executable(api_raster bridge/tests/api_raster.cpp)
+        target_include_directories(api_raster PRIVATE bridge/include)
+        if(MSVC)
+            target_compile_options(api_raster PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_raster PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_raster PRIVATE jpdfium)
+        add_test(NAME api_raster COMMAND api_raster)
     endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
@@ -745,7 +758,8 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety api_guards PROPERTIES ENVIRONMENT "${_jpdfium_test_env}")
+            set_tests_properties(api_safety api_guards api_raster PROPERTIES
+                ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs

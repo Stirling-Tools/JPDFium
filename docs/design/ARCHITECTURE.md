@@ -51,5 +51,5 @@ In: lazy Python loading, safe document/page/bitmap handles, one native PDFium do
 and close-race tests, stale-handle rejection, transactional render output, the Java migration
 map. Out: OCR, text-layer writing, OCRmyPDF, broader bindings, optimization, IPC.
 
-Related: [NATIVE_ABI.md](NATIVE_ABI.md), [LIFETIME.md](LIFETIME.md),
+Related: [RASTER.md](RASTER.md), [NATIVE_ABI.md](NATIVE_ABI.md), [LIFETIME.md](LIFETIME.md),
 [CALLBACKS.md](CALLBACKS.md), [CAPABILITIES.md](CAPABILITIES.md), [TESTING.md](TESTING.md).
