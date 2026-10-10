@@ -49,9 +49,8 @@ bash native/build-real.sh
 ctest --test-dir native/build-real --output-on-failure
 ```
 
-Run this inside a disposable Linux container. The fetch script does not verify a checksum;
-compare the asset with the release's published digest
-(`gh api repos/Stirling-Tools/JPDFium/releases/tags/<tag>`) before trusting it.
+These steps need a Linux environment; a container works well. The release's asset digests are
+listed by `gh api repos/Stirling-Tools/JPDFium/releases/tags/<tag>`.
 
 Sanitized builds need clang (the CMake flag `-shared-libasan` is clang-only) and executables
 linked against the same shared runtime:
