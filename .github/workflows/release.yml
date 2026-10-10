@@ -123,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@a78ec39f1243adc9be41d35a49593a4c665a604c # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         # The musl legs build + smoke inside an Alpine container which ships its
         # own musl JDK - a glibc host JDK is neither needed nor usable there.
         if: matrix.libc != 'musl'
@@ -551,7 +551,7 @@ jobs:
         if: matrix.platform == 'darwin-x64'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
 
-      - uses: graalvm/setup-graalvm@0426e2e191540e8514dff98dc52a5f5146a2a276 # v1.6.6
+      - uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
         with:
           java-version: '25'
           distribution: 'graalvm'
@@ -620,7 +620,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: actions/setup-java@a78ec39f1243adc9be41d35a49593a4c665a604c # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
@@ -811,7 +811,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@a78ec39f1243adc9be41d35a49593a4c665a604c # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
@@ -938,7 +938,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@a78ec39f1243adc9be41d35a49593a4c665a604c # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
@@ -984,7 +984,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@a78ec39f1243adc9be41d35a49593a4c665a604c # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
