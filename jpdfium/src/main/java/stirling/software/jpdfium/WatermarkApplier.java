@@ -65,6 +65,7 @@ public final class WatermarkApplier {
                 case TEXT -> applyTextWatermark(rawDoc, rawPage, size, watermark);
                 case IMAGE -> applyImageWatermark(rawDoc, rawPage, size, watermark);
             }
+            doc.markContentModified();
         }
     }
 

@@ -232,6 +232,9 @@ public final class PdfFormFiller {
         }
 
         int flattenedPages = flattenTouchedPages(pagesToFlatten);
+        if (!filledList.isEmpty()) {
+            document.markContentModified();
+        }
         return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages);
     }
 

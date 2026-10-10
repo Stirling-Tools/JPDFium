@@ -749,6 +749,7 @@ public final class PdfPage implements AutoCloseable {
     public void redactRegion(Rect rect, int argbColor) {
         ensureOpen();
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -763,11 +764,13 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     public void redactPattern(String regexPattern, int argbColor) {
         ensureOpen();
         JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -780,6 +783,7 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -799,6 +803,7 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactWords(handle, words, argbColor, padding, wholeWord, useRegex, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -822,8 +827,10 @@ public final class PdfPage implements AutoCloseable {
                               boolean caseSensitive) {
         ensureOpen();
         requireContentRemoval(removeContent);
-        return JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
+        int removed = JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
                 wholeWord, useRegex, true, caseSensitive);
+        if (removed > 0) ownerDoc.markContentModified();
+        return removed;
     }
 
     public int redactWordsEx(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
@@ -831,8 +838,10 @@ public final class PdfPage implements AutoCloseable {
                               boolean caseSensitive) {
         ensureOpen();
         requireContentRemoval(removeContent);
-        return JpdfiumLib.redactWordsEx(handle, wordsPtrs, wordCount, argbColor, padding,
+        int removed = JpdfiumLib.redactWordsEx(handle, wordsPtrs, wordCount, argbColor, padding,
                 wholeWord, useRegex, true, caseSensitive);
+        if (removed > 0) ownerDoc.markContentModified();
+        return removed;
     }
 
     /** Non-positive DPI silently flipped transparency natively; reject it here. */
@@ -866,8 +875,10 @@ public final class PdfPage implements AutoCloseable {
      */
     public int markRedactRegion(Rect rect, int argbColor) {
         ensureOpen();
-        return JpdfiumLib.annotCreateRedact(handle, rect.x(), rect.y(),
+        int annotIndex = JpdfiumLib.annotCreateRedact(handle, rect.x(), rect.y(),
                 rect.width(), rect.height(), argbColor);
+        ownerDoc.markContentModified();
+        return annotIndex;
     }
 
     /**
@@ -886,16 +897,20 @@ public final class PdfPage implements AutoCloseable {
                                 boolean wholeWord, boolean useRegex,
                                 boolean caseSensitive) {
         ensureOpen();
-        return JpdfiumLib.redactMarkWords(handle, words, padding,
+        int created = JpdfiumLib.redactMarkWords(handle, words, padding,
                 wholeWord, useRegex, caseSensitive, argbColor);
+        ownerDoc.markContentModified();
+        return created;
     }
 
     public int markRedactWords(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
                                 boolean wholeWord, boolean useRegex,
                                 boolean caseSensitive) {
         ensureOpen();
-        return JpdfiumLib.redactMarkWords(handle, wordsPtrs, wordCount, padding,
+        int created = JpdfiumLib.redactMarkWords(handle, wordsPtrs, wordCount, padding,
                 wholeWord, useRegex, caseSensitive, argbColor);
+        ownerDoc.markContentModified();
+        return created;
     }
 
     /**
@@ -923,6 +938,7 @@ public final class PdfPage implements AutoCloseable {
     public void unmarkRedaction(int annotIndex) {
         ensureOpen();
         JpdfiumLib.annotRemoveRedact(handle, annotIndex);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -931,6 +947,7 @@ public final class PdfPage implements AutoCloseable {
     public void clearPendingRedactions() {
         ensureOpen();
         JpdfiumLib.annotClearRedacts(handle);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -953,7 +970,9 @@ public final class PdfPage implements AutoCloseable {
     public int commitRedactions(int argbColor, boolean removeContent) {
         ensureOpen();
         requireContentRemoval(removeContent);
-        return JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        int committed = JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        if (committed > 0) ownerDoc.markContentModified();
+        return committed;
     }
 
     /**

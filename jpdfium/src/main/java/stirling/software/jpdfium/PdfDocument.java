@@ -82,6 +82,9 @@ public final class PdfDocument implements AutoCloseable {
      */
     private final AtomicInteger contentGeneration = new AtomicInteger(0);
 
+    /** Set once on the first content edit; survives handle reloads, unlike {@link #contentGeneration}. */
+    private volatile boolean contentModified;
+
     /**
      * Temporary file this document owns, deleted on {@link #close()}.
      *
@@ -154,9 +157,15 @@ public final class PdfDocument implements AutoCloseable {
         return contentGeneration.get();
     }
 
-    /** Records a successful content mutation so retained open-time bytes are not reused. */
-    void markContentModified() {
+    /** True once an edit changed the content; not bumped by handle reloads, so it flags real caller edits. */
+    public boolean isContentModified() {
+        return contentModified;
+    }
+
+    /** Records a content mutation so retained open-time bytes are not reused. */
+    public void markContentModified() {
         contentGeneration.incrementAndGet();
+        contentModified = true;
     }
 
     /**

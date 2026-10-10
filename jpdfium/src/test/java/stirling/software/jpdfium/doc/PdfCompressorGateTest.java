@@ -4,10 +4,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.Watermark;
+import stirling.software.jpdfium.WatermarkApplier;
 
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -104,6 +107,43 @@ class PdfCompressorGateTest {
                     "EXACT must not remove metadata");
             assertTrue(out.result().actions().stream().noneMatch(a -> a.startsWith("Native:")),
                     "no native image action under EXACT: " + out.result().actions());
+        }
+    }
+
+    @Test
+    void editedDocumentIsNotReplacedByTheOpenTimeBytes() throws Exception {
+        // Open, edit (watermark), compress: the watermark must survive even when
+        // the watermarked serialization is larger than the opened file.
+        Path src = resource("/pdfs/general/minimal.pdf");
+        byte[] original = Files.readAllBytes(src);
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            WatermarkApplier.apply(doc, Watermark.text("CONFIDENTIAL").build());
+            assertTrue(doc.isContentModified(),
+                    "applying a watermark must flag the document as modified");
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+            assertFalse(Arrays.equals(original, out.bytes()),
+                    "compressing an edited document must not return the open-time bytes");
+        }
+    }
+
+    @Test
+    void editedSignedDocumentIsSerializedInsteadOfReturnedVerbatim() throws Exception {
+        Path src = resource("/pdfs/general/irs_f1040.pdf");
+        byte[] original = Files.readAllBytes(src);
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            WatermarkApplier.apply(doc, Watermark.text("CONFIDENTIAL").build());
+            assertTrue(doc.isContentModified(),
+                    "applying a watermark must flag the signed document as modified");
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+            assertFalse(Arrays.equals(original, out.bytes()),
+                    "an edited signed document must be serialized, not returned verbatim");
+            assertTrue(
+                    out.result().warnings().stream()
+                            .anyMatch(w -> w.contains("modified after it was opened")),
+                    "the signature warning must explain the document was edited: "
+                            + out.result().warnings());
         }
     }
 }
