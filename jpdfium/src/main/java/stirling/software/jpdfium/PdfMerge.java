@@ -408,7 +408,7 @@ public final class PdfMerge {
             Path tmp = options.createTempFile("jpdfium-merge-bm", ".pdf");
             boolean done = false;
             try {
-                PdfBookmarkEditor.setBookmarks(merged, bookmarks, tmp);
+                PdfBookmarkEditor.setBookmarks(merged, bookmarks, tmp, false);
                 PdfDocument owned = PdfDocument.openTemp(tmp);
                 done = true;
                 return owned;
