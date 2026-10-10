@@ -281,6 +281,11 @@ int32_t renderIntoBuffer(FPDF_PAGE page, FPDF_FORMHANDLE form, uint8_t* target,
 
 }  // namespace
 
+int32_t jpdfium_render_into_buffer(FPDF_PAGE page, uint8_t* target, uint64_t target_capacity,
+                                   int32_t width, int32_t height, int32_t stride, int32_t flags) {
+    return renderIntoBuffer(page, nullptr, target, target_capacity, width, height, stride, flags);
+}
+
 int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint8_t** rgba,
                                   int32_t* width, int32_t* height) JPDFIUM_NOEXCEPT {
     PageWrapper* pw = decodePage(page);

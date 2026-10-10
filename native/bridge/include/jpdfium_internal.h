@@ -374,6 +374,18 @@ extern bool g_jpdfiumUseSkia;
 // JPDFIUM_ERR_INVALID when Skia is requested from a non-Skia build.
 int jpdfium_init_library(int renderer);
 
+// Which serializer owns PDFium in this process; the first claim wins for the process lifetime.
+enum class PdfiumAuthority : int { None = 0, Legacy = 1, Safe = 2 };
+bool jpdfium_claim_authority(PdfiumAuthority who) noexcept;
+
+// FPDF_InitLibrary/FPDF_DestroyLibrary without the authority claim; callers serialize.
+int jpdfium_init_pdfium_core(int renderer);
+void jpdfium_destroy_pdfium_core() noexcept;
+
+// renderIntoBuffer for the safe API: same Skia unpremultiply and byte-order handling.
+int32_t jpdfium_render_into_buffer(FPDF_PAGE page, uint8_t* target, uint64_t target_capacity,
+                                   int32_t width, int32_t height, int32_t stride, int32_t flags);
+
 // Initialize once, preserving whatever renderer was already selected.
 void jpdfium_ensure_library();
 

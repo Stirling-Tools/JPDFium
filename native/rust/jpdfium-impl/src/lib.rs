@@ -630,3 +630,192 @@ pub unsafe extern "C" fn jpdfium_rust_free(ptr: *mut u8) {
         libc::free(ptr as *mut libc::c_void);
     }
 }
+
+/// Sink for streamed output: returns 0 to continue, anything else aborts the encode.
+pub type JpdfiumWriteSink =
+    unsafe extern "C" fn(ctx: *mut libc::c_void, data: *const u8, len: usize) -> i32;
+
+const PNG_OK: i32 = 0;
+const PNG_ERR_INVALID: i32 = -1;
+const PNG_ERR_SINK: i32 = -2;
+const PNG_ERR_INTERNAL: i32 = -3;
+// IDAT payload per chunk; bounds the encoder's buffering independently of image size.
+const PNG_IDAT_CHUNK: usize = 256 * 1024;
+
+struct SinkWriter {
+    sink: JpdfiumWriteSink,
+    ctx: *mut libc::c_void,
+    aborted: bool,
+}
+
+impl SinkWriter {
+    fn emit(&mut self, data: &[u8]) -> std::io::Result<()> {
+        if self.aborted || unsafe { (self.sink)(self.ctx, data.as_ptr(), data.len()) } != 0 {
+            self.aborted = true;
+            return Err(std::io::Error::other("sink aborted"));
+        }
+        Ok(())
+    }
+
+    fn chunk(&mut self, kind: &[u8; 4], payload: &[u8]) -> std::io::Result<()> {
+        let mut crc = flate2::Crc::new();
+        crc.update(kind);
+        crc.update(payload);
+        self.emit(&(payload.len() as u32).to_be_bytes())?;
+        self.emit(kind)?;
+        self.emit(payload)?;
+        self.emit(&crc.sum().to_be_bytes())
+    }
+}
+
+/// Buffers compressed bytes and flushes them to the sink as bounded IDAT chunks.
+struct IdatWriter<'a> {
+    out: &'a mut SinkWriter,
+    buf: Vec<u8>,
+}
+
+impl std::io::Write for IdatWriter<'_> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(data);
+        while self.buf.len() >= PNG_IDAT_CHUNK {
+            let rest = self.buf.split_off(PNG_IDAT_CHUNK);
+            self.out.chunk(b"IDAT", &self.buf)?;
+            self.buf = rest;
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if !self.buf.is_empty() {
+            self.out.chunk(b"IDAT", &self.buf)?;
+            self.buf.clear();
+        }
+        Ok(())
+    }
+}
+
+fn paeth(a: u8, b: u8, c: u8) -> u8 {
+    let p = a as i16 + b as i16 - c as i16;
+    let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+    if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
+}
+
+/// Filters one row with each PNG filter and keeps the smallest absolute sum (libpng's heuristic).
+fn filter_row(row: &[u8], prev: &[u8], bpp: usize, out: &mut Vec<u8>, scratch: &mut [Vec<u8>; 5]) {
+    for (kind, dst) in scratch.iter_mut().enumerate() {
+        dst.clear();
+        for i in 0..row.len() {
+            let a = if i >= bpp { row[i - bpp] } else { 0 };
+            let b = prev[i];
+            let c = if i >= bpp { prev[i - bpp] } else { 0 };
+            let predicted = match kind {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => ((a as u16 + b as u16) / 2) as u8,
+                _ => paeth(a, b, c),
+            };
+            dst.push(row[i].wrapping_sub(predicted));
+        }
+    }
+    let cost = |v: &Vec<u8>| v.iter().map(|&x| (x as i8).unsigned_abs() as u64).sum::<u64>();
+    let best = (0..5).min_by_key(|&k| cost(&scratch[k])).unwrap_or(0);
+    out.push(best as u8);
+    out.extend_from_slice(&scratch[best]);
+}
+
+fn encode_png(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+    channels: usize,
+    ppm: (u32, u32),
+    level: u32,
+    out: &mut SinkWriter,
+) -> std::io::Result<()> {
+    out.emit(b"\x89PNG\r\n\x1a\n")?;
+    let color_type: u8 = match channels {
+        1 => 0,
+        3 => 2,
+        _ => 6,
+    };
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&(width as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(height as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, color_type, 0, 0, 0]);
+    out.chunk(b"IHDR", &ihdr)?;
+    if ppm.0 > 0 && ppm.1 > 0 {
+        let mut phys = Vec::with_capacity(9);
+        phys.extend_from_slice(&ppm.0.to_be_bytes());
+        phys.extend_from_slice(&ppm.1.to_be_bytes());
+        phys.push(1);
+        out.chunk(b"pHYs", &phys)?;
+    }
+    let row_len = width * channels;
+    let zero_row = vec![0u8; row_len];
+    let mut filtered = Vec::with_capacity(row_len + 1);
+    let mut scratch: [Vec<u8>; 5] = Default::default();
+    let mut encoder = flate2::write::ZlibEncoder::new(
+        IdatWriter { out: &mut *out, buf: Vec::with_capacity(PNG_IDAT_CHUNK) },
+        flate2::Compression::new(level),
+    );
+    for y in 0..height {
+        let row = &pixels[y * stride..y * stride + row_len];
+        let prev = if y == 0 { &zero_row[..] } else { &pixels[(y - 1) * stride..(y - 1) * stride + row_len] };
+        filtered.clear();
+        filter_row(row, prev, channels, &mut filtered, &mut scratch);
+        std::io::Write::write_all(&mut encoder, &filtered)?;
+    }
+    let mut idat = encoder.finish()?;
+    std::io::Write::flush(&mut idat)?;
+    out.chunk(b"IEND", &[])
+}
+
+/// Streams 8-bit gray (1), RGB (3) or straight RGBA (4) pixels as PNG through `sink`.
+///
+/// `ppm_x`/`ppm_y` > 0 add a pHYs chunk. Returns 0, -1 invalid args, -2 sink abort, -3 internal.
+///
+/// # Safety
+/// `pixels` must hold `stride * height` readable bytes; `sink` must be a valid callback.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_write_png(
+    pixels: *const u8,
+    width: i32,
+    height: i32,
+    stride: i32,
+    channels: i32,
+    ppm_x: u32,
+    ppm_y: u32,
+    compression: i32,
+    sink: Option<JpdfiumWriteSink>,
+    ctx: *mut libc::c_void,
+) -> i32 {
+    let Some(sink) = sink else { return PNG_ERR_INVALID };
+    if pixels.is_null() || width <= 0 || height <= 0 || !matches!(channels, 1 | 3 | 4) {
+        return PNG_ERR_INVALID;
+    }
+    let (w, h, s, ch) = (width as usize, height as usize, stride as usize, channels as usize);
+    let Some(row_len) = w.checked_mul(ch) else { return PNG_ERR_INVALID };
+    if stride <= 0 || s < row_len {
+        return PNG_ERR_INVALID;
+    }
+    let Some(total) = s.checked_mul(h) else { return PNG_ERR_INVALID };
+    let level = if (0..=9).contains(&compression) { compression as u32 } else { 6 };
+    let data = slice::from_raw_parts(pixels, total);
+    let mut out = SinkWriter { sink, ctx, aborted: false };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_png(data, w, h, s, ch, (ppm_x, ppm_y), level, &mut out)
+    }));
+    match result {
+        Ok(Ok(())) => PNG_OK,
+        Ok(Err(_)) if out.aborted => PNG_ERR_SINK,
+        _ => PNG_ERR_INTERNAL,
+    }
+}

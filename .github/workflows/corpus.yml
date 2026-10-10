@@ -132,6 +132,10 @@ jobs:
       - name: Build real bridge
         run: bash native/build-real.sh
 
+      # The only CI job with real PDFium: run the native suites, including the safe jpdf_* API.
+      - name: Native tests (real PDFium)
+        run: ctest --test-dir native/build-real --output-on-failure
+
       - name: Stage natives
         run: |
           mkdir -p native/dist/linux-x64

@@ -1,0 +1,87 @@
+// image_writer.cpp - PNG output through the Rust encoder and an OutputTransaction.
+
+#include "image_writer.h"
+
+#include <cmath>
+#include <cstddef>
+#include <memory>
+
+#include "output_transaction.h"
+#include "runtime/api_status.h"
+
+extern "C" {
+typedef int32_t (*jpdfium_write_sink)(void* ctx, const uint8_t* data, size_t len);
+int32_t jpdfium_rust_write_png(const uint8_t* pixels, int32_t width, int32_t height, int32_t stride,
+                               int32_t channels, uint32_t ppm_x, uint32_t ppm_y,
+                               int32_t compression, jpdfium_write_sink sink, void* ctx);
+}
+
+namespace jpdf {
+
+namespace {
+
+struct SinkContext {
+    OutputTransaction* tx;
+    jpdf_status status;
+};
+
+int32_t transaction_sink(void* ctx, const uint8_t* data, size_t len) noexcept {
+    auto* sink = static_cast<SinkContext*>(ctx);
+    sink->status = sink->tx->write(data, len);
+    return sink->status == JPDF_OK ? 0 : 1;
+}
+
+uint32_t pixels_per_meter(double dpi) noexcept {
+    if (!std::isfinite(dpi) || dpi <= 0 || dpi > 1e6) return 0;
+    return static_cast<uint32_t>(std::lround(dpi / 0.0254));
+}
+
+}  // namespace
+
+jpdf_status parse_write_options(const jpdf_write_options* options, WriteRequest* out) noexcept {
+    *out = WriteRequest{};
+    if (!options) return JPDF_OK;
+    jpdf_status st = check_input_struct(options, options->struct_size, sizeof(jpdf_write_options),
+                                        sizeof(jpdf_write_options), "jpdf_write_options");
+    if (st != JPDF_OK) return st;
+    if ((options->flags & ~JPDF_WRITE_DURABLE) != 0) {
+        return fail(JPDF_E_UNSUPPORTED, "unknown jpdf_write_options.flags bits");
+    }
+    if (options->image_format != JPDF_IMAGE_PNG) {
+        return fail(JPDF_E_UNSUPPORTED, "only JPDF_IMAGE_PNG output is implemented");
+    }
+    if (options->png_compression < -1 || options->png_compression > 9) {
+        return fail(JPDF_E_INVALID_ARGUMENT, "png_compression must be -1 or 0-9");
+    }
+    out->durable = (options->flags & JPDF_WRITE_DURABLE) != 0;
+    out->image_format = options->image_format;
+    out->png_compression = options->png_compression < 0 ? 6 : options->png_compression;
+    out->max_bytes = options->max_bytes;
+    return JPDF_OK;
+}
+
+jpdf_status write_image_file(const PixelStorage& pixels, const char* path_utf8,
+                             const WriteRequest& request) noexcept {
+    const int32_t channels = channels_for(pixels.pixel_format);
+    if (channels == 0 || !pixels.data) return fail(JPDF_E_INTERNAL, "bitmap has no pixels");
+
+    std::unique_ptr<OutputTransaction> tx;
+    jpdf_status st = OutputTransaction::begin(path_utf8, request.durable, request.max_bytes, &tx);
+    if (st != JPDF_OK) return st;
+
+    SinkContext sink{tx.get(), JPDF_OK};
+    const int32_t rc = jpdfium_rust_write_png(
+        pixels.data.get(), pixels.width, pixels.height, pixels.stride, channels,
+        pixels_per_meter(pixels.dpi_x), pixels_per_meter(pixels.dpi_y), request.png_compression,
+        transaction_sink, &sink);
+    if (rc != 0) {
+        // The sink already recorded why it stopped (I/O or max_bytes); keep that cause.
+        if (sink.status != JPDF_OK) return sink.status;
+        return fail(JPDF_E_INTERNAL, "PNG encoder failed");
+    }
+    if ((st = tx->finalize()) != JPDF_OK) return st;
+    if ((st = tx->validate()) != JPDF_OK) return st;
+    return tx->publish();
+}
+
+}  // namespace jpdf

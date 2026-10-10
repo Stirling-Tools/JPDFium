@@ -202,10 +202,35 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
         bridge/src/jpdfium_openjpeg.cpp
-        bridge/src/jpdfium_signature.cpp)
+        bridge/src/jpdfium_signature.cpp
+        # Safe jpdf_* API (jpdfium_api.h): native domain, generation-checked handles.
+        bridge/src/runtime/api_status.cpp
+        bridge/src/runtime/domain.cpp
+        bridge/src/runtime/api_runtime.cpp
+        bridge/src/objects/objects.cpp
+        bridge/src/pdf/api_document.cpp
+        bridge/src/pdf/api_render.cpp
+        bridge/src/images/pixels.cpp
+        bridge/src/images/api_bitmap.cpp
+        bridge/src/output/output_transaction.cpp
+        bridge/src/output/image_writer.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
-        PRIVATE "${PDFIUM_INCLUDE_DIR}")
+        PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
+    # Identity reported by jpdf_runtime_get_info; bindings check it to detect mismatched cores.
+    execute_process(
+        COMMAND git rev-parse --short=12 HEAD
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE _jpdfium_git_rev
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT _jpdfium_git_rev)
+        set(_jpdfium_git_rev "unknown")
+    endif()
+    file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pdfium-")
+    target_compile_definitions(jpdfium PRIVATE
+        JPDF_BUILDING_CORE
+        "JPDFIUM_BUILD_ID=\"jpdfium ${_jpdfium_git_rev} ${JPDFIUM_PLATFORM} ${_jpdfium_pdfium_pin}\"")
     # Warnings-as-errors: the redaction engine is a security boundary - every
     # warning is a potential UB/leak. -Wno-ignored-qualifiers stays (harmless
     # const-qualifier noise from the qpdf headers).
@@ -642,6 +667,26 @@ if(JPDFIUM_BUILD_TESTS)
         target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME registry_cost COMMAND registry_cost)
+
+    # Safe jpdf_* API: the handle table alone, then the full C API against real PDFium.
+    add_executable(api_object_table bridge/tests/api_object_table.cpp)
+    target_include_directories(api_object_table PRIVATE bridge/include bridge/src)
+    if(NOT MSVC)
+        target_compile_options(api_object_table PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_link_libraries(api_object_table PRIVATE pthread)
+    endif()
+    add_test(NAME api_object_table COMMAND api_object_table)
+    if(JPDFIUM_USE_PDFIUM)
+        add_executable(api_safety bridge/tests/api_safety.cpp)
+        target_include_directories(api_safety PRIVATE bridge/include)
+        if(MSVC)
+            target_compile_options(api_safety PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_safety PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_safety PRIVATE jpdfium)
+        add_test(NAME api_safety COMMAND api_safety)
+    endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
     # assignment, which previously cost the component-build library path as soon
@@ -674,6 +719,9 @@ if(JPDFIUM_BUILD_TESTS)
     if(NOT _jpdfium_test_env STREQUAL "")
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
+        if(JPDFIUM_USE_PDFIUM)
+            set_tests_properties(api_safety PROPERTIES ENVIRONMENT "${_jpdfium_test_env}")
+        endif()
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs
     # from the build directory, so the path must be anchored at the repo root.

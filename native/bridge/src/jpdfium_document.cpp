@@ -220,9 +220,22 @@ bool g_jpdfiumUseSkia = false;
 
 namespace {
 bool g_libraryInitialized = false;
+std::atomic<int> g_pdfiumAuthority{static_cast<int>(PdfiumAuthority::None)};
+}  // namespace
+
+bool jpdfium_claim_authority(PdfiumAuthority who) noexcept {
+    int expected = static_cast<int>(PdfiumAuthority::None);
+    if (g_pdfiumAuthority.compare_exchange_strong(expected, static_cast<int>(who))) return true;
+    return expected == static_cast<int>(who);
 }
 
 int jpdfium_init_library(int renderer) {
+    // The safe jpdf_* runtime serializes natively; mixing it with this bridge would mean two locks.
+    if (!jpdfium_claim_authority(PdfiumAuthority::Legacy)) return JPDFIUM_ERR_INVALID;
+    return jpdfium_init_pdfium_core(renderer);
+}
+
+int jpdfium_init_pdfium_core(int renderer) {
     // Re-initialising would reset g_jpdfiumUseSkia while PDFium keeps the
     // renderer it was configured with, so the first selection wins.
     if (g_libraryInitialized) return JPDFIUM_OK;
@@ -312,6 +325,10 @@ int32_t jpdfium_active_renderer() noexcept {
 }
 
 void jpdfium_destroy() noexcept {
+    jpdfium_destroy_pdfium_core();
+}
+
+void jpdfium_destroy_pdfium_core() noexcept {
     FPDF_DestroyLibrary();
     g_libraryInitialized = false;
     g_jpdfiumUseSkia = false;
