@@ -144,6 +144,7 @@ public final class PdfSplit {
             List<PdfDocument> results = new ArrayList<>(ranges.size());
             try {
                 List<Bookmark> sourceBookmarks = doc.bookmarks();
+                boolean snapshotRefused = false;
                 for (int[] range : ranges) {
                     if (doc.structureEpoch() != epoch) {
                         throw new JPDFiumException(
@@ -158,10 +159,24 @@ public final class PdfSplit {
                     List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
                             : filterBookmarksForRange(sourceBookmarks, range[0], range[1]);
                     COUNTERS.sourceLoads.incrementAndGet();
-                    PdfDocument part = extractToTemp(reusable, idx, remapped, options);
+                    FileExtract extracted = snapshotRefused
+                            ? FileExtract.REFUSED
+                            : extractToTemp(reusable, idx, remapped, options);
                     COUNTERS.outputWrites.incrementAndGet();
-                    if (part != null) {
-                        results.add(part);
+                    if (extracted.part() != null) {
+                        results.add(extracted.part());
+                        continue;
+                    }
+                    if (extracted.rejected()) {
+                        // A refused snapshot stays refused, so stop re-feeding it and
+                        // import from the live document instead.
+                        if (extracted.refused()) {
+                            snapshotRefused = true;
+                        }
+                        if (options.mode() == StorageOptions.Mode.FILE) {
+                            throw new JPDFiumException("file-backed extract failed");
+                        }
+                        results.add(importRange(doc, range[0], range[1], remapped, options));
                         continue;
                     }
                     results.add(extractPageRange(doc, range[0], range[1], options));
@@ -211,6 +226,8 @@ public final class PdfSplit {
      * Extract specific pages with explicit storage control.
      * FILE mode fails loudly when the native file-backed extract is
      * unavailable or fails; live documents are materialized to temp files.
+     * When qpdf rejects that snapshot (e.g. a password-protected source),
+     * AUTO imports the pages through temp files instead of a heap copy.
      */
     public static PdfDocument extractPages(PdfDocument doc, Set<Integer> indices, StorageOptions options) {
         if (indices.isEmpty()) {
@@ -224,6 +241,7 @@ public final class PdfSplit {
         List<Bookmark> sourceBookmarks = doc.bookmarks();
         List<Bookmark> remappedBookmarks = sourceBookmarks.isEmpty() ? List.of() : filterBookmarksForIndices(sourceBookmarks, sortedIndices);
 
+        boolean rejected = false;
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
             Path materialized = null;
             try {
@@ -231,8 +249,9 @@ public final class PdfSplit {
                 // in-memory edits; serialize the live document first.
                 materialized = options.createTempFile("jpdfium-split-src", ".pdf");
                 doc.saveTo(materialized, SaveOptions.ephemeral());
-                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
-                if (fileDoc != null) return fileDoc;
+                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (extracted.part() != null) return extracted.part();
+                rejected = extracted.rejected();
             } catch (Exception _) {
                 // Fall through to the in-memory paths below
             } finally {
@@ -245,7 +264,9 @@ public final class PdfSplit {
             throw new JPDFiumException("file-backed extract unavailable");
         }
 
-        if (QpdfLib.isExtractSupported()) {
+        // qpdf already refused this document's serialization; feeding it the
+        // same bytes from the heap cannot succeed and copies the whole source.
+        if (!rejected && QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
                 if (!remappedBookmarks.isEmpty()) {
@@ -267,14 +288,7 @@ public final class PdfSplit {
         PdfDocument destinationDoc = createEmptyDocument();
         PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
         PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandle(), pageIndices, 0);
-
-        PdfDocument detachedDoc = detach(destinationDoc);
-        if (!remappedBookmarks.isEmpty()) {
-            byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
-            detachedDoc.close();
-            return PdfDocument.open(bytesWithBookmarks);
-        }
-        return detachedDoc;
+        return detach(destinationDoc, remappedBookmarks, options);
     }
 
     /**
@@ -296,6 +310,8 @@ public final class PdfSplit {
      * Extract a contiguous range with explicit storage control.
      * FILE mode fails loudly when the native file-backed extract is
      * unavailable or fails; live documents are materialized to temp files.
+     * When qpdf rejects that snapshot (e.g. a password-protected source),
+     * AUTO imports the pages through temp files instead of a heap copy.
      */
     public static PdfDocument extractPageRange(PdfDocument doc, int fromPage, int toPage, StorageOptions options) {
         if (fromPage < 0 || toPage < fromPage || toPage >= doc.pageCount()) {
@@ -313,6 +329,7 @@ public final class PdfSplit {
             pageIndices[i] = fromPage + i;
         }
 
+        boolean rejected = false;
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isExtractFileSupported()) {
             Path materialized = null;
             try {
@@ -320,8 +337,9 @@ public final class PdfSplit {
                 // in-memory edits; serialize the live document first.
                 materialized = options.createTempFile("jpdfium-split-src", ".pdf");
                 doc.saveTo(materialized, SaveOptions.ephemeral());
-                PdfDocument fileDoc = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
-                if (fileDoc != null) return fileDoc;
+                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                if (extracted.part() != null) return extracted.part();
+                rejected = extracted.rejected();
             } catch (Exception _) {
                 // Fall through to the in-memory paths below
             } finally {
@@ -334,7 +352,9 @@ public final class PdfSplit {
             throw new JPDFiumException("file-backed extract unavailable");
         }
 
-        if (QpdfLib.isExtractSupported()) {
+        // qpdf already refused this document's serialization; feeding it the
+        // same bytes from the heap cannot succeed and copies the whole source.
+        if (!rejected && QpdfLib.isExtractSupported()) {
             byte[] extractedBytes = QpdfLib.extractPages(doc.saveBytes(), pageIndices);
             if (extractedBytes != null) {
                 if (!remappedBookmarks.isEmpty()) {
@@ -353,19 +373,18 @@ public final class PdfSplit {
             }
         }
 
+        return importRange(doc, fromPage, toPage, remappedBookmarks, options);
+    }
+
+    /** PDFium page import, the last resort when qpdf cannot produce the part. */
+    private static PdfDocument importRange(PdfDocument doc, int fromPage, int toPage,
+                                           List<Bookmark> remappedBookmarks, StorageOptions options) {
         String pageRangeSpec = (fromPage + 1) + "-" + (toPage + 1);
 
         PdfDocument destinationDoc = createEmptyDocument();
         PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
         PdfPageImporter.importPages(destinationDoc.rawHandle(), doc.rawHandle(), pageRangeSpec, 0);
-
-        PdfDocument detachedDoc = detach(destinationDoc);
-        if (!remappedBookmarks.isEmpty()) {
-            byte[] bytesWithBookmarks = PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks);
-            detachedDoc.close();
-            return PdfDocument.open(bytesWithBookmarks);
-        }
-        return detachedDoc;
+        return detach(destinationDoc, remappedBookmarks, options);
     }
 
     /**
@@ -491,17 +510,28 @@ public final class PdfSplit {
     }
 
     /**
+     * Outcome of {@link #extractToTemp}: the part, or why there is none.
+     * {@code rejected} means qpdf itself refused the input or dropped pages,
+     * which a heap retry over the same bytes would repeat.
+     */
+    private record FileExtract(PdfDocument part, boolean rejected, boolean refused) {
+        static final FileExtract FAILED = new FileExtract(null, false, false);
+        static final FileExtract REJECTED = new FileExtract(null, true, false);
+        static final FileExtract REFUSED = new FileExtract(null, true, true);
+    }
+
+    /**
      * File-backed extract shared by the open-document paths: extract to a
      * temp file, apply bookmarks through the file variant, verify, and hand
-     * back a temp-owned document. Null when anything fails (caller falls back).
+     * back a temp-owned document. No part when anything fails (caller falls back).
      */
-    private static PdfDocument extractToTemp(Path input, int[] pageIndices,
+    private static FileExtract extractToTemp(Path input, int[] pageIndices,
                                              List<Bookmark> remappedBookmarks, StorageOptions options) {
         List<Path> cleanup = new ArrayList<>();
         try {
             Path staging = options.createTempFile("jpdfium-split", ".pdf");
             cleanup.add(staging);
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging, false)) return null;
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging, false)) return FileExtract.REFUSED;
             Path result = staging;
             if (!remappedBookmarks.isEmpty()) {
                 Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
@@ -512,12 +542,13 @@ public final class PdfSplit {
                 result = tmpBookmarks;
             }
             try (PdfDocument verify = PdfDocument.open(result)) {
-                if (verify.pageCount() != pageIndices.length) return null;
+                if (verify.pageCount() != pageIndices.length) return FileExtract.REJECTED;
             }
+            PdfDocument part = PdfDocument.openTemp(result);
             cleanup.remove(result);
-            return PdfDocument.openTemp(result);
+            return new FileExtract(part, false, false);
         } catch (Exception _) {
-            return null;
+            return FileExtract.FAILED;
         } finally {
             for (Path leftover : cleanup) {
                 deleteQuietly(leftover);
@@ -562,10 +593,48 @@ public final class PdfSplit {
      * moment the source closes (saving it afterwards crashes the native layer).
      * Save, close and reopen while the source is still open so the returned
      * document is fully standalone and safe to use after the source closes.
+     * Outside MEMORY mode the round trip goes through temp files, not the heap.
      */
-    private static PdfDocument detach(PdfDocument dest) {
+    private static PdfDocument detach(PdfDocument dest, List<Bookmark> remappedBookmarks,
+                                      StorageOptions options) {
         try (dest) {
-            return PdfDocument.open(dest.saveBytes());
+            if (options.mode() != StorageOptions.Mode.MEMORY) {
+                PdfDocument part = detachToTemp(dest, remappedBookmarks, options);
+                if (part != null) return part;
+            }
+            PdfDocument detachedDoc = PdfDocument.open(dest.saveBytes());
+            if (remappedBookmarks.isEmpty()) return detachedDoc;
+            try (detachedDoc) {
+                return PdfDocument.open(PdfBookmarkEditor.setBookmarks(detachedDoc, remappedBookmarks));
+            }
+        }
+    }
+
+    /**
+     * Same save, reopen and bookmark steps as the heap round trip, through
+     * temp files. Null when a temp step fails, so AUTO can still use the heap.
+     */
+    private static PdfDocument detachToTemp(PdfDocument dest, List<Bookmark> remappedBookmarks,
+                                            StorageOptions options) {
+        List<Path> cleanup = new ArrayList<>();
+        try {
+            Path result = options.createTempFile("jpdfium-split-part", ".pdf");
+            cleanup.add(result);
+            if (remappedBookmarks.isEmpty()) {
+                dest.save(result);
+            } else {
+                // setBookmarks writes dest to the path itself, so this needs only one temp.
+                PdfBookmarkEditor.setBookmarks(dest, remappedBookmarks, result, false);
+            }
+            PdfDocument owned = PdfDocument.openTemp(result);
+            cleanup.remove(result);
+            return owned;
+        } catch (Exception _) {
+            return null;
+        } finally {
+            for (Path leftover : cleanup) {
+                deleteQuietly(leftover);
+            }
         }
     }
 
