@@ -144,6 +144,7 @@ public final class PdfSplit {
             List<PdfDocument> results = new ArrayList<>(ranges.size());
             try {
                 List<Bookmark> sourceBookmarks = doc.bookmarks();
+                boolean snapshotRefused = false;
                 for (int[] range : ranges) {
                     if (doc.structureEpoch() != epoch) {
                         throw new JPDFiumException(
@@ -158,15 +159,20 @@ public final class PdfSplit {
                     List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
                             : filterBookmarksForRange(sourceBookmarks, range[0], range[1]);
                     COUNTERS.sourceLoads.incrementAndGet();
-                    FileExtract extracted = extractToTemp(reusable, idx, remapped, options);
+                    FileExtract extracted = snapshotRefused
+                            ? FileExtract.REFUSED
+                            : extractToTemp(reusable, idx, remapped, options);
                     COUNTERS.outputWrites.incrementAndGet();
                     if (extracted.part() != null) {
                         results.add(extracted.part());
                         continue;
                     }
                     if (extracted.rejected() && ownsReusable) {
-                        // qpdf refused the snapshot itself; a per-range retry would
-                        // serialize the whole source again only to be refused again.
+                        // qpdf refused the snapshot once; re-feeding the same bytes
+                        // per range would only be refused again, so skip to the import.
+                        if (extracted.refused()) {
+                            snapshotRefused = true;
+                        }
                         if (options.mode() == StorageOptions.Mode.FILE) {
                             throw new JPDFiumException("file-backed extract failed");
                         }
@@ -508,9 +514,10 @@ public final class PdfSplit {
      * {@code rejected} means qpdf itself refused the input or dropped pages,
      * which a heap retry over the same bytes would repeat.
      */
-    private record FileExtract(PdfDocument part, boolean rejected) {
-        static final FileExtract FAILED = new FileExtract(null, false);
-        static final FileExtract REJECTED = new FileExtract(null, true);
+    private record FileExtract(PdfDocument part, boolean rejected, boolean refused) {
+        static final FileExtract FAILED = new FileExtract(null, false, false);
+        static final FileExtract REJECTED = new FileExtract(null, true, false);
+        static final FileExtract REFUSED = new FileExtract(null, true, true);
     }
 
     /**
@@ -524,7 +531,7 @@ public final class PdfSplit {
         try {
             Path staging = options.createTempFile("jpdfium-split", ".pdf");
             cleanup.add(staging);
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging, false)) return FileExtract.REJECTED;
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staging, false)) return FileExtract.REFUSED;
             Path result = staging;
             if (!remappedBookmarks.isEmpty()) {
                 Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
@@ -539,7 +546,7 @@ public final class PdfSplit {
             }
             PdfDocument part = PdfDocument.openTemp(result);
             cleanup.remove(result);
-            return new FileExtract(part, false);
+            return new FileExtract(part, false, false);
         } catch (Exception _) {
             return FileExtract.FAILED;
         } finally {
@@ -611,17 +618,13 @@ public final class PdfSplit {
                                             StorageOptions options) {
         List<Path> cleanup = new ArrayList<>();
         try {
-            Path saved = options.createTempFile("jpdfium-split-part", ".pdf");
-            cleanup.add(saved);
-            dest.save(saved);
-            Path result = saved;
-            if (!remappedBookmarks.isEmpty()) {
-                Path withBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
-                cleanup.add(withBookmarks);
-                try (PdfDocument part = PdfDocument.open(saved)) {
-                    PdfBookmarkEditor.setBookmarks(part, remappedBookmarks, withBookmarks);
-                }
-                result = withBookmarks;
+            Path result = options.createTempFile("jpdfium-split-part", ".pdf");
+            cleanup.add(result);
+            if (remappedBookmarks.isEmpty()) {
+                dest.save(result);
+            } else {
+                // setBookmarks writes dest to the path itself, so this needs only one temp.
+                PdfBookmarkEditor.setBookmarks(dest, remappedBookmarks, result, false);
             }
             PdfDocument owned = PdfDocument.openTemp(result);
             cleanup.remove(result);
