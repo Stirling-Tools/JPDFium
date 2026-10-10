@@ -95,9 +95,8 @@ public final class PdfCompressor {
             "/SubFilter".getBytes(StandardCharsets.US_ASCII),
     };
 
-    // Every marker needed by the signed/PDF-A decisions, located in ONE forward
-    // sweep of the source instead of one full pass per marker. The marker order
-    // is fixed so the scan can record first offsets by index.
+    // One forward sweep records the first offset of every signed/PDF-A marker,
+    // instead of a full pass per marker.
     private static final int N_PDFA_PART = 0;
     private static final int N_PDFA_PART_ATTR = 1;
     private static final int N_PDFA_CONF = 2;
@@ -111,6 +110,10 @@ public final class PdfCompressor {
     private static final int N_TYPE_SPACE_SIG = 10;
     private static final int N_SUBFILTER = 11;
     private static final int N_NEEDLES = 12;
+
+    // Cap on retained /Metadata offsets: bounds memory on a file that repeats
+    // "/Metadata", while still covering the catalog stream in any real document.
+    private static final int MAX_METADATA_REFS = 256;
 
     private static final byte[][] SCAN_NEEDLES = {
             PDFA_MARKERS[0],
@@ -180,16 +183,19 @@ public final class PdfCompressor {
             originalBytesKnown = false;
         }
 
+        // Snapshot of the live document carrying any in-memory edits, so the size
+        // guarantee can fall back to it without discarding them.
+        byte[] openStateBytes = originalBytesKnown ? doc.saveBytes() : sourceBytes;
+
         // 0. Signed documents are never rewritten: recompression would
         //    invalidate the signature's /ByteRange coverage.
         //    One marker sweep answers both the signed and PDF/A checks.
         Markers markers = scanMarkers(sourceBytes);
         int pdfiumSignatures = signatureCount(doc);
         boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(markers);
-        if (signed && originalBytesKnown && doc.contentGeneration() == 0) {
-            // The true original bytes are available and the document has not
-            // been structurally modified since it was opened, so return them
-            // byte-for-byte.
+        if (signed && originalBytesKnown && !doc.isContentModified()) {
+            // The true original bytes are available and the caller has not edited
+            // the document since it was opened, so return them byte-for-byte.
             String detail = pdfiumSignatures > 0
                     ? "%d digital signature(s)".formatted(pdfiumSignatures)
                     : "a digital signature";
@@ -251,9 +257,8 @@ public final class PdfCompressor {
         int imagesOptimized = 0;
         int expectedPages = doc.pageCount();
 
-        // Bytes carrying every pass applied so far. Passes run on working copies
-        // opened from these bytes, never on the caller's live document, so its open
-        // pages stay valid.
+        // Bytes carrying every pass so far. Passes run on copies opened from these,
+        // never on the caller's live document, so its open pages stay valid.
         byte[] baseBytes = openStateBytes;
 
         // 2. Remove metadata if requested, before serializing.
@@ -406,30 +411,11 @@ public final class PdfCompressor {
             }
         }
 
-        // 7. Monotonic guarantee: never return something larger than the current
-        //    document. The current bytes (not the ones captured at open time) are
-        //    serialized only when the result actually grew, so an in-memory
-        //    watermark or annotation is never silently replaced by stale input.
+        // 7. Monotonic guarantee: never return more than the live document. Fall back
+        //    to the in-memory snapshot, never the open-time bytes, so an edit survives.
         if (resultBytes.length > originalSize) {
-            byte[] current = doc.saveBytes();
-            if (resultBytes.length > current.length) {
-                resultBytes = current;
-                streamsOptimized = false;
-                imagesOptimized = 0;
-                metadataRemoved = 0;
-                actions.clear();
-                warnings.add("compressed output was larger than the input; "
-                        + "returned the document unchanged");
-            }
-        }
-        // Even the freshly serialized document can exceed the input size when
-        // PDFium rewrites a small or already-tight file. Honour the documented
-        // guarantee by falling back to the open-time snapshot when the document
-        // has not been structurally edited; otherwise report the shortfall
-        // instead of silently returning more bytes than the caller supplied.
-        if (resultBytes.length > originalSize && sourceBytes != null) {
-            if (doc.contentGeneration() == 0) {
-                resultBytes = sourceBytes;
+            if (resultBytes.length > openStateBytes.length) {
+                resultBytes = openStateBytes;
                 streamsOptimized = false;
                 imagesOptimized = 0;
                 metadataRemoved = 0;
@@ -437,8 +423,8 @@ public final class PdfCompressor {
                 warnings.add("compressed output was larger than the input; "
                         + "returned the document unchanged");
             } else {
-                warnings.add("compressed output is larger than the input and the document "
-                        + "was modified after opening; the size guarantee does not hold");
+                warnings.add("compressed output is larger than the input; "
+                        + "the size guarantee does not hold for this document");
             }
         }
 
@@ -673,7 +659,7 @@ public final class PdfCompressor {
                     if (first[id] < 0) {
                         first[id] = i;
                     }
-                    if (id == N_METADATA) {
+                    if (id == N_METADATA && metadataCount < MAX_METADATA_REFS) {
                         if (metadataCount == metadata.length) {
                             metadata = Arrays.copyOf(metadata, Math.max(4, metadataCount * 2));
                         }
@@ -760,12 +746,8 @@ public final class PdfCompressor {
         return -1;
     }
 
-    // Renders two documents and returns the worst per-tile mean absolute per-channel
-    // difference across their pages. Used to verify (and roll back) the lossy image
-    // pass. A page-count mismatch fails outright, and a localized change (a destroyed
-    // logo) is measured on its own tile rather than averaged away. Returns positive
-    // infinity when there is nothing to compare or rendering fails, so an unverifiable
-    // pass always fails safe (rolls back) rather than silently passing every tolerance.
+    // Worst per-tile mean absolute per-channel difference between two documents; a
+    // localized change is not averaged away, and +INF (unverifiable) rolls back the pass.
     private static double maxPreviewMeanAbsDiff(byte[] before, byte[] after, int expectedPages) {
         if (before == null || after == null) {
             return Double.POSITIVE_INFINITY;
@@ -792,9 +774,8 @@ public final class PdfCompressor {
 
     private static final int PREVIEW_DPI = 96;
 
-    // Worst per-tile mean absolute difference over a page, so a localized change is
-    // not averaged away. A size mismatch fails outright (falling back to the
-    // pre-image), never a merely large finite value.
+    // Worst per-tile mean absolute difference over a page; a size mismatch fails
+    // outright (falling back to the pre-image), never a merely large value.
     private static double worstTileMeanAbsDiff(BufferedImage a, BufferedImage b) {
         if (a == null || b == null) {
             return Double.POSITIVE_INFINITY;
