@@ -43,12 +43,12 @@ class PdfBookmarkEditorTest {
     @BeforeAll
     static void init() {
         NativeLoader.ensureLoaded();
-        assumeTrue(NativeRuntime.isFull(), "bookmark appendix tests need real PDFium and QPDF");
-        assumeTrue(QpdfLib.isMergeSupported() && QpdfLib.isMergeFilesSupported(), "QPDF merge unavailable");
+        assumeTrue(NativeRuntime.isFull(), "bookmark appendix tests need real PDFium");
     }
 
     @Test
     void bytesOverloadKeepsPagesOnQpdfMergedOutput() throws Exception {
+        assumeTrue(QpdfLib.isMergeSupported(), "QPDF merge unavailable");
         byte[] merged = QpdfLib.merge(List.of(bookmarkedPdf("A", 3), bookmarkedPdf("B", 2)));
         assertTrue(usesXrefStream(merged), "QPDF output must exercise the xref stream path");
 
@@ -62,6 +62,7 @@ class PdfBookmarkEditorTest {
 
     @Test
     void fileOverloadKeepsPagesOnQpdfMergedOutput() throws Exception {
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "QPDF file merge unavailable");
         Path a = write("a.pdf", bookmarkedPdf("A", 3));
         Path b = write("b.pdf", bookmarkedPdf("B", 2));
         Path merged = tmp.resolve("merged.pdf");
@@ -81,6 +82,7 @@ class PdfBookmarkEditorTest {
 
     @Test
     void mergeCarriesSourceOutlinesInEveryStorageMode() throws Exception {
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "QPDF file merge unavailable");
         for (StorageOptions.Mode mode : StorageOptions.Mode.values()) {
             try (PdfDocument a = PdfDocument.open(bookmarkedPdf("A", 3));
                  PdfDocument b = PdfDocument.open(bookmarkedPdf("B", 2));
