@@ -167,9 +167,9 @@ public final class PdfSplit {
                         results.add(extracted.part());
                         continue;
                     }
-                    if (extracted.rejected() && ownsReusable) {
-                        // qpdf refused the snapshot once; re-feeding the same bytes
-                        // per range would only be refused again, so skip to the import.
+                    if (extracted.rejected()) {
+                        // A refused snapshot stays refused, so stop re-feeding it and
+                        // import from the live document instead.
                         if (extracted.refused()) {
                             snapshotRefused = true;
                         }
