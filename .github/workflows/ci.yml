@@ -356,13 +356,17 @@ jobs:
             -Pjmh.iterations=5 \
             --no-daemon
 
+      # Bumped v2 -> v3: the guarded-downcall architecture admits every bridge
+      # entry point through a native jpdf_guard_* shim, which deliberately costs
+      # more per call than the previous raw+Java-guard path. The first run with
+      # the new key re-baselines from this architecture instead of the old one.
       - name: Restore main-branch baseline from cache
         id: cache-baseline
         uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-v2-${{ github.base_ref || 'main' }}
-          restore-keys: jmh-baseline-v2-
+          key: jmh-baseline-v3-${{ github.base_ref || 'main' }}
+          restore-keys: jmh-baseline-v3-
 
       - name: Compare results against baseline (warn if regressed >15%)
         run: |
@@ -395,7 +399,7 @@ jobs:
         uses: actions/cache/save@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-v2-main
+          key: jmh-baseline-v3-main
 
       - name: Upload benchmark results
         if: always()
