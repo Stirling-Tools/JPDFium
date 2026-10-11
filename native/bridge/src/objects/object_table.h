@@ -11,8 +11,17 @@
 
 namespace jpdf {
 
-enum class ObjectType : uint8_t { None = 0, Document = 1, Page = 2, Bitmap = 3, View = 4 };
-constexpr size_t kObjectTypeCount = 5;
+// Module objects belong to optional native modules (OCR); a lease pins one for a call.
+enum class ObjectType : uint8_t {
+    None = 0,
+    Document = 1,
+    Page = 2,
+    Bitmap = 3,
+    View = 4,
+    Module = 5,
+    Lease = 6
+};
+constexpr size_t kObjectTypeCount = 7;
 
 struct Object {
     explicit Object(ObjectType t) noexcept : type(t) {}

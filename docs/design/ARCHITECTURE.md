@@ -44,6 +44,7 @@ other is refused, so an unguarded legacy caller can never run beside the domain.
 | `native/bridge/src/output/` | Output transactions, image and document writers |
 | `native/bridge/src/textlayer/` | Invisible text layer PDFs and their built-in glyphless font |
 | `native/bridge/src/legacy/` | Generated `jpdf_guard_*` shims for the legacy surface |
+| `native/ocr/` | Optional OCR module: PP-OCR on ONNX Runtime, its profiles and tests |
 | `native/bridge/tests/api_*.cpp` | Table unit tests, real-PDFium API and guard tests |
 
 ## First pass scope
@@ -52,8 +53,9 @@ In: lazy Python loading, safe document/page/bitmap handles, one native PDFium do
 and close-race tests, stale-handle rejection, transactional render output, the Java migration
 map. Out: OCR, text-layer writing, OCRmyPDF, broader bindings, optimization, IPC.
 
-Later stages added OCRmyPDF-compatible rasterization ([RASTER.md](RASTER.md)) and the synthetic
-text-layer writer ([TEXT_LAYER.md](TEXT_LAYER.md)).
+Later stages added OCRmyPDF-compatible rasterization ([RASTER.md](RASTER.md)), the synthetic
+text-layer writer ([TEXT_LAYER.md](TEXT_LAYER.md)) and the optional OCR module
+([OCR.md](OCR.md)), whose engines and results live in the core's handle table.
 
 Related: [NATIVE_ABI.md](NATIVE_ABI.md), [LIFETIME.md](LIFETIME.md), [CALLBACKS.md](CALLBACKS.md),
 [CAPABILITIES.md](CAPABILITIES.md), [TESTING.md](TESTING.md).

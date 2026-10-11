@@ -22,7 +22,7 @@ extern "C" {
 
 // API version: a binding requires an equal major and a minor >= the one it was compiled against.
 #define JPDF_API_VERSION_MAJOR 1
-#define JPDF_API_VERSION_MINOR 2
+#define JPDF_API_VERSION_MINOR 3
 
 typedef int32_t jpdf_status;
 // Opaque generation-checked token; 0 is never valid. The bit layout is private.
@@ -85,6 +85,7 @@ typedef uint64_t jpdf_handle;
 #define JPDF_STRUCT_TEXT_WORD 13
 #define JPDF_STRUCT_TEXT_LINE 14
 #define JPDF_STRUCT_TEXT_LAYER_OPTIONS 15
+#define JPDF_STRUCT_IMAGE_LOAD_OPTIONS 16
 
 typedef struct jpdf_runtime_options {
     uint32_t struct_size;
@@ -224,6 +225,12 @@ typedef struct jpdf_raster_result {
     double dpi_y;
 } jpdf_raster_result;
 
+typedef struct jpdf_image_load_options {
+    uint32_t struct_size;
+    uint32_t flags;       // reserved, must be 0
+    uint64_t max_pixels;  // 0 selects the library budget
+} jpdf_image_load_options;
+
 #define JPDF_INTERP_NEAREST 0
 #define JPDF_INTERP_BILINEAR 1
 #define JPDF_INTERP_BICUBIC 2  // OpenCV INTER_CUBIC kernel (a = -0.75)
@@ -345,6 +352,12 @@ JPDF_API jpdf_status jpdf_page_render_to_file(jpdf_handle page, const jpdf_rende
                                               const jpdf_write_options* write) JPDF_NOEXCEPT;
 
 // --- Bitmaps. No PDFium state: these never enter the domain. ---
+
+// Decodes a PNG file into an independently owned GRAY8 or RGB8 bitmap, as OpenCV's IMREAD_COLOR
+// reads it: alpha dropped, 16-bit samples cut to their high byte. DPI comes from pHYs, else 0.
+JPDF_API jpdf_status jpdf_image_load_file(const char* path_utf8,
+                                          const jpdf_image_load_options* options,
+                                          jpdf_handle* out_bitmap) JPDF_NOEXCEPT;
 
 JPDF_API jpdf_status jpdf_bitmap_get_info(jpdf_handle bitmap, jpdf_bitmap_info* out) JPDF_NOEXCEPT;
 // Copies byte_size bytes; JPDF_E_BUFFER_TOO_SMALL reports the size needed in out_written.

@@ -1,0 +1,2 @@
+# ONNX Runtime's worker threads synchronize in uninstrumented code TSan cannot see.
+race:libonnxruntime.so

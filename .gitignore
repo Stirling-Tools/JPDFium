@@ -77,6 +77,7 @@ jpdfium-natives/**/src/main/resources/natives/
 native/dist/
 native/pdfium/
 native/pdfium-*/
+native/ocr/onnxruntime/
 *.tgz
 
 native/pdfium/out/

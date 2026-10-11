@@ -43,6 +43,17 @@ Java deps (not bundled, resolved from Maven Central):
 - org.junit (test only) - EPL-2.0
 - com.twelvemonkeys.imageio (test only) - BSD-3-Clause
 
+Optional OCR module (libjpdfium_ocr, built only when ONNX Runtime is fetched):
+- ONNX Runtime 1.30.0 - MIT (shipped beside the module, with its LICENSE and
+  ThirdPartyNotices.txt)
+- OpenCV 4.10 - Apache-2.0: resize, warpPerspective, findContours, convexHull,
+  minAreaRect, boxPoints and fillPoly are ported in native/ocr/src/cv_compat.cpp
+  (Apache-2.0 text: native/licenses/QPDF-APACHE-2.0.txt)
+- Clipper 6.4.2 - BSL-1.0: polygon offsetting ported in native/ocr/src/paddle.cpp
+  (native/licenses/CLIPPER-BSL-1.0.txt)
+- PP-OCRv6 small models (PaddlePaddle) - Apache-2.0, fetched by digest at run
+  time, not bundled
+
 Rust helper (static-linked into libjpdfium):
 - lopdf - MIT
 - zopfli / oxipng / flate2 / fast_image_resize / usvg / resvg - Apache-2.0 / MIT / MPL-2.0

@@ -19,7 +19,12 @@
 | `pdf.raster` | implemented; matches the OCRmyPDF reference on linux-x64 ([RASTER.md](RASTER.md)) |
 | `image.rectify` | implemented |
 | `pdf.text` | implemented (API 1.2) |
+| `image.load` | implemented (API 1.3): PNG, read as OpenCV's `IMREAD_COLOR` reads it |
 | `text_layer.write` | implemented (API 1.2); left-to-right scripts, checked against OCRmyPDF's graft ([TEXT_LAYER.md](TEXT_LAYER.md)) |
 
+The OCR module answers for its own names through `jpdf_ocr_capability`: `ocr.recognize` is
+implemented and matches the official PaddleOCR pipeline ([OCR.md](OCR.md)); `ocr.word_geometry`
+is absent.
+
 Reserved names, absent until their phase lands: `fonts.shape_explicit`, `fonts.subset`,
-`ocr.recognize`, `ocr.word_geometry`, `pdf.optimize`, `svg.render`. Unknown names report absent.
+`pdf.optimize`, `svg.render`. Unknown names report absent.

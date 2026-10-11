@@ -49,6 +49,24 @@ Text layers read back through PDFium. The test covers:
 Checks with independent tools, including OCRmyPDF's own graft, are in PyJPDFium's parity suite
 ([TEXT_LAYER.md](TEXT_LAYER.md)).
 
+## OCR coverage
+
+- `ocr_geometry` checks every ported OpenCV and Clipper step, and PaddleOCR's pre- and
+  post-processing, bit for bit against outputs recorded from the reference stack. It needs no
+  models.
+- `ocr_engine` reads a rendered page through the module. It also covers:
+  - engine and result lifetimes, and wrong-type handles;
+  - four concurrent recognitions on one engine;
+  - a tampered profile being refused.
+
+  It needs a fetched profile in `JPDFIUM_OCR_PROFILE` and is skipped without one.
+- `api_image` decodes hand-built PNGs of every colour type.
+
+ONNX Runtime is not instrumented. Under LeakSanitizer one allocation of its own is suppressed, and
+under TSan races between its own worker threads are suppressed (`native/ocr/tests/*.supp`).
+Nothing in JPDFium's code is suppressed. Parity with the official PaddleOCR pipeline is in
+PyJPDFium ([OCR.md](OCR.md)).
+
 ## Java suite against real natives
 
 With the Java lock removed, the full `:jpdfium:test` suite runs against real linux-x64 natives

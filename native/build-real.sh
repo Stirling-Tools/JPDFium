@@ -34,6 +34,11 @@ elif [ "${TRIPLET:-}" = "arm64-windows" ] || [ "${PROCESSOR_ARCHITECTURE:-}" = "
     fi
 fi
 
+# The OCR module builds when ONNX Runtime has been fetched (native/ocr/fetch-onnxruntime.sh),
+# unless JPDFIUM_OCR=0.
+if [ "${JPDFIUM_OCR:-auto}" != "0" ] && [ -f "${SCRIPT_DIR}/ocr/onnxruntime/include/onnxruntime_c_api.h" ]; then
+    CMAKE_ARGS+=(-DJPDFIUM_BUILD_OCR=ON)
+fi
 if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
     CMAKE_ARGS+=(-DCMAKE_OSX_ARCHITECTURES="${CMAKE_OSX_ARCHITECTURES}")
 fi
@@ -53,6 +58,12 @@ fi
 mkdir -p "${SCRIPT_DIR}/dist/${PLATFORM}"
 find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
 find "${SCRIPT_DIR}/pdfium/lib" -maxdepth 1 \( -name '*.dylib' -o -name '*.so*' -o -name '*.dll' \) -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+if [ -n "$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -print -quit)" ]; then
+    find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+    cp "${SCRIPT_DIR}/ocr/onnxruntime/LICENSE" "${SCRIPT_DIR}/dist/${PLATFORM}/onnxruntime-LICENSE.txt"
+    cp "${SCRIPT_DIR}/ocr/onnxruntime/ThirdPartyNotices.txt" "${SCRIPT_DIR}/dist/${PLATFORM}/onnxruntime-ThirdPartyNotices.txt"
+    find "${SCRIPT_DIR}/ocr/onnxruntime/lib" -maxdepth 1 \( -name 'libonnxruntime*.so*' -o -name 'libonnxruntime*.dylib' -o -name 'onnxruntime*.dll' \) -exec cp -P {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+fi
 
 echo ""
 echo "Built: $(find "${SCRIPT_DIR}/build-real" -name 'libjpdfium.*' -type f)"

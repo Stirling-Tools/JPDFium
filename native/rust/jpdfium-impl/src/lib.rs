@@ -9,6 +9,7 @@
 //   jpdfium_rust_unpack_pixels  - gray/rgb/cmyk/bgr samples -> opaque ARGB u32
 //   jpdfium_rust_compress_png   - oxipng lossless PNG optimisation
 //   jpdfium_rust_zlib_compress  - streaming zlib for PDF /FlateDecode streams
+//   jpdfium_rust_decode_png     - PNG decoding for jpdf_image_load_file
 //   jpdfium_rust_free           - free buffers allocated by any of the above
 //
 // All functions use libc::malloc for output allocation so the Java side can
@@ -875,5 +876,124 @@ pub unsafe extern "C" fn jpdfium_rust_zlib_compress(
         Ok(Ok(())) => PNG_OK,
         Ok(Err(_)) if out.aborted => PNG_ERR_SINK,
         _ => PNG_ERR_INTERNAL,
+    }
+}
+
+/// Allocates `size` bytes for decoded pixels; null refuses the allocation.
+pub type JpdfiumAllocFn = unsafe extern "C" fn(ctx: *mut libc::c_void, size: usize) -> *mut u8;
+
+/// A decoded image: tightly packed rows of `channels` (1 gray, 3 RGB) bytes per pixel.
+#[repr(C)]
+pub struct JpdfiumDecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub channels: u32,
+    pub ppm_x: u32,
+    pub ppm_y: u32,
+    pub pixels: *mut u8,
+}
+
+const DECODE_OK: i32 = 0;
+const DECODE_ERR_FORMAT: i32 = -1;
+const DECODE_ERR_ALLOC: i32 = -2;
+const DECODE_ERR_INTERNAL: i32 = -3;
+const DECODE_ERR_LIMIT: i32 = -4;
+
+fn decode_png(
+    data: &[u8],
+    max_pixels: u64,
+    alloc: JpdfiumAllocFn,
+    ctx: *mut libc::c_void,
+    out: &mut JpdfiumDecodedImage,
+) -> i32 {
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    decoder.set_limits(png::Limits { bytes: usize::MAX });
+    // Expand palettes and low bit depths and keep the high byte of 16-bit samples, as OpenCV's
+    // IMREAD_COLOR does through libpng.
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let Ok(mut reader) = decoder.read_info() else { return DECODE_ERR_FORMAT };
+    let (width, height) = (reader.info().width, reader.info().height);
+    if width == 0 || height == 0 {
+        return DECODE_ERR_FORMAT;
+    }
+    if (width as u64) * (height as u64) > max_pixels {
+        return DECODE_ERR_LIMIT;
+    }
+    let (ppm_x, ppm_y) = match reader.info().pixel_dims {
+        Some(d) if d.unit == png::Unit::Meter => (d.xppu, d.yppu),
+        _ => (0, 0),
+    };
+    let (color, depth) = reader.output_color_type();
+    if depth != png::BitDepth::Eight {
+        return DECODE_ERR_FORMAT;
+    }
+    let (in_channels, out_channels) = match color {
+        png::ColorType::Grayscale => (1usize, 1usize),
+        png::ColorType::GrayscaleAlpha => (2, 1),
+        png::ColorType::Rgb => (3, 3),
+        png::ColorType::Rgba => (4, 3),
+        _ => return DECODE_ERR_FORMAT,
+    };
+    let Some(size) = reader.output_buffer_size() else { return DECODE_ERR_LIMIT };
+    let mut frame = vec![0u8; size];
+    let Ok(info) = reader.next_frame(&mut frame) else { return DECODE_ERR_FORMAT };
+    let (w, h) = (width as usize, height as usize);
+    let Some(out_size) = w.checked_mul(h).and_then(|n| n.checked_mul(out_channels)) else {
+        return DECODE_ERR_LIMIT;
+    };
+    let pixels = unsafe { alloc(ctx, out_size) };
+    if pixels.is_null() {
+        return DECODE_ERR_ALLOC;
+    }
+    let dst = unsafe { slice::from_raw_parts_mut(pixels, out_size) };
+    // Alpha is dropped without compositing, as IMREAD_COLOR does.
+    for y in 0..h {
+        let src = &frame[y * info.line_size..y * info.line_size + w * in_channels];
+        let row = &mut dst[y * w * out_channels..(y + 1) * w * out_channels];
+        if in_channels == out_channels {
+            row.copy_from_slice(src);
+        } else {
+            for (o, i) in row.chunks_exact_mut(out_channels).zip(src.chunks_exact(in_channels)) {
+                o.copy_from_slice(&i[..out_channels]);
+            }
+        }
+    }
+    *out = JpdfiumDecodedImage {
+        width,
+        height,
+        channels: out_channels as u32,
+        ppm_x,
+        ppm_y,
+        pixels,
+    };
+    DECODE_OK
+}
+
+/// Decodes a PNG held in memory into pixels obtained from `alloc`. Returns 0, -1 not a supported
+/// PNG, -2 allocation refused, -3 internal, -4 over `max_pixels`.
+///
+/// # Safety
+/// `data` must hold `len` readable bytes; `alloc` must return null or `size` writable bytes;
+/// `out` must be valid for writes.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_decode_png(
+    data: *const u8,
+    len: usize,
+    max_pixels: u64,
+    alloc: Option<JpdfiumAllocFn>,
+    ctx: *mut libc::c_void,
+    out: *mut JpdfiumDecodedImage,
+) -> i32 {
+    let Some(alloc) = alloc else { return DECODE_ERR_FORMAT };
+    if data.is_null() || len == 0 || out.is_null() {
+        return DECODE_ERR_FORMAT;
+    }
+    let input = slice::from_raw_parts(data, len);
+    let out = &mut *out;
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_png(input, max_pixels, alloc, ctx, out)
+    })) {
+        Ok(code) => code,
+        Err(_) => DECODE_ERR_INTERNAL,
     }
 }

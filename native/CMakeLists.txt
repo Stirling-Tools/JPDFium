@@ -136,6 +136,7 @@ set(JPDFIUM_DOMAIN_SOURCES
     bridge/src/runtime/domain.cpp
     bridge/src/runtime/api_runtime.cpp
     bridge/src/runtime/guard.cpp
+    bridge/src/runtime/api_module.cpp
     bridge/src/objects/objects.cpp
     bridge/src/legacy/guards_bridge.cpp)
 
@@ -242,6 +243,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/images/dither.cpp
         bridge/src/images/rectify.cpp
         bridge/src/images/api_bitmap.cpp
+        bridge/src/images/api_image.cpp
         bridge/src/output/output_transaction.cpp
         bridge/src/output/image_writer.cpp
         bridge/src/textlayer/glyphless_font.cpp
@@ -729,6 +731,16 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(api_raster PRIVATE jpdfium)
         add_test(NAME api_raster COMMAND api_raster)
 
+        add_executable(api_image bridge/tests/api_image.cpp)
+        target_include_directories(api_image PRIVATE bridge/include)
+        if(MSVC)
+            target_compile_options(api_image PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_image PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_image PRIVATE jpdfium)
+        add_test(NAME api_image COMMAND api_image)
+
         add_executable(api_text_layer bridge/tests/api_text_layer.cpp)
         target_include_directories(api_text_layer PRIVATE bridge/include)
         if(MSVC)
@@ -772,7 +784,7 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety api_guards api_raster api_text_layer PROPERTIES
+            set_tests_properties(api_safety api_guards api_raster api_text_layer api_image PROPERTIES
                 ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
@@ -822,3 +834,66 @@ if(JPDFIUM_USE_PDFIUM)
         RUNTIME DESTINATION bin)
 endif()
 install(DIRECTORY bridge/include/ DESTINATION include)
+
+# Optional OCR module: PP-OCR models on ONNX Runtime. It links to the core and never compiles
+# its own copy of the domain or the handle table (docs/design/OCR.md).
+option(JPDFIUM_BUILD_OCR "Build libjpdfium_ocr; needs ONNX Runtime in ocr/onnxruntime" OFF)
+if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/ocr/onnxruntime" CACHE PATH "ONNX Runtime package")
+    find_library(ONNXRUNTIME_LIB NAMES onnxruntime PATHS "${ONNXRUNTIME_DIR}/lib"
+        NO_DEFAULT_PATH REQUIRED)
+    set(JPDFIUM_OCR_SOURCES
+        ocr/src/api_ocr.cpp
+        ocr/src/engine.cpp
+        ocr/src/ort_session.cpp
+        ocr/src/profile.cpp
+        ocr/src/sha256.cpp
+        ocr/src/paddle.cpp
+        ocr/src/cv_compat.cpp)
+    add_library(jpdfium_ocr SHARED ${JPDFIUM_OCR_SOURCES})
+    target_include_directories(jpdfium_ocr
+        PUBLIC ocr/include bridge/include
+        PRIVATE ocr/src "${ONNXRUNTIME_DIR}/include")
+    target_compile_definitions(jpdfium_ocr PRIVATE JPDF_BUILDING_OCR)
+    target_link_libraries(jpdfium_ocr PRIVATE jpdfium "${ONNXRUNTIME_LIB}")
+    set_target_properties(jpdfium_ocr PROPERTIES CXX_VISIBILITY_PRESET hidden)
+    if(MSVC)
+        target_compile_options(jpdfium_ocr PRIVATE /W4 /WX)
+    else()
+        target_compile_options(jpdfium_ocr PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(APPLE)
+        set_target_properties(jpdfium_ocr PROPERTIES
+            INSTALL_RPATH "@loader_path" BUILD_RPATH "@loader_path;${ONNXRUNTIME_DIR}/lib")
+    elseif(UNIX)
+        set_target_properties(jpdfium_ocr PROPERTIES
+            INSTALL_RPATH "$ORIGIN" BUILD_RPATH "$ORIGIN;${ONNXRUNTIME_DIR}/lib")
+    endif()
+
+    if(JPDFIUM_BUILD_TESTS)
+        # Geometry and pre/post-processing against values recorded from OpenCV and pyclipper.
+        add_executable(ocr_geometry ocr/tests/ocr_geometry.cpp ocr/src/paddle.cpp
+            ocr/src/cv_compat.cpp ocr/src/sha256.cpp)
+        target_include_directories(ocr_geometry PRIVATE ocr/src bridge/include)
+        add_test(NAME ocr_geometry COMMAND ocr_geometry)
+
+        # Needs a fetched profile in JPDFIUM_OCR_PROFILE; skipped (77) without one.
+        add_executable(ocr_engine ocr/tests/ocr_engine.cpp)
+        target_include_directories(ocr_engine PRIVATE ocr/include bridge/include)
+        target_link_libraries(ocr_engine PRIVATE jpdfium_ocr jpdfium)
+        add_test(NAME ocr_engine COMMAND ocr_engine)
+        set_tests_properties(ocr_engine PROPERTIES SKIP_RETURN_CODE 77)
+        # ONNX Runtime is not instrumented: its own allocations and worker threads are excluded.
+        if(JPDFIUM_SANITIZE MATCHES "address")
+            set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/lsan.supp")
+        elseif(JPDFIUM_SANITIZE MATCHES "thread")
+            set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
+                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/tsan.supp")
+        endif()
+        if(NOT MSVC)
+            target_compile_options(ocr_geometry PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(ocr_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+    endif()
+endif()

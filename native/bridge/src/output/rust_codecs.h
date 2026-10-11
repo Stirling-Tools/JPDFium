@@ -14,4 +14,20 @@ int32_t jpdfium_rust_write_png(const uint8_t* pixels, int32_t width, int32_t hei
                                int32_t compression, jpdfium_write_sink sink, void* ctx);
 int32_t jpdfium_rust_zlib_compress(const uint8_t* data, size_t len, int32_t level,
                                    jpdfium_write_sink sink, void* ctx);
+
+// Returns a buffer of size bytes for decoded pixels, or null to refuse.
+typedef uint8_t* (*jpdfium_alloc_fn)(void* ctx, size_t size);
+
+typedef struct jpdfium_decoded_image {
+    uint32_t width;
+    uint32_t height;
+    uint32_t channels;  // 1 gray or 3 RGB, rows tightly packed
+    uint32_t ppm_x;     // pixels per metre from pHYs, 0 if absent
+    uint32_t ppm_y;
+    uint8_t* pixels;
+} jpdfium_decoded_image;
+
+// 0, -1 not a supported PNG, -2 allocation refused, -3 internal, -4 over max_pixels.
+int32_t jpdfium_rust_decode_png(const uint8_t* data, size_t len, uint64_t max_pixels,
+                                jpdfium_alloc_fn alloc, void* ctx, jpdfium_decoded_image* out);
 }

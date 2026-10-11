@@ -129,6 +129,13 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash native/fetch-prebuilt-pdfium.sh linux-x64
 
+      # The optional OCR module: ONNX Runtime and the model profile, each pinned by digest.
+      - name: Fetch ONNX Runtime and the OCR profile (pinned)
+        run: |
+          bash native/ocr/fetch-onnxruntime.sh linux-x64
+          python3 native/ocr/tools/fetch_profile.py native/ocr/profiles/pp-ocrv6-small.profile \
+            "$RUNNER_TEMP/ocr-profile"
+
       # The guard shims are generated from the pinned PDFium headers; a pin bump must regenerate them.
       - name: Guard shims match the pinned PDFium
         run: |
@@ -142,6 +149,8 @@ jobs:
 
       # The only CI job with real PDFium: run the native suites, including the safe jpdf_* API.
       - name: Native tests (real PDFium)
+        env:
+          JPDFIUM_OCR_PROFILE: ${{ runner.temp }}/ocr-profile
         run: ctest --test-dir native/build-real --output-on-failure
 
       - name: Stage natives

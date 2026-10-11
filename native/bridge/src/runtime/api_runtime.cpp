@@ -25,6 +25,7 @@ constexpr Capability kCapabilities[] = {
     {"output.transaction", JPDF_CAP_IMPLEMENTED}, {"legacy.guards", JPDF_CAP_IMPLEMENTED},
     {"pdf.raster", JPDF_CAP_IMPLEMENTED},         {"image.rectify", JPDF_CAP_IMPLEMENTED},
     {"pdf.text", JPDF_CAP_IMPLEMENTED},           {"text_layer.write", JPDF_CAP_IMPLEMENTED},
+    {"image.load", JPDF_CAP_IMPLEMENTED},
 };
 
 }  // namespace
@@ -67,6 +68,8 @@ int64_t jpdf_abi_struct_size(int32_t struct_id) noexcept {
             return sizeof(jpdf_text_line);
         case JPDF_STRUCT_TEXT_LAYER_OPTIONS:
             return sizeof(jpdf_text_layer_options);
+        case JPDF_STRUCT_IMAGE_LOAD_OPTIONS:
+            return sizeof(jpdf_image_load_options);
         default:
             return -1;
     }
