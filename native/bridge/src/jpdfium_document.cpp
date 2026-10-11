@@ -30,6 +30,7 @@
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
+#include "runtime/domain.h"
 
 namespace {
 
@@ -325,6 +326,10 @@ int32_t jpdfium_active_renderer() noexcept {
 }
 
 void jpdfium_destroy() noexcept {
+    // Only the legacy owner may destroy. Under the safe runtime the domain owns PDFium's
+    // lifetime and tears it down through jpdf_runtime_shutdown, so an unguarded destroy here
+    // would free PDFium while the domain still admits work.
+    if (g_pdfiumAuthority.load() != static_cast<int>(PdfiumAuthority::Legacy)) return;
     jpdfium_destroy_pdfium_core();
 }
 
@@ -349,6 +354,7 @@ int32_t jpdfium_doc_create(int64_t* handle) {
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -368,6 +374,7 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -395,6 +402,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -421,6 +429,7 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -442,6 +451,7 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -668,6 +678,7 @@ void jpdfium_doc_close(int64_t doc) noexcept {
     if (!w) return;
     DocHandleRegistry::instance().remove(w);
     delete w;
+    jpdf::Domain::instance().document_closed();
 }
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
@@ -681,6 +692,7 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
         auto* pw = new PageWrapper(page, w->core->doc, idx, w->core);
         PageHandleRegistry::instance().add(pw);
         *handle = encodeHandle(pw);
+        jpdf::Domain::instance().page_opened();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -746,6 +758,7 @@ void jpdfium_page_close(int64_t page) noexcept {
     }
     PageHandleRegistry::instance().remove(pw);
     delete pw;
+    jpdf::Domain::instance().page_closed();
 }
 
 // JSON report of the last sanitize stage ("" when none has run).

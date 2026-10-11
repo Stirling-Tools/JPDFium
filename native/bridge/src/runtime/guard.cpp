@@ -16,7 +16,9 @@ CallStart::CallStart() noexcept {
 }
 
 GuardScope::GuardScope(Purpose purpose) noexcept : admission_(purpose) {
-    if (!admission_.admitted()) t_refusal = admission_.status();
+    // The refusal belongs to this call only: an admitted call clears any stale
+    // status so a caller that never took the refusal cannot leak it to the next one.
+    t_refusal = admission_.admitted() ? JPDF_OK : admission_.status();
 }
 
 }  // namespace jpdf

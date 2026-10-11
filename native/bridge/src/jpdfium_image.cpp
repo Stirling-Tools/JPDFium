@@ -13,6 +13,7 @@
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
+#include "runtime/domain.h"
 
 // Internal helpers
 
@@ -293,6 +294,7 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
         (void)dw.release();
         provisional = nullptr;
         *doc_handle = encodeHandle(raw);
+        jpdf::Domain::instance().document_opened();
         return JPDFIUM_OK;
 
     } catch (...) {

@@ -54,13 +54,13 @@ jpdf_status jpdf_module_object_insert(uint32_t kind, void* object, jpdf_module_d
             return jpdf::fail(JPDF_E_INVALID_ARGUMENT,
                               "kind, object, destroy and out are required");
         }
-        auto holder = std::make_shared<ModuleObject>(kind, object, destroy);
+        // No destroyer until the table owns it: a throwing insert must leave ownership
+        // with the caller, and ~ModuleObject must not free an object it never accepted.
+        auto holder = std::make_shared<ModuleObject>(kind, object, nullptr);
         jpdf_handle token = 0;
         jpdf_status st = jpdf::objects().insert(holder, &token);
-        if (st != JPDF_OK) {
-            holder->destroy = nullptr;  // ownership stays with the caller on failure
-            return jpdf::fail(st, "object table rejected the module object");
-        }
+        if (st != JPDF_OK) return jpdf::fail(st, "object table rejected the module object");
+        holder->destroy = destroy;
         *out_handle = token;
         return JPDF_OK;
     });

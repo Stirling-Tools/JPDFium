@@ -189,7 +189,6 @@ jpdf_status OutputTransaction::write(const uint8_t* data, size_t size) noexcept 
 
 jpdf_status OutputTransaction::finalize() noexcept {
     if (stage_ != Stage::Writing) return fail(JPDF_E_INTERNAL, "finalize outside writing");
-    if (durable_ && sync_fd(fd_) != 0) return io_fail("flushing staging file failed", errno);
 #if !defined(_WIN32)
     try {
         mirror_destination_mode(fd_, destination_);
@@ -197,6 +196,8 @@ jpdf_status OutputTransaction::finalize() noexcept {
         // Best effort: a stricter mode is safer than failing the output.
     }
 #endif
+    // Sync after the mode change so the durable fsync also covers the fchmod metadata.
+    if (durable_ && sync_fd(fd_) != 0) return io_fail("flushing staging file failed", errno);
     const int fd = fd_;
     fd_ = -1;
     if (close_fd(fd) != 0) return io_fail("closing staging file failed", errno);
@@ -228,10 +229,15 @@ jpdf_status OutputTransaction::publish() noexcept {
     }
     if (durable_) {
         // Persist the directory entry so the rename itself survives a crash.
-        int dfd = ::open(destination_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-        if (dfd >= 0) {
-            ::fsync(dfd);
-            ::close(dfd);
+        const int dfd =
+            ::open(destination_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int err = dfd < 0 ? errno : (::fsync(dfd) != 0 ? errno : 0);
+        if (dfd >= 0) ::close(dfd);
+        if (err != 0) {
+            // The rename already landed, so the destination holds the new bytes; only the
+            // guarantee that the entry survives a crash is missing.
+            stage_ = Stage::Published;
+            return io_fail("published, but syncing the directory failed", err);
         }
     }
 #endif

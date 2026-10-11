@@ -243,13 +243,18 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
         uint8_t* row = base + static_cast<ptrdiff_t>(v) * static_cast<ptrdiff_t>(stride);
         for (int32_t u = 0; u < width; ++u) {
             const double w = h[6] * u + h[7] * v + h[8];
-            const double x = (h[0] * u + h[1] * v + h[2]) / w;
-            const double y = (h[3] * u + h[4] * v + h[5]) / w;
+            double x = (h[0] * u + h[1] * v + h[2]) / w;
+            double y = (h[3] * u + h[4] * v + h[5]) / w;
             uint8_t* px = row + static_cast<ptrdiff_t>(u) * channels;
             if (!std::isfinite(x) || !std::isfinite(y)) {
                 std::fill(px, px + channels, uint8_t{255});
                 continue;
             }
+            // Every sample more than 4 px outside the source is a border sample, so clamping
+            // keeps the result identical while keeping the int conversions defined for a
+            // caller-supplied quad (or a vanishing denominator) far outside the int range.
+            x = std::clamp(x, -4.0, static_cast<double>(source.width) + 4.0);
+            y = std::clamp(y, -4.0, static_cast<double>(source.height) + 4.0);
             for (int c = 0; c < channels; ++c) {
                 if (interpolation == JPDF_INTERP_NEAREST) {
                     px[c] = saturate(s.get(static_cast<int>(std::lround(x)),
@@ -414,7 +419,11 @@ jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
         int32_t width = o.width, height = o.height;
         if (width == 0) jpdf::derived_size(ordered, &width, &height);
         const uint64_t budget = o.max_pixels == 0 ? kDefaultMaxPixels : o.max_pixels;
-        if (static_cast<uint64_t>(width) * static_cast<uint64_t>(height) > budget) {
+        // warp() narrows stride = width * channels to int32; bound it before the allocation
+        // so a wide, short source cannot store a wrapped (negative) stride in the bitmap info.
+        const int32_t channels = jpdf::channels_for(object->pixels->pixel_format);
+        if (channels == 0 || width > INT32_MAX / channels ||
+            static_cast<uint64_t>(width) * static_cast<uint64_t>(height) > budget) {
             return jpdf::fail(JPDF_E_LIMIT, "rectified size exceeds the pixel budget");
         }
         jpdf::Homography to_source{};
