@@ -146,6 +146,16 @@ jpdf_status render_pixels(jpdf_handle page, const RenderRequest& req,
     storage->stride = stride;
     storage->pixel_format = req.pixel_format;
     storage->byte_size = static_cast<uint64_t>(stride) * static_cast<uint64_t>(height);
+    // The in-place narrowing wrote its result at the front of the RGBA buffer, but the allocation
+    // is still RGBA-sized. Hand the tail back to the allocator so a gray/RGB bitmap does not retain
+    // four times its logical pixels for the whole life of the handle. Nothing holds a pointer into
+    // the buffer yet (it is published only at *out below), so shrinking here is safe.
+    const uint64_t rgba_bytes = static_cast<uint64_t>(width) * 4 * static_cast<uint64_t>(height);
+    if (storage->byte_size < rgba_bytes) {
+        uint8_t* original = storage->data.release();
+        void* shrunk = std::realloc(original, static_cast<size_t>(storage->byte_size));
+        storage->data.reset(shrunk ? static_cast<uint8_t*>(shrunk) : original);
+    }
     *out = std::move(storage);
     return JPDF_OK;
 }

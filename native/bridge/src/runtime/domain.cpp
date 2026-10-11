@@ -20,6 +20,12 @@ uint64_t elapsed_ns(std::chrono::steady_clock::time_point since) noexcept {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
 }
 
+uint64_t between_ns(std::chrono::steady_clock::time_point from,
+                    std::chrono::steady_clock::time_point to) noexcept {
+    auto d = to - from;
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+}
+
 jpdf_status reject_for_state(State state, Purpose purpose) noexcept {
     switch (state) {
         case State::Running:
@@ -208,7 +214,9 @@ Admission::Admission(Purpose purpose) noexcept {
         return;
     }
     acquired_at_ = std::chrono::steady_clock::now();
-    domain.wait_ns_.fetch_add(elapsed_ns(requested), std::memory_order_relaxed);
+    // The wait ends exactly where the hold begins, so reuse the acquisition timestamp instead of
+    // taking a redundant second clock read for telemetry on every admitted call.
+    domain.wait_ns_.fetch_add(between_ns(requested, acquired_at_), std::memory_order_relaxed);
     status_ = reject_for_state(domain.state(), purpose);
     if (status_ != JPDF_OK) {
         lock_.unlock();

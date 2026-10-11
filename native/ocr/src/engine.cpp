@@ -37,31 +37,40 @@ jpdf_status Engine::open(const std::filesystem::path& profile_dir, int intra_op_
 }
 
 jpdf_status Engine::recognize(const Image& image, OcrResult* out, std::string* detail) const {
-    const DetectorInput input = prepare_detector_input(image, profile_.det);
-    std::vector<float> pred;
-    std::vector<int64_t> shape;
-    jpdf_status st = detector_->run(input.tensor.data(), {1, 3, input.height, input.width}, &pred,
-                                    &shape, detail);
-    if (st != JPDF_OK) return st;
-    if (shape.size() != 4 || shape[0] != 1 || shape[1] != 1 || shape[2] != input.height ||
-        shape[3] != input.width) {
-        *detail = "detector output does not match its input size";
-        return JPDF_E_FORMAT;
+    std::vector<Detection> boxes;
+    jpdf_status st = JPDF_OK;
+    {
+        // The detector input tensor and its output are needed only to derive the text boxes; drop
+        // both before crops are materialized so the pipeline never holds the whole detector
+        // activation alongside the recognizer batches.
+        const DetectorInput input = prepare_detector_input(image, profile_.det);
+        std::vector<float> pred;
+        std::vector<int64_t> shape;
+        st = detector_->run(input.tensor.data(), {1, 3, input.height, input.width}, &pred, &shape,
+                            detail);
+        if (st != JPDF_OK) return st;
+        if (shape.size() != 4 || shape[0] != 1 || shape[1] != 1 || shape[2] != input.height ||
+            shape[3] != input.width) {
+            *detail = "detector output does not match its input size";
+            return JPDF_E_FORMAT;
+        }
+        boxes = detect_boxes(pred.data(), input.width, input.height, image.width, image.height,
+                             profile_.det);
     }
-    std::vector<Detection> boxes = detect_boxes(pred.data(), input.width, input.height, image.width,
-                                                image.height, profile_.det);
     sort_boxes(&boxes);
 
-    std::vector<Image> crops;
     std::vector<Detection> kept;
-    for (const Detection& d : boxes) {
-        Image crop;
-        if (!crop_box(image, d.box, &crop)) continue;  // empty crops are dropped, as upstream
-        crops.push_back(std::move(crop));
-        kept.push_back(d);
-    }
     std::vector<Recognition> texts;
-    if ((st = recognize_crops(crops, &texts, detail)) != JPDF_OK) return st;
+    {
+        std::vector<Image> crops;
+        for (const Detection& d : boxes) {
+            Image crop;
+            if (!crop_box(image, d.box, &crop)) continue;  // empty crops are dropped, as upstream
+            crops.push_back(std::move(crop));
+            kept.push_back(d);
+        }
+        if ((st = recognize_crops(crops, &texts, detail)) != JPDF_OK) return st;
+    }  // crop pixels are released before the text lines are assembled
 
     out->width = image.width;
     out->height = image.height;
