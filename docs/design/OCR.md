@@ -19,7 +19,10 @@ python3 native/ocr/tools/fetch_profile.py native/ocr/profiles/pp-ocrv6-small.pro
 ```
 
 `build-real.sh` builds the module once ONNX Runtime has been fetched (`JPDFIUM_OCR=0` turns it
-off) and stages it with the runtime in `native/dist/<platform>`.
+off). It stages the module and the runtime library, under the name the module links and without
+ONNX Runtime's provider library, in `native/dist/ocr-<platform>`, apart from the core bundle, so
+the core's size budget and bundle checks are unchanged. A distribution that ships the module
+also ships `native/ocr/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`.
 
 Opening an engine reads every profile file once and refuses it unless its digest matches. The
 models are handed to ONNX Runtime from those same bytes. The profile also fixes the pipeline

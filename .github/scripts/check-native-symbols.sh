@@ -48,13 +48,13 @@ if [[ "$LIB" == *.dll ]]; then
     echo "dumpbin not found - skipping Windows symbol check"
   fi
 else
+  # Read the tables once: under pipefail, grep -q closing a pipe early fails nm with SIGPIPE.
+  DYNAMIC=$(nm -D "$LIB" 2>/dev/null || true)
+  GLOBAL=$(nm -g "$LIB" 2>/dev/null || true)  # macOS has no -D table
   for sym in "${EXPECTED[@]}"; do
-    if ! nm -D "$LIB" 2>/dev/null | grep -q " T $sym"; then
-      # Also try without -D for macOS
-      if ! nm -g "$LIB" 2>/dev/null | grep -q " T _\?$sym"; then
-        echo "MISSING export: $sym"
-        MISSING=1
-      fi
+    if ! grep -q " T $sym" <<<"$DYNAMIC" && ! grep -q " T _\?$sym" <<<"$GLOBAL"; then
+      echo "MISSING export: $sym"
+      MISSING=1
     fi
   done
 fi

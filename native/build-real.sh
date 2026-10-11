@@ -58,11 +58,21 @@ fi
 mkdir -p "${SCRIPT_DIR}/dist/${PLATFORM}"
 find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
 find "${SCRIPT_DIR}/pdfium/lib" -maxdepth 1 \( -name '*.dylib' -o -name '*.so*' -o -name '*.dll' \) -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+rm -f "${SCRIPT_DIR}/dist/${PLATFORM}"/*jpdfium_ocr.* "${SCRIPT_DIR}/dist/${PLATFORM}"/*onnxruntime*
 if [ -n "$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -print -quit)" ]; then
-    find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -exec cp {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
-    cp "${SCRIPT_DIR}/ocr/onnxruntime/LICENSE" "${SCRIPT_DIR}/dist/${PLATFORM}/onnxruntime-LICENSE.txt"
-    cp "${SCRIPT_DIR}/ocr/onnxruntime/ThirdPartyNotices.txt" "${SCRIPT_DIR}/dist/${PLATFORM}/onnxruntime-ThirdPartyNotices.txt"
-    find "${SCRIPT_DIR}/ocr/onnxruntime/lib" -maxdepth 1 \( -name 'libonnxruntime*.so*' -o -name 'libonnxruntime*.dylib' -o -name 'onnxruntime*.dll' \) -exec cp -P {} "${SCRIPT_DIR}/dist/${PLATFORM}/" \;
+    # The optional OCR module stays out of the core bundle: dist/ocr-<platform>, libraries only.
+    # Packagers ship ocr/onnxruntime/LICENSE and ThirdPartyNotices.txt with it.
+    OCR_DIST="${SCRIPT_DIR}/dist/ocr-${PLATFORM}"
+    rm -rf "${OCR_DIST}"
+    mkdir -p "${OCR_DIST}"
+    find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -exec cp {} "${OCR_DIST}/" \;
+    # Only the runtime, under the name the OCR module links: CPU inference loads no provider library.
+    ORT_LIB="${SCRIPT_DIR}/ocr/onnxruntime/lib"
+    case "$OS" in
+        linux) cp -L "${ORT_LIB}/libonnxruntime.so.1" "${OCR_DIST}/" ;;
+        darwin) find "${ORT_LIB}" -maxdepth 1 -type f -name 'libonnxruntime.*.dylib' -exec cp {} "${OCR_DIST}/" \; ;;
+        *) cp "${ORT_LIB}/onnxruntime.dll" "${OCR_DIST}/" ;;
+    esac
 fi
 
 echo ""
