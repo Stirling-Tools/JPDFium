@@ -25,7 +25,8 @@ constexpr Capability kCapabilities[] = {
     {"output.transaction", JPDF_CAP_IMPLEMENTED}, {"legacy.guards", JPDF_CAP_IMPLEMENTED},
     {"pdf.raster", JPDF_CAP_IMPLEMENTED},         {"image.rectify", JPDF_CAP_IMPLEMENTED},
     {"pdf.text", JPDF_CAP_IMPLEMENTED},           {"text_layer.write", JPDF_CAP_IMPLEMENTED},
-    {"image.load", JPDF_CAP_IMPLEMENTED},
+    {"image.load", JPDF_CAP_IMPLEMENTED},         {"text_layer.bidi", JPDF_CAP_IMPLEMENTED},
+    {"text_layer.quad", JPDF_CAP_IMPLEMENTED},
 };
 
 }  // namespace

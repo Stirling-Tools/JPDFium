@@ -1,7 +1,9 @@
 // api_text_layer.cpp - jpdf_text_layer_write and jpdf_page_get_text, read back by real PDFium.
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -82,6 +84,37 @@ jpdf_text_line line(double x0, double y0, double x1, double y1, int32_t word_cou
     l.x1 = x1;
     l.y1 = y1;
     l.word_count = word_count;
+    return l;
+}
+
+// A box's corners rotated about (cx, cy), clockwise from its top-left as read.
+std::vector<double> rotated(double x0, double y0, double x1, double y1, double degrees, double cx,
+                            double cy, double skew = 0) {
+    const double a = degrees * 3.14159265358979323846 / 180.0;
+    const double c = std::cos(a);
+    const double s = std::sin(a);
+    const double pts[8] = {x0 + skew, y0, x1 + skew, y0, x1, y1, x0, y1};
+    std::vector<double> out(8);
+    for (size_t k = 0; k < 4; ++k) {
+        const double dx = pts[2 * k] - cx;
+        const double dy = pts[2 * k + 1] - cy;
+        out[2 * k] = cx + dx * c - dy * s;
+        out[2 * k + 1] = cy + dx * s + dy * c;
+    }
+    return out;
+}
+
+jpdf_text_word quad_word(const char* text, const std::vector<double>& q) {
+    jpdf_text_word w = word(text, 0, 0, 0, 0);
+    w.flags = JPDF_TEXT_WORD_QUAD;
+    std::copy(q.begin(), q.end(), w.quad);
+    return w;
+}
+
+jpdf_text_line quad_line(const std::vector<double>& q, int32_t word_count, uint32_t flags = 0) {
+    jpdf_text_line l = line(0, 0, 0, 0, word_count);
+    l.flags = JPDF_TEXT_LINE_QUAD | flags;
+    std::copy(q.begin(), q.end(), l.quad);
     return l;
 }
 
@@ -215,6 +248,108 @@ void test_unicode() {
     if (got != want) std::printf("  got [%s]\n", got.c_str());
 }
 
+// Right-to-left words keep logical order in the stream, so PDFium returns logical text.
+void test_right_to_left() {
+    const std::vector<jpdf_text_word> words = {
+        word("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D", 1300, 300, 1600, 400),  // shalom
+        word("\xD7\xA2\xD7\x95\xD7\x9C\xD7\x9D", 900, 300, 1250, 400),   // olam
+        // marhaban ya, with harakat: combining marks inside right-to-left runs
+        word("\xD9\x85\xD9\x8E\xD8\xB1\xD9\x92\xD8\xAD\xD9\x8E\xD8\xA8\xD9\x8B\xD8\xA7", 1100, 500,
+             1600, 600),
+        word("\xD9\x8A\xD9\x8E\xD8\xA7", 900, 500, 1050, 600),
+        word("see", 300, 700, 450, 800),  // a Hebrew word inside a left-to-right line
+        word("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D", 500, 700, 700, 800),
+        word("here", 750, 700, 950, 800),
+    };
+    const std::vector<jpdf_text_line> lines = {
+        line(900, 300, 1600, 400, 2), line(900, 500, 1600, 600, 2), line(300, 700, 950, 800, 3)};
+    const std::string out = path("rtl.pdf");
+    CHECK_STATUS(write(lines, words, out), JPDF_OK, "write right-to-left lines");
+    Opened o;
+    CHECK(open(out, &o), "open right-to-left layer");
+    const std::string want =
+        "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D \xD7\xA2\xD7\x95\xD7\x9C\xD7\x9D "
+        "\xD9\x85\xD9\x8E\xD8\xB1\xD9\x92\xD8\xAD\xD9\x8E\xD8\xA8\xD9\x8B\xD8\xA7 "
+        "\xD9\x8A\xD9\x8E\xD8\xA7 see \xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D here";
+    const std::string got = squash(page_text(o.page));
+    CHECK(got == want, "right-to-left and mixed lines come back in logical order");
+    if (got != want) std::printf("  got [%s]\n", got.c_str());
+    CHECK(renders_blank(o.page), "mirrored runs draw nothing");
+
+    // Forcing the direction changes only placement: the same words, read back the same.
+    std::vector<jpdf_text_line> forced = lines;
+    forced[0].flags = JPDF_TEXT_LINE_RTL;
+    forced[2].flags = JPDF_TEXT_LINE_LTR;
+    CHECK_STATUS(write(forced, words, out), JPDF_OK, "explicit directions");
+    Opened again;
+    CHECK(open(out, &again) && squash(page_text(again.page)) == want, "explicit directions agree");
+}
+
+// Rotated and skewed lines: text runs along each quad's top edge.
+void test_quads() {
+    const std::vector<jpdf_text_word> words = {
+        quad_word("rotated", rotated(1000, 1000, 1350, 1100, 90, 1200, 1050)),
+        quad_word("ninety", rotated(1400, 1000, 1700, 1100, 90, 1200, 1050)),
+        quad_word("slanted", rotated(300, 2000, 650, 2100, 15, 500, 2050)),
+        quad_word("line", rotated(700, 2000, 900, 2100, 15, 500, 2050)),
+        quad_word("italic", rotated(300, 2500, 600, 2600, 0, 0, 0, 25)),
+        word("box", 650, 2500, 800, 2600),  // a plain box word on a quad line
+    };
+    const std::vector<jpdf_text_line> lines = {
+        quad_line(rotated(1000, 1000, 1700, 1100, 90, 1200, 1050), 2),
+        quad_line(rotated(300, 2000, 900, 2100, 15, 500, 2050), 2),
+        quad_line(rotated(300, 2500, 800, 2600, 0, 0, 0, 25), 2),
+    };
+    const std::string out = path("quads.pdf");
+    CHECK_STATUS(write(lines, words, out), JPDF_OK, "write quad lines");
+    Opened o;
+    CHECK(open(out, &o), "open quad layer");
+    const std::string got = squash(page_text(o.page));
+    CHECK(got == "rotated ninety slanted line italic box", "quad lines read back in order");
+    if (got != "rotated ninety slanted line italic box") std::printf("  got [%s]\n", got.c_str());
+    CHECK(renders_blank(o.page), "quad lines draw nothing");
+
+    const std::string again = path("quads-again.pdf");
+    CHECK_STATUS(write(lines, words, again), JPDF_OK, "rewrite quad lines");
+    CHECK(read_file(out) == read_file(again), "quad output is deterministic");
+}
+
+// Callers built against 1.3 pass the shorter structs; they still work, without quads.
+void test_previous_layout() {
+    struct WordV13 {
+        uint32_t struct_size;
+        uint32_t flags;
+        const char* text_utf8;
+        double x0, y0, x1, y1;
+    };
+    struct LineV13 {
+        uint32_t struct_size;
+        uint32_t flags;
+        double x0, y0, x1, y1;
+        int32_t word_count;
+        int32_t reserved0;
+    };
+    static_assert(sizeof(WordV13) == offsetof(jpdf_text_word, quad), "1.3 word layout");
+    static_assert(sizeof(LineV13) == offsetof(jpdf_text_line, quad), "1.3 line layout");
+    WordV13 words[2] = {{sizeof(WordV13), 0, "old", 0, 0, 200, 50},
+                        {sizeof(WordV13), 0, "layout", 250, 0, 500, 50}};
+    LineV13 lines[1] = {{sizeof(LineV13), 0, 0, 0, 500, 50, 2, 0}};
+    const std::string out = path("v13.pdf");
+    const auto* w = reinterpret_cast<const jpdf_text_word*>(words);
+    const auto* l = reinterpret_cast<const jpdf_text_line*>(lines);
+    CHECK_STATUS(jpdf_text_layer_write(&kLetter, l, 1, w, 2, out.c_str(), nullptr), JPDF_OK,
+                 "1.3 structs are accepted");
+    Opened o;
+    CHECK(open(out, &o) && squash(page_text(o.page)) == "old layout", "1.3 words read back");
+    words[0].flags = JPDF_TEXT_WORD_QUAD;
+    CHECK_STATUS(jpdf_text_layer_write(&kLetter, l, 1, w, 2, out.c_str(), nullptr),
+                 JPDF_E_INVALID_ARGUMENT, "a quad needs the 1.4 word struct");
+    words[0].flags = 0;
+    lines[0].flags = JPDF_TEXT_LINE_QUAD;
+    CHECK_STATUS(jpdf_text_layer_write(&kLetter, l, 1, w, 2, out.c_str(), nullptr),
+                 JPDF_E_INVALID_ARGUMENT, "a quad needs the 1.4 line struct");
+}
+
 void test_empty_layer() {
     const std::string out = path("empty.pdf");
     CHECK_STATUS(jpdf_text_layer_write(&kLetter, nullptr, 0, nullptr, 0, out.c_str(), nullptr),
@@ -269,8 +404,16 @@ void test_rejections() {
     CHECK_STATUS(write(lines, with("a\tb"), out), JPDF_E_INVALID_ARGUMENT, "control character");
     CHECK_STATUS(write(lines, with("\xEF\xBF\xBF"), out), JPDF_E_INVALID_ARGUMENT, "noncharacter");
     CHECK_STATUS(write(lines, with(""), out), JPDF_E_INVALID_ARGUMENT, "empty word");
-    CHECK_STATUS(write(lines, with("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D"), out), JPDF_E_UNSUPPORTED,
-                 "Hebrew is refused until right-to-left layout exists");
+    CHECK_STATUS(write(lines,
+                       with("a\xE2\x80\xAE"
+                            "b"),
+                       out),
+                 JPDF_E_UNSUPPORTED, "a right-to-left override is refused");
+    CHECK_STATUS(write(lines,
+                       with("\xE2\x81\xA7"
+                            "a\xE2\x81\xA9"),
+                       out),
+                 JPDF_E_UNSUPPORTED, "an isolate is refused");
     std::vector<jpdf_text_word> null_text = with("a");
     null_text[0].text_utf8 = nullptr;
     CHECK_STATUS(write(lines, null_text, out), JPDF_E_INVALID_ARGUMENT, "NULL text");
@@ -294,6 +437,30 @@ void test_rejections() {
     std::vector<jpdf_text_line> bad_line = lines;
     bad_line[0].reserved0 = 1;
     CHECK_STATUS(write(bad_line, with("a"), out), JPDF_E_UNSUPPORTED, "line reserved field");
+    bad_line = lines;
+    bad_line[0].flags = 0x8;
+    CHECK_STATUS(write(bad_line, with("a"), out), JPDF_E_UNSUPPORTED, "unknown line flag");
+    bad_line[0].flags = JPDF_TEXT_LINE_LTR | JPDF_TEXT_LINE_RTL;
+    CHECK_STATUS(write(bad_line, with("a"), out), JPDF_E_INVALID_ARGUMENT, "both directions");
+    std::vector<jpdf_text_word> bad_word = with("a");
+    bad_word[0].flags = 0x2;
+    CHECK_STATUS(write(lines, bad_word, out), JPDF_E_UNSUPPORTED, "unknown word flag");
+    bad_word = {quad_word("a", {0, 0, 10, 0, 10, 50, 0, std::nan("")})};
+    CHECK_STATUS(write(lines, bad_word, out), JPDF_E_INVALID_ARGUMENT, "NaN word quad");
+
+    const std::vector<double> square = {0, 0, 100, 0, 100, 50, 0, 50};
+    CHECK_STATUS(write({quad_line(square, 1)}, with("a"), path("square.pdf")), JPDF_OK,
+                 "a plain quad line");
+    CHECK_STATUS(write({quad_line({0, 0, 0, 0, 0, 50, 0, 50}, 1)}, with("a"), out),
+                 JPDF_E_INVALID_ARGUMENT, "a quad line with no length");
+    CHECK_STATUS(write({quad_line({0, 0, 100, 0, 100, 0, 0, 0}, 1)}, with("a"), out),
+                 JPDF_E_INVALID_ARGUMENT, "a quad line with no height");
+    CHECK_STATUS(write({quad_line({0, 50, 100, 50, 100, 0, 0, 0}, 1)}, with("a"), out),
+                 JPDF_E_INVALID_ARGUMENT, "corners running anticlockwise are mirrored");
+    CHECK_STATUS(write({quad_line({0, 0, 100, 0, 1000, 5, 900, 5}, 1)}, with("a"), out),
+                 JPDF_E_INVALID_ARGUMENT, "sides nearly parallel to the baseline");
+    CHECK_STATUS(write({quad_line({0, 0, 100, 0, 100, 1e300, 0, 50}, 1)}, with("a"), out),
+                 JPDF_E_INVALID_ARGUMENT, "a quad coordinate out of range");
 
     jpdf_write_options w{};
     w.struct_size = sizeof(w);
@@ -374,6 +541,7 @@ void test_concurrent_writers() {
     CHECK(open(source, &o), "open shared source");
     std::atomic<int> failures{0};
     std::vector<std::thread> writers;
+    writers.reserve(4);
     for (int t = 0; t < 4; ++t) {
         writers.emplace_back([t, &failures] {
             for (int i = 0; i < 25; ++i) {
@@ -404,7 +572,14 @@ int main() {
     CHECK(jpdf_capability("text_layer.write", &level) == JPDF_OK && level >= JPDF_CAP_IMPLEMENTED,
           "capability reported");
     test_round_trip();
+    CHECK(jpdf_capability("text_layer.bidi", &level) == JPDF_OK && level >= JPDF_CAP_IMPLEMENTED,
+          "bidi capability reported");
+    CHECK(jpdf_capability("text_layer.quad", &level) == JPDF_OK && level >= JPDF_CAP_IMPLEMENTED,
+          "quad capability reported");
     test_unicode();
+    test_right_to_left();
+    test_quads();
+    test_previous_layout();
     test_empty_layer();
     test_deterministic_and_repeatable();
     test_rejections();

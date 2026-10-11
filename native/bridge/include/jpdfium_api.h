@@ -22,7 +22,7 @@ extern "C" {
 
 // API version: a binding requires an equal major and a minor >= the one it was compiled against.
 #define JPDF_API_VERSION_MAJOR 1
-#define JPDF_API_VERSION_MINOR 3
+#define JPDF_API_VERSION_MINOR 4
 
 typedef int32_t jpdf_status;
 // Opaque generation-checked token; 0 is never valid. The bit layout is private.
@@ -260,27 +260,37 @@ typedef struct jpdf_rectify_result {
 // Built-in glyphless font: every glyph is blank; /ToUnicode carries the exact text.
 #define JPDF_FONT_GLYPHLESS 1
 
+// 1.4: quad[] replaces the box. Corners are top-left, top-right, bottom-right, bottom-left as
+// read, so a rotated or skewed line keeps its baseline along the top-left to top-right edge.
+#define JPDF_TEXT_WORD_QUAD 0x1u
+#define JPDF_TEXT_LINE_QUAD 0x1u
+// 1.4: the line's base direction; neither flag takes it from the first strong character.
+#define JPDF_TEXT_LINE_LTR 0x2u
+#define JPDF_TEXT_LINE_RTL 0x4u
+
 // Boxes are in image pixels, origin top-left. Arrays of these structs are read with the first
 // element's struct_size as the stride, and every element must carry the same struct_size.
 typedef struct jpdf_text_word {
     uint32_t struct_size;
-    uint32_t flags;         // reserved, must be 0
+    uint32_t flags;         // JPDF_TEXT_WORD_QUAD or 0
     const char* text_utf8;  // logical order, valid UTF-8, not empty, no control characters
     double x0;              // x1 >= x0; the line sets the vertical placement
     double y0;
     double x1;
     double y1;
+    double quad[8];  // 1.4, read only with JPDF_TEXT_WORD_QUAD
 } jpdf_text_word;
 
 typedef struct jpdf_text_line {
     uint32_t struct_size;
-    uint32_t flags;  // reserved, must be 0
+    uint32_t flags;  // JPDF_TEXT_LINE_* bits
     double x0;
     double y0;  // y1 > y0: the line height is the font size
     double x1;
     double y1;
     int32_t word_count;  // takes the next word_count words, at least 1
     int32_t reserved0;
+    double quad[8];  // 1.4, read only with JPDF_TEXT_LINE_QUAD
 } jpdf_text_line;
 
 typedef struct jpdf_text_layer_options {

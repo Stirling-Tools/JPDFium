@@ -9,7 +9,7 @@ and keeps raw pointer-valued handles; the two surfaces never share handle values
 major matches and the minor is at least the one it was compiled against. Additive changes bump
 the minor; any layout or semantic break bumps the major. 1.1 added rasterization and
 rectification; 1.2 added page text and text layers; 1.3 added PNG loading and the module
-interface below.
+interface below; 1.4 added quads and base directions to text lines and words.
 
 `jpdf_abi_struct_size(JPDF_STRUCT_*)` reports each struct's size so bindings that do not compile
 against the header (Java FFM) can verify layouts at load time.
@@ -32,7 +32,8 @@ requires at least the 1.0 size and never writes past `struct_size`.
 
 Arrays of structs (`jpdf_text_line`, `jpdf_text_word`) are read with the first element's
 `struct_size` as the stride. Every element must carry that same size, which must keep elements
-8-byte aligned; each element is then checked like an input struct.
+8-byte aligned; each element is then checked like an input struct. Their 1.0 size is the 1.3
+layout, before the quads; fields past an element's `struct_size` read as zero.
 
 Native structs are not a wire format. Do not serialize them across processes.
 

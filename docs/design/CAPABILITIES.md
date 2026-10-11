@@ -20,11 +20,14 @@
 | `image.rectify` | implemented |
 | `pdf.text` | implemented (API 1.2) |
 | `image.load` | implemented (API 1.3): PNG, read as OpenCV's `IMREAD_COLOR` reads it |
-| `text_layer.write` | implemented (API 1.2); left-to-right scripts, checked against OCRmyPDF's graft ([TEXT_LAYER.md](TEXT_LAYER.md)) |
+| `text_layer.write` | implemented (API 1.2); checked against OCRmyPDF's graft ([TEXT_LAYER.md](TEXT_LAYER.md)) |
+| `text_layer.bidi` | implemented (API 1.4): right-to-left and mixed lines, qualified against four extractors |
+| `text_layer.quad` | implemented (API 1.4): rotated and skewed lines |
 
 The OCR module answers for its own names through `jpdf_ocr_capability`: `ocr.recognize` is
 implemented and matches the official PaddleOCR pipeline ([OCR.md](OCR.md)); `ocr.word_geometry`
 is absent.
 
-Reserved names, absent until their phase lands: `fonts.shape_explicit`, `fonts.subset`,
-`pdf.optimize`, `svg.render`. Unknown names report absent.
+Reserved names, absent until their phase lands: `pdf.optimize`, `svg.render`.
+`fonts.shape_explicit` and `fonts.subset` stay absent: the glyphless text layer needs neither
+([TEXT_LAYER.md](TEXT_LAYER.md)). Unknown names report absent.

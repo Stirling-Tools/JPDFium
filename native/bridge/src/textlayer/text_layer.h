@@ -1,6 +1,7 @@
 // text_layer.h - invisible text layer PDFs for OCRmyPDF's sandwich renderer. No PDFium.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -10,19 +11,35 @@
 
 namespace jpdf {
 
+struct Point {
+    double x = 0;
+    double y = 0;
+};
+
+// Corners in image pixels: top-left, top-right, bottom-right, bottom-left as read.
+using Quad = std::array<Point, 4>;
+
 struct LayerWord {
     std::vector<char32_t> text;
-    double x0 = 0;  // image pixels
+    double x0 = 0;  // image pixels; the quad's horizontal extent for a quad word
     double x1 = 0;
+    Quad corners;
+    bool quad = false;
+    bool bidi = false;  // holds a class that needs bidi layout
     bool cjk_only = false;
     bool blank = false;  // whitespace only
 };
+
+enum class Direction : uint8_t { Auto, Ltr, Rtl };
 
 struct LayerLine {
     double x0 = 0;
     double y0 = 0;
     double x1 = 0;
     double y1 = 0;
+    Quad corners;
+    bool quad = false;
+    Direction direction = Direction::Auto;
     size_t first_word = 0;
     size_t word_count = 0;
 };

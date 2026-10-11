@@ -2,9 +2,17 @@
 
 #include "text_layer.h"
 
+#include <unicode/ubidi.h>
+#include <unicode/uchar.h>
+#include <unicode/utf16.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <initializer_list>
+#include <limits>
+#include <numeric>
 #include <string_view>
 #include <unordered_map>
 
@@ -27,7 +35,10 @@ constexpr double kMinFontSize = 1e-4;   // points
 constexpr double kMaxTz = 1e9;
 constexpr size_t kMaxCids = 0xFFFF;  // two-byte Identity-H codes; CID 0 stays .notdef
 constexpr int32_t kDeflateLevel = 6;
-constexpr long long kScale = 10000;  // numbers are written with up to four decimals
+constexpr long long kScale = 10000;        // numbers are written with up to four decimals
+constexpr long long kUnitScale = 1000000;  // matrix directions get six decimals
+constexpr double kMinQuadLength = 1e-4;    // points
+constexpr double kMinShear = 0.1;          // sine of the angle between a quad's baseline and sides
 
 // --- Unicode classes ---
 
@@ -39,12 +50,18 @@ bool is_noncharacter(char32_t c) {
     return (c >= 0xFDD0 && c <= 0xFDEF) || (c & 0xFFFE) == 0xFFFE;
 }
 
-// Strong right-to-left scripts and RTL controls: extractors reorder these, so 1:1 layout breaks.
-bool is_right_to_left(char32_t c) {
-    return (c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB1D && c <= 0xFDFF) ||
-           (c >= 0xFE70 && c <= 0xFEFE) || (c >= 0x10800 && c <= 0x10FFF) ||
-           (c >= 0x1E800 && c <= 0x1EFFF) || c == 0x200F || c == 0x202B || c == 0x202E ||
-           c == 0x2067;
+// Embeddings, overrides and isolates nest across words, which per-word layout cannot honour.
+bool is_explicit_bidi(UCharDirection d) {
+    return d == U_LEFT_TO_RIGHT_EMBEDDING || d == U_LEFT_TO_RIGHT_OVERRIDE ||
+           d == U_RIGHT_TO_LEFT_EMBEDDING || d == U_RIGHT_TO_LEFT_OVERRIDE ||
+           d == U_POP_DIRECTIONAL_FORMAT || d == U_LEFT_TO_RIGHT_ISOLATE ||
+           d == U_RIGHT_TO_LEFT_ISOLATE || d == U_FIRST_STRONG_ISOLATE ||
+           d == U_POP_DIRECTIONAL_ISOLATE;
+}
+
+// Classes that can raise a level above 0 in a left-to-right line.
+bool is_right_to_left(UCharDirection d) {
+    return d == U_RIGHT_TO_LEFT || d == U_RIGHT_TO_LEFT_ARABIC || d == U_ARABIC_NUMBER;
 }
 
 // OCRmyPDF's _is_cjk_only ranges: words written without separating spaces.
@@ -103,20 +120,36 @@ bool decode_utf8(std::string_view s, std::vector<char32_t>* out) {
     return true;
 }
 
+bool coordinate_ok(double v) {
+    return std::isfinite(v) && std::fabs(v) <= kMaxCoordinate;
+}
+
 bool box_ok(double x0, double y0, double x1, double y1) {
-    for (double v : {x0, y0, x1, y1}) {
-        if (!std::isfinite(v) || std::fabs(v) > kMaxCoordinate) return false;
+    const std::initializer_list<double> values = {x0, y0, x1, y1};
+    return std::all_of(values.begin(), values.end(), coordinate_ok) && x1 >= x0 && y1 >= y0;
+}
+
+Quad box_corners(double x0, double y0, double x1, double y1) {
+    return {Point{x0, y0}, Point{x1, y0}, Point{x1, y1}, Point{x0, y1}};
+}
+
+bool quad_ok(const double (&v)[8], Quad* out) {
+    for (size_t k = 0; k < 4; ++k) {
+        if (!coordinate_ok(v[2 * k]) || !coordinate_ok(v[2 * k + 1])) return false;
+        (*out)[k] = Point{v[2 * k], v[2 * k + 1]};
     }
-    return x1 >= x0 && y1 >= y0;
+    return true;
 }
 
 bool dpi_ok(double dpi) {
     return std::isfinite(dpi) && dpi >= kMinDpi && dpi <= kMaxDpi;
 }
 
-// Copies a caller array whose stride is the first element's struct_size.
+// Copies a caller array whose stride is the first element's struct_size. Elements may stop at
+// min_size (the 1.2 layout); missing fields read as zero.
 template <typename T>
-jpdf_status read_array(const T* items, int32_t count, std::string_view name, std::vector<T>* out) {
+jpdf_status read_array(const T* items, int32_t count, uint32_t min_size, std::string_view name,
+                       std::vector<T>* out, uint32_t* out_stride) {
     if (count == 0) return JPDF_OK;
     if (!items) return fail(JPDF_E_INVALID_ARGUMENT, name, " array is NULL");
     uint32_t stride = 0;
@@ -133,12 +166,13 @@ jpdf_status read_array(const T* items, int32_t count, std::string_view name, std
         if (size != stride) {
             return fail(JPDF_E_INVALID_ARGUMENT, name, " elements must share one struct_size");
         }
-        jpdf_status st = check_input_struct(item, size, sizeof(T), sizeof(T), name);
+        jpdf_status st = check_input_struct(item, size, min_size, sizeof(T), name);
         if (st != JPDF_OK) return st;
-        T value;
-        std::memcpy(&value, item, sizeof(T));
+        T value{};
+        std::memcpy(&value, item, std::min<size_t>(size, sizeof(T)));
         out->push_back(value);
     }
+    *out_stride = stride;
     return JPDF_OK;
 }
 
@@ -168,11 +202,31 @@ jpdf_status parse_options(const jpdf_text_layer_options* options, TextLayer* out
     return JPDF_OK;
 }
 
-jpdf_status parse_word(const jpdf_text_word& item, uint64_t* text_bytes, LayerWord* word) {
-    if (item.flags != 0) return fail(JPDF_E_UNSUPPORTED, "jpdf_text_word.flags must be 0");
+jpdf_status parse_word(const jpdf_text_word& item, uint32_t size, uint64_t* text_bytes,
+                       LayerWord* word) {
+    if ((item.flags & ~JPDF_TEXT_WORD_QUAD) != 0) {
+        return fail(JPDF_E_UNSUPPORTED, "unknown jpdf_text_word.flags");
+    }
     if (!item.text_utf8) return fail(JPDF_E_INVALID_ARGUMENT, "word text is NULL");
-    if (!box_ok(item.x0, item.y0, item.x1, item.y1)) {
-        return fail(JPDF_E_INVALID_ARGUMENT, "word boxes need finite x1 >= x0 and y1 >= y0");
+    word->quad = (item.flags & JPDF_TEXT_WORD_QUAD) != 0;
+    if (word->quad) {
+        if (size < sizeof(jpdf_text_word)) {
+            return fail(JPDF_E_INVALID_ARGUMENT, "JPDF_TEXT_WORD_QUAD needs the 1.4 struct");
+        }
+        if (!quad_ok(item.quad, &word->corners)) {
+            return fail(JPDF_E_INVALID_ARGUMENT, "word quads need finite coordinates");
+        }
+        const auto [lo, hi] = std::minmax(
+            {word->corners[0].x, word->corners[1].x, word->corners[2].x, word->corners[3].x});
+        word->x0 = lo;
+        word->x1 = hi;
+    } else {
+        if (!box_ok(item.x0, item.y0, item.x1, item.y1)) {
+            return fail(JPDF_E_INVALID_ARGUMENT, "word boxes need finite x1 >= x0 and y1 >= y0");
+        }
+        word->corners = box_corners(item.x0, item.y0, item.x1, item.y1);
+        word->x0 = item.x0;
+        word->x1 = item.x1;
     }
     const size_t len = std::strlen(item.text_utf8);
     *text_bytes += len;
@@ -180,17 +234,17 @@ jpdf_status parse_word(const jpdf_text_word& item, uint64_t* text_bytes, LayerWo
     if (len == 0 || !decode_utf8(std::string_view(item.text_utf8, len), &word->text)) {
         return fail(JPDF_E_INVALID_ARGUMENT, "word text must be non-empty, valid UTF-8");
     }
-    word->x0 = item.x0;
-    word->x1 = item.x1;
     word->cjk_only = true;
     word->blank = true;
     for (char32_t c : word->text) {
         if (is_control(c) || is_noncharacter(c)) {
             return fail(JPDF_E_INVALID_ARGUMENT, "word text contains a control or noncharacter");
         }
-        if (is_right_to_left(c)) {
-            return fail(JPDF_E_UNSUPPORTED, "right-to-left text is not supported yet");
+        const UCharDirection d = u_charDirection(static_cast<UChar32>(c));
+        if (is_explicit_bidi(d)) {
+            return fail(JPDF_E_UNSUPPORTED, "bidi embeddings, overrides and isolates are refused");
         }
+        word->bidi = word->bidi || is_right_to_left(d);
         word->cjk_only = word->cjk_only && is_cjk(c);
         word->blank = word->blank && is_space(c);
     }
@@ -205,23 +259,32 @@ long long scaled(double v) {
 }
 
 // Fixed-point with no exponent, independent of the C locale.
-void append_scaled(std::string& out, long long v) {
+void append_fixed(std::string& out, long long v, long long scale, int places) {
     if (v < 0) {
         out += '-';
         v = -v;
     }
-    out += std::to_string(v / kScale);
-    long long frac = v % kScale;
+    out += std::to_string(v / scale);
+    long long frac = v % scale;
     if (frac == 0) return;
-    char digits[4];
-    for (int i = 3; i >= 0; --i) {
+    char digits[8];
+    for (int i = places - 1; i >= 0; --i) {
         digits[i] = static_cast<char>('0' + frac % 10);
         frac /= 10;
     }
-    size_t len = 4;
+    auto len = static_cast<size_t>(places);
     while (digits[len - 1] == '0') --len;
     out += '.';
     out.append(digits, len);
+}
+
+void append_scaled(std::string& out, long long v) {
+    append_fixed(out, v, kScale, 4);
+}
+
+void append_unit(std::string& out, double v) {
+    append_fixed(out, std::llround(std::clamp(v, -1.0, 1.0) * static_cast<double>(kUnitScale)),
+                 kUnitScale, 6);
 }
 
 void append_number(std::string& out, double v) {
@@ -269,67 +332,346 @@ class CidMap {
     std::vector<char32_t> chars_;  // chars_[cid - 1]
 };
 
-// One BT block per line with a Td and Tz per word, as OCRmyPDF's renderer emits them.
-jpdf_status content_stream(const TextLayer& layer, CidMap* cids, std::string* out) {
-    const double sx = 72.0 / layer.dpi_x;
-    const double sy = 72.0 / layer.dpi_y;
-    const double page_height = layer.image_height * sy;
-    const double descent = -kGlyphlessDescent / 1000.0;
-    const double advance = kGlyphlessAdvance / 1000.0;
-    for (const LayerLine& line : layer.lines) {
-        // Ascent + descent is one em, so glyph boxes fill the line box exactly.
-        const double size = (line.y1 - line.y0) * sy;
-        if (size < kMinFontSize)
-            return fail(JPDF_E_INVALID_ARGUMENT, "line is too short to hold text");
-        *out += "BT\n3 Tr\n/F1 ";
-        append_number(*out, size);
-        *out += " Tf\n";
-        long long previous_x = 0;
-        for (size_t i = 0; i < line.word_count; ++i) {
-            const LayerWord& word = layer.words[line.first_word + i];
-            const double width = (word.x1 - word.x0) * sx;
-            const double natural = static_cast<double>(word.text.size()) * advance * size;
-            double tz = natural > 0 && width > 0 ? 100.0 * width / natural : 100.0;
-            bool space = false;
-            if (i + 1 < line.word_count) {
-                const LayerWord& next = layer.words[line.first_word + i + 1];
-                const double step = (next.x0 - word.x0) * sx;
-                const bool both_cjk = word.cjk_only && next.cjk_only;
-                space = step > 0 && !both_cjk;
-                // CJK words carry no separator, so stretch across a punctuation-sized gap.
-                if (both_cjk && width > 0 && step > 0 && step - width <= 2 * size) {
-                    tz *= step / width;
-                }
+jpdf_status append_cids(const char32_t* text, size_t count, CidMap* cids, std::string* out) {
+    uint32_t cid = 0;
+    for (size_t k = 0; k < count; ++k) {
+        jpdf_status st = cids->cid(text[k], &cid);
+        if (st != JPDF_OK) return st;
+        append_hex(*out, cid, 4);
+    }
+    return JPDF_OK;
+}
+
+// ICU bidi levels per code point, reusing one UBiDi object across words.
+class Bidi {
+   public:
+    Bidi() : bidi_(ubidi_open()) {}
+    ~Bidi() {
+        if (bidi_) ubidi_close(bidi_);
+    }
+    Bidi(const Bidi&) = delete;
+    Bidi& operator=(const Bidi&) = delete;
+
+    jpdf_status levels(const std::vector<char32_t>& text, bool rtl, std::vector<uint8_t>* out) {
+        if (!bidi_) return fail(JPDF_E_NO_MEMORY, "out of memory for bidi layout");
+        units_.clear();
+        starts_.clear();
+        for (char32_t c : text) {
+            starts_.push_back(units_.size());
+            if (c < 0x10000) {
+                units_.push_back(static_cast<UChar>(c));
             } else {
-                space = !word.blank && !word.cjk_only;
+                units_.push_back(static_cast<UChar>(U16_LEAD(c)));
+                units_.push_back(static_cast<UChar>(U16_TRAIL(c)));
             }
-            const long long x = scaled(word.x0 * sx);
-            if (i == 0) {
-                append_scaled(*out, x);
-                *out += ' ';
-                append_number(*out, page_height - line.y1 * sy + descent * size);
-            } else {
-                append_scaled(*out, x - previous_x);  // exact, so rounding never accumulates
-                *out += " 0";
-            }
-            *out += " Td\n";
-            previous_x = x;
-            append_number(*out, std::min(tz, kMaxTz));
-            *out += " Tz\n<";
-            uint32_t cid = 0;
-            for (char32_t c : word.text) {
-                jpdf_status st = cids->cid(c, &cid);
-                if (st != JPDF_OK) return st;
-                append_hex(*out, cid, 4);
-            }
-            if (space) {
-                jpdf_status st = cids->cid(U' ', &cid);
-                if (st != JPDF_OK) return st;
-                append_hex(*out, cid, 4);
-            }
-            *out += "> Tj\n";
         }
-        *out += "ET\n";
+        UErrorCode err = U_ZERO_ERROR;
+        ubidi_setPara(bidi_, units_.data(), static_cast<int32_t>(units_.size()),
+                      static_cast<UBiDiLevel>(rtl ? 1 : 0), nullptr, &err);
+        const UBiDiLevel* levels = U_SUCCESS(err) ? ubidi_getLevels(bidi_, &err) : nullptr;
+        if (U_FAILURE(err) || !levels) {
+            return fail(err == U_MEMORY_ALLOCATION_ERROR ? JPDF_E_NO_MEMORY : JPDF_E_INTERNAL,
+                        "bidi layout failed");
+        }
+        out->resize(text.size());
+        for (size_t i = 0; i < text.size(); ++i) (*out)[i] = levels[starts_[i]];
+        return JPDF_OK;
+    }
+
+   private:
+    UBiDi* bidi_;
+    std::vector<UChar> units_;
+    std::vector<size_t> starts_;  // first UTF-16 unit of each code point
+};
+
+// UAX #9 rule L2 on code points: the visual position of each logical character.
+void visual_positions(const std::vector<uint8_t>& levels, std::vector<size_t>* out) {
+    const size_t n = levels.size();
+    std::vector<size_t> order(n);  // order[visual] = logical
+    std::iota(order.begin(), order.end(), size_t{0});
+    const auto [low, high] = std::minmax_element(levels.begin(), levels.end());
+    if (n > 0) {
+        for (int level = *high; level >= (*low | 1); --level) {
+            for (size_t i = 0; i < n;) {
+                if (levels[order[i]] < level) {
+                    ++i;
+                    continue;
+                }
+                size_t j = i;
+                while (j < n && levels[order[j]] >= level) ++j;
+                std::reverse(order.begin() + static_cast<std::ptrdiff_t>(i),
+                             order.begin() + static_cast<std::ptrdiff_t>(j));
+                i = j;
+            }
+        }
+    }
+    out->resize(n);
+    for (size_t v = 0; v < n; ++v) (*out)[order[v]] = v;
+}
+
+// First strong character of the line (UAX #9 P2), left-to-right without one.
+bool line_is_rtl(const TextLayer& layer, const LayerLine& line) {
+    if (line.direction != Direction::Auto) return line.direction == Direction::Rtl;
+    for (size_t i = 0; i < line.word_count; ++i) {
+        for (char32_t c : layer.words[line.first_word + i].text) {
+            const UCharDirection d = u_charDirection(static_cast<UChar32>(c));
+            if (d == U_LEFT_TO_RIGHT) return false;
+            if (d == U_RIGHT_TO_LEFT || d == U_RIGHT_TO_LEFT_ARABIC) return true;
+        }
+    }
+    return false;
+}
+
+double cross(Point a, Point b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+// A line's text space in points: u runs along the baseline, w from the bottom edge to the top.
+struct Frame {
+    Point origin;  // the bottom-left corner raised by the descent
+    Point u{1, 0};
+    Point w{0, 1};
+    double det = 1;   // cross(u, w)
+    double size = 0;  // font size: one em spans the line's height along w
+};
+
+class PageSpace {
+   public:
+    explicit PageSpace(const TextLayer& layer)
+        : sx_(72.0 / layer.dpi_x), sy_(72.0 / layer.dpi_y), height_(layer.image_height * sy_) {}
+
+    Point map(Point p) const {
+        return {p.x * sx_, height_ - p.y * sy_};
+    }
+    double sx() const {
+        return sx_;
+    }
+    double sy() const {
+        return sy_;
+    }
+    double height() const {
+        return height_;
+    }
+
+    jpdf_status frame(const LayerLine& line, Frame* f) const {
+        Point bottom_left = map({line.x0, line.y1});
+        f->size = (line.y1 - line.y0) * sy_;
+        if (line.quad) {
+            Point q[4];
+            for (size_t k = 0; k < 4; ++k) q[k] = map(line.corners[k]);
+            const Point u{(q[1].x - q[0].x + q[2].x - q[3].x) / 2,
+                          (q[1].y - q[0].y + q[2].y - q[3].y) / 2};
+            const Point w{(q[0].x - q[3].x + q[1].x - q[2].x) / 2,
+                          (q[0].y - q[3].y + q[1].y - q[2].y) / 2};
+            const double u_len = std::hypot(u.x, u.y);
+            const double w_len = std::hypot(w.x, w.y);
+            if (!(u_len >= kMinQuadLength)) {
+                return fail(JPDF_E_INVALID_ARGUMENT, "line quad has no length");
+            }
+            if (!(w_len >= kMinFontSize)) {
+                return fail(JPDF_E_INVALID_ARGUMENT, "line is too short to hold text");
+            }
+            f->u = {u.x / u_len, u.y / u_len};
+            f->w = {w.x / w_len, w.y / w_len};
+            f->det = cross(f->u, f->w);
+            if (!(f->det >= kMinShear)) {
+                return fail(JPDF_E_INVALID_ARGUMENT,
+                            "line quad corners must run clockwise from the top-left, "
+                            "with sides within 84 degrees of upright");
+            }
+            f->size = w_len;
+            bottom_left = q[3];
+        }
+        if (!(f->size >= kMinFontSize)) {
+            return fail(JPDF_E_INVALID_ARGUMENT, "line is too short to hold text");
+        }
+        const double raise = -kGlyphlessDescent / 1000.0 * f->size;
+        f->origin = {bottom_left.x + f->w.x * raise, bottom_left.y + f->w.y * raise};
+        return JPDF_OK;
+    }
+
+    // The word's extent along the baseline, in points from the frame's origin.
+    void extent(const Frame& f, const LayerWord& word, double* s0, double* s1) const {
+        *s0 = std::numeric_limits<double>::infinity();
+        *s1 = -*s0;
+        for (const Point& corner : word.corners) {
+            const Point p = map(corner);
+            const double s = cross({p.x - f.origin.x, p.y - f.origin.y}, f.w) / f.det;
+            *s0 = std::min(*s0, s);
+            *s1 = std::max(*s1, s);
+        }
+    }
+
+   private:
+    double sx_;
+    double sy_;
+    double height_;
+};
+
+// Horizontal scale and trailing space for word i, shared by both line writers.
+struct Spacing {
+    double tz = 100;
+    bool space = false;
+};
+
+// starts times scale and widths are points along the line's reading direction.
+Spacing spacing(const TextLayer& layer, const LayerLine& line, size_t i, double size,
+                const std::vector<double>& starts, double scale,
+                const std::vector<double>& widths) {
+    const double advance = kGlyphlessAdvance / 1000.0;
+    const LayerWord& word = layer.words[line.first_word + i];
+    const double width = widths[i];
+    const double natural = static_cast<double>(word.text.size()) * advance * size;
+    Spacing out;
+    out.tz = natural > 0 && width > 0 ? 100.0 * width / natural : 100.0;
+    if (i + 1 < line.word_count) {
+        const LayerWord& next = layer.words[line.first_word + i + 1];
+        const double step = (starts[i + 1] - starts[i]) * scale;
+        const bool both_cjk = word.cjk_only && next.cjk_only;
+        out.space = step > 0 && !both_cjk;
+        // CJK words carry no separator, so stretch across a punctuation-sized gap.
+        if (both_cjk && width > 0 && step > 0 && step - width <= 2 * size) {
+            out.tz *= step / width;
+        }
+    } else {
+        out.space = !word.blank && !word.cjk_only;
+    }
+    out.tz = std::min(out.tz, kMaxTz);
+    return out;
+}
+
+// Left-to-right box lines: one BT block with a Td and Tz per word, as OCRmyPDF emits them.
+jpdf_status simple_line(const TextLayer& layer, const PageSpace& page, const LayerLine& line,
+                        CidMap* cids, std::string* out) {
+    const double size = (line.y1 - line.y0) * page.sy();
+    if (!(size >= kMinFontSize)) {
+        return fail(JPDF_E_INVALID_ARGUMENT, "line is too short to hold text");
+    }
+    std::vector<double> starts(line.word_count);
+    std::vector<double> widths(line.word_count);
+    for (size_t i = 0; i < line.word_count; ++i) {
+        const LayerWord& word = layer.words[line.first_word + i];
+        starts[i] = word.x0;
+        widths[i] = (word.x1 - word.x0) * page.sx();
+    }
+    *out += "BT\n3 Tr\n/F1 ";
+    append_number(*out, size);
+    *out += " Tf\n";
+    long long previous_x = 0;
+    for (size_t i = 0; i < line.word_count; ++i) {
+        const LayerWord& word = layer.words[line.first_word + i];
+        const Spacing sp = spacing(layer, line, i, size, starts, page.sx(), widths);
+        const long long x = scaled(word.x0 * page.sx());
+        if (i == 0) {
+            append_scaled(*out, x);
+            *out += ' ';
+            // Ascent + descent is one em, so glyph boxes fill the line box exactly.
+            append_number(*out,
+                          page.height() - line.y1 * page.sy() - kGlyphlessDescent / 1000.0 * size);
+        } else {
+            append_scaled(*out, x - previous_x);  // exact, so rounding never accumulates
+            *out += " 0";
+        }
+        *out += " Td\n";
+        previous_x = x;
+        append_number(*out, sp.tz);
+        *out += " Tz\n<";
+        jpdf_status st = append_cids(word.text.data(), word.text.size(), cids, out);
+        if (st != JPDF_OK) return st;
+        if (sp.space) {
+            const char32_t blank = U' ';
+            st = append_cids(&blank, 1, cids, out);
+            if (st != JPDF_OK) return st;
+        }
+        *out += "> Tj\n";
+    }
+    *out += "ET\n";
+    return JPDF_OK;
+}
+
+void append_matrix(std::string& out, const Frame& f, bool mirrored, double s) {
+    const double a = mirrored ? -f.u.x : f.u.x;
+    const double b = mirrored ? -f.u.y : f.u.y;
+    for (double v : {a, b, f.w.x, f.w.y}) {
+        append_unit(out, v);
+        out += ' ';
+    }
+    append_number(out, f.origin.x + s * f.u.x);
+    out += ' ';
+    append_number(out, f.origin.y + s * f.u.y);
+    out += " Tm\n";
+}
+
+// Quad or bidi lines: characters stay in logical order, and each directional run gets its own
+// text matrix, mirrored for right-to-left runs, so extractors recover logical text.
+jpdf_status general_line(const TextLayer& layer, const PageSpace& page, const LayerLine& line,
+                         bool rtl, Bidi* bidi, CidMap* cids, std::string* out) {
+    Frame f;
+    jpdf_status st = page.frame(line, &f);
+    if (st != JPDF_OK) return st;
+    std::vector<double> lo(line.word_count);
+    std::vector<double> hi(line.word_count);
+    std::vector<double> starts(line.word_count);
+    std::vector<double> widths(line.word_count);
+    for (size_t i = 0; i < line.word_count; ++i) {
+        page.extent(f, layer.words[line.first_word + i], &lo[i], &hi[i]);
+        starts[i] = rtl ? -hi[i] : lo[i];
+        widths[i] = hi[i] - lo[i];
+    }
+    *out += "BT\n3 Tr\n/F1 ";
+    append_number(*out, f.size);
+    *out += " Tf\n";
+    std::vector<uint8_t> levels;
+    std::vector<size_t> visual;
+    for (size_t i = 0; i < line.word_count; ++i) {
+        const LayerWord& word = layer.words[line.first_word + i];
+        const Spacing sp = spacing(layer, line, i, f.size, starts, 1.0, widths);
+        std::vector<char32_t> text = word.text;
+        if (sp.space) text.push_back(U' ');
+        st = bidi->levels(text, rtl, &levels);
+        if (st != JPDF_OK) return st;
+        visual_positions(levels, &visual);
+        // Glyph cells start at the word's leading edge; a right-to-left line's space sits left.
+        const double cell = kGlyphlessAdvance / 1000.0 * f.size * sp.tz / 100.0;
+        const double cells = static_cast<double>(word.text.size());
+        const double base = rtl ? hi[i] - cells * cell : lo[i];
+        const double shift = rtl && sp.space ? 1.0 : 0.0;
+        append_number(*out, sp.tz);
+        *out += " Tz\n";
+        for (size_t k = 0; k < text.size();) {
+            const bool odd = (levels[k] & 1) != 0;
+            size_t end = k + 1;
+            while (
+                end < text.size() && ((levels[end] & 1) != 0) == odd &&
+                (odd ? visual[end] + 1 == visual[end - 1] : visual[end] == visual[end - 1] + 1)) {
+                ++end;
+            }
+            const double slot = static_cast<double>(visual[k]) - shift + (odd ? 1.0 : 0.0);
+            append_matrix(*out, f, odd, base + slot * cell);
+            *out += '<';
+            st = append_cids(text.data() + k, end - k, cids, out);
+            if (st != JPDF_OK) return st;
+            *out += "> Tj\n";
+            k = end;
+        }
+    }
+    *out += "ET\n";
+    return JPDF_OK;
+}
+
+jpdf_status content_stream(const TextLayer& layer, CidMap* cids, std::string* out) {
+    const PageSpace page(layer);
+    Bidi bidi;
+    for (const LayerLine& line : layer.lines) {
+        const bool rtl = line_is_rtl(layer, line);
+        bool simple = !line.quad && !rtl;
+        for (size_t i = 0; simple && i < line.word_count; ++i) {
+            const LayerWord& word = layer.words[line.first_word + i];
+            simple = !word.quad && !word.bidi;
+        }
+        jpdf_status st = simple ? simple_line(layer, page, line, cids, out)
+                                : general_line(layer, page, line, rtl, &bidi, cids, out);
+        if (st != JPDF_OK) return st;
     }
     return JPDF_OK;
 }
@@ -466,28 +808,51 @@ jpdf_status parse_text_layer(const jpdf_text_layer_options* options, const jpdf_
     }
     std::vector<jpdf_text_line> line_items;
     std::vector<jpdf_text_word> word_items;
-    if ((st = read_array(lines, line_count, "jpdf_text_line", &line_items)) != JPDF_OK) return st;
-    if ((st = read_array(words, word_count, "jpdf_text_word", &word_items)) != JPDF_OK) return st;
+    uint32_t line_size = 0;
+    uint32_t word_size = 0;
+    st = read_array(lines, line_count, offsetof(jpdf_text_line, quad), "jpdf_text_line",
+                    &line_items, &line_size);
+    if (st != JPDF_OK) return st;
+    st = read_array(words, word_count, offsetof(jpdf_text_word, quad), "jpdf_text_word",
+                    &word_items, &word_size);
+    if (st != JPDF_OK) return st;
 
     size_t next_word = 0;
     out->lines.reserve(line_items.size());
     for (const jpdf_text_line& item : line_items) {
-        if (item.flags != 0 || item.reserved0 != 0) {
-            return fail(JPDF_E_UNSUPPORTED, "jpdf_text_line.flags and reserved0 must be 0");
+        constexpr uint32_t kLineFlags =
+            JPDF_TEXT_LINE_QUAD | JPDF_TEXT_LINE_LTR | JPDF_TEXT_LINE_RTL;
+        if ((item.flags & ~kLineFlags) != 0 || item.reserved0 != 0) {
+            return fail(JPDF_E_UNSUPPORTED, "unknown jpdf_text_line.flags, or reserved0 is set");
         }
-        if (!box_ok(item.x0, item.y0, item.x1, item.y1) || !(item.y1 > item.y0)) {
+        LayerLine line;
+        if ((item.flags & JPDF_TEXT_LINE_LTR) && (item.flags & JPDF_TEXT_LINE_RTL)) {
+            return fail(JPDF_E_INVALID_ARGUMENT, "a line cannot be both LTR and RTL");
+        }
+        if (item.flags & JPDF_TEXT_LINE_LTR) line.direction = Direction::Ltr;
+        if (item.flags & JPDF_TEXT_LINE_RTL) line.direction = Direction::Rtl;
+        line.quad = (item.flags & JPDF_TEXT_LINE_QUAD) != 0;
+        if (line.quad) {
+            if (line_size < sizeof(jpdf_text_line)) {
+                return fail(JPDF_E_INVALID_ARGUMENT, "JPDF_TEXT_LINE_QUAD needs the 1.4 struct");
+            }
+            if (!quad_ok(item.quad, &line.corners)) {
+                return fail(JPDF_E_INVALID_ARGUMENT, "line quads need finite coordinates");
+            }
+        } else if (!box_ok(item.x0, item.y0, item.x1, item.y1) || !(item.y1 > item.y0)) {
             return fail(JPDF_E_INVALID_ARGUMENT, "line boxes need finite x1 >= x0 and y1 > y0");
+        } else {
+            line.x0 = item.x0;
+            line.y0 = item.y0;
+            line.x1 = item.x1;
+            line.y1 = item.y1;
+            line.corners = box_corners(item.x0, item.y0, item.x1, item.y1);
         }
         if (item.word_count < 1 ||
             static_cast<size_t>(item.word_count) > word_items.size() - next_word) {
             return fail(JPDF_E_INVALID_ARGUMENT,
                         "each line needs 1 or more of the remaining words");
         }
-        LayerLine line;
-        line.x0 = item.x0;
-        line.y0 = item.y0;
-        line.x1 = item.x1;
-        line.y1 = item.y1;
         line.first_word = next_word;
         line.word_count = static_cast<size_t>(item.word_count);
         out->lines.push_back(line);
@@ -500,7 +865,8 @@ jpdf_status parse_text_layer(const jpdf_text_layer_options* options, const jpdf_
     uint64_t text_bytes = 0;
     out->words.resize(word_items.size());
     for (size_t i = 0; i < word_items.size(); ++i) {
-        if ((st = parse_word(word_items[i], &text_bytes, &out->words[i])) != JPDF_OK) return st;
+        st = parse_word(word_items[i], word_size, &text_bytes, &out->words[i]);
+        if (st != JPDF_OK) return st;
     }
     return JPDF_OK;
 }
@@ -526,7 +892,8 @@ jpdf_status build_text_layer_pdf(const TextLayer& layer, std::string* out) {
     page += has_text ? "] /Resources << /Font << /F1 5 0 R >> >>" : "] /Resources << >>";
     page += " /Contents 4 0 R >>";
     pdf.object(page);
-    if ((st = pdf.stream("", content)) != JPDF_OK) return st;
+    st = pdf.stream("", content);
+    if (st != JPDF_OK) return st;
     if (has_text) {
         pdf.object(
             "<< /Type /Font /Subtype /Type0 /BaseFont /GlyphLessFont /Encoding /Identity-H "
@@ -541,11 +908,12 @@ jpdf_status build_text_layer_pdf(const TextLayer& layer, std::string* out) {
                    " /Descent " + descent + " /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>");
         const std::vector<uint8_t>& font = glyphless_font();
         const std::string_view font_bytes(reinterpret_cast<const char*>(font.data()), font.size());
-        if ((st = pdf.stream(" /Length1 " + std::to_string(font.size()), font_bytes)) != JPDF_OK) {
-            return st;
-        }
-        if ((st = pdf.stream("", to_unicode_cmap(cids.chars()))) != JPDF_OK) return st;
-        if ((st = pdf.stream("", cid_to_gid_map(cids.chars().size()))) != JPDF_OK) return st;
+        st = pdf.stream(" /Length1 " + std::to_string(font.size()), font_bytes);
+        if (st != JPDF_OK) return st;
+        st = pdf.stream("", to_unicode_cmap(cids.chars()));
+        if (st != JPDF_OK) return st;
+        st = pdf.stream("", cid_to_gid_map(cids.chars().size()));
+        if (st != JPDF_OK) return st;
     }
     return pdf.finish(out);
 }

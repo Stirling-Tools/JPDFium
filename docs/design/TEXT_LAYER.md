@@ -12,6 +12,12 @@ It never touches PDFium, so it runs outside the domain and in any runtime state.
   top-left.
 - A line without word geometry is passed as one word holding the whole line, spaces included.
   The writer never invents word boxes by dividing a line.
+- Since API 1.4 a line or word may carry a quad instead of a box (`JPDF_TEXT_LINE_QUAD`,
+  `JPDF_TEXT_WORD_QUAD`): corners top-left, top-right, bottom-right, bottom-left as read. Text
+  runs along the top-left to top-right edge, so OCR polygons of rotated or skewed lines keep
+  their slope. Callers built against 1.3 pass the shorter structs and get the 1.3 behaviour.
+- A line's base direction comes from its first strong character, or from `JPDF_TEXT_LINE_LTR`
+  or `JPDF_TEXT_LINE_RTL`. Words stay in logical order whatever the direction.
 
 ## Layout
 
@@ -25,6 +31,42 @@ The layout follows OCRmyPDF 17.13's renderer (`fpdf_renderer/renderer.py`):
 - Every word is followed by a space character, line-final words included, so extractors without
   layout analysis still separate words. Between two CJK words no space is written; the first is
   stretched to meet the second when the gap is at most two ems.
+
+Left-to-right lines with boxes are written exactly as above. Other lines take the general path
+below.
+
+### Right-to-left and mixed text
+
+Each word is laid out with ICU's implementation of the Unicode bidi algorithm (UAX #9), at the
+line's base level. Characters stay in logical order in the content stream, and each directional
+run gets its own text matrix: left-to-right runs advance rightwards, right-to-left runs are
+mirrored (`-1` horizontal scale) and advance leftwards from their right edge. Each character
+lands in the cell the bidi algorithm gives it, so:
+
+- extractors that read stream order (pdfminer.six) get logical text directly;
+- extractors that rebuild order from positions (PDFium, poppler) see an ordinary right-to-left
+  line and reverse it back to logical text.
+
+Tesseract's PDF renderer uses the same mirrored layout for right-to-left words. Two other
+layouts were measured and rejected: logical order placed left to right came back reversed from
+PDFium and poppler, and visual order came back reversed from pdfminer.six.
+
+In a right-to-left line the space after a word sits to its left, and words are spaced when the
+next word starts further left.
+
+### Rotated and skewed lines
+
+A quad line's text matrix runs along the quad's baseline, with its vertical axis along the
+quad's sides, so skew is kept as well as rotation. The font size is the height of the quad
+along those sides. Word positions are their quads, or boxes, projected onto the baseline.
+
+### Widths
+
+Every code point advances by one cell, combining marks and joiners included. Grapheme-cluster
+widths (zero-width marks through `/W`) were measured and rejected: pdfminer.six then split
+Vietnamese, Devanagari and decomposed Hangul words, and PDFium dropped a joiner inside an emoji
+sequence. With equal cells all four extractors returned the exact text. Nothing is drawn, so
+shaping and font fallback would change no pixels; they are not needed for this font.
 
 `jpdf_page_get_text` returns PDFium's extracted text for a page as UTF-8, so bindings can read a
 layer back.
@@ -51,13 +93,13 @@ layer back.
 
 | Input | Status |
 |---|---|
-| Right-to-left scripts and RTL controls | `UNSUPPORTED`: extractors reorder RTL runs, so laying them out like LTR text would reverse them |
+| Bidi embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069) | `UNSUPPORTED`: they nest across words, which per-word layout cannot honour |
+| Unknown flags, both direction flags, a quad flag on a 1.3 struct | `UNSUPPORTED` or `INVALID_ARGUMENT` |
+| Quads with no length or height, corners running anticlockwise, sides within about 6 degrees of the baseline, non-finite corners | `INVALID_ARGUMENT` |
 | Invalid UTF-8, surrogates, control characters, noncharacters, empty words | `INVALID_ARGUMENT` |
 | Zero-height lines, inverted boxes, lines that do not use every word exactly once | `INVALID_ARGUMENT` |
 | More than 1,048,576 lines, 2,097,152 words, 16 MiB of text or 65,535 distinct characters | `LIMIT` |
 | `image_format` or `png_compression` set in `jpdf_write_options` | `UNSUPPORTED` |
-
-Right-to-left text, shaping and font fallback belong to the full multilingual writer.
 
 ## Evidence
 
@@ -68,7 +110,20 @@ Right-to-left text, shaping and font fallback belong to the full multilingual wr
   - blank rendering, and byte-identical output for equal input;
   - 200 repeated writes under LeakSanitizer;
   - rejections, larger caller structs, and a failed write leaving the destination untouched;
-  - concurrent writers beside a reader, under TSan.
+  - concurrent writers beside a reader, under TSan;
+  - Hebrew, Arabic with harakat, and a Hebrew word in a Latin line read back in logical order;
+  - rotated (15 and 90 degrees) and skewed quad lines read back, drawing nothing;
+  - 1.3-sized structs still accepted.
+- PyJPDFium's `tests/parity/test_multilingual_parity.py` qualifies the general path. Twenty-three
+  samples are each written flat, rotated 15, 90 and 180 degrees, and skewed. They cover Latin,
+  Greek, Cyrillic, Chinese, Hangul, kana, Devanagari, Thai, combining marks, emoji sequences,
+  Hebrew with and without points, Arabic with harakat, Persian with a ZWNJ, and mixed-direction
+  lines. Each layer is read by four extractors: JPDFium's PDFium, pypdfium2's newer PDFium,
+  pdfminer.six 20260107 and poppler 24.02's `pdftotext`. Every character's box must land in the
+  cell the writer contract gives it, and the text must reach the level each extractor showed in
+  the qualification run, recorded in PyJPDFium's `docs/COMPATIBILITY.md`. Nine mutations of the
+  layout code, among them an unmirrored right-to-left run, a wrong bidi level bound and a
+  left-to-right-only line direction, each fail this suite.
 - PyJPDFium's `tests/parity/test_text_layer_parity.py` uses independent tools:
   - pypdfium2 5.14.0, which bundles a newer PDFium than JPDFium's pin. It checks the text,
     search across words, and that word spaces are real characters rather than generated ones.
