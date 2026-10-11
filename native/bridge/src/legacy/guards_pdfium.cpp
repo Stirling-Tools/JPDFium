@@ -1907,7 +1907,11 @@ JPDF_API FPDF_PAGE jpdf_guard_FPDFPage_New(FPDF_DOCUMENT document, int page_inde
                                            double height) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return FPDFPage_New(document, page_index, width, height);
+    auto result = FPDFPage_New(document, page_index, width, height);
+    if (result != nullptr) {
+        jpdf::Domain::instance().page_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_FPDFPage_RemoveAnnot(FPDF_PAGE page, int index) noexcept {
@@ -2200,12 +2204,18 @@ JPDF_API void jpdf_guard_FPDF_CloseDocument(FPDF_DOCUMENT document) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Teardown);
     if (!guard.admitted()) return;
     FPDF_CloseDocument(document);
+    if (document != nullptr) {
+        jpdf::Domain::instance().document_closed();
+    }
 }
 
 JPDF_API void jpdf_guard_FPDF_ClosePage(FPDF_PAGE page) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Teardown);
     if (!guard.admitted()) return;
     FPDF_ClosePage(page);
+    if (page != nullptr) {
+        jpdf::Domain::instance().page_closed();
+    }
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_FPDF_CopyViewerPreferences(FPDF_DOCUMENT dest_doc,
@@ -2224,7 +2234,11 @@ JPDF_API FPDF_DWORD jpdf_guard_FPDF_CountNamedDests(FPDF_DOCUMENT document) noex
 JPDF_API FPDF_DOCUMENT jpdf_guard_FPDF_CreateNewDocument(void) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return FPDF_CreateNewDocument();
+    auto result = FPDF_CreateNewDocument();
+    if (result != nullptr) {
+        jpdf::Domain::instance().document_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_FPDF_DeviceToPage(FPDF_PAGE page, int start_x, int start_y,
@@ -2324,8 +2338,12 @@ JPDF_API FPDF_DOCUMENT jpdf_guard_FPDF_ImportNPagesToOne(FPDF_DOCUMENT src_doc, 
                                                          size_t num_pages_on_y_axis) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return FPDF_ImportNPagesToOne(src_doc, output_width, output_height, num_pages_on_x_axis,
-                                  num_pages_on_y_axis);
+    auto result = FPDF_ImportNPagesToOne(src_doc, output_width, output_height, num_pages_on_x_axis,
+                                         num_pages_on_y_axis);
+    if (result != nullptr) {
+        jpdf::Domain::instance().document_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_FPDF_ImportPages(FPDF_DOCUMENT dest_doc, FPDF_DOCUMENT src_doc,

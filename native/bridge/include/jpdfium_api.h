@@ -22,7 +22,7 @@ extern "C" {
 
 // API version: a binding requires an equal major and a minor >= the one it was compiled against.
 #define JPDF_API_VERSION_MAJOR 1
-#define JPDF_API_VERSION_MINOR 4
+#define JPDF_API_VERSION_MINOR 5
 
 typedef int32_t jpdf_status;
 // Opaque generation-checked token; 0 is never valid. The bit layout is private.
@@ -50,6 +50,10 @@ typedef uint64_t jpdf_handle;
 #define JPDF_E_REENTRANT (-19)
 #define JPDF_E_CANCELLED (-20)
 #define JPDF_E_TIMEOUT (-21)
+// The destination was replaced, but the durability sync of the containing directory could not be
+// confirmed. Unlike a pre-publication failure the new bytes are already visible, so callers must
+// not treat this as "the destination was left untouched".
+#define JPDF_E_UNSYNCED (-22)
 #define JPDF_E_INTERNAL (-99)
 
 // Runtime lifecycle states reported by jpdf_runtime_get_info.
@@ -356,7 +360,9 @@ JPDF_API jpdf_status jpdf_page_get_text(jpdf_handle page, char* buffer, uint64_t
 // Renders into an independently owned bitmap; closing the page or document does not free it.
 JPDF_API jpdf_status jpdf_page_render(jpdf_handle page, const jpdf_render_options* options,
                                       jpdf_handle* out_bitmap) JPDF_NOEXCEPT;
-// Render and publish an image file through an output transaction; failure leaves path untouched.
+// Render and publish an image file through an output transaction. A failure before publication
+// leaves the destination untouched; JPDF_E_UNSYNCED means the replacement landed but its crash
+// durability could not be confirmed (the path already holds the new bytes).
 JPDF_API jpdf_status jpdf_page_render_to_file(jpdf_handle page, const jpdf_render_options* render,
                                               const char* path_utf8,
                                               const jpdf_write_options* write) JPDF_NOEXCEPT;

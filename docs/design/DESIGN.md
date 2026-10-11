@@ -134,6 +134,7 @@ map unknown negative values to an internal error, never to success.
 | `REENTRANT` | Called from inside the domain |
 | `CANCELLED`, `TIMEOUT` | Reserved |
 | `INTERNAL` | Unexpected native failure |
+| `UNSYNCED` | Destination was replaced, but the durability sync failed: the new bytes are visible, their crash durability is uncertain |
 
 Detail is per thread and per call: each call clears it, and the first failure in a call wins so
 cleanup cannot overwrite the cause. Read it before making another call on the same thread.
@@ -173,7 +174,19 @@ clears it. Bindings must check it after every guarded call, because a zero `int3
 indistinguishable from `JPDFIUM_OK`.
 
 No C++ exception crosses the ABI: every entry point is `noexcept` and runs its body inside an
-exception firewall that maps failures to status codes.
+exception firewall that maps failures to status codes. The generated guards keep that guarantee
+without a catch boundary of their own: each wrapped `jpdfium_*` function is itself `noexcept` or
+catches every exception internally, and the raw PDFium symbols are C functions that cannot throw
+across this frame. The guard's only added work is atomic lifetime accounting, which does not
+allocate and cannot throw.
+
+A small, fixed set of raw PDFium factories and their matching closes carry the same lifetime
+accounting as the bridge: `FPDF_CreateNewDocument`, `FPDF_ImportNPagesToOne` and `FPDFPage_New`
+record an open document or page when they return a non-null handle, and `FPDF_CloseDocument` and
+`FPDF_ClosePage` record the matching close. So a document or page created through the raw bindings
+still keeps `jpdf_runtime_shutdown` returning `JPDF_E_BUSY` until it is closed through the matching
+raw close. Objects the bridge creates are counted once, by the bridge, because the bridge calls
+PDFium directly and never through these guards.
 
 ## Runtime, handle and resource lifetime
 
@@ -255,6 +268,12 @@ are immutable after publication, so views need no locking.
 - `JPDF_WRITE_DURABLE` adds fsync of the file and its directory. It is a separate policy from
   atomicity.
 - A pre-publication failure removes the staging file and leaves the destination unchanged.
+- A successful call reports one of three outcomes, never conflated into "nothing changed": a
+  non-zero status before publication means the destination was not replaced; success means the
+  destination holds the new bytes and, with `JPDF_WRITE_DURABLE`, that they are durable; and
+  `JPDF_E_UNSYNCED` means the rename already replaced the destination but the directory sync failed,
+  so the new bytes are visible while their crash durability is uncertain. Callers must not assume a
+  non-zero status always means no external change.
 
 ## Callbacks and binding concurrency
 

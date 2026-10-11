@@ -122,6 +122,8 @@ const char* jpdf_status_name(jpdf_status status) noexcept {
             return "JPDF_E_CANCELLED";
         case JPDF_E_TIMEOUT:
             return "JPDF_E_TIMEOUT";
+        case JPDF_E_UNSYNCED:
+            return "JPDF_E_UNSYNCED";
         case JPDF_E_INTERNAL:
             return "JPDF_E_INTERNAL";
         default:

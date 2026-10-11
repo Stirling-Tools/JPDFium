@@ -5,6 +5,12 @@ Usage:
   nm -D --defined-only native/pdfium/lib/libpdfium.so | awk '{print $3}' > /tmp/pdfium.exports
   python native/tools/gen_guards.py --pdfium-include native/pdfium/include \
       --pdfium-exports /tmp/pdfium.exports
+
+Exception firewall: a guard shim is `noexcept` and adds no catch boundary of its own. That is safe
+because the entry point it forwards to already isolates exceptions -- every guarded `jpdfium_*`
+export is `noexcept` or wraps its body in `catch (...)`, and raw PDFium C symbols cannot throw
+across this frame -- so no C++ exception can escape `jpdf_guard_*` and terminate the process.
+The single lifetime-aware exception is the accounting added below, which only touches atomics.
 """
 
 from __future__ import annotations
@@ -29,6 +35,21 @@ UNGUARDED_BRIDGE = re.compile(r"^jpdfium_(qpdf_\w+|rust_\w+|abi_\w+|init|init_ex
 TEARDOWN = re.compile(r"(Close|close|Destroy|destroy|Exit|Free|free|Release|release|abandon|forget)")
 PDFIUM_SYMBOL = re.compile(r"^(FPDF|EPDF|FORM_|FSDK_)\w+$")
 NEVER_GUARD = {"FPDF_InitLibrary", "FPDF_InitLibraryWithConfig", "FPDF_DestroyLibrary"}
+
+# Raw factory/close shims that create or destroy a document/page the Java bindings own directly.
+# They must keep the safe-runtime lifetime counters in step with the bridge's own accounting so
+# `jpdf_runtime_shutdown` reports JPDF_E_BUSY for every supported path. The bridge's jpdfium_*
+# entry points call PDFium directly and are counted by the bridge itself, so counting only here
+# covers the raw surface without double counting.
+LIFETIME_OPEN = {
+    "FPDF_CreateNewDocument": "document_opened",
+    "FPDF_ImportNPagesToOne": "document_opened",
+    "FPDFPage_New": "page_opened",
+}
+LIFETIME_CLOSE = {
+    "FPDF_CloseDocument": "document_closed",
+    "FPDF_ClosePage": "page_closed",
+}
 
 
 @dataclass
@@ -110,7 +131,25 @@ def shim(fn: Function, header_comment: str = "") -> str:
     purpose = "Teardown" if TEARDOWN.search(fn.name) else "Ordinary"
     refused = "return;" if fn.ret == "void" else "return {};"
     call = f"{fn.name}({', '.join(args)})"
-    body = f"    {call};\n" if fn.ret == "void" else f"    return {call};\n"
+    if fn.name in LIFETIME_OPEN:
+        counter = LIFETIME_OPEN[fn.name]
+        body = (
+            f"    auto result = {call};\n"
+            f"    if (result != nullptr) {{\n"
+            f"        jpdf::Domain::instance().{counter}();\n"
+            f"    }}\n"
+            f"    return result;\n"
+        )
+    elif fn.name in LIFETIME_CLOSE:
+        counter = LIFETIME_CLOSE[fn.name]
+        body = (
+            f"    {call};\n"
+            f"    if ({args[0]} != nullptr) {{\n"
+            f"        jpdf::Domain::instance().{counter}();\n"
+            f"    }}\n"
+        )
+    else:
+        body = f"    {call};\n" if fn.ret == "void" else f"    return {call};\n"
     return (
         f"{header_comment}JPDF_API {fn.ret} jpdf_guard_{fn.name}({', '.join(decls) or 'void'}) noexcept {{\n"
         f"    jpdf::GuardScope guard(jpdf::Purpose::{purpose});\n"

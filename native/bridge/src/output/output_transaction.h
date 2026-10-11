@@ -22,7 +22,10 @@ class OutputTransaction {
     jpdf_status write(const uint8_t* data, size_t size) noexcept;
     jpdf_status finalize() noexcept;
     jpdf_status validate() noexcept;
-    // Atomic replace only: rename(2) or MoveFileExW. There is no non-atomic fallback.
+    // Atomic replace only: rename(2) or MoveFileExW. There is no non-atomic fallback. When the
+    // replacement lands but the durability sync of the directory cannot be confirmed the
+    // destination already holds the new bytes; publish() then returns JPDF_E_UNSYNCED, not a
+    // pre-publication failure, so callers must not treat every non-zero status as "unchanged".
     jpdf_status publish() noexcept;
     void abort() noexcept;
 
@@ -44,6 +47,8 @@ class OutputTransaction {
     OutputTransaction() = default;
 
     std::filesystem::path destination_;
+    // Resolved once at begin(); publish() must not allocate a path inside a noexcept function.
+    std::filesystem::path parent_;
     std::filesystem::path staging_;
     int fd_ = -1;
     bool durable_ = false;

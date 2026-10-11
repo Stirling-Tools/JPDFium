@@ -39,6 +39,11 @@ JPDF_API int64_t jpdf_guard_jpdfium_doc_raw_handle(int64_t doc) noexcept;
 JPDF_API int jpdf_guard_FPDF_GetPageCount(FPDF_DOCUMENT document) noexcept;
 JPDF_API FPDF_BOOL jpdf_guard_FPDF_SaveAsCopy(FPDF_DOCUMENT document, FPDF_FILEWRITE* pFileWrite,
                                               FPDF_DWORD flags) noexcept;
+JPDF_API FPDF_DOCUMENT jpdf_guard_FPDF_CreateNewDocument(void) noexcept;
+JPDF_API void jpdf_guard_FPDF_CloseDocument(FPDF_DOCUMENT document) noexcept;
+JPDF_API FPDF_PAGE jpdf_guard_FPDFPage_New(FPDF_DOCUMENT document, int page_index, double width,
+                                           double height) noexcept;
+JPDF_API void jpdf_guard_FPDF_ClosePage(FPDF_PAGE page) noexcept;
 }
 
 static int g_failures = 0;
@@ -223,6 +228,41 @@ void test_both_bindings_share_one_domain(const std::string& path) {
     CHECK(mismatches == 0, "legacy and safe callers interleave safely in one process");
 }
 
+// Documents and pages created through the raw PDFium guards must hold the domain open, exactly
+// as ones created through the legacy bridge do, so shutdown cannot free PDFium underneath them.
+// The matching raw close must release the accounting.
+void test_raw_factory_lifetime_accounting() {
+    jpdf_runtime_info before{};
+    before.struct_size = sizeof(before);
+    jpdf_runtime_get_info(&before);
+
+    FPDF_DOCUMENT raw_doc = jpdf_guard_FPDF_CreateNewDocument();
+    CHECK(raw_doc != nullptr, "raw FPDF_CreateNewDocument admitted by the guard");
+    jpdf_runtime_info opened{};
+    opened.struct_size = sizeof(opened);
+    jpdf_runtime_get_info(&opened);
+    CHECK(opened.live_documents == before.live_documents + 1, "the raw document is counted");
+    CHECK(jpdf_runtime_shutdown_within(50) == JPDF_E_BUSY,
+          "shutdown refuses while a raw-created document is live");
+    CHECK(jpdf_runtime_resume() == JPDF_OK, "resume after the refused shutdown");
+
+    FPDF_PAGE raw_page = jpdf_guard_FPDFPage_New(raw_doc, 0, 612, 792);
+    if (raw_page != nullptr) {
+        jpdf_runtime_info paged{};
+        paged.struct_size = sizeof(paged);
+        jpdf_runtime_get_info(&paged);
+        CHECK(paged.live_pages == before.live_pages + 1, "the raw page is counted");
+        jpdf_guard_FPDF_ClosePage(raw_page);
+    }
+
+    jpdf_guard_FPDF_CloseDocument(raw_doc);
+    jpdf_runtime_info after{};
+    after.struct_size = sizeof(after);
+    jpdf_runtime_get_info(&after);
+    CHECK(after.live_documents == before.live_documents, "document count returns to baseline");
+    CHECK(after.live_pages == before.live_pages, "page count returns to baseline");
+}
+
 void test_bounded_shutdown_then_stop() {
     const int64_t doc = open_legacy();
     std::atomic<bool> in_callback{false}, release{false};
@@ -283,6 +323,7 @@ int main() {
     test_callback_reentry_is_rejected();
     test_quiesce_admits_teardown_only();
     test_both_bindings_share_one_domain(path);
+    test_raw_factory_lifetime_accounting();
     test_bounded_shutdown_then_stop();
     std::remove(path.c_str());
     std::printf("=== failures: %d ===\n", g_failures);

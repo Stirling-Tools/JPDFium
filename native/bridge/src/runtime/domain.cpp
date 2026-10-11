@@ -58,7 +58,14 @@ jpdf_status Domain::init(int32_t renderer) noexcept {
         renderer != JPDF_RENDERER_SKIA) {
         return fail(JPDF_E_INVALID_ARGUMENT, "unknown renderer");
     }
-    std::lock_guard<std::timed_mutex> lock(mutex_);
+    // std::timed_mutex::lock can throw std::system_error; this function is noexcept, so a throw
+    // here would terminate before any ABI firewall could map it to a status.
+    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    try {
+        lock.lock();
+    } catch (const std::system_error&) {
+        return fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
+    }
     switch (state()) {
         case State::Running:
             if (renderer == JPDF_RENDERER_AUTO || renderer == renderer_.load()) return JPDF_OK;
@@ -102,11 +109,17 @@ jpdf_status Domain::resume() noexcept {
 jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
     if (t_in_domain) return fail(JPDF_E_REENTRANT, "shutdown called from inside the domain");
     std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
-    if (timeout_ms < 0) {
-        lock.lock();
-    } else if (!lock.try_lock_for(std::chrono::milliseconds(timeout_ms))) {
-        // Bounded so a JVM exit hook never parks behind a long-running operation.
-        return fail(JPDF_E_TIMEOUT, "PDFium domain stayed busy; shutdown skipped");
+    // Both lock() and try_lock_for() can throw std::system_error; this function is noexcept and
+    // must report a status instead of letting the exception terminate the process.
+    try {
+        if (timeout_ms < 0) {
+            lock.lock();
+        } else if (!lock.try_lock_for(std::chrono::milliseconds(timeout_ms))) {
+            // Bounded so a JVM exit hook never parks behind a long-running operation.
+            return fail(JPDF_E_TIMEOUT, "PDFium domain stayed busy; shutdown skipped");
+        }
+    } catch (const std::system_error&) {
+        return fail(JPDF_E_INTERNAL, "could not acquire the PDFium domain");
     }
     switch (state()) {
         case State::Stopped:
@@ -157,7 +170,14 @@ void Domain::document_opened() noexcept {
 }
 
 void Domain::document_closed() noexcept {
-    live_documents_.fetch_sub(1);
+    // Saturating so a mismatched close cannot wrap the counter and mask a real leak from
+    // shutdown's BUSY check.
+    for (uint64_t current = live_documents_.load(std::memory_order_relaxed); current != 0;) {
+        if (live_documents_.compare_exchange_weak(current, current - 1,
+                                                  std::memory_order_relaxed)) {
+            return;
+        }
+    }
 }
 
 void Domain::page_opened() noexcept {
@@ -165,7 +185,12 @@ void Domain::page_opened() noexcept {
 }
 
 void Domain::page_closed() noexcept {
-    live_pages_.fetch_sub(1);
+    // Saturating for the same reason as document_closed().
+    for (uint64_t current = live_pages_.load(std::memory_order_relaxed); current != 0;) {
+        if (live_pages_.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)) {
+            return;
+        }
+    }
 }
 
 Admission::Admission(Purpose purpose) noexcept {

@@ -32,13 +32,16 @@ namespace {
 constexpr int kMaxSymlinkHops = 32;
 constexpr int kStagingAttempts = 32;
 
-jpdf_status io_fail(std::string_view what, int err) noexcept {
+jpdf_status io_fail(jpdf_status status, std::string_view what, int err) noexcept {
     try {
-        return fail(JPDF_E_IO, what,
-                    ": " + std::error_code(err, std::generic_category()).message());
+        return fail(status, what, ": " + std::error_code(err, std::generic_category()).message());
     } catch (...) {
-        return fail(JPDF_E_IO, what);
+        return fail(status, what);
     }
+}
+
+jpdf_status io_fail(std::string_view what, int err) noexcept {
+    return io_fail(JPDF_E_IO, what, err);
 }
 
 long process_id() noexcept {
@@ -137,6 +140,7 @@ jpdf_status OutputTransaction::begin(const char* destination_utf8, bool durable,
         static std::atomic<unsigned> counter{0};
         std::unique_ptr<OutputTransaction> tx(new OutputTransaction());
         tx->destination_ = destination;
+        tx->parent_ = parent;
         tx->durable_ = durable;
         tx->max_bytes_ = max_bytes;
         for (int attempt = 0; attempt < kStagingAttempts; ++attempt) {
@@ -230,15 +234,15 @@ jpdf_status OutputTransaction::publish() noexcept {
     }
     if (durable_) {
         // Persist the directory entry so the rename itself survives a crash.
-        const int dfd =
-            ::open(destination_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int dfd = ::open(parent_.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
         const int err = dfd < 0 ? errno : (::fsync(dfd) != 0 ? errno : 0);
         if (dfd >= 0) ::close(dfd);
         if (err != 0) {
             // The rename already landed, so the destination holds the new bytes; only the
-            // guarantee that the entry survives a crash is missing.
+            // guarantee that the entry survives a crash is missing. Report a distinct status so
+            // callers do not read it as a pre-publication failure.
             stage_ = Stage::Published;
-            return io_fail("published, but syncing the directory failed", err);
+            return io_fail(JPDF_E_UNSYNCED, "published, but syncing the directory failed", err);
         }
     }
 #endif
