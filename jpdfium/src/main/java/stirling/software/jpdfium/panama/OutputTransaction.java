@@ -116,7 +116,9 @@ public final class OutputTransaction implements AutoCloseable {
     public void publish(SaveOptions options) throws IOException {
         if (published) return;
         validateStaged(staging, options);
-        publishStaged(staging, destination, durable);
+        // destination was already symlink-resolved in begin(); resolve it once
+        // there, not again on every publish.
+        publishResolved(staging, destination, durable);
         published = true;
     }
 
@@ -149,15 +151,25 @@ public final class OutputTransaction implements AutoCloseable {
      */
     public static void publishStaged(Path staging, Path destination, boolean durable)
             throws IOException {
-        if (durable) {
-            publishDurable(staging, destination);
-            return;
-        }
-        moveIntoPlace(staging, resolveSymlinks(destination));
+        publishResolved(staging, resolveSymlinks(destination), durable);
     }
 
-    private static void publishDurable(Path staging, Path destination) throws IOException {
-        Path target = resolveSymlinks(destination);
+    /**
+     * Publish when {@code target} is already symlink-resolved. The instance path
+     * resolves the destination once in {@code begin()}; re-walking symlinks here
+     * would repeat up to {@link #MAX_SYMLINK_HOPS} stat/readlink calls per publish
+     * for no benefit.
+     */
+    private static void publishResolved(Path staging, Path target, boolean durable)
+            throws IOException {
+        if (durable) {
+            publishDurableResolved(staging, target);
+            return;
+        }
+        moveIntoPlace(staging, target);
+    }
+
+    private static void publishDurableResolved(Path staging, Path target) throws IOException {
         applyDestinationPermissions(staging, target);
         // Flush file content before the rename: without this a power loss can
         // leave the destination with zero or partial bytes despite a

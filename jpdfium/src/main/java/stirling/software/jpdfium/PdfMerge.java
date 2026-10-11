@@ -16,6 +16,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -390,8 +391,12 @@ public final class PdfMerge {
             return false;
         }
         try {
-            if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
-            AtomicPublish.replace(staged, output);
+            if (!QpdfLib.mergeFilesInto(paths, staged) || Files.size(staged) == 0) return false;
+            // Single durable commit: the native writer filled the staging file
+            // this method owns, so this is the only rename and the only fsync on
+            // the merge-to-file path. Nothing is fsynced under an intermediate
+            // name that is about to be renamed away.
+            OutputTransaction.publishStaged(staged, output, true);
             staged = null;
             return true;
         } finally {

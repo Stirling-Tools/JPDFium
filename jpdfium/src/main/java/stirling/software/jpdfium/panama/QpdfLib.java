@@ -404,22 +404,9 @@ public final class QpdfLib {
         // commit, empty-file and budget checks.
         try (QpdfCall call = new QpdfCall();
                 OutputTransaction tx = OutputTransaction.begin(output, durable)) {
-            int count = inputs.size();
-            MemorySegment pathsArraySeg = call.arena.allocate(ADDRESS, count);
-            for (int i = 0; i < count; i++) {
-                Path p = inputs.get(i);
-                if (p == null) {
-                    pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
-                } else {
-                    MemorySegment s = call.cString(p.toAbsolutePath().toString());
-                    pathsArraySeg.setAtIndex(ADDRESS, i, s);
-                }
-            }
             rejectAlias(inputs, output);
             staging = tx.staging();
-            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
-            int rc = (int) MERGE_FILES_HANDLE.invokeExact(pathsArraySeg, count, outSeg);
-            if (rc != 0) {
+            if (invokeMergeFiles(call, inputs, staging) != 0) {
                 return false;
             }
             publish(staging, output, durable);
@@ -432,6 +419,59 @@ public final class QpdfLib {
             deleteQuietly(staging);
             releaseSlot(held);
         }
+    }
+
+    /**
+     * Write a merged PDF straight into a caller-owned staging file.
+     *
+     * <p>Unlike {@link #mergeFiles(List, Path, boolean)} this creates no second
+     * staging file and publishes nothing: the caller writes into the staging
+     * file it already placed beside the destination and publishes it exactly
+     * once. That keeps a single owner of the final rename and removes the
+     * nested staging/rename cycle. QpdfLib still owns the job slot, the
+     * alias rejection and the native error mapping.
+     *
+     * @param inputs        input PDF file paths
+     * @param stagingTarget a staging file the caller owns and will delete
+     * @return true on success; false if the file operation is unavailable or failed
+     */
+    public static boolean mergeFilesInto(List<Path> inputs, Path stagingTarget) {
+        if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty()
+                || stagingTarget == null) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf merge interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            rejectAlias(inputs, stagingTarget);
+            return invokeMergeFiles(call, inputs, stagingTarget) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf merge files failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeMergeFiles(QpdfCall call, List<Path> inputs, Path stagingTarget)
+            throws Throwable {
+        int count = inputs.size();
+        MemorySegment pathsArraySeg = call.arena.allocate(ADDRESS, count);
+        for (int i = 0; i < count; i++) {
+            Path p = inputs.get(i);
+            if (p == null) {
+                pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
+            } else {
+                pathsArraySeg.setAtIndex(ADDRESS, i, call.cString(p.toAbsolutePath().toString()));
+            }
+        }
+        MemorySegment outSeg = call.cString(stagingTarget.toAbsolutePath().toString());
+        return (int) MERGE_FILES_HANDLE.invokeExact(pathsArraySeg, count, outSeg);
     }
 
     /**
@@ -468,14 +508,9 @@ public final class QpdfLib {
         Path staging = null;
         try (QpdfCall call = new QpdfCall();
                 OutputTransaction tx = OutputTransaction.begin(output, durable)) {
-            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
-            MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
             rejectAlias(List.of(input), output);
             staging = tx.staging();
-            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
-            int rc = (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
-                    inSeg, indicesSeg, pageIndices.length, outSeg);
-            if (rc != 0) {
+            if (invokeExtractPagesToFile(call, input, pageIndices, staging) != 0) {
                 return false;
             }
             publish(staging, output, durable);
@@ -488,6 +523,52 @@ public final class QpdfLib {
             deleteQuietly(staging);
             releaseSlot(held);
         }
+    }
+
+    /**
+     * Extract pages straight into a caller-owned staging file.
+     *
+     * <p>The file-backed counterpart of {@link #mergeFilesInto}: no second
+     * staging file, no publication. The caller validates and publishes once.
+     *
+     * @param input         input PDF file path
+     * @param pageIndices   zero-based page indices to extract
+     * @param stagingTarget a staging file the caller owns and will delete
+     * @return true on success; false if the file operation is unavailable or failed
+     */
+    public static boolean extractPagesInto(Path input, int[] pageIndices, Path stagingTarget) {
+        if (EXTRACT_PAGES_FILE_HANDLE == null || input == null || stagingTarget == null
+                || pageIndices == null || pageIndices.length == 0) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            rejectAlias(List.of(input), stagingTarget);
+            return invokeExtractPagesToFile(call, input, pageIndices, stagingTarget) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf extract pages to file failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeExtractPagesToFile(QpdfCall call, Path input, int[] pageIndices,
+            Path stagingTarget) throws Throwable {
+        MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+        // copyInts already copies into off-heap memory; the clone keeps the
+        // caller's array as the immutable snapshot for the duration of the call
+        // so a concurrent mutation cannot tear the index list.
+        MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
+        MemorySegment outSeg = call.cString(stagingTarget.toAbsolutePath().toString());
+        return (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
+                inSeg, indicesSeg, pageIndices.length, outSeg);
     }
 
     public static byte[] extractPages(byte[] input, int[] pageIndices) {

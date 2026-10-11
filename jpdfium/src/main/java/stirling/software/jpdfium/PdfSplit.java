@@ -20,6 +20,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -474,7 +475,7 @@ public final class PdfSplit {
             return false;
         }
         try {
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+            if (!QpdfLib.extractPagesInto(input, pageIndices, staged) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -485,7 +486,10 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            AtomicPublish.replace(staged, output);
+            // Single durable commit: the native extractor filled the staging
+            // file this method owns, so this is the only rename and the only
+            // fsync on the extract-to-file path.
+            OutputTransaction.publishStaged(staged, output, true);
             staged = null;
             return true;
         } finally {
