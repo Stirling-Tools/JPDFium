@@ -934,29 +934,58 @@ fn decode_png(
         png::ColorType::Rgba => (4, 3),
         _ => return DECODE_ERR_FORMAT,
     };
-    let Some(size) = reader.output_buffer_size() else { return DECODE_ERR_LIMIT };
-    let mut frame = vec![0u8; size];
-    let Ok(info) = reader.next_frame(&mut frame) else { return DECODE_ERR_FORMAT };
     let (w, h) = (width as usize, height as usize);
     let Some(out_size) = w.checked_mul(h).and_then(|n| n.checked_mul(out_channels)) else {
         return DECODE_ERR_LIMIT;
     };
+    let Some(frame_size) = reader.output_buffer_size() else { return DECODE_ERR_LIMIT };
+    // When the channel count does not change, a de-interlaced output row is exactly
+    // `w * out_channels` bytes, so the whole image is `out_size` and the decoder can write it
+    // straight into the destination - no intermediate frame and no second pass. Interlaced
+    // images whose channels are reduced still need one full output frame, because their rows
+    // arrive in Adam7 pass order rather than row by row.
+    let interlaced = reader.info().interlaced;
+    let direct = in_channels == out_channels && frame_size == out_size;
+    let mut frame = if direct { Vec::new() } else { vec![0u8; frame_size] };
     let pixels = unsafe { alloc(ctx, out_size) };
     if pixels.is_null() {
         return DECODE_ERR_ALLOC;
     }
     let dst = unsafe { slice::from_raw_parts_mut(pixels, out_size) };
     // Alpha is dropped without compositing, as IMREAD_COLOR does.
-    for y in 0..h {
-        let src = &frame[y * info.line_size..y * info.line_size + w * in_channels];
-        let row = &mut dst[y * w * out_channels..(y + 1) * w * out_channels];
-        if in_channels == out_channels {
-            row.copy_from_slice(src);
-        } else {
-            for (o, i) in row.chunks_exact_mut(out_channels).zip(src.chunks_exact(in_channels)) {
-                o.copy_from_slice(&i[..out_channels]);
+    let decoded = if direct {
+        reader.next_frame(dst).is_ok()
+    } else if in_channels == out_channels || interlaced {
+        match reader.next_frame(&mut frame) {
+            Ok(info) => {
+                for y in 0..h {
+                    let src = &frame[y * info.line_size..y * info.line_size + w * in_channels];
+                    let row = &mut dst[y * w * out_channels..(y + 1) * w * out_channels];
+                    convert_row(src, row, in_channels, out_channels);
+                }
+                true
+            }
+            Err(_) => false,
+        }
+    } else {
+        // Non-interlaced channel reduction: consume one full-width output row at a time and
+        // convert it straight into the destination, skipping the full-frame allocation.
+        let mut y = 0usize;
+        while y < h {
+            match reader.next_row() {
+                Ok(Some(row)) => {
+                    let out = &mut dst[y * w * out_channels..(y + 1) * w * out_channels];
+                    convert_row(&row.data()[..w * in_channels], out, in_channels, out_channels);
+                    y += 1;
+                }
+                Ok(None) => break,
+                Err(_) => return DECODE_ERR_FORMAT,
             }
         }
+        y == h
+    };
+    if !decoded {
+        return DECODE_ERR_FORMAT;
     }
     *out = JpdfiumDecodedImage {
         width,
@@ -967,6 +996,41 @@ fn decode_png(
         pixels,
     };
     DECODE_OK
+}
+
+// Copies one decoded output row into the destination, dropping the alpha channel when present.
+// The per-layout branches let the compiler emit wide loads/stores; the generic `chunks_exact`
+// iterator used before does not vectorize here and costs several milliseconds over a full image.
+#[inline]
+fn convert_row(src: &[u8], row: &mut [u8], in_channels: usize, out_channels: usize) {
+    match (in_channels, out_channels) {
+        (1, 1) | (3, 3) => row.copy_from_slice(&src[..row.len()]),
+        (4, 3) => {
+            let n = row.len() / 3;
+            for i in 0..n {
+                let v = u32::from_le_bytes([
+                    src[i * 4],
+                    src[i * 4 + 1],
+                    src[i * 4 + 2],
+                    src[i * 4 + 3],
+                ]);
+                let b = v.to_le_bytes();
+                row[i * 3] = b[0];
+                row[i * 3 + 1] = b[1];
+                row[i * 3 + 2] = b[2];
+            }
+        }
+        (2, 1) => {
+            for (i, o) in row.iter_mut().enumerate() {
+                *o = src[i * 2];
+            }
+        }
+        _ => {
+            for (o, i) in row.chunks_exact_mut(out_channels).zip(src.chunks_exact(in_channels)) {
+                o.copy_from_slice(&i[..out_channels]);
+            }
+        }
+    }
 }
 
 /// Decodes a PNG held in memory into pixels obtained from `alloc`. Returns 0, -1 not a supported
