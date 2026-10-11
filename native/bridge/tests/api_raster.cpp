@@ -261,6 +261,51 @@ std::vector<uint8_t> pixels(jpdf_handle bmp) {
     return out;
 }
 
+void test_pixel_kernels() {
+    // The render path allocates RGBA, narrows in place, and (as of this change) shrinks the
+    // allocation. Verify the shipped kernels against the scalar reference formulas by comparing a
+    // narrowed render with the same render's RGBA pixels: byte-for-byte, no compiler autovectorizer
+    // help, and a width that is not a multiple of the vector length exercises the tail.
+    const std::string letter = (scratch() / "letter.pdf").string();
+    const jpdf_handle rgba_bmp = render_bitmap(letter, 72, JPDF_PIXEL_RGBA8);
+    const jpdf_handle rgb_bmp = render_bitmap(letter, 72, JPDF_PIXEL_RGB8);
+    const jpdf_handle gray_bmp = render_bitmap(letter, 72, JPDF_PIXEL_GRAY8);
+
+    jpdf_bitmap_info info{};
+    info.struct_size = sizeof(info);
+    CHECK_STATUS(jpdf_bitmap_get_info(rgba_bmp, &info), JPDF_OK, "rgba bitmap info");
+    const size_t count = static_cast<size_t>(info.width) * static_cast<size_t>(info.height);
+    CHECK(info.width > 0 && info.byte_size == count * 4, "rgba info reports the full allocation");
+    CHECK(info.width % 16 != 0, "render width exercises the vector tail");
+
+    const std::vector<uint8_t> rgba = pixels(rgba_bmp);
+    const std::vector<uint8_t> rgb = pixels(rgb_bmp);
+    const std::vector<uint8_t> gray = pixels(gray_bmp);
+    CHECK(rgba.size() == count * 4 && rgb.size() == count * 3 && gray.size() == count,
+          "narrowed bitmaps report the logical size they were shrunk to");
+
+    bool rgb_exact = rgb.size() == count * 3;
+    for (size_t i = 0; rgb_exact && i < count; ++i) {
+        rgb_exact = rgb[i * 3] == rgba[i * 4] && rgb[i * 3 + 1] == rgba[i * 4 + 1] &&
+                    rgb[i * 3 + 2] == rgba[i * 4 + 2];
+    }
+    CHECK(rgb_exact, "RGB8 is byte-identical to the scalar RGBA->RGB narrowing");
+
+    bool gray_exact = gray.size() == count;
+    for (size_t i = 0; gray_exact && i < count; ++i) {
+        const uint32_t r = rgba[i * 4];
+        const uint32_t g = rgba[i * 4 + 1];
+        const uint32_t b = rgba[i * 4 + 2];
+        const uint32_t luma = (r * 19595 + g * 38470 + b * 7471 + 0x8000) >> 16;
+        gray_exact = gray[i] == static_cast<uint8_t>(luma);
+    }
+    CHECK(gray_exact, "GRAY8 is byte-identical to the Pillow ITU-R 601-2 luma formula");
+
+    jpdf_bitmap_close(rgba_bmp);
+    jpdf_bitmap_close(rgb_bmp);
+    jpdf_bitmap_close(gray_bmp);
+}
+
 void test_rectify() {
     const std::string letter = (scratch() / "letter.pdf").string();
     const jpdf_handle src = render_bitmap(letter, 72, JPDF_PIXEL_GRAY8);
@@ -340,6 +385,7 @@ int main() {
     test_rounding_matches_python();
     test_rotation_and_boxes();
     test_rejections();
+    test_pixel_kernels();
     test_rectify();
     std::error_code ec;
     fs::remove_all(scratch(), ec);
