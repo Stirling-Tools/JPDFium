@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include "images/pixels.h"
 #include "jpdfium_api.h"
@@ -175,8 +176,11 @@ jpdf_status render(const char* path, int32_t index, const RasterRequest& req, Ca
     const size_t bytes = static_cast<size_t>(canvas->stride) * static_cast<size_t>(canvas->height);
     canvas->data.reset(static_cast<uint8_t*>(std::malloc(bytes)));
     if (!canvas->data) return jpdf::fail(JPDF_E_NO_MEMORY, "raster buffer allocation failed");
-    std::memset(canvas->data.get(), 0xFF, bytes);
     if (canvas->channels == 4) {
+        // Skia renders BGRA only; convert after leaving the domain. Not parity-qualified.
+        // jpdfium_render_into_buffer leaves unpainted pixels untouched, so this path still
+        // needs the explicit white pre-fill.
+        std::memset(canvas->data.get(), 0xFF, bytes);
         if (jpdfium_render_into_buffer(page.page, canvas->data.get(), bytes, canvas->width,
                                        canvas->height, canvas->stride,
                                        flags | FPDF_REVERSE_BYTE_ORDER) != JPDFIUM_OK) {
@@ -184,6 +188,9 @@ jpdf_status render(const char* path, int32_t index, const RasterRequest& req, Ca
         }
         return JPDF_OK;
     }
+    // The AGG path whitens every readable pixel with FPDFBitmap_FillRect below, so a separate
+    // full-frame memset would only duplicate that pass. Row padding is never read by the
+    // encoder or the dither, so it need not be initialised.
     const int format = gray ? FPDFBitmap_Gray : FPDFBitmap_BGR;
     FPDF_BITMAP bitmap = FPDFBitmap_CreateEx(canvas->width, canvas->height, format,
                                              canvas->data.get(), canvas->stride);
@@ -272,16 +279,45 @@ jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
         int32_t w = 0, h = 0;
         fitted_size(canvas, ew, eh, &w, &h);
         const int32_t channels = gray_device(req.device) ? 1 : 3;
-        jpdf::PixelBuffer image = fit(canvas, w, h, channels);
-        if (!image) return jpdf::fail(JPDF_E_NO_MEMORY, "raster output allocation failed");
-        canvas.data.reset();
+
+        // Fast path. fitted_size only trims or crops the canvas, so the result is always a
+        // top-left sub-rectangle of it, and in this build canvas.channels already equals the
+        // encoder's channel count. The encoder reads exactly w*channels bytes per row from
+        // y*stride, so the canvas's real (4-byte padded) stride and the rows below h are never
+        // addressed: encode straight from the rendered canvas and skip fit()'s full-size
+        // allocate, white fill and per-pixel copy. A BGR canvas is swapped to RGB in place.
+        // fit() still runs when the layout genuinely differs (Skia's 4-channel BGRA needs the
+        // channel change plus Skia's own gray formula) or when a future caller needs padding.
+        jpdf::PixelBuffer fitted;
+        const uint8_t* pixels = nullptr;
+        int32_t pixels_stride = 0;
+        const bool reuse = w <= canvas.width && h <= canvas.height && channels == canvas.channels;
+        if (reuse) {
+            uint8_t* base = canvas.data.get();
+            if (channels == 3 && canvas.bgr) {
+                for (int32_t y = 0; y < h; ++y) {
+                    uint8_t* row = base + static_cast<ptrdiff_t>(y) * canvas.stride;
+                    for (int32_t x = 0; x < w; ++x) {
+                        std::swap(row[x * 3], row[x * 3 + 2]);
+                    }
+                }
+            }
+            pixels = base;
+            pixels_stride = canvas.stride;
+        } else {
+            fitted = fit(canvas, w, h, channels);
+            if (!fitted) return jpdf::fail(JPDF_E_NO_MEMORY, "raster output allocation failed");
+            pixels = fitted.get();
+            pixels_stride = w * channels;
+            canvas.data.reset();
+        }
 
         // Ghostscript swaps the DPI axes with the image for quarter-turn corrections.
         const bool swap = req.rotation_ccw % 180 == 90;
-        jpdf::PngImage png{image.get(),
+        jpdf::PngImage png{pixels,
                            w,
                            h,
-                           w * channels,
+                           pixels_stride,
                            channels,
                            swap ? req.out_dpi_y : req.out_dpi_x,
                            swap ? req.out_dpi_x : req.out_dpi_y};
@@ -291,7 +327,9 @@ jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
             bits.reset(static_cast<uint8_t*>(
                 std::malloc(static_cast<size_t>(bits_stride) * static_cast<size_t>(h))));
             if (!bits) return jpdf::fail(JPDF_E_NO_MEMORY, "raster output allocation failed");
-            jpdf::dither_to_bits(image.get(), w, h, w, bits.get(), bits_stride);
+            // The gray buffer's real stride, not an assumed w, since the fast path reads the
+            // canvas directly and a 4-byte-padded row is wider than w for gray canvases.
+            jpdf::dither_to_bits(pixels, w, h, pixels_stride, bits.get(), bits_stride);
             png.data = bits.get();
             png.stride = bits_stride;
             png.channels = 0;
