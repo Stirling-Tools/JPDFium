@@ -56,10 +56,9 @@ public class PdfiumDomainBenchmark {
     private Arena arena;
     private MemorySegment outSegment;
     /**
-     * Guarded downcall built once per trial, like production static handles:
-     * building it per invocation would measure handle construction (foldArguments
-     * plus tryFinally) instead of the steady-state admission cost and bias the
-     * comparison against the typed binding, whose handle is a static final.
+     * The shared static guarded handle for {@code jpdfium_page_width}, the same
+     * one {@link JpdfiumLib#pageWidth} uses. Held here to invoke it without the
+     * typed binding's {@code check} and scratch-slot wrapper.
      */
     private MethodHandle guardedWidth;
 
@@ -153,15 +152,15 @@ public class PdfiumDomainBenchmark {
     }
 
     /**
-     * Guarded MethodHandle: the wrapper cost for raw bindings, which is the
-     * other candidate admission path. Invokes the same {@code jpdfium_page_width}
-     * downcall as {@link #pageWidthHeightPair}, but reached through the raw
-     * {@link FastLinks#PAGE_WIDTH} handle instead of the typed binding, so the
-     * difference between the two is exactly the admission mechanism.
+     * Invokes {@code jpdfium_page_width} through the raw guarded
+     * {@link FastLinks#PAGE_WIDTH} handle, bypassing the typed binding's
+     * {@code check} and scratch-slot handling. It reaches the same native guard
+     * as {@link #pageWidthHeightPair}, so the difference between the two is the
+     * typed wrapper cost, not the admission mechanism.
      */
     @Benchmark
     @OperationsPerInvocation(BATCH)
-    public float guardedGeometryPair() throws Throwable {
+    public float rawGuardedWidth() throws Throwable {
         MethodHandle width = guardedWidth;
         long h = pageHandle;
         float acc = 0;
