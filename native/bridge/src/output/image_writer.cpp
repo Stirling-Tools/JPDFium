@@ -1,4 +1,4 @@
-// image_writer.cpp - PNG output through the Rust encoder and an OutputTransaction.
+// image_writer.cpp - PNG and document output through an OutputTransaction.
 
 #include "image_writer.h"
 
@@ -8,13 +8,7 @@
 
 #include "output_transaction.h"
 #include "runtime/api_status.h"
-
-extern "C" {
-typedef int32_t (*jpdfium_write_sink)(void* ctx, const uint8_t* data, size_t len);
-int32_t jpdfium_rust_write_png(const uint8_t* pixels, int32_t width, int32_t height, int32_t stride,
-                               int32_t channels, uint32_t ppm_x, uint32_t ppm_y,
-                               int32_t compression, jpdfium_write_sink sink, void* ctx);
-}
+#include "rust_codecs.h"
 
 namespace jpdf {
 
@@ -59,6 +53,35 @@ jpdf_status parse_write_options(const jpdf_write_options* options, WriteRequest*
     out->png_compression = options->png_compression < 0 ? 6 : options->png_compression;
     out->max_bytes = options->max_bytes;
     return JPDF_OK;
+}
+
+jpdf_status parse_document_write_options(const jpdf_write_options* options,
+                                         WriteRequest* out) noexcept {
+    *out = WriteRequest{};
+    if (!options) return JPDF_OK;
+    jpdf_status st = check_input_struct(options, options->struct_size, sizeof(jpdf_write_options),
+                                        sizeof(jpdf_write_options), "jpdf_write_options");
+    if (st != JPDF_OK) return st;
+    if ((options->flags & ~JPDF_WRITE_DURABLE) != 0) {
+        return fail(JPDF_E_UNSUPPORTED, "unknown jpdf_write_options.flags bits");
+    }
+    if (options->image_format != 0 || options->png_compression != 0) {
+        return fail(JPDF_E_UNSUPPORTED, "image_format and png_compression must be 0 here");
+    }
+    out->durable = (options->flags & JPDF_WRITE_DURABLE) != 0;
+    out->max_bytes = options->max_bytes;
+    return JPDF_OK;
+}
+
+jpdf_status write_bytes_file(const uint8_t* data, size_t size, const char* path_utf8,
+                             const WriteRequest& request) noexcept {
+    std::unique_ptr<OutputTransaction> tx;
+    jpdf_status st = OutputTransaction::begin(path_utf8, request.durable, request.max_bytes, &tx);
+    if (st != JPDF_OK) return st;
+    if ((st = tx->write(data, size)) != JPDF_OK) return st;
+    if ((st = tx->finalize()) != JPDF_OK) return st;
+    if ((st = tx->validate()) != JPDF_OK) return st;
+    return tx->publish();
 }
 
 jpdf_status write_image_file(const PixelStorage& pixels, const char* path_utf8,

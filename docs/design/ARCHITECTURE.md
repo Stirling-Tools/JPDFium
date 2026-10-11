@@ -8,8 +8,8 @@ JPDFium's native library owns PDFium serialization, lifecycle, handle validation
 ownership. Java (FFM) and Python (nanobind, in the PyJPDFium repository) are peer bindings over
 one safe C API, `native/bridge/include/jpdfium_api.h`. Python needs no JVM.
 
-Native-first buys deployment simplicity and one implementation. It does not buy isolation: a
-native crash still ends the host process. Hard isolation stays an optional worker process.
+Native-first buys deployment simplicity and one implementation. The core runs inside the host
+process; jobs that need their own memory or time limits can run in an optional worker process.
 
 ```text
 Java API (FFM)            Python API (nanobind, PyJPDFium)
@@ -41,7 +41,8 @@ other is refused, so an unguarded legacy caller can never run beside the domain.
 | `native/bridge/src/objects/` | Generation-checked object table |
 | `native/bridge/src/pdf/` | Document, page and render entry points |
 | `native/bridge/src/images/` | Owned pixel storage, format conversion, bitmap entry points |
-| `native/bridge/src/output/` | Output transactions and image writers |
+| `native/bridge/src/output/` | Output transactions, image and document writers |
+| `native/bridge/src/textlayer/` | Invisible text layer PDFs and their built-in glyphless font |
 | `native/bridge/src/legacy/` | Generated `jpdf_guard_*` shims for the legacy surface |
 | `native/bridge/tests/api_*.cpp` | Table unit tests, real-PDFium API and guard tests |
 
@@ -51,5 +52,8 @@ In: lazy Python loading, safe document/page/bitmap handles, one native PDFium do
 and close-race tests, stale-handle rejection, transactional render output, the Java migration
 map. Out: OCR, text-layer writing, OCRmyPDF, broader bindings, optimization, IPC.
 
-Related: [RASTER.md](RASTER.md), [NATIVE_ABI.md](NATIVE_ABI.md), [LIFETIME.md](LIFETIME.md),
-[CALLBACKS.md](CALLBACKS.md), [CAPABILITIES.md](CAPABILITIES.md), [TESTING.md](TESTING.md).
+Later stages added OCRmyPDF-compatible rasterization ([RASTER.md](RASTER.md)) and the synthetic
+text-layer writer ([TEXT_LAYER.md](TEXT_LAYER.md)).
+
+Related: [NATIVE_ABI.md](NATIVE_ABI.md), [LIFETIME.md](LIFETIME.md), [CALLBACKS.md](CALLBACKS.md),
+[CAPABILITIES.md](CAPABILITIES.md), [TESTING.md](TESTING.md).

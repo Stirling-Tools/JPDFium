@@ -35,6 +35,20 @@ closes admitted while quiescing, resume, legacy and safe-API callers rendering b
 on 8 threads in one process (the Java plus Python case), and bounded shutdown timing out behind a
 busy domain.
 
+## `api_text_layer` coverage
+
+Text layers read back through PDFium. The test covers:
+
+- page size, and text in logical order, including combining marks, CJK and code points outside
+  the BMP;
+- blank rendering and byte-identical output;
+- 200 repeated writes under LeakSanitizer;
+- input rejections, larger caller structs, and transactional failure;
+- four concurrent writers beside a reader, under TSan.
+
+Checks with independent tools, including OCRmyPDF's own graft, are in PyJPDFium's parity suite
+([TEXT_LAYER.md](TEXT_LAYER.md)).
+
 ## Java suite against real natives
 
 With the Java lock removed, the full `:jpdfium:test` suite runs against real linux-x64 natives

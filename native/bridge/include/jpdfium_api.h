@@ -22,7 +22,7 @@ extern "C" {
 
 // API version: a binding requires an equal major and a minor >= the one it was compiled against.
 #define JPDF_API_VERSION_MAJOR 1
-#define JPDF_API_VERSION_MINOR 1
+#define JPDF_API_VERSION_MINOR 2
 
 typedef int32_t jpdf_status;
 // Opaque generation-checked token; 0 is never valid. The bit layout is private.
@@ -82,6 +82,9 @@ typedef uint64_t jpdf_handle;
 #define JPDF_STRUCT_RASTER_RESULT 10
 #define JPDF_STRUCT_RECTIFY_OPTIONS 11
 #define JPDF_STRUCT_RECTIFY_RESULT 12
+#define JPDF_STRUCT_TEXT_WORD 13
+#define JPDF_STRUCT_TEXT_LINE 14
+#define JPDF_STRUCT_TEXT_LAYER_OPTIONS 15
 
 typedef struct jpdf_runtime_options {
     uint32_t struct_size;
@@ -247,6 +250,43 @@ typedef struct jpdf_rectify_result {
     double to_source[9];  // row-major homography mapping output pixel centres to source pixels
 } jpdf_rectify_result;
 
+// Built-in glyphless font: every glyph is blank; /ToUnicode carries the exact text.
+#define JPDF_FONT_GLYPHLESS 1
+
+// Boxes are in image pixels, origin top-left. Arrays of these structs are read with the first
+// element's struct_size as the stride, and every element must carry the same struct_size.
+typedef struct jpdf_text_word {
+    uint32_t struct_size;
+    uint32_t flags;         // reserved, must be 0
+    const char* text_utf8;  // logical order, valid UTF-8, not empty, no control characters
+    double x0;              // x1 >= x0; the line sets the vertical placement
+    double y0;
+    double x1;
+    double y1;
+} jpdf_text_word;
+
+typedef struct jpdf_text_line {
+    uint32_t struct_size;
+    uint32_t flags;  // reserved, must be 0
+    double x0;
+    double y0;  // y1 > y0: the line height is the font size
+    double x1;
+    double y1;
+    int32_t word_count;  // takes the next word_count words, at least 1
+    int32_t reserved0;
+} jpdf_text_line;
+
+typedef struct jpdf_text_layer_options {
+    uint32_t struct_size;
+    uint32_t flags;  // reserved, must be 0
+    int32_t image_width;
+    int32_t image_height;
+    double dpi_x;  // the page is image_width / dpi_x * 72 points wide
+    double dpi_y;
+    int32_t font;  // JPDF_FONT_GLYPHLESS, or 0 for it
+    int32_t reserved0;
+} jpdf_text_layer_options;
+
 // --- Identity, errors, capabilities. Callable in every runtime state. ---
 
 // (major << 16) | minor of the loaded library.
@@ -292,6 +332,9 @@ JPDF_API jpdf_status jpdf_page_open(jpdf_handle doc, int32_t index,
                                     jpdf_handle* out_page) JPDF_NOEXCEPT;
 JPDF_API jpdf_status jpdf_page_close(jpdf_handle page) JPDF_NOEXCEPT;
 JPDF_API jpdf_status jpdf_page_get_info(jpdf_handle page, jpdf_page_info* out) JPDF_NOEXCEPT;
+// UTF-8 text in PDFium's extraction order. required includes the NUL; a NULL buffer only sizes.
+JPDF_API jpdf_status jpdf_page_get_text(jpdf_handle page, char* buffer, uint64_t capacity,
+                                        uint64_t* required) JPDF_NOEXCEPT;
 
 // Renders into an independently owned bitmap; closing the page or document does not free it.
 JPDF_API jpdf_status jpdf_page_render(jpdf_handle page, const jpdf_render_options* options,
@@ -318,6 +361,16 @@ JPDF_API jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8
                                          const jpdf_rectify_options* options,
                                          jpdf_handle* out_bitmap,
                                          jpdf_rectify_result* out_result) JPDF_NOEXCEPT;
+
+// --- Invisible text layers (OCRmyPDF generate_pdf). No PDFium: never enters the domain. ---
+
+// Writes a one-page PDF sized to the image that holds only invisible text, through an output
+// transaction. write may be NULL; its image fields must be 0. See docs/design/TEXT_LAYER.md.
+JPDF_API jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* options,
+                                           const jpdf_text_line* lines, int32_t line_count,
+                                           const jpdf_text_word* words, int32_t word_count,
+                                           const char* output_path_utf8,
+                                           const jpdf_write_options* write) JPDF_NOEXCEPT;
 
 // --- Rasterization for OCR pipelines (the OCRmyPDF rasterize_pdf_page contract). ---
 

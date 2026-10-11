@@ -8,6 +8,7 @@
 //   jpdfium_rust_resize_pixels  - fast_image_resize SIMD pixel scaling (Lanczos3)
 //   jpdfium_rust_unpack_pixels  - gray/rgb/cmyk/bgr samples -> opaque ARGB u32
 //   jpdfium_rust_compress_png   - oxipng lossless PNG optimisation
+//   jpdfium_rust_zlib_compress  - streaming zlib for PDF /FlateDecode streams
 //   jpdfium_rust_free           - free buffers allocated by any of the above
 //
 // All functions use libc::malloc for output allocation so the Java side can
@@ -825,6 +826,50 @@ pub unsafe extern "C" fn jpdfium_rust_write_png(
     let mut out = SinkWriter { sink, ctx, aborted: false };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         encode_png(data, w, h, s, ch, (ppm_x, ppm_y), level, &mut out)
+    }));
+    match result {
+        Ok(Ok(())) => PNG_OK,
+        Ok(Err(_)) if out.aborted => PNG_ERR_SINK,
+        _ => PNG_ERR_INTERNAL,
+    }
+}
+
+impl std::io::Write for SinkWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.emit(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Streams `data` as a zlib (PDF /FlateDecode) stream through `sink`. `level` 0-9, else 6.
+/// Returns 0, -1 invalid args, -2 sink abort, -3 internal.
+///
+/// # Safety
+/// `data` must hold `len` readable bytes (it may be null when `len` is 0); `sink` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_zlib_compress(
+    data: *const u8,
+    len: usize,
+    level: i32,
+    sink: Option<JpdfiumWriteSink>,
+    ctx: *mut libc::c_void,
+) -> i32 {
+    use std::io::Write;
+    let Some(sink) = sink else { return PNG_ERR_INVALID };
+    if data.is_null() && len != 0 {
+        return PNG_ERR_INVALID;
+    }
+    let input: &[u8] = if len == 0 { &[] } else { slice::from_raw_parts(data, len) };
+    let level = if (0..=9).contains(&level) { level as u32 } else { 6 };
+    let mut out = SinkWriter { sink, ctx, aborted: false };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut encoder = flate2::write::ZlibEncoder::new(&mut out, flate2::Compression::new(level));
+        encoder.write_all(input)?;
+        encoder.finish().map(|_| ())
     }));
     match result {
         Ok(Ok(())) => PNG_OK,

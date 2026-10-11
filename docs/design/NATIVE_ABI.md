@@ -7,7 +7,8 @@ and keeps raw pointer-valued handles; the two surfaces never share handle values
 
 `jpdf_api_version()` returns `(major << 16) | minor`. A binding accepts the library when the
 major matches and the minor is at least the one it was compiled against. Additive changes bump
-the minor; any layout or semantic break bumps the major.
+the minor; any layout or semantic break bumps the major. 1.1 added rasterization and
+rectification; 1.2 added page text and text layers.
 
 `jpdf_abi_struct_size(JPDF_STRUCT_*)` reports each struct's size so bindings that do not compile
 against the header (Java FFM) can verify layouts at load time.
@@ -28,12 +29,18 @@ Input structs (`*_options`):
 Output structs (`*_info`, `jpdf_bitmap_view`): the caller sets `struct_size`; the library
 requires at least the 1.0 size and never writes past `struct_size`.
 
+Arrays of structs (`jpdf_text_line`, `jpdf_text_word`) are read with the first element's
+`struct_size` as the stride. Every element must carry that same size, which must keep elements
+8-byte aligned; each element is then checked like an input struct.
+
 Native structs are not a wire format. Do not serialize them across processes.
 
 ## Strings
 
 Inputs are NUL-terminated UTF-8. Library-owned output strings (`build_id`, status names) are
-static. Error detail is copied into a caller buffer by `jpdf_last_error_message`.
+static. Error detail (`jpdf_last_error_message`) and page text (`jpdf_page_get_text`) are copied
+into a caller buffer: `required` includes the NUL, a NULL buffer only reports it, and a short
+buffer is `BUFFER_TOO_SMALL` with `required` still set.
 
 ## Status codes
 
@@ -65,6 +72,7 @@ cleanup cannot overwrite the cause. Read it before making another call on the sa
 | Value | Ownership |
 |---|---|
 | Path, password, options | Borrowed for the duration of the call |
+| Text layer lines, words and their strings | Borrowed for the duration of the call |
 | Document, page, bitmap, view tokens | Owned by the caller until the matching close or release |
 | Bitmap pixels | Owned by the library; independent of the page and document |
 | `jpdf_bitmap_view.data` | Valid until `jpdf_view_release`, even after the bitmap closes |

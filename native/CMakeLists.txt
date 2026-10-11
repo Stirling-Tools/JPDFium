@@ -237,12 +237,16 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/pdf/api_document.cpp
         bridge/src/pdf/api_render.cpp
         bridge/src/pdf/api_raster.cpp
+        bridge/src/pdf/api_text.cpp
         bridge/src/images/pixels.cpp
         bridge/src/images/dither.cpp
         bridge/src/images/rectify.cpp
         bridge/src/images/api_bitmap.cpp
         bridge/src/output/output_transaction.cpp
-        bridge/src/output/image_writer.cpp)
+        bridge/src/output/image_writer.cpp
+        bridge/src/textlayer/glyphless_font.cpp
+        bridge/src/textlayer/text_layer.cpp
+        bridge/src/textlayer/api_text_layer.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
@@ -724,6 +728,16 @@ if(JPDFIUM_BUILD_TESTS)
         endif()
         target_link_libraries(api_raster PRIVATE jpdfium)
         add_test(NAME api_raster COMMAND api_raster)
+
+        add_executable(api_text_layer bridge/tests/api_text_layer.cpp)
+        target_include_directories(api_text_layer PRIVATE bridge/include)
+        if(MSVC)
+            target_compile_options(api_text_layer PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_text_layer PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_text_layer PRIVATE jpdfium)
+        add_test(NAME api_text_layer COMMAND api_text_layer)
     endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
@@ -758,7 +772,7 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety api_guards api_raster PROPERTIES
+            set_tests_properties(api_safety api_guards api_raster api_text_layer PROPERTIES
                 ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
