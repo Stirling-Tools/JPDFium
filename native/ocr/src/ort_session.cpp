@@ -1,10 +1,10 @@
 // ort_session.cpp - ONNX Runtime C API calls. One environment per process, created lazily.
 
-#include "ort_session.h"
-
 #include <onnxruntime_c_api.h>
 
 #include <mutex>
+
+#include "engine.h"
 
 namespace jpdf::ocr {
 

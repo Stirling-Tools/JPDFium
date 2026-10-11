@@ -4,7 +4,7 @@
 #include <new>
 
 #include "api_status.h"
-#include "jpdfium_module.h"
+#include "jpdfium_api.h"
 #include "objects/module_objects.h"
 
 namespace {

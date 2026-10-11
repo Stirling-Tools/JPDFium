@@ -1,13 +1,11 @@
 // profile.cpp - profile.txt parsing and digest checks. Unknown lines and keys are refused.
 
-#include "profile.h"
+#include "engine.h"
 
 #include <fstream>
 #include <map>
 #include <memory>
 #include <sstream>
-
-#include "sha256.h"
 
 namespace jpdf::ocr {
 

@@ -8,7 +8,6 @@
 
 #include "output_transaction.h"
 #include "runtime/api_status.h"
-#include "rust_codecs.h"
 
 namespace jpdf {
 

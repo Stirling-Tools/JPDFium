@@ -61,4 +61,13 @@ jpdf_status parse_text_layer(const jpdf_text_layer_options* options, const jpdf_
 // Serializes the one-page PDF; equal layers give byte-identical files. May throw bad_alloc.
 jpdf_status build_text_layer_pdf(const TextLayer& layer, std::string* out);
 
+// A TrueType font with no drawable glyphs, built in code for text layers.
+// Metrics in font units of a 1000-unit em, shared by the font program and its PDF descriptor.
+inline constexpr int kGlyphlessAdvance = 500;
+inline constexpr int kGlyphlessAscent = 800;
+inline constexpr int kGlyphlessDescent = -200;
+
+// Two blank glyphs, .notdef and the one text layers draw, shaped like OCRmyPDF's Occulta.
+const std::vector<uint8_t>& glyphless_font();  // built once
+
 }  // namespace jpdf

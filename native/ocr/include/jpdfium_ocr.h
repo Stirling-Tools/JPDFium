@@ -1,6 +1,6 @@
 // jpdfium_ocr.h - the optional OCR module: PP-OCR models on ONNX Runtime, outside the PDFium
 // domain. Handles share the core's table; errors are read with jpdf_last_error_message.
-// See docs/design/OCR.md.
+// See docs/design/DESIGN.md.
 #pragma once
 #include <stdint.h>
 

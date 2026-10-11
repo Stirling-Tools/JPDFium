@@ -7,7 +7,6 @@
 
 #include "jpdfium_api.h"
 #include "objects/objects.h"
-#include "pdf_support.h"
 #include "runtime/api_status.h"
 #include "runtime/domain.h"
 

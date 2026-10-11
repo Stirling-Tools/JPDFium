@@ -240,13 +240,9 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/pdf/api_raster.cpp
         bridge/src/pdf/api_text.cpp
         bridge/src/images/pixels.cpp
-        bridge/src/images/dither.cpp
-        bridge/src/images/rectify.cpp
         bridge/src/images/api_bitmap.cpp
-        bridge/src/images/api_image.cpp
         bridge/src/output/output_transaction.cpp
         bridge/src/output/image_writer.cpp
-        bridge/src/textlayer/glyphless_font.cpp
         bridge/src/textlayer/text_layer.cpp
         bridge/src/textlayer/api_text_layer.cpp)
     target_include_directories(jpdfium
@@ -836,7 +832,7 @@ endif()
 install(DIRECTORY bridge/include/ DESTINATION include)
 
 # Optional OCR module: PP-OCR models on ONNX Runtime. It links to the core and never compiles
-# its own copy of the domain or the handle table (docs/design/OCR.md).
+# its own copy of the domain or the handle table (docs/design/DESIGN.md).
 option(JPDFIUM_BUILD_OCR "Build libjpdfium_ocr; needs ONNX Runtime in ocr/onnxruntime" OFF)
 if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
     set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/ocr/onnxruntime" CACHE PATH "ONNX Runtime package")

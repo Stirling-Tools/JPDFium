@@ -3,11 +3,13 @@
 
 #include <fpdfview.h>
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
 #include "images/pixels.h"
 #include "object_table.h"
+#include "runtime/api_status.h"
 
 namespace jpdf {
 
@@ -37,6 +39,37 @@ struct ViewObject final : Object {
     explicit ViewObject(std::shared_ptr<const PixelStorage> p) noexcept
         : Object(ObjectType::View), pixels(std::move(p)) {}
     const std::shared_ptr<const PixelStorage> pixels;
+};
+
+// Maps FPDF_GetLastError after a failed load; call while still admitted.
+inline jpdf_status pdfium_open_failure() noexcept {
+    switch (FPDF_GetLastError()) {
+        case FPDF_ERR_FILE:
+            return fail(JPDF_E_IO, "file not found or could not be read");
+        case FPDF_ERR_FORMAT:
+            return fail(JPDF_E_FORMAT, "not a PDF or corrupted");
+        case FPDF_ERR_PASSWORD:
+            return fail(JPDF_E_PASSWORD, "password required or incorrect");
+        case FPDF_ERR_SECURITY:
+            return fail(JPDF_E_UNSUPPORTED, "unsupported security handler");
+        default:
+            return fail(JPDF_E_FORMAT, "PDFium could not load the document");
+    }
+}
+
+// Closes a document unless released; only destroyed while admitted.
+struct LoadedDocument {
+    FPDF_DOCUMENT doc;
+    ~LoadedDocument() {
+        if (doc) FPDF_CloseDocument(doc);
+    }
+};
+
+struct LoadedPage {
+    FPDF_PAGE page;
+    ~LoadedPage() {
+        if (page) FPDF_ClosePage(page);
+    }
 };
 
 }  // namespace jpdf

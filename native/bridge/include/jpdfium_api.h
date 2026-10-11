@@ -1,5 +1,5 @@
 // jpdfium_api.h - safe, versioned C API shared by the Java and Python bindings.
-// Contracts live in docs/design/NATIVE_ABI.md and docs/design/LIFETIME.md.
+// Contracts live in docs/design/DESIGN.md.
 #pragma once
 #include <stdint.h>
 
@@ -388,7 +388,7 @@ JPDF_API jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8
 // --- Invisible text layers (OCRmyPDF generate_pdf). No PDFium: never enters the domain. ---
 
 // Writes a one-page PDF sized to the image that holds only invisible text, through an output
-// transaction. write may be NULL; its image fields must be 0. See docs/design/TEXT_LAYER.md.
+// transaction. write may be NULL; its image fields must be 0. See docs/design/DESIGN.md.
 JPDF_API jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* options,
                                            const jpdf_text_line* lines, int32_t line_count,
                                            const jpdf_text_word* words, int32_t word_count,
@@ -398,12 +398,35 @@ JPDF_API jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* option
 // --- Rasterization for OCR pipelines (the OCRmyPDF rasterize_pdf_page contract). ---
 
 // Opens path_utf8, rasterizes page_index (0-based) and publishes a PNG through an output
-// transaction. out_result may be NULL. See docs/design/RASTER.md for the reference contract.
+// transaction. out_result may be NULL. See docs/design/DESIGN.md for the reference contract.
 JPDF_API jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
                                               const jpdf_raster_options* options,
                                               const char* output_path_utf8,
                                               const jpdf_write_options* write,
                                               jpdf_raster_result* out_result) JPDF_NOEXCEPT;
+
+// --- Optional native modules (OCR). Objects live in the core's handle table. ---
+
+typedef void (*jpdf_module_destroy_fn)(void* object);
+
+// Starts a module entry point: clears this thread's error detail, as every jpdf_* call does.
+// The other jpdf_module_* functions keep it, so a failure already recorded survives cleanup.
+JPDF_API void jpdf_module_begin_call(void) JPDF_NOEXCEPT;
+// Records detail for the current call's first failure; returns status unchanged.
+JPDF_API jpdf_status jpdf_module_fail(jpdf_status status, const char* detail) JPDF_NOEXCEPT;
+
+// Takes ownership on success: destroy runs once the handle is closed and no lease remains.
+// On failure the caller still owns object. kind must be non-zero.
+JPDF_API jpdf_status jpdf_module_object_insert(uint32_t kind, void* object,
+                                               jpdf_module_destroy_fn destroy,
+                                               jpdf_handle* out_handle) JPDF_NOEXCEPT;
+// Pins the object for one call; a handle of another kind is JPDF_E_WRONG_HANDLE_TYPE.
+JPDF_API jpdf_status jpdf_module_object_acquire(jpdf_handle handle, uint32_t kind,
+                                                void** out_object,
+                                                jpdf_handle* out_lease) JPDF_NOEXCEPT;
+JPDF_API jpdf_status jpdf_module_lease_release(jpdf_handle lease) JPDF_NOEXCEPT;
+// Retires the handle; leases already taken keep the object alive until released.
+JPDF_API jpdf_status jpdf_module_object_close(jpdf_handle handle, uint32_t kind) JPDF_NOEXCEPT;
 
 #ifdef __cplusplus
 }

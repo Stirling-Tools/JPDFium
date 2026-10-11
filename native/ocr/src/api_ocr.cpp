@@ -10,7 +10,6 @@
 
 #include "engine.h"
 #include "jpdfium_api.h"
-#include "jpdfium_module.h"
 #include "jpdfium_ocr.h"
 
 namespace {

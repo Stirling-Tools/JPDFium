@@ -10,7 +10,6 @@
 
 #include "cv_compat.h"
 #include "paddle.h"
-#include "sha256.h"
 
 namespace {
 

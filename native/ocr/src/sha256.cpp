@@ -1,6 +1,6 @@
 // sha256.cpp - FIPS 180-4 SHA-256.
 
-#include "sha256.h"
+#include "paddle.h"
 
 #include <algorithm>
 #include <cstring>
