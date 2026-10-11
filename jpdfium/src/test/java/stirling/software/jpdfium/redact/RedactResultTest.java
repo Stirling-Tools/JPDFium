@@ -2,10 +2,14 @@ package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.util.List;
+
+import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for {@link RedactResult} (pure Java, no native dependency). */
@@ -56,5 +60,35 @@ class RedactResultTest {
     void incrementalSaveWhenEnabled() {
         var result = new RedactResult(null, List.of(), 50L, true);
         assertTrue(result.incrementalSave());
+    }
+
+    @Test
+    void incompleteAnalysisIsDetected() {
+        var pages = List.of(
+                new RedactResult.PageResult(0, 5, 3),
+                new RedactResult.PageResult(1, 5, -1));
+        var result = new RedactResult(null, pages, 10L);
+        assertTrue(result.analysisIncomplete(), "a page with an unknown match count is incomplete");
+    }
+
+    @Test
+    void completeAnalysisIsNotFlagged() {
+        var pages = List.of(new RedactResult.PageResult(0, 5, 3));
+        var result = new RedactResult(null, pages, 10L);
+        assertFalse(result.analysisIncomplete());
+    }
+
+    @Test
+    void incompleteAnalysisCannotBePublished() {
+        var pages = List.of(new RedactResult.PageResult(0, 5, -1));
+        var result = new RedactResult(null, pages, 10L);
+        assertThrows(JPDFiumException.class, () -> result.save(Path.of("unused.pdf")));
+        assertThrows(JPDFiumException.class, result::saveBytes);
+    }
+
+    @Test
+    void incrementalSaveCannotBePublishedAsBytes() {
+        var result = new RedactResult(null, List.of(), 50L, true);
+        assertThrows(JPDFiumException.class, result::saveBytes);
     }
 }

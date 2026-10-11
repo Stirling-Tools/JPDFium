@@ -27,6 +27,55 @@ final class PageTextScratchBuffer implements AutoCloseable {
     private long nativeBufCapacity;
     private char[] charBuf;
 
+    /** Outcome of the character count a text page reports. */
+    enum CountOutcome {
+        EMPTY,
+        EXTRACT,
+        FAIL,
+        TOO_LARGE
+    }
+
+    /**
+     * A negative count is an extraction error, not an empty page: reporting it as
+     * empty would silently skip redaction for that page. A count that needs more
+     * than {@link #MAX_EXTRACTION_BYTES} is refused rather than attempted.
+     */
+    static CountOutcome classifyCharCount(int charCount) {
+        if (charCount < 0) return CountOutcome.FAIL;
+        if (charCount == 0) return CountOutcome.EMPTY;
+        return requiredExtractionBytes(charCount) < 0 ? CountOutcome.TOO_LARGE : CountOutcome.EXTRACT;
+    }
+
+    /**
+     * Native bytes needed for {@code charCount} characters plus the terminator (UTF-16),
+     * or {@code -1} when the count is negative, the arithmetic overflows, or the
+     * result exceeds {@link #MAX_EXTRACTION_BYTES}.
+     */
+    static long requiredExtractionBytes(int charCount) {
+        if (charCount < 0) return -1;
+        final long required;
+        try {
+            required = Math.multiplyExact(Math.addExact((long) charCount, 1L), 2L);
+        } catch (ArithmeticException e) {
+            return -1;
+        }
+        return required > MAX_EXTRACTION_BYTES ? -1 : required;
+    }
+
+    /**
+     * Proposed {@code char[]} capacity for a page, or {@code -1} when the growth
+     * overflows or exceeds {@link #MAX_EXTRACTION_CHARS}.
+     */
+    static long proposedCharCapacity(int charCount, int currentLength) {
+        final long proposed;
+        try {
+            proposed = Math.max(Math.addExact((long) charCount, 1024L), currentLength * 2L);
+        } catch (ArithmeticException e) {
+            return -1;
+        }
+        return proposed > MAX_EXTRACTION_CHARS ? -1 : proposed;
+    }
+
     PageTextScratchBuffer() {
         this.arena = Arena.ofConfined();
         this.nativeBufCapacity = 65536;
@@ -56,24 +105,16 @@ final class PageTextScratchBuffer implements AutoCloseable {
             } catch (Throwable t) { NativeRuntime.rethrowFatal(t);
                 return -1;
             }
-            if (charCount < 0) {
+            final CountOutcome outcome = classifyCharCount(charCount);
+            if (outcome == CountOutcome.FAIL || outcome == CountOutcome.TOO_LARGE) {
                 // A negative count is an extraction error, not an empty page:
                 // reporting it as empty would silently skip redaction here.
                 return -1;
             }
-            if (charCount == 0) {
+            if (outcome == CountOutcome.EMPTY) {
                 return 0;
             }
-
-            final long requiredBytes;
-            try {
-                requiredBytes = Math.multiplyExact(Math.addExact((long) charCount, 1L), 2L);
-            } catch (ArithmeticException e) {
-                return -1;
-            }
-            if (requiredBytes > MAX_EXTRACTION_BYTES) {
-                return -1;
-            }
+            final long requiredBytes = requiredExtractionBytes(charCount);
             if (requiredBytes > nativeBufCapacity) {
                 long proposed = Math.max(requiredBytes, nativeBufCapacity * 2);
                 // Grow in a fresh arena and release the previous one: a confined
@@ -98,14 +139,8 @@ final class PageTextScratchBuffer implements AutoCloseable {
             }
 
             if (charCount > charBuf.length) {
-                final long proposedChars;
-                try {
-                    proposedChars = Math.max(
-                            Math.addExact((long) charCount, 1024L), charBuf.length * 2L);
-                } catch (ArithmeticException e) {
-                    return -1;
-                }
-                if (proposedChars > MAX_EXTRACTION_CHARS) {
+                final long proposedChars = proposedCharCapacity(charCount, charBuf.length);
+                if (proposedChars < 0) {
                     return -1;
                 }
                 charBuf = new char[(int) proposedChars];
