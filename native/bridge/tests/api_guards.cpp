@@ -10,6 +10,16 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include "jpdfium.h"
 #include "jpdfium_api.h"
 
@@ -243,7 +253,24 @@ void test_bounded_shutdown_then_stop() {
 int main() {
     std::printf("=== jpdf guard shims (real PDFium) ===\n");
     const std::string path = "jpdf-guards-fixture.pdf";
-    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+    // Owner-only from creation: fopen(path, "wb") creates 0666 before umask
+    // (CodeQL cpp/world-writable-file-creation) and warns as C4996 under /WX.
+    FILE* f = nullptr;
+#if defined(_WIN32)
+    int fd = -1;
+    if (::_sopen_s(&fd, path.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _SH_DENYRW,
+                   _S_IREAD | _S_IWRITE) == 0) {
+        f = ::_fdopen(fd, "wb");
+        if (!f) ::_close(fd);
+    }
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+        f = ::fdopen(fd, "wb");
+        if (!f) ::close(fd);
+    }
+#endif
+    if (f) {
         std::fwrite(pdf().data(), 1, pdf().size(), f);
         std::fclose(f);
     }

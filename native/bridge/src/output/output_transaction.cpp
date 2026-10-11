@@ -95,20 +95,15 @@ fs::path resolve_symlinks(const fs::path& destination, std::error_code& ec) {
 }
 
 #if !defined(_WIN32)
-// Publish with the mode a direct write would have produced, not the 0600 staging mode.
-void mirror_destination_mode(int fd, const fs::path& staging, const fs::path& destination) {
+// Publish with the mode a direct write would have produced when the destination
+// exists; a new destination keeps the restrictive 0600 staging mode. Learning
+// the umask default from a probe file would need a 0666 creation, which is a
+// world-writable-file finding, so no probe is used.
+void mirror_destination_mode(int fd, const fs::path& destination) {
     struct stat st {};
     if (::stat(destination.c_str(), &st) == 0) {
         ::fchmod(fd, st.st_mode & 07777);
-        return;
     }
-    // No destination yet: learn the umask default from a probe instead of racing umask(2).
-    const std::string probe = staging.string() + ".mode";
-    int pfd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0666);
-    if (pfd < 0) return;
-    if (::fstat(pfd, &st) == 0) ::fchmod(fd, st.st_mode & 07777);
-    ::close(pfd);
-    ::unlink(probe.c_str());
 }
 #endif
 
@@ -197,7 +192,7 @@ jpdf_status OutputTransaction::finalize() noexcept {
     if (durable_ && sync_fd(fd_) != 0) return io_fail("flushing staging file failed", errno);
 #if !defined(_WIN32)
     try {
-        mirror_destination_mode(fd_, staging_, destination_);
+        mirror_destination_mode(fd_, destination_);
     } catch (...) {
         // Best effort: a stricter mode is safer than failing the output.
     }

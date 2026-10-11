@@ -43,17 +43,21 @@ void append_utf8(std::string& out, char32_t c) {
 std::string utf16le_to_utf8(const std::vector<uint8_t>& bytes, size_t units) {
     std::string out;
     out.reserve(units);
-    for (size_t i = 0; i < units; ++i) {
+    size_t i = 0;
+    while (i < units) {
         char32_t c = static_cast<char32_t>(bytes[2 * i] | (bytes[2 * i + 1] << 8));
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < units) {
-            const char32_t low = static_cast<char32_t>(bytes[2 * i + 2] | (bytes[2 * i + 3] << 8));
+        size_t next = i + 1;
+        if (c >= 0xD800 && c <= 0xDBFF && next < units) {
+            const char32_t low =
+                static_cast<char32_t>(bytes[2 * next] | (bytes[2 * next + 1] << 8));
             if (low >= 0xDC00 && low <= 0xDFFF) {
                 c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
-                ++i;
+                next = i + 2;
             }
         }
         if (c >= 0xD800 && c <= 0xDFFF) c = 0xFFFD;
         append_utf8(out, c);
+        i = next;
     }
     return out;
 }

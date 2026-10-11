@@ -118,18 +118,16 @@ jpdf_text_line quad_line(const std::vector<double>& q, int32_t word_count, uint3
     return l;
 }
 
-jpdf_text_layer_options options(int32_t w, int32_t h, double dpi_x, double dpi_y) {
+// A 2550 x 3300 scan at 300 dpi: a US Letter page.
+const jpdf_text_layer_options kLetter = [] {
     jpdf_text_layer_options o{};
     o.struct_size = sizeof(o);
-    o.image_width = w;
-    o.image_height = h;
-    o.dpi_x = dpi_x;
-    o.dpi_y = dpi_y;
+    o.image_width = 2550;
+    o.image_height = 3300;
+    o.dpi_x = 300;
+    o.dpi_y = 300;
     return o;
-}
-
-// A 2550 x 3300 scan at 300 dpi: a US Letter page.
-const jpdf_text_layer_options kLetter = options(2550, 3300, 300, 300);
+}();
 
 jpdf_status write(const std::vector<jpdf_text_line>& lines,
                   const std::vector<jpdf_text_word>& words, const std::string& out,

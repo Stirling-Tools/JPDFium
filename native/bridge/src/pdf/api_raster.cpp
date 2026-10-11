@@ -1,24 +1,22 @@
 // api_raster.cpp - jpdf_rasterize_page_file: the OCRmyPDF rasterize_pdf_page contract, matched
-// to the pypdfium reference with the deviations listed in docs/design/RASTER.md.
+// to the pypdfium reference with the deviations listed in docs/design/DESIGN.md.
 
 #include <fpdf_edit.h>
 #include <fpdf_transformpage.h>
 #include <fpdfview.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <system_error>
 
-#include "images/dither.h"
 #include "images/pixels.h"
 #include "jpdfium_api.h"
 #include "jpdfium_internal.h"
+#include "objects/objects.h"
 #include "output/image_writer.h"
-#include "pdf_support.h"
 #include "runtime/api_status.h"
 #include "runtime/domain.h"
 
@@ -89,14 +87,13 @@ jpdf_status parse(const jpdf_raster_options* o, RasterRequest* out) noexcept {
 }
 
 // Python round(x, 6): the reference rounds DPI to Ghostscript's precision this way.
+// Apple libc++ deletes the floating-point std::from_chars overload, so round-trip
+// through snprintf/strtod instead of to_chars/from_chars.
 double round6(double value) noexcept {
+    if (!std::isfinite(value)) return value;
     char buf[64];
-    const auto [end, ec] =
-        std::to_chars(buf, buf + sizeof(buf), value, std::chars_format::fixed, 6);
-    if (ec != std::errc()) return value;
-    double out = value;
-    std::from_chars(buf, end, out);
-    return out;
+    std::snprintf(buf, sizeof(buf), "%.6f", value);
+    return std::strtod(buf, nullptr);
 }
 
 // Python int(round(x)): half to even.

@@ -77,7 +77,7 @@ public class PdfiumDomainBenchmark {
         // access from another one.
         arena = Arena.ofShared();
         outSegment = arena.allocate(JAVA_FLOAT);
-        guardedWidth = PdfiumRuntime.guarded(FastLinks.PAGE_WIDTH);
+        guardedWidth = FastLinks.PAGE_WIDTH;
     }
 
     @TearDown(Level.Trial)
@@ -155,8 +155,8 @@ public class PdfiumDomainBenchmark {
     /**
      * Guarded MethodHandle: the wrapper cost for raw bindings, which is the
      * other candidate admission path. Invokes the same {@code jpdfium_page_width}
-     * downcall as {@link #pageWidthHeightPair}, but reached through
-     * {@link PdfiumRuntime#guarded} instead of the typed binding, so the
+     * downcall as {@link #pageWidthHeightPair}, but reached through the raw
+     * {@link FastLinks#PAGE_WIDTH} handle instead of the typed binding, so the
      * difference between the two is exactly the admission mechanism.
      */
     @Benchmark
