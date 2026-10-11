@@ -61,7 +61,7 @@ find "${SCRIPT_DIR}/pdfium/lib" -maxdepth 1 \( -name '*.dylib' -o -name '*.so*' 
 rm -f "${SCRIPT_DIR}/dist/${PLATFORM}"/*jpdfium_ocr.* "${SCRIPT_DIR}/dist/${PLATFORM}"/*onnxruntime*
 if [ -n "$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -print -quit)" ]; then
     # The optional OCR module stays out of the core bundle: dist/ocr-<platform>, libraries only.
-    # Packagers ship ocr/onnxruntime/LICENSE and ThirdPartyNotices.txt with it.
+    # The ONNX Runtime MIT notice travels with the runtime, not the packager.
     OCR_DIST="${SCRIPT_DIR}/dist/ocr-${PLATFORM}"
     rm -rf "${OCR_DIST}"
     mkdir -p "${OCR_DIST}"
@@ -73,6 +73,15 @@ if [ -n "$(find "${BUILD_DIR}" -maxdepth 1 -name 'libjpdfium_ocr.*' -print -quit
         darwin) find "${ORT_LIB}" -maxdepth 1 -type f -name 'libonnxruntime.*.dylib' -exec cp {} "${OCR_DIST}/" \; ;;
         *) cp "${ORT_LIB}/onnxruntime.dll" "${OCR_DIST}/" ;;
     esac
+    # MIT requires the notice in every copy; fetch-onnxruntime.sh places both beside lib/.
+    for lic in LICENSE ThirdPartyNotices.txt; do
+        [ -f "${SCRIPT_DIR}/ocr/onnxruntime/${lic}" ] || {
+            echo "OCR bundle is missing ${lic} from ocr/onnxruntime" >&2
+            exit 1
+        }
+    done
+    cp "${SCRIPT_DIR}/ocr/onnxruntime/LICENSE" "${OCR_DIST}/ONNXRUNTIME-LICENSE"
+    cp "${SCRIPT_DIR}/ocr/onnxruntime/ThirdPartyNotices.txt" "${OCR_DIST}/ONNXRUNTIME-ThirdPartyNotices.txt"
 fi
 
 echo ""
