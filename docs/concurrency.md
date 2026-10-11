@@ -33,7 +33,7 @@ void rasterize(Path input, Path output) throws IOException {
 
 Upstream PDFium shares mutable state across all documents, including the font manager and cache, the page module, parser tables, and the last-error slot. JPDFium admits one PDFium call at a time through a single process-wide native domain, so throughput does not increase with thread count. The domain lives in the native library, so other bindings loaded into the same process (such as PyJPDFium) share it.
 
-Java work that does not enter PDFium is unaffected. JPDFium holds no Java lock, so text processing, image encoding, and file I/O between native calls run in parallel, which is why `PdfPipeline` can process pages concurrently while the native portion stays serialized.
+Java work that does not enter PDFium is unaffected. JPDFium holds no Java lock, so text processing, image encoding, and file I/O between native calls run in parallel, which is why `PdfPipeline` can process pages concurrently while the native portion stays serialized. The one exception is the legacy save path: `FileWriteSink` writes to a caller `OutputStream` while its guarded PDFium save holds the domain.
 
 `PdfPipeline.PDFIUM_LOCK` is deprecated as of 1.0.4. JPDFium serializes PDFium calls internally, so caller-side locking is unnecessary. The field remains so existing `synchronized (PDFIUM_LOCK)` blocks keep compiling.
 

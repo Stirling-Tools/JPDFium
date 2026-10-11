@@ -260,9 +260,10 @@ are immutable after publication, so views need no locking.
 
 ## Policy
 
-No Java or Python application code runs while the PDFium domain is held. The 1.0 safe API has no
-application callbacks at all. Future progress or cancellation uses polled state (atomic flags,
-buffered events), not upcalls.
+No Java or Python application code runs while the PDFium domain is held by the 1.0 safe API, which
+has no application callbacks at all. Future progress or cancellation uses polled state (atomic flags,
+buffered events), not upcalls. The legacy save path is the exception: the `FileWriteSink` upcall
+writes to a caller `OutputStream` while a guarded save holds the domain (see Java below).
 
 Native-to-native callbacks are allowed when they cannot re-enter the API, for example the PNG
 encoder's byte sink, which writes into an output transaction outside the domain.

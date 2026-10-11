@@ -68,7 +68,7 @@ def guarded_symbols() -> set[str]:
 def domain(symbol: str, guarded: set[str]) -> str:
     if symbol in guarded:
         return "guarded"
-    return "unguarded" if touches_pdfium(symbol) == "no" else "absent"
+    return "unguarded" if touches_pdfium(symbol) == "no" else "unadmitted"
 
 
 def main() -> int:
@@ -98,7 +98,7 @@ def main() -> int:
         "`PDFium` is name-based: bridge wrappers around other libraries count as `no`. "
         "Confirm each entry against its C++ body when migrating it. `Domain` is `guarded` when the "
         "Java binding reaches it through its guard shim, `unguarded` for PDFium-free entry points, "
-        "and `absent` when this PDFium build does not export it.",
+        "and `unadmitted` when a PDFium-touching symbol has no guard shim.",
         "",
     ]
     for cls in sorted(by_class):
