@@ -37,6 +37,22 @@ public final class PdfMerge {
 
     private PdfMerge() {}
 
+    private static final System.Logger LOG = System.getLogger(PdfMerge.class.getName());
+
+    /**
+     * Publish a staging file this class owns, reporting a publication that
+     * landed without a confirmed directory sync instead of assuming durability.
+     */
+    private static void publishStagedFile(Path staged, Path output) throws IOException {
+        if (OutputTransaction.publishStagedDurable(staged, output)
+                == OutputTransaction.Durability.UNCONFIRMED) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "published {0}, but its directory entry could not be synchronised;"
+                            + " crash durability is not guaranteed on this platform",
+                    output);
+        }
+    }
+
     /**
      * Merge multiple open PDF documents into a new document.
      *
@@ -346,7 +362,7 @@ public final class PdfMerge {
             Path staged = options.createStagingFile(output);
             try {
                 Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                AtomicPublish.replace(staged, output);
+                publishStagedFile(staged, output);
                 staged = null;
             } finally {
                 deleteQuietly(staged);
@@ -367,9 +383,11 @@ public final class PdfMerge {
         Path staged = options.createStagingFile(output);
         try {
             try (PdfDocument merged = mergeFiles(paths, options)) {
-                merged.save(staged);
+                // The commit below fsyncs the staging file and its directory, so
+                // the staged write itself must not duplicate that work.
+                merged.saveTo(staged, SaveOptions.ephemeral());
             }
-            AtomicPublish.replace(staged, output);
+            publishStagedFile(staged, output);
             staged = null;
         } finally {
             deleteQuietly(staged);
@@ -391,12 +409,15 @@ public final class PdfMerge {
             return false;
         }
         try {
-            if (!QpdfLib.mergeFilesInto(paths, staged) || Files.size(staged) == 0) return false;
+            if (!QpdfLib.mergeFilesInto(paths, staged)
+                    || !OutputTransaction.isPublishableStaging(staged, 0)) {
+                return false;
+            }
             // Single durable commit: the native writer filled the staging file
             // this method owns, so this is the only rename and the only fsync on
             // the merge-to-file path. Nothing is fsynced under an intermediate
             // name that is about to be renamed away.
-            OutputTransaction.publishStaged(staged, output, true);
+            publishStagedFile(staged, output);
             staged = null;
             return true;
         } finally {

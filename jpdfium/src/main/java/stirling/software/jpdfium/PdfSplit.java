@@ -44,6 +44,22 @@ public final class PdfSplit {
 
     private PdfSplit() {}
 
+    private static final System.Logger LOG = System.getLogger(PdfSplit.class.getName());
+
+    /**
+     * Publish a staging file this class owns, reporting a publication that
+     * landed without a confirmed directory sync instead of assuming durability.
+     */
+    private static void publishStagedFile(Path staged, Path output) throws IOException {
+        if (OutputTransaction.publishStagedDurable(staged, output)
+                == OutputTransaction.Durability.UNCONFIRMED) {
+            LOG.log(System.Logger.Level.WARNING,
+                    "published {0}, but its directory entry could not be synchronised;"
+                            + " crash durability is not guaranteed on this platform",
+                    output);
+        }
+    }
+
     /** Operation counters for split source reuse (reset per test/benchmark). */
     public static final SplitCounters COUNTERS = new SplitCounters();
 
@@ -449,8 +465,10 @@ public final class PdfSplit {
             // unavailable staging file is refused rather than downgraded.
             Path staged = options.createStagingFile(output);
             try {
-                part.save(staged);
-                AtomicPublish.replace(staged, output);
+                // The commit below fsyncs the staging file and its directory, so
+                // the staged write itself must not duplicate that work.
+                part.saveTo(staged, SaveOptions.ephemeral());
+                publishStagedFile(staged, output);
                 staged = null;
             } finally {
                 if (staged != null) {
@@ -475,7 +493,8 @@ public final class PdfSplit {
             return false;
         }
         try {
-            if (!QpdfLib.extractPagesInto(input, pageIndices, staged) || Files.size(staged) == 0) {
+            if (!QpdfLib.extractPagesInto(input, pageIndices, staged)
+                    || !OutputTransaction.isPublishableStaging(staged, 0)) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
