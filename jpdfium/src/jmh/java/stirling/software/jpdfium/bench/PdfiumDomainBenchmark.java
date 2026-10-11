@@ -115,6 +115,22 @@ public class PdfiumDomainBenchmark {
     }
 
     /**
+     * Single leaf dispatch through the typed binding: one native call and one
+     * admission. Paired with {@link #rawGuardedWidth}, the difference is the
+     * typed wrapper cost for the same single native call.
+     */
+    @Benchmark
+    @OperationsPerInvocation(BATCH)
+    public float pageWidthSingle() {
+        long h = pageHandle;
+        float acc = 0;
+        for (int i = 0; i < BATCH; i++) {
+            acc += JpdfiumLib.pageWidth(h);
+        }
+        return acc;
+    }
+
+    /**
      * Realistic nested batch: one outer admission covering a coarse query plus
      * two nested leaf continuations. Measures the nested fast path against
      * three separate admissions.
@@ -155,8 +171,9 @@ public class PdfiumDomainBenchmark {
      * Invokes {@code jpdfium_page_width} through the raw guarded
      * {@link FastLinks#PAGE_WIDTH} handle, bypassing the typed binding's
      * {@code check} and scratch-slot handling. It reaches the same native guard
-     * as {@link #pageWidthHeightPair}, so the difference between the two is the
-     * typed wrapper cost, not the admission mechanism.
+     * with the same single native call as {@link #pageWidthSingle}, so the
+     * difference between the two is the typed wrapper cost, not the admission
+     * mechanism.
      */
     @Benchmark
     @OperationsPerInvocation(BATCH)

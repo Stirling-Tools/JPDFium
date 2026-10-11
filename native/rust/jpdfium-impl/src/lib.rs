@@ -680,9 +680,10 @@ impl std::io::Write for IdatWriter<'_> {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
         self.buf.extend_from_slice(data);
         while self.buf.len() >= PNG_IDAT_CHUNK {
-            let rest = self.buf.split_off(PNG_IDAT_CHUNK);
-            self.out.chunk(b"IDAT", &self.buf)?;
-            self.buf = rest;
+            // Emit the chunk from the existing buffer and drop the prefix in place, so the
+            // large capacity is retained instead of being reallocated on every chunk.
+            self.out.chunk(b"IDAT", &self.buf[..PNG_IDAT_CHUNK])?;
+            self.buf.drain(..PNG_IDAT_CHUNK);
         }
         Ok(data.len())
     }
@@ -907,7 +908,11 @@ fn decode_png(
     out: &mut JpdfiumDecodedImage,
 ) -> i32 {
     let mut decoder = png::Decoder::new(Cursor::new(data));
-    decoder.set_limits(png::Limits { bytes: usize::MAX });
+    // Bound the decoder's cumulative allocation to the accepted frame budget plus headroom for
+    // chunk metadata instead of disabling the crate's default limit: read_info() parses
+    // attacker-controlled chunks (e.g. iCCP/zTXt) before max_pixels is enforced.
+    let cap = max_pixels.saturating_mul(8).saturating_add(64 << 20).min(usize::MAX as u64) as usize;
+    decoder.set_limits(png::Limits { bytes: cap });
     // Expand palettes and low bit depths and keep the high byte of 16-bit samples, as OpenCV's
     // IMREAD_COLOR does through libpng.
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);

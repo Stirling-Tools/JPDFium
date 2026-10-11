@@ -102,7 +102,8 @@ fs::path resolve_symlinks(const fs::path& destination, std::error_code& ec) {
 void mirror_destination_mode(int fd, const fs::path& destination) {
     struct stat st {};
     if (::stat(destination.c_str(), &st) == 0) {
-        ::fchmod(fd, st.st_mode & 07777);
+        // A direct write clears setuid/setgid; do not carry them onto new content.
+        ::fchmod(fd, st.st_mode & 01777);
     }
 }
 #endif

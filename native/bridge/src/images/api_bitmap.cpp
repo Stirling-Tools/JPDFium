@@ -255,15 +255,23 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
             // caller-supplied quad (or a vanishing denominator) far outside the int range.
             x = std::clamp(x, -4.0, static_cast<double>(source.width) + 4.0);
             y = std::clamp(y, -4.0, static_cast<double>(source.height) + 4.0);
+            // The sample position and interpolation weights are the same for every colour
+            // channel, so derive them once per pixel instead of once per channel.
+            const int xn = static_cast<int>(std::lround(x));
+            const int yn = static_cast<int>(std::lround(y));
+            const int x0 = static_cast<int>(std::floor(x));
+            const int y0 = static_cast<int>(std::floor(y));
+            const double fx = x - x0, fy = y - y0;
+            double wx[4] = {}, wy[4] = {};
+            if (interpolation == JPDF_INTERP_BICUBIC) {
+                cubic_weights(fx, wx);
+                cubic_weights(fy, wy);
+            }
             for (int c = 0; c < channels; ++c) {
                 if (interpolation == JPDF_INTERP_NEAREST) {
-                    px[c] = saturate(s.get(static_cast<int>(std::lround(x)),
-                                           static_cast<int>(std::lround(y)), c));
+                    px[c] = saturate(s.get(xn, yn, c));
                     continue;
                 }
-                const int x0 = static_cast<int>(std::floor(x));
-                const int y0 = static_cast<int>(std::floor(y));
-                const double fx = x - x0, fy = y - y0;
                 if (interpolation == JPDF_INTERP_BILINEAR) {
                     const double top = s.get(x0, y0, c) * (1 - fx) + s.get(x0 + 1, y0, c) * fx;
                     const double bottom =
@@ -271,9 +279,6 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
                     px[c] = saturate(top * (1 - fy) + bottom * fy);
                     continue;
                 }
-                double wx[4], wy[4];
-                cubic_weights(fx, wx);
-                cubic_weights(fy, wy);
                 double acc = 0;
                 for (int j = 0; j < 4; ++j) {
                     double line = 0;
