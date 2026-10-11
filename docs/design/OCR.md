@@ -24,6 +24,16 @@ ONNX Runtime's provider library, in `native/dist/ocr-<platform>`, apart from the
 the core's size budget and bundle checks are unchanged. A distribution that ships the module
 also ships `native/ocr/onnxruntime/LICENSE` and `ThirdPartyNotices.txt`.
 
+Two profiles share the same pinned models:
+
+- `pp-ocrv6-small` uses PaddleOCR 3.7's defaults, so detection runs at the image's full
+  resolution, up to 4000 px.
+- `pp-ocrv6-small-balanced` caps detection at 1600 px on the longer side. On 300 dpi pages it
+  takes about half the time and a third of the memory, with the same accuracy on PyJPDFium's
+  benchmark (its `docs/PERFORMANCE.md`).
+
+Each profile matches the official pipeline run with the same settings.
+
 Opening an engine reads every profile file once and refuses it unless its digest matches. The
 models are handed to ONNX Runtime from those same bytes. The profile also fixes the pipeline
 parameters, and unknown keys are refused.

@@ -130,7 +130,8 @@ int main() {
     jpdf_ocr_engine_info info{};
     info.struct_size = sizeof(info);
     CHECK_STATUS(jpdf_ocr_engine_get_info(engine, &info), JPDF_OK, "engine info");
-    CHECK(std::strcmp(info.profile_id, "pp-ocrv6-small") == 0, "profile id");
+    // Either PP-OCRv6 small profile: they differ only in detection size.
+    CHECK(std::strncmp(info.profile_id, "pp-ocrv6-small", 14) == 0, "profile id");
     std::printf("  runtime %s, profile %s\n", info.runtime_version, info.profile_id);
 
     jpdf_handle doc = 0, page = 0, bitmap = 0;
