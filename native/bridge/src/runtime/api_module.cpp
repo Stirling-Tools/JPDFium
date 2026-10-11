@@ -30,6 +30,14 @@ struct LeaseObject final : Object {
     const std::shared_ptr<ModuleObject> object;
 };
 
+// The process-wide object table. Never destroyed: bindings may release views from finalizers
+// during interpreter teardown.
+ObjectTable& objects() noexcept {
+    alignas(ObjectTable) static unsigned char storage[sizeof(ObjectTable)];
+    static ObjectTable* table = ::new (storage) ObjectTable();
+    return *table;
+}
+
 }  // namespace jpdf
 
 namespace {

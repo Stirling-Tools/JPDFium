@@ -137,7 +137,6 @@ set(JPDFIUM_DOMAIN_SOURCES
     bridge/src/runtime/api_runtime.cpp
     bridge/src/runtime/guard.cpp
     bridge/src/runtime/api_module.cpp
-    bridge/src/objects/objects.cpp
     bridge/src/legacy/guards_bridge.cpp)
 
 # Stub library (always built for testing).
@@ -242,9 +241,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/images/pixels.cpp
         bridge/src/images/api_bitmap.cpp
         bridge/src/output/output_transaction.cpp
-        bridge/src/output/image_writer.cpp
-        bridge/src/textlayer/text_layer.cpp
-        bridge/src/textlayer/api_text_layer.cpp)
+        bridge/src/textlayer/text_layer.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
@@ -688,17 +685,11 @@ if(JPDFIUM_BUILD_TESTS)
     endif()
     add_test(NAME registry_cost COMMAND registry_cost)
 
-    # Safe jpdf_* API: the handle table alone, then the full C API against real PDFium.
-    add_executable(api_object_table bridge/tests/api_object_table.cpp)
-    target_include_directories(api_object_table PRIVATE bridge/include bridge/src)
-    if(NOT MSVC)
-        target_compile_options(api_object_table PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        target_link_libraries(api_object_table PRIVATE pthread)
-    endif()
-    add_test(NAME api_object_table COMMAND api_object_table)
+    # Safe jpdf_* API: the full C API against real PDFium, including the
+    # handle table suite, which needs no PDFium model.
     if(JPDFIUM_USE_PDFIUM)
         add_executable(api_safety bridge/tests/api_safety.cpp)
-        target_include_directories(api_safety PRIVATE bridge/include)
+        target_include_directories(api_safety PRIVATE bridge/include bridge/src)
         if(MSVC)
             target_compile_options(api_safety PRIVATE /W4 /WX)
         else()
@@ -706,16 +697,6 @@ if(JPDFIUM_BUILD_TESTS)
         endif()
         target_link_libraries(api_safety PRIVATE jpdfium)
         add_test(NAME api_safety COMMAND api_safety)
-
-        add_executable(api_guards bridge/tests/api_guards.cpp)
-        target_include_directories(api_guards PRIVATE bridge/include "${PDFIUM_INCLUDE_DIR}")
-        if(MSVC)
-            target_compile_options(api_guards PRIVATE /W4 /WX)
-        else()
-            target_compile_options(api_guards PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        endif()
-        target_link_libraries(api_guards PRIVATE jpdfium)
-        add_test(NAME api_guards COMMAND api_guards)
 
         add_executable(api_raster bridge/tests/api_raster.cpp)
         target_include_directories(api_raster PRIVATE bridge/include)
@@ -727,18 +708,8 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(api_raster PRIVATE jpdfium)
         add_test(NAME api_raster COMMAND api_raster)
 
-        add_executable(api_image bridge/tests/api_image.cpp)
-        target_include_directories(api_image PRIVATE bridge/include)
-        if(MSVC)
-            target_compile_options(api_image PRIVATE /W4 /WX)
-        else()
-            target_compile_options(api_image PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        endif()
-        target_link_libraries(api_image PRIVATE jpdfium)
-        add_test(NAME api_image COMMAND api_image)
-
         add_executable(api_text_layer bridge/tests/api_text_layer.cpp)
-        target_include_directories(api_text_layer PRIVATE bridge/include)
+        target_include_directories(api_text_layer PRIVATE bridge/include "${PDFIUM_INCLUDE_DIR}")
         if(MSVC)
             target_compile_options(api_text_layer PRIVATE /W4 /WX)
         else()
@@ -780,7 +751,7 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety api_guards api_raster api_text_layer api_image PROPERTIES
+            set_tests_properties(api_safety api_raster api_text_layer PROPERTIES
                 ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
@@ -882,10 +853,10 @@ if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
         # ONNX Runtime is not instrumented: its own allocations and worker threads are excluded.
         if(JPDFIUM_SANITIZE MATCHES "address")
             set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
-                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/lsan.supp")
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers.supp")
         elseif(JPDFIUM_SANITIZE MATCHES "thread")
             set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
-                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/tsan.supp")
+                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers.supp")
         endif()
         if(NOT MSVC)
             target_compile_options(ocr_geometry PRIVATE -Wall -Wextra -Wpedantic -Werror)

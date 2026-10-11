@@ -1,2 +1,4 @@
+# ONNX Runtime keeps a small allocation of its own for the life of the process.
+leak:libonnxruntime.so
 # ONNX Runtime's worker threads synchronize in uninstrumented code TSan cannot see.
 race:libonnxruntime.so
