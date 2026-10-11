@@ -338,26 +338,18 @@ public final class PdfMerge {
         if (paths.isEmpty()) throw new IllegalArgumentException("At least one file path is required");
         if (output == null) throw new IllegalArgumentException("output must not be null");
         if (paths.size() == 1) {
-            // Use staging so the destination is replaced only on success and aliased
+            // Stage beside the destination so it is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
-            Path staged;
+            // Staging is never downgraded to a direct in-place copy: a failed copy would
+            // truncate an existing destination, so an unavailable staging file is refused.
+            Path staged = options.createStagingFile(output);
             try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
+                Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
+                AtomicPublish.replace(staged, output);
                 staged = null;
+            } finally {
+                deleteQuietly(staged);
             }
-            if (staged != null) {
-                try {
-                    Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                    return;
-                } finally {
-                    deleteQuietly(staged);
-                }
-            }
-            // Staging unavailable, fall back to direct copy (best-effort).
-            Files.copy(paths.getFirst(), output, StandardCopyOption.REPLACE_EXISTING);
             return;
         }
 
@@ -376,7 +368,7 @@ public final class PdfMerge {
             try (PdfDocument merged = mergeFiles(paths, options)) {
                 merged.save(staged);
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            AtomicPublish.replace(staged, output);
             staged = null;
         } finally {
             deleteQuietly(staged);
@@ -399,7 +391,7 @@ public final class PdfMerge {
         }
         try {
             if (!QpdfLib.mergeFiles(paths, staged) || Files.size(staged) == 0) return false;
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            AtomicPublish.replace(staged, output);
             staged = null;
             return true;
         } finally {

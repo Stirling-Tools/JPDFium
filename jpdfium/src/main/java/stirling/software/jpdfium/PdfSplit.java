@@ -4,10 +4,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
@@ -441,27 +442,19 @@ public final class PdfSplit {
         }
         try (PdfDocument doc = PdfDocument.open(input);
              PdfDocument part = extractPageRange(doc, fromPage, toPage, options)) {
-            // Save to a staging file first, then atomically replace the output.
-            // A direct save to output would corrupt the file when output aliases input
-            // (the document is still open), and a failed save would leave a partial file.
-            Path staged;
+            // Stage beside the destination and publish atomically. A direct save to
+            // output would corrupt the file when output aliases input (the document is
+            // still open), and a failed save would leave a partial file, so an
+            // unavailable staging file is refused rather than downgraded.
+            Path staged = options.createStagingFile(output);
             try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
+                part.save(staged);
+                AtomicPublish.replace(staged, output);
                 staged = null;
-            }
-            if (staged != null) {
-                try {
-                    part.save(staged);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                } finally {
-                    if (staged != null) {
-                        try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                    }
+            } finally {
+                if (staged != null) {
+                    try { Files.deleteIfExists(staged); } catch (IOException _) {}
                 }
-            } else {
-                part.save(output);
             }
         }
     }
@@ -492,7 +485,7 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            AtomicPublish.replace(staged, output);
             staged = null;
             return true;
         } finally {
@@ -571,14 +564,29 @@ public final class PdfSplit {
         return result;
     }
 
+    /**
+     * Keep only bookmarks whose page is selected, remapping each kept page to its
+     * position in the output. The source-page-to-output-page mapping is built once
+     * and reused for every bookmark (and its children) instead of scanning the
+     * index list once per bookmark.
+     */
     private static List<Bookmark> filterBookmarksForIndices(List<Bookmark> bookmarks, List<Integer> sortedIndices) {
+        Map<Integer, Integer> outputIndexBySourcePage = new HashMap<>(Math.max(1, sortedIndices.size() * 2));
+        for (int i = 0; i < sortedIndices.size(); i++) {
+            outputIndexBySourcePage.putIfAbsent(sortedIndices.get(i), i);
+        }
+        return filterBookmarksWithMap(bookmarks, outputIndexBySourcePage);
+    }
+
+    private static List<Bookmark> filterBookmarksWithMap(List<Bookmark> bookmarks,
+                                                         Map<Integer, Integer> outputIndexBySourcePage) {
         List<Bookmark> result = new ArrayList<>();
         for (Bookmark bookmark : bookmarks) {
             List<Bookmark> filteredChildren = bookmark.hasChildren()
-                    ? filterBookmarksForIndices(bookmark.children(), sortedIndices)
+                    ? filterBookmarksWithMap(bookmark.children(), outputIndexBySourcePage)
                     : Collections.emptyList();
-            int matchingIndex = sortedIndices.indexOf(bookmark.pageIndex());
-            boolean inSet = matchingIndex >= 0;
+            Integer matchingIndex = outputIndexBySourcePage.get(bookmark.pageIndex());
+            boolean inSet = matchingIndex != null;
             if (inSet || !filteredChildren.isEmpty()) {
                 int newPageIndex = inSet ? matchingIndex : (!filteredChildren.isEmpty() ? filteredChildren.getFirst().pageIndex() : 0);
                 result.add(new Bookmark(bookmark.title(), newPageIndex, filteredChildren, bookmark.actionType(), bookmark.uri(), bookmark.filePath()));
