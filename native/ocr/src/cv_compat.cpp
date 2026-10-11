@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <numbers>
 
 namespace jpdf::ocr {
 
@@ -712,12 +713,12 @@ RotatedRect min_area_rect(const std::vector<Point>& points) {
     } else if (n == 1) {
         box.center = h[0];
     }
-    box.angle = static_cast<float>(box.angle * 180 / M_PI);
+    box.angle = static_cast<float>(box.angle * 180 / std::numbers::pi);
     return box;
 }
 
 void box_points(const RotatedRect& rect, Point2f pt[4]) {
-    const double angle = rect.angle * M_PI / 180.;
+    const double angle = rect.angle * std::numbers::pi / 180.;
     const float b = static_cast<float>(std::cos(angle)) * 0.5f;
     const float a = static_cast<float>(std::sin(angle)) * 0.5f;
     pt[0].x = rect.center.x - a * rect.height - b * rect.width;
