@@ -160,13 +160,16 @@ public final class PdfSplit {
                 return fallback;
             }
             List<PdfDocument> results = new ArrayList<>(ranges.size());
+            // Batch outcomes live outside the try so the failure path can close any
+            // part that was produced but never transferred into `results`.
+            List<FileExtract> batched = null;
+            int batchedIndex = 0;
             try {
                 List<Bookmark> sourceBookmarks = doc.bookmarks();
                 boolean snapshotRefused = false;
                 // E1: when the native symbol exists, one source parse serves every
                 // range. Each outcome is aligned with `ranges`, so the existing
                 // part/rejected/fallback handling below is unchanged.
-                List<FileExtract> batched = null;
                 if (QpdfLib.isExtractRangesSupported()) {
                     if (doc.structureEpoch() != epoch) {
                         throw new JPDFiumException(
@@ -177,16 +180,16 @@ public final class PdfSplit {
                     }
                     batched = extractAllToTemp(reusable, ranges, sourceBookmarks, options);
                 }
-                int batchedIndex = 0;
                 for (int[] range : ranges) {
-                    if (batched == null) {
-                        if (doc.structureEpoch() != epoch) {
-                            throw new JPDFiumException(
-                                    "document mutated during split; outputs would mix snapshots");
-                        }
-                        if (Thread.currentThread().isInterrupted()) {
-                            throw new JPDFiumException("split cancelled between outputs");
-                        }
+                    // Recheck per outcome: the batch can span a document that changed
+                    // after the pre-batch check, and a rejected outcome falls back to
+                    // the live document, so the state must still hold here.
+                    if (doc.structureEpoch() != epoch) {
+                        throw new JPDFiumException(
+                                "document mutated during split; outputs would mix snapshots");
+                    }
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new JPDFiumException("split cancelled between outputs");
                     }
                     int count = range[1] - range[0] + 1;
                     int[] idx = new int[count];
@@ -223,6 +226,12 @@ public final class PdfSplit {
                 }
                 return results;
             } catch (RuntimeException e) {
+                if (batched != null) {
+                    for (int i = batchedIndex; i < batched.size(); i++) {
+                        PdfDocument part = batched.get(i).part();
+                        if (part != null) part.close();
+                    }
+                }
                 closeAll(results);
                 throw e;
             } finally {

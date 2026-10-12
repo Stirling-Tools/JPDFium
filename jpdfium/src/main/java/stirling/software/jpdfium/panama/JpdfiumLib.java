@@ -1190,9 +1190,12 @@ public final class JpdfiumLib {
             if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX
                     && RenderTargetPool.RETAINED_BYTES.get() + byteLen
                             <= RENDER_TARGET_RETAINED_MAX_BYTES) {
+                // Allocate before counting: a failed allocation must not consume the
+                // pool budget, or repeated failures would starve later renders.
+                MemorySegment target = RenderTargetPool.ARENA.allocate(byteLen);
                 RenderTargetPool.ALLOCATED.incrementAndGet();
                 RenderTargetPool.RETAINED_BYTES.addAndGet(byteLen);
-                return RenderTargetPool.ARENA.allocate(byteLen);
+                return target;
             }
         }
         return null;
