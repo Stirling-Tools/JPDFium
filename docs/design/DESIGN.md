@@ -733,7 +733,7 @@ multilingual qualification, are in PyJPDFium's parity suite ([TEXT_LAYER.md](#in
   - a tampered profile being refused.
 
   It needs a fetched profile in `JPDFIUM_OCR_PROFILE` and is skipped without one.
-- `api_raster` also decodes hand-built PNGs of every colour type.
+- `api_safety` also decodes hand-built PNGs of every colour type.
 
 ONNX Runtime is not instrumented. Under LeakSanitizer one allocation of its own is suppressed, and
 under TSan races between its own worker threads are suppressed (`native/ocr/tests/*.supp`).

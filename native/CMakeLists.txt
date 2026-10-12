@@ -698,16 +698,6 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(api_safety PRIVATE jpdfium)
         add_test(NAME api_safety COMMAND api_safety)
 
-        add_executable(api_raster bridge/tests/api_raster.cpp)
-        target_include_directories(api_raster PRIVATE bridge/include)
-        if(MSVC)
-            target_compile_options(api_raster PRIVATE /W4 /WX)
-        else()
-            target_compile_options(api_raster PRIVATE -Wall -Wextra -Wpedantic -Werror)
-        endif()
-        target_link_libraries(api_raster PRIVATE jpdfium)
-        add_test(NAME api_raster COMMAND api_raster)
-
         add_executable(api_text_layer bridge/tests/api_text_layer.cpp)
         target_include_directories(api_text_layer PRIVATE bridge/include "${PDFIUM_INCLUDE_DIR}")
         if(MSVC)
@@ -751,7 +741,7 @@ if(JPDFIUM_BUILD_TESTS)
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
         if(JPDFIUM_USE_PDFIUM)
-            set_tests_properties(api_safety api_raster api_text_layer PROPERTIES
+            set_tests_properties(api_safety api_text_layer PROPERTIES
                 ENVIRONMENT "${_jpdfium_test_env}")
         endif()
     endif()
