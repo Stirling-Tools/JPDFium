@@ -1013,6 +1013,9 @@ public final class PdfPage implements AutoCloseable {
     /**
      * {@link #rawHandle()} for library-internal reads that cannot change the document.
      * Unlike {@link #rawHandle()}, taking it does not mark the owning document as modified.
+     *
+     * <p>Do not write through the returned handle: such writes are invisible to
+     * {@link PdfDocument#isContentModified()}.
      */
     public MemorySegment rawHandleForRead() {
         ensureOpen();

@@ -203,6 +203,28 @@ class ContentModificationTrackingTest {
     }
 
     @Test
+    void failedAttachmentDoesNotMarkModified() {
+        assumeTrue(NativeRuntime.isFull(), "attachments require the full native build");
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            assertFalse(doc.addAttachment("", new byte[] {1, 2, 3}),
+                    "PDFium must reject an attachment with an empty name");
+            assertFalse(doc.isContentModified(),
+                    "a failed attachment must not mark the document modified");
+        }
+    }
+
+    @Test
+    void successfulAttachmentMarksModified() {
+        assumeTrue(NativeRuntime.isFull(), "attachments require the full native build");
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            assertTrue(doc.addAttachment("note.bin", new byte[] {1, 2, 3}),
+                    "the attachment must be added");
+            assertTrue(doc.isContentModified(),
+                    "an added attachment must mark the document modified");
+        }
+    }
+
+    @Test
     void rawHandleMarksModified() {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             doc.rawHandle();

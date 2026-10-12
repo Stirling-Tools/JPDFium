@@ -2,6 +2,7 @@ package stirling.software.jpdfium.doc;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.junit.jupiter.api.io.TempDir;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Contract tests for the compression gates:
@@ -50,6 +52,25 @@ class PdfCompressorGateTest {
                     "no compression actions may be applied to a signed PDF");
             assertFalse(out.result().warnings().isEmpty(),
                     "skipping a signed PDF must be reported as a warning");
+            assertTrue(out.result().warnings().stream().anyMatch(w -> w.contains("signature")),
+                    "the warning must explain the signature: " + out.result().warnings());
+        }
+    }
+
+    @Test
+    void passwordProtectedSignedDocumentIsNotRewritten(@TempDir Path tempDir) throws Exception {
+        assumeTrue(PdfSecurity.isSupported(), "encrypting the fixture requires the qpdf native backend");
+        byte[] plain = Files.readAllBytes(resource("/pdfs/general/irs_f1040.pdf"));
+        byte[] protectedBytes
+                = PdfSecurity.encryptBytes(plain, "user-secret", "owner-secret", PdfSecurity.PERM_ALL);
+        assertNotNull(protectedBytes, "the fixture must encrypt");
+        Path src = tempDir.resolve("protected-signed.pdf");
+        Files.write(src, protectedBytes);
+        try (PdfDocument doc = PdfDocument.open(src, "user-secret")) {
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+            assertArrayEquals(protectedBytes, out.bytes(),
+                    "an unchanged password-protected signed document must keep its open-time bytes");
             assertTrue(out.result().warnings().stream().anyMatch(w -> w.contains("signature")),
                     "the warning must explain the signature: " + out.result().warnings());
         }

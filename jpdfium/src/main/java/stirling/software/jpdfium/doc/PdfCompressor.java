@@ -198,7 +198,7 @@ public final class PdfCompressor {
         int pdfiumSignatures = signatureCount(doc);
         boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(markers);
         if (signed && originalBytesKnown && !doc.isContentModified()
-                && serializesIdentically(sourceBytes, openStateBytes)) {
+                && serializesIdentically(doc, sourceBytes, openStateBytes)) {
             // The true original bytes are available and the caller has not edited
             // the document since it was opened, so return them byte-for-byte.
             String detail = pdfiumSignatures > 0
@@ -446,9 +446,27 @@ public final class PdfCompressor {
     // returning the open-time bytes of a signed document, confirm that a fresh open
     // of them serializes to the same bytes as the live document. Any doubt means
     // "edited": an unneeded re-save is recoverable, a dropped redaction is not.
-    private static boolean serializesIdentically(byte[] sourceBytes, byte[] liveBytes) {
+    private static boolean serializesIdentically(PdfDocument doc, byte[] sourceBytes, byte[] liveBytes) {
+        if (isEncrypted(doc)) {
+            // PDFium re-encrypts on every save with a fresh key, so two serializations
+            // of the same protected document are never byte-comparable (and a
+            // password-free reopen of the source is rejected outright). The tracking
+            // flag is the only signal available there, and the caller has already
+            // proved the document was not flagged as edited.
+            return true;
+        }
         try (PdfDocument pristine = PdfDocument.open(sourceBytes)) {
             return equalIgnoringInstanceId(pristine.saveBytes(), liveBytes);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
+    }
+
+    /** True when the document carries an encryption dictionary; never throws. */
+    private static boolean isEncrypted(PdfDocument doc) {
+        try {
+            return PdfEncryption.isEncrypted(doc.rawHandleForRead());
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return false;

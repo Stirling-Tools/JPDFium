@@ -1315,6 +1315,12 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * {@link #rawHandle()} for library-internal reads that cannot change the document.
      * Unlike {@link #rawHandle()}, taking it does not mark the document as modified.
+     *
+     * <p>Do not write through the returned handle. Such writes are invisible to
+     * {@link #isContentModified()}, and on an encrypted document they cannot be
+     * detected by re-serialising either, because PDFium re-encrypts with a fresh key
+     * on every save. An edit made that way can therefore be dropped when a signed
+     * document is returned unchanged.
      */
     public MemorySegment rawHandleForRead() {
         ensureOpen();
