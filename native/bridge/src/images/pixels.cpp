@@ -65,17 +65,16 @@ void rgba_to_rgb(uint8_t* data, int32_t width, int32_t height) noexcept {
 namespace {
 
 // ITU-R 601-2 luma for eight pixels, widened to 32-bit lanes so the coefficients cannot wrap.
+// The narrowing rounding shift folds the (x + 0x8000) >> 16 step into one instruction.
 inline uint8x8_t luma8(uint8x8_t r, uint8x8_t g, uint8x8_t b) noexcept {
     const uint16x8_t r16 = vmovl_u8(r), g16 = vmovl_u8(g), b16 = vmovl_u8(b);
-    const uint32x4_t rlo = vmovl_u16(vget_low_u16(r16)), rhi = vmovl_u16(vget_high_u16(r16));
-    const uint32x4_t glo = vmovl_u16(vget_low_u16(g16)), ghi = vmovl_u16(vget_high_u16(g16));
-    const uint32x4_t blo = vmovl_u16(vget_low_u16(b16)), bhi = vmovl_u16(vget_high_u16(b16));
-    const uint32x4_t round = vdupq_n_u32(0x8000u);
-    uint32x4_t lo = vaddq_u32(vmulq_n_u32(rlo, 19595u), vmulq_n_u32(glo, 38470u));
-    lo = vaddq_u32(vaddq_u32(lo, vmulq_n_u32(blo, 7471u)), round);
-    uint32x4_t hi = vaddq_u32(vmulq_n_u32(rhi, 19595u), vmulq_n_u32(ghi, 38470u));
-    hi = vaddq_u32(vaddq_u32(hi, vmulq_n_u32(bhi, 7471u)), round);
-    return vmovn_u16(vcombine_u16(vmovn_u32(vshrq_n_u32(lo, 16)), vmovn_u32(vshrq_n_u32(hi, 16))));
+    uint32x4_t lo = vmull_n_u16(vget_low_u16(r16), 19595u);
+    lo = vmlal_n_u16(lo, vget_low_u16(g16), 38470u);
+    lo = vmlal_n_u16(lo, vget_low_u16(b16), 7471u);
+    uint32x4_t hi = vmull_n_u16(vget_high_u16(r16), 19595u);
+    hi = vmlal_n_u16(hi, vget_high_u16(g16), 38470u);
+    hi = vmlal_n_u16(hi, vget_high_u16(b16), 7471u);
+    return vmovn_u16(vcombine_u16(vrshrn_n_u32(lo, 16), vrshrn_n_u32(hi, 16)));
 }
 
 }  // namespace
