@@ -176,6 +176,8 @@ static constexpr double kInkDpi = 200.0;
 // Upper bound on the rendered page, in pixels: 16 Mpx is 64 MB of BGRx and puts
 // an A0 sheet at ~100 dpi instead of failing the cover pass outright.
 static constexpr double kMaxInkPixels = 16.0e6;
+static constexpr double kMinCoverWidthEm = 0.1;
+static constexpr double kFallbackEm = 10.0;  // pt, for chars with no derivable size
 
 // Font size of a character in page space, or 0 when it cannot be derived:
 // generated chars (the spaces and line breaks PDFium inserts) have no text
@@ -359,6 +361,15 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
 
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
+    // A redaction removes a char only when the box overlaps its glyph box, and a
+    // zero-width one (a combining mark, OCR text with no advance) on the edge of
+    // the box only touches it. A box over it alone would have no area.
+    if (*r - *l < 0.01) {  // pt
+        double em = charEm(textPage, index, nullptr);
+        double half = 0.5 * kMinCoverWidthEm * (em > 0 ? em : kFallbackEm);
+        *l -= half;
+        *r += half;
+    }
     FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
     if (!obj || FPDFTextObj_GetTextRenderMode(obj) != FPDF_TEXTRENDERMODE_INVISIBLE) return true;
     FS_MATRIX m;
@@ -520,6 +531,19 @@ static bool addCharBox(FPDF_TEXTPAGE textPage, int index, CoverBounds& bounds, d
     return true;
 }
 
+int32_t logicalMatchCount(const std::vector<TextMatch>& matches) {
+    std::set<int> groups;
+    int32_t ungrouped = 0;
+    for (const auto& m : matches) {
+        if (m.group < 0) {
+            ++ungrouped;
+        } else {
+            groups.insert(m.group);
+        }
+    }
+    return ungrouped + static_cast<int32_t>(groups.size());
+}
+
 // Rebuild a TextMatch bbox from its char indices (used after grapheme or
 // cluster extension so the painted cover encloses everything removed).
 static bool recomputeMatchBbox(CharBoxCache& chars, TextMatch& m) {
@@ -538,21 +562,69 @@ bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
     return recomputeMatchBbox(chars, m);
 }
 
+static bool isLineBreak(unsigned int uni) {
+    return uni == '\r' || uni == '\n' || uni == 0x2028 || uni == 0x2029;
+}
+
+// True when a char box shares a text line with the box built so far: the
+// vertical overlap covers at least half of the shorter of the two.
+static bool onSameLine(double ymin, double ymax, double b, double t) {
+    double overlap = std::min(ymax, t) - std::max(ymin, b);
+    double shorter = std::min(ymax - ymin, t - b);
+    return shorter <= 0 ? overlap >= 0 : overlap >= 0.5 * shorter;
+}
+
+// A gap wider than this between neighbouring characters on one baseline is a
+// column gutter or a table cell boundary, not a word space (0.25-0.35em).
+static constexpr double kRunBreakGapEm = 1.5;
+
 // Append the chars covered by a PCRE2 match [start,start+len) of the search
-// buffer into a TextMatch, computing its cover box.
+// buffer, one TextMatch per run of text. A single box over a match that wraps
+// to the next line, column or page spans every glyph in between, and two
+// side-by-side columns can share a baseline, so a box also ends at a gutter.
+// The pieces share a group.
 static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap, int start,
                              int len, float padding, std::vector<TextMatch>& out) {
+    FPDF_TEXTPAGE textPage = chars.textPage();
+    const size_t firstPiece = out.size();
+    const int group = static_cast<int>(firstPiece);
     TextMatch tm;
     CoverBounds bounds;
+    double lastRight = 0;
+    int lastCi = -1;
+    auto flush = [&]() {
+        if (bounds.any) {
+            fitCover(chars, tm, bounds, padding);
+            tm.group = group;
+            out.push_back(std::move(tm));
+        }
+        tm = TextMatch();
+        bounds = CoverBounds();
+    };
     for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
         int ci = idxMap[k];
-        tm.charIndices.push_back(ci);
+        if (ci == lastCi) continue;  // NFKC expansion maps several buffer units to one char
+        lastCi = ci;
+        if (isLineBreak(FPDFText_GetUnicode(textPage, ci))) {
+            flush();
+            continue;
+        }
         double l, r, b, t;
-        addCharBox(chars.textPage(), ci, bounds, &l, &r, &b, &t);  // skips unmapped chars
+        if (!matchCharBox(textPage, ci, &l, &r, &b, &t)) {  // unmapped: stays with its line
+            tm.charIndices.push_back(ci);
+            continue;
+        }
+        if (bounds.any) {
+            double em = charEm(textPage, ci, nullptr);
+            bool gutter = em > 0 && l - lastRight > kRunBreakGapEm * em;
+            if (gutter || !onSameLine(bounds.coverB, bounds.coverT, b, t)) flush();
+        }
+        lastRight = r;
+        tm.charIndices.push_back(ci);
+        addCharBox(textPage, ci, bounds, &l, &r, &b, &t);
     }
-    if (!bounds.any) return;
-    fitCover(chars, tm, bounds, padding);
-    out.push_back(std::move(tm));
+    flush();
+    if (out.size() == firstPiece + 1) out.back().group = -1;
 }
 
 #ifdef JPDFIUM_HAS_PCRE2

@@ -300,6 +300,10 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
             FPDFPage_CloseAnnot(annot);
+            // Once one box is applied the text page indexes freed objects, so the
+            // fission fallback would read them. Skip the box; the post-redaction
+            // check still covers its text.
+            if (!ok && !appliedRects.empty()) continue;
             if (!ok) {
                 epdfOk = false;
                 break;
@@ -431,7 +435,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
 #endif
-        if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
+        if (matchCount) *matchCount = logicalMatchCount(matches);
 
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
@@ -507,6 +511,10 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
             FPDFPage_CloseAnnot(annot);
+            // Once one box is applied the text page indexes freed objects, so the
+            // fission fallback would read them. Skip the box; the post-redaction
+            // check still covers its text.
+            if (!ok && !appliedRects.empty()) continue;
             if (!ok) {
                 epdfOk = false;
                 break;
@@ -791,7 +799,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 
         FPDFText_ClosePage(tp);
 
-        if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
+        if (matchCount) *matchCount = logicalMatchCount(matches);
 
         if (createdCount > 0 && pw->core) {
             // Saving with uncommitted marks would ship intact text under red marks.
