@@ -696,20 +696,29 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     // The sanitize stage works on vectors and may replace the buffer, so only
     // the sanitize path funnels through one vector (same copies as before).
     if (w->core->contentRedacted && w->core->sanitizeOnSave) {
-        std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
-        std::free(mw.buf);
-        int32_t sanitizeRc = applySanitizeStage(w, vec);
-        if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
-        size_t sz = vec.size();
-        // malloc(0) is permitted to return NULL, which is indistinguishable
-        // from an allocation failure; an empty save result is legitimate, so
-        // allocate one byte for it.
-        uint8_t* out = static_cast<uint8_t*>(std::malloc(sz ? sz : 1));
-        if (!out) return JPDFIUM_ERR_NATIVE;
-        if (sz) std::memcpy(out, vec.data(), sz);
-        *data = out;
-        *len = static_cast<int64_t>(sz);
-        return JPDFIUM_OK;
+        try {
+            std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
+            std::free(mw.buf);
+            mw.buf = nullptr;
+            int32_t sanitizeRc = applySanitizeStage(w, vec);
+            if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+            size_t sz = vec.size();
+            // malloc(0) is permitted to return NULL, which is indistinguishable
+            // from an allocation failure; an empty save result is legitimate, so
+            // allocate one byte for it.
+            uint8_t* out = static_cast<uint8_t*>(std::malloc(sz ? sz : 1));
+            if (!out) return JPDFIUM_ERR_NATIVE;
+            if (sz) std::memcpy(out, vec.data(), sz);
+            *data = out;
+            *len = static_cast<int64_t>(sz);
+            return JPDFIUM_OK;
+        } catch (...) {
+            // The vector or the sanitize stage can throw; the buffer must not
+            // leak, and this entry point must report instead of terminating.
+            std::free(mw.buf);
+            mw.buf = nullptr;
+            return JPDFIUM_ERR_NATIVE;
+        }
     }
 
     if (mw.size == 0) {

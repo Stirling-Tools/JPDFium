@@ -951,7 +951,17 @@ fn decode_png(
     // arrive in Adam7 pass order rather than row by row.
     let interlaced = reader.info().interlaced;
     let direct = in_channels == out_channels && frame_size == out_size;
-    let mut frame = if direct { Vec::new() } else { vec![0u8; frame_size] };
+    let mut frame = if direct {
+        Vec::new()
+    } else {
+        // vec![0u8; frame_size] aborts the process on OOM; the caller must get an error instead.
+        let mut frame = Vec::new();
+        if frame.try_reserve_exact(frame_size).is_err() {
+            return DECODE_ERR_ALLOC;
+        }
+        frame.resize(frame_size, 0);
+        frame
+    };
     let pixels = unsafe { alloc(ctx, out_size) };
     if pixels.is_null() {
         return DECODE_ERR_ALLOC;

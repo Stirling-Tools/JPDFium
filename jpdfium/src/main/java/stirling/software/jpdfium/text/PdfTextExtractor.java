@@ -274,31 +274,45 @@ public final class PdfTextExtractor {
     }
 
     private static float parseFloatFast(String s, int start, int end) {
+        // The generic scan stops at the object's `,` or `}`, so a padded literal can
+        // carry trailing whitespace; the value ends at its last numeric character.
+        while (end > start) {
+            char last = s.charAt(end - 1);
+            if ((last >= '0' && last <= '9') || last == '.') break;
+            end--;
+        }
+        int dot = -1;
+        for (int i = start; i < end; i++) {
+            char c = s.charAt(i);
+            // An exponent is rare in this layout, so hand the whole literal to the JDK.
+            if (c == 'e' || c == 'E') {
+                return parseFloatWithJdk(s, start, end);
+            }
+            if (c == '.' && dot < 0) {
+                dot = i;
+            }
+        }
+        if (dot < 0) {
+            return (float) parseIntFast(s, start, end);
+        }
+        int intPart = parseIntFast(s, start, dot);
+        int fracPart = parseIntFast(s, dot + 1, end);
+        int fracDigits = end - (dot + 1);
+        float frac = fracPart;
+        for (int i = 0; i < fracDigits; i++) {
+            frac /= 10.0f;
+        }
+        // The sign lives in the literal, not in intPart: "-0.5" parses "-0" to 0.
+        boolean negative = start < end && s.charAt(start) == '-';
+        return negative ? intPart - frac : intPart + frac;
+    }
+
+    /** Parses one numeric literal the way the generic path does, 0 when the JDK rejects it. */
+    private static float parseFloatWithJdk(String s, int start, int end) {
         try {
-            int dot = -1;
-            for (int i = start; i < end; i++) {
-                if (s.charAt(i) == '.') {
-                    dot = i;
-                    break;
-                }
-            }
-            if (dot < 0) {
-                return (float) parseIntFast(s, start, end);
-            }
-            int intPart = parseIntFast(s, start, dot);
-            int fracPart = parseIntFast(s, dot + 1, end);
-            int fracDigits = end - (dot + 1);
-            float frac = fracPart;
-            for (int i = 0; i < fracDigits; i++) {
-                frac /= 10.0f;
-            }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
-        } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
-            try {
-                return Float.parseFloat(s.substring(start, end));
-            } catch (NumberFormatException _) {
-                return 0.0f;
-            }
+            return Float.parseFloat(s.substring(start, end));
+        } catch (NumberFormatException | IndexOutOfBoundsException _) {
+            return 0.0f;
         }
     }
 

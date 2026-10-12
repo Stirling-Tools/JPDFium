@@ -153,7 +153,12 @@ jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
             return fail(JPDF_E_BUSY, "shutdown refused with documents or pages open");
         }
     }
-    state_.store(State::Destroying, std::memory_order_release);
+    // Only a still-quiescing domain may be destroyed: resume() is lock-free and can
+    // succeed between the check above and here, and it has already told its caller JPDF_OK.
+    State expected = State::Quiescing;
+    if (!state_.compare_exchange_strong(expected, State::Destroying, std::memory_order_acq_rel)) {
+        return fail(JPDF_E_BUSY, "domain was resumed while shutting down");
+    }
     t_in_domain = true;
     try {
         jpdfium_destroy_pdfium_core();

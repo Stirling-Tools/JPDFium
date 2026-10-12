@@ -798,7 +798,6 @@ if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
     set(JPDFIUM_OCR_SOURCES
         ocr/src/api_ocr.cpp
         ocr/src/engine.cpp
-        ocr/src/ort_session.cpp
         ocr/src/profile.cpp
         ocr/src/sha256.cpp
         ocr/src/paddle.cpp

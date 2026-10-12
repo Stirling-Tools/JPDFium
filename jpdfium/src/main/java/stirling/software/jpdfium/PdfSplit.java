@@ -625,10 +625,15 @@ public final class PdfSplit {
                         result = tmpBookmarks;
                     }
                     PdfDocument part = PdfDocument.openTemp(result);
-                    if (part.pageCount() != idx.length) {
-                        part.close();
-                        out.add(FileExtract.REJECTED);
-                        continue;
+                    boolean keep = false;
+                    try {
+                        if (part.pageCount() != idx.length) {
+                            out.add(FileExtract.REJECTED);
+                            continue;
+                        }
+                        keep = true;
+                    } finally {
+                        if (!keep) part.close();
                     }
                     cleanup.remove(result);
                     out.add(new FileExtract(part, false, false));
@@ -675,9 +680,14 @@ public final class PdfSplit {
                 result = tmpBookmarks;
             }
             PdfDocument part = PdfDocument.openTemp(result);
-            if (part.pageCount() != pageIndices.length) {
-                part.close();
-                return FileExtract.REJECTED;
+            boolean keep = false;
+            try {
+                if (part.pageCount() != pageIndices.length) {
+                    return FileExtract.REJECTED;
+                }
+                keep = true;
+            } finally {
+                if (!keep) part.close();
             }
             cleanup.remove(result);
             return new FileExtract(part, false, false);

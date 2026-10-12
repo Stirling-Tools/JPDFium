@@ -14,10 +14,12 @@
 #include <initializer_list>
 #include <limits>
 #include <numeric>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 
+#include "jpdfium_api.h"
 #include "output/image_writer.h"
 #include "runtime/api_status.h"
 
@@ -158,6 +160,9 @@ jpdf_status read_array(const T* items, int32_t count, uint32_t min_size, std::st
     if (!items) return fail(JPDF_E_INVALID_ARGUMENT, name, " array is NULL");
     uint32_t stride = 0;
     std::memcpy(&stride, items, sizeof(stride));
+    if (stride < min_size) {
+        return fail(JPDF_E_INVALID_ARGUMENT, name, ".struct_size is below the minimum layout");
+    }
     if (stride % alignof(T) != 0) {
         return fail(JPDF_E_INVALID_ARGUMENT, name, ".struct_size breaks element alignment");
     }
@@ -1216,14 +1221,6 @@ const std::vector<uint8_t>& glyphless_font() {
 }  // namespace jpdf
 
 // --- api_text_layer.cpp (merged) ---
-// api_text_layer.cpp - jpdf_text_layer_write. Builds the PDF in memory, then publishes it.
-
-#include <string>
-
-#include "jpdfium_api.h"
-#include "output/image_writer.h"
-#include "runtime/api_status.h"
-#include "text_layer.h"
 
 extern "C" {
 

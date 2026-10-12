@@ -56,4 +56,48 @@ class PdfTextExtractorTest {
         assertTrue(newline.isNewline());
         assertTrue(newline.isWhitespace());
     }
+
+    @Test
+    void parseNegativeFractionsKeepsSign() {
+        List<TextChar> fast = PdfTextExtractor.parseCharsJson(
+                "[{\"i\":0,\"u\":65,\"x\":-0.5,\"y\":-0.25,\"w\":8.0,\"h\":12.0,\"font\":\"Arial\",\"size\":12.0}]");
+        List<TextChar> generic = PdfTextExtractor.parseCharsJson(
+                "[{ \"i\": 0, \"u\": 65, \"x\": -0.5, \"y\": -0.25, \"w\": 8.0, \"h\": 12.0, "
+                        + "\"font\": \"Arial\", \"size\": 12.0 }]");
+
+        assertEquals(1, fast.size());
+        // A negative fraction used to come back positive: the sign was read off intPart,
+        // and parseIntFast("-0") is 0.
+        assertEquals(-0.5f, fast.getFirst().x(), 1e-6f);
+        assertEquals(-0.25f, fast.getFirst().y(), 1e-6f);
+        assertEquals(fast, generic);
+    }
+
+    @Test
+    void parseExponentLiteralsMatchesGenericParser() {
+        List<TextChar> fast = PdfTextExtractor.parseCharsJson(
+                "[{\"i\":1,\"u\":66,\"x\":1.5e+06,\"y\":-2e-03,\"w\":8.0,\"h\":12.0,\"font\":\"Arial\",\"size\":12.0}]");
+        List<TextChar> generic = PdfTextExtractor.parseCharsJson(
+                "[{ \"i\": 1, \"u\": 66, \"x\": 1.5e+06, \"y\": -2e-03, \"w\": 8.0, \"h\": 12.0, "
+                        + "\"font\": \"Arial\", \"size\": 12.0 }]");
+
+        assertEquals(1, fast.size());
+        assertEquals(1500000.0f, fast.getFirst().x(), 1e-3f);
+        assertEquals(-0.002f, fast.getFirst().y(), 1e-6f);
+        assertEquals(fast, generic);
+    }
+
+    @Test
+    void parseEscapedFontNameMatchesGenericParser() {
+        List<TextChar> fast = PdfTextExtractor.parseCharsJson(
+                "[{\"i\":2,\"u\":67,\"x\":1.0,\"y\":2.0,\"w\":3.0,\"h\":4.0,"
+                        + "\"font\":\"A\\\"B\\\\C\",\"size\":9.5}]");
+        List<TextChar> generic = PdfTextExtractor.parseCharsJson(
+                "[{ \"i\": 2, \"u\": 67, \"x\": 1.0, \"y\": 2.0, \"w\": 3.0, \"h\": 4.0, "
+                        + "\"font\": \"A\\\"B\\\\C\", \"size\": 9.5 }]");
+
+        assertEquals(1, fast.size());
+        assertEquals("A\"B\\C", fast.getFirst().fontName());
+        assertEquals(fast, generic);
+    }
 }

@@ -304,7 +304,18 @@ void test_bounded_shutdown_then_stop() {
     writer.in_callback = &in_callback;
     writer.release = &release;
     std::thread holder([&] { jpdf_guard_FPDF_SaveAsCopy(writer.doc, &writer, 0); });
-    while (!in_callback.load()) std::this_thread::yield();
+    // A refused shim or a null writer.doc never enters the callback, so the wait needs a
+    // deadline instead of parking until the ctest timeout.
+    const auto callbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!in_callback.load()) {
+        if (std::chrono::steady_clock::now() > callbackDeadline) {
+            release = true;
+            holder.join();
+            CHECK(in_callback.load(), "save callback entered before the deadline");
+            return;
+        }
+        std::this_thread::yield();
+    }
     const auto t0 = std::chrono::steady_clock::now();
     CHECK(jpdf_runtime_shutdown_within(50) == JPDF_E_TIMEOUT, "busy domain times out");
     CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5), "within the bound");

@@ -315,7 +315,7 @@ class LifecycleTest {
         }
     }
 
-    // PdfiumRuntime execution domain counting is always on; wait/hold timing stays gated off by default.
+    // PdfiumRuntime execution domain counting and hold timing are always recorded; there is no switch.
     @Test
     void guardStatsAdvanceWithUse() throws Exception {
         var before = PdfiumRuntime.stats();
