@@ -15,12 +15,14 @@ import stirling.software.jpdfium.doc.PdfImageDpiReport;
 import stirling.software.jpdfium.doc.PdfLinkValidator;
 import stirling.software.jpdfium.doc.PdfPrint;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Guards the edit-tracking contract behind {@link PdfDocument#rawHandle()}:
@@ -106,6 +108,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void bookletImpositionDoesNotMarkSourceModified() {
+        assumeTrue(NativeRuntime.isFull(), "booklet imposition requires real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(TEXT_PDF);
              PdfDocument booklet = PdfPrint.booklet(doc)) {
             assertNotNull(booklet, "booklet imposition must produce a document");
@@ -210,6 +213,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void realEditMarksModified() {
+        assumeTrue(NativeRuntime.isFull(), "setting the media box requires real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             try (PdfPage page = doc.page(0)) {
                 page.setMediaBox(Rect.of(0, 0, 300, 300));
