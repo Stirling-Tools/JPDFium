@@ -2,7 +2,9 @@ package stirling.software.jpdfium.panama;
 
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
@@ -1103,18 +1105,79 @@ public final class JpdfiumLib {
             long byteLen = (long) w * h * 4;
             // Renders into native memory, so a plain downcall; pixels are bulk-copied into
             // the raster, skipping renderPage's intermediate RGBA byte[] and per-pixel pack loop.
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment nativeTarget = arena.allocate(byteLen);
+            // A fresh confined-arena allocation is zero-filled on every call, which for a
+            // 300 dpi page is tens of MB of needless writes, so a pooled target is reused where
+            // one is available; large pages and pool exhaustion fall back to a one-shot arena.
+            MemorySegment pooled = byteLen <= RENDER_TARGET_MAX_BYTES ? borrowRenderTarget(byteLen) : null;
+            boolean own = pooled == null;
+            Arena arena = own ? Arena.ofConfined() : null;
+            MemorySegment nativeTarget = own ? arena.allocate(byteLen) : pooled.asSlice(0, byteLen);
+            try {
                 if (!transparent) {
                     // Match jpdfium_render_page_flags, which fills the bitmap opaque white
                     // before drawing so uncovered pixels are white rather than transparent.
                     nativeTarget.fill((byte) 0xFF);
+                } else if (!own) {
+                    // A pooled target still holds the previous render and PDFium only writes the
+                    // covered pixels, so clear it to keep uncovered pixels transparent.
+                    nativeTarget.fill((byte) 0x00);
                 }
                 doRenderIntoNative(pageRawHandle0(page), nativeTarget, w, h, effective);
                 MemorySegment.copy(nativeTarget, 0, MemorySegment.ofArray(raster), 0, byteLen);
+            } finally {
+                if (own) {
+                    arena.close();
+                } else {
+                    releaseRenderTarget(pooled);
+                }
             }
             return image;
         });
+    }
+
+    /** Largest page buffer kept for reuse; bigger pages use a one-shot arena. */
+    private static final long RENDER_TARGET_MAX_BYTES = 64L * 1024 * 1024;
+
+    /** Cap on pooled render targets, so a burst of large concurrent renders cannot pin memory. */
+    private static final int RENDER_TARGET_POOL_MAX = 4;
+
+    /**
+     * Reusable render targets, borrowed and returned around each render. Held in a shared,
+     * process-lifetime arena so any thread may use one and the memory outlives the caller's
+     * thread. Initialised lazily so nothing is allocated until the first render.
+     */
+    private static final class RenderTargetPool {
+        static final Arena ARENA = Arena.ofShared();
+        static final ArrayDeque<MemorySegment> FREE = new ArrayDeque<>();
+        static final AtomicInteger ALLOCATED = new AtomicInteger();
+    }
+
+    /**
+     * Borrows a pooled render target of at least {@code byteLen} bytes, or {@code null} when the
+     * page is too large to pool or the pool is exhausted. Every non-null result must be handed back
+     * to {@link #releaseRenderTarget(MemorySegment)}.
+     */
+    private static MemorySegment borrowRenderTarget(long byteLen) {
+        synchronized (RenderTargetPool.FREE) {
+            for (var it = RenderTargetPool.FREE.iterator(); it.hasNext(); ) {
+                MemorySegment target = it.next();
+                if (target.byteSize() >= byteLen) {
+                    it.remove();
+                    return target;
+                }
+            }
+            if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX) {
+                RenderTargetPool.ALLOCATED.incrementAndGet();
+                return RenderTargetPool.ARENA.allocate(byteLen);
+            }
+        }
+        return null;
+    }
+
+    private static void releaseRenderTarget(MemorySegment target) {
+        synchronized (RenderTargetPool.FREE) {
+            RenderTargetPool.FREE.addLast(target);
+        }
     }
 
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,
