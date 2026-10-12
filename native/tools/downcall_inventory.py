@@ -11,7 +11,7 @@ JAVA = ROOT / "jpdfium" / "src" / "main" / "java"
 OUT = ROOT / "docs" / "design" / "JAVA_MIGRATION_INVENTORY.md"
 GUARDS = ROOT / "native" / "bridge" / "src" / "legacy"
 
-DOWNCALL = re.compile(r'\b(downcall|downcallCritical|downcallOptional|find)\(\s*"([A-Za-z0-9_]+)"', re.S)
+DOWNCALL = re.compile(r'\b(downcall|downcallCritical|downcallOptional|find)\(\s*"([A-Za-z0-9_]*[A-Za-z0-9])"', re.S)
 JEXTRACT = re.compile(r"\bJpdfiumH\.(jpdfium_[a-z0-9_]+)\(")
 
 # Bridge entry points that wrap a non-PDFium library; everything else is assumed to reach PDFium.

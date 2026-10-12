@@ -78,7 +78,8 @@ and keeps raw pointer-valued handles; the two surfaces never share handle values
 major matches and the minor is at least the one it was compiled against. Additive changes bump
 the minor; any layout or semantic break bumps the major. 1.1 added rasterization and
 rectification; 1.2 added page text and text layers; 1.3 added PNG loading and the module
-interface below; 1.4 added quads and base directions to text lines and words.
+interface below; 1.4 added quads and base directions to text lines and words; 1.5 added the
+exception firewall, the raw-factory lifetime contract and the publish-status contract.
 
 `jpdf_abi_struct_size(JPDF_STRUCT_*)` reports each struct's size so bindings that do not compile
 against the header (Java FFM) can verify layouts at load time.
@@ -178,8 +179,8 @@ No C++ exception crosses the ABI: every entry point is `noexcept` and runs its b
 exception firewall that maps failures to status codes. The generated guards keep that guarantee
 without a catch boundary of their own: each wrapped `jpdfium_*` function is itself `noexcept` or
 catches every exception internally, and the raw PDFium symbols are C functions that cannot throw
-across this frame. The guard's only added work is atomic lifetime accounting, which does not
-allocate and cannot throw.
+across this frame. Beyond admitting the call through the domain, the guard's only added work is
+atomic lifetime accounting, which does not allocate and cannot throw.
 
 A small, fixed set of raw PDFium factories and their matching closes carry the same lifetime
 accounting as the bridge: `FPDF_CreateNewDocument`, `FPDF_ImportNPagesToOne`,
@@ -821,8 +822,8 @@ writer so no Java code runs inside a guarded PDFium call.
 module binds, per class, whether it reaches PDFium, and its safe replacement. Regenerate it with
 `python native/tools/downcall_inventory.py` after binding changes.
 
-Now: 466 symbols across 40 classes; 439 bound through a guard; 9 EmbedPDF annotation symbols are
-absent from the pinned PDFium build; 19 have a safe `jpdf_*` replacement.
+Now: 465 symbols across 39 classes; 426 reach PDFium; 439 bound through a guard; 9 EmbedPDF
+annotation symbols have no guard shim; 19 have a safe `jpdf_*` replacement.
 
 ### Order
 

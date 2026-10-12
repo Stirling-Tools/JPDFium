@@ -121,7 +121,15 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
             libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev \
-            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf clang-format
+            libqpdf-dev libpugixml-dev libunibreak-dev lld patchelf
+
+      # Pinned: the guard shims below are regenerated with clang-format, and an
+      # unpinned version would reformat them and fail the diff check.
+      - name: Install pinned clang-format
+        run: |
+          python3 -m pip install --user clang-format==18.1.8
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          clang-format --version
 
       - name: Fetch prebuilt PDFium (pinned)
         env:
