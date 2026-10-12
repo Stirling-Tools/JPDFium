@@ -91,6 +91,9 @@ public final class PdfTextExtractor {
         List<TextChar> characters = new ArrayList<>(Math.max(8, jsonLength / 56));
         int searchPosition = 0;
         String lastFontName = null;
+        int[] fastInts = new int[2];
+        float[] fastFloats = new float[5];
+        String[] fastFont = new String[1];
         while (true) {
             int objectStart = json.indexOf('{', searchPosition);
             if (objectStart < 0) break;
@@ -105,6 +108,21 @@ public final class PdfTextExtractor {
             String fontName = "";
             boolean complete = false;
             try {
+                int fastEnd = parseObjectFast(json, jsonLength, cursor, fastInts, fastFloats, fastFont,
+                        lastFontName);
+                if (fastEnd >= 0) {
+                    index = fastInts[0];
+                    unicode = fastInts[1];
+                    x = fastFloats[0];
+                    y = fastFloats[1];
+                    width = fastFloats[2];
+                    height = fastFloats[3];
+                    fontSize = fastFloats[4];
+                    fontName = fastFont[0];
+                    lastFontName = fontName;
+                    complete = true;
+                    cursor = fastEnd;
+                } else {
                 while (cursor < jsonLength) {
                     char ch = json.charAt(cursor);
                     if (ch == '}') {
@@ -160,6 +178,7 @@ public final class PdfTextExtractor {
                         cursor = valueEnd;
                     }
                 }
+                }
                 if (complete) characters.add(new TextChar(index, unicode, x, y, width, height, fontName, fontSize));
             } catch (NumberFormatException _) {
                 // Skip malformed entries
@@ -167,6 +186,73 @@ public final class PdfTextExtractor {
             searchPosition = cursor;
         }
         return characters;
+    }
+
+    /** Key literals of the fixed native object layout, in emission order. */
+    private static final String[] FAST_KEYS = {"\"i\":", "\"u\":", "\"x\":", "\"y\":", "\"w\":", "\"h\":"};
+
+    /**
+     * Fast path for {@link #parseCharsJson}: the native layer emits every text object in
+     * fixed key order with no whitespace,
+     * {@code {"i":I,"u":U,"x":X,"y":Y,"w":W,"h":H,"font":"F","size":S}}.
+     * Parses it positionally ({@code ints[0..1]} take index/unicode,
+     * {@code floats[0..4]} take x/y/width/height/fontSize, {@code fontBox[0]} takes the
+     * font name deduplicated against {@code lastFontName}) and returns the cursor just
+     * past the closing brace, or -1 when the object has any other shape. The caller then
+     * runs the generic loop, so foreign or future layouts keep working. Never throws.
+     */
+    private static int parseObjectFast(String json, int jsonLength, int cursor,
+            int[] ints, float[] floats, String[] fontBox, String lastFontName) {
+        try {
+            int p = cursor;
+            for (int k = 0; k < FAST_KEYS.length; k++) {
+                if (!json.startsWith(FAST_KEYS[k], p)) return -1;
+                int valueStart = p + 4;
+                int valueEnd = scanFastNumber(json, jsonLength, valueStart);
+                if (valueEnd < 0 || valueEnd >= jsonLength || json.charAt(valueEnd) != ',') return -1;
+                if (k < 2) {
+                    ints[k] = parseIntFast(json, valueStart, valueEnd);
+                } else {
+                    floats[k - 2] = parseFloatFast(json, valueStart, valueEnd);
+                }
+                p = valueEnd + 1;
+            }
+            if (!json.startsWith("\"font\":\"", p)) return -1;
+            int fontStart = p + 8;
+            int quoteClose = endOfQuoted(json, fontStart);
+            if (quoteClose < 0 || quoteClose + 1 >= jsonLength
+                    || !json.startsWith("\",\"size\":", quoteClose)) {
+                return -1;
+            }
+            int quoteLen = quoteClose - fontStart;
+            if (lastFontName != null && lastFontName.length() == quoteLen
+                    && json.regionMatches(fontStart, lastFontName, 0, quoteLen)) {
+                fontBox[0] = lastFontName;
+            } else {
+                fontBox[0] = unescape(json, fontStart, quoteClose);
+            }
+            int sizeStart = quoteClose + 9;
+            int sizeEnd = scanFastNumber(json, jsonLength, sizeStart);
+            if (sizeEnd < 0 || sizeEnd >= jsonLength || json.charAt(sizeEnd) != '}') return -1;
+            floats[4] = parseFloatFast(json, sizeStart, sizeEnd);
+            return sizeEnd + 1;
+        } catch (RuntimeException _) {
+            return -1;
+        }
+    }
+
+    /** End of a numeric literal; -1 when no number characters follow {@code start}. */
+    private static int scanFastNumber(String json, int jsonLength, int start) {
+        int p = start;
+        while (p < jsonLength) {
+            char c = json.charAt(p);
+            if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
+                p++;
+            } else {
+                break;
+            }
+        }
+        return p == start ? -1 : p;
     }
 
     private static int parseIntFast(String s, int start, int end) {
