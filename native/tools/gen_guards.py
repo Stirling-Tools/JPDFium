@@ -31,15 +31,14 @@ OUT_PDFIUM = BRIDGE / "src" / "legacy" / "guards_pdfium.cpp"
 
 # Stay unguarded: QPDF and the Rust helpers never touch PDFium and may run in parallel (some are
 # heap-critical downcalls, which must not block); ABI probes and legacy init precede the runtime.
-# The same applies to the PDFium-free stateless helpers (ICU, Brotli, Luhn, HarfBuzz font
-# subsetting) and the buffer/string frees: they share no mutable state, so admitting them only
-# queues them behind every render/save and makes cleanup (jpdfium_free_buffer/free_string) fail
-# once the runtime is quiescing or stopped. Stateful entry points stay guarded: PCRE2 reuses one
-# mutable match data per handle, FlashText mutates trie state, and font classification shares a
-# process-wide FreeType library (jpdfium_font_covers_text is guarded for the same reason).
+# The same applies to the PDFium-free utility entry points (PCRE2, ICU, FlashText, Brotli, Luhn,
+# FreeType font classification/subsetting): they reach only per-handle state and share no PDFium
+# state, so admitting them would queue them behind every render/save (docs/concurrency.md promises
+# this text work runs in parallel) and would make their frees refuse once the runtime is stopped,
+# leaking the native object.
 UNGUARDED_BRIDGE = re.compile(
-    r"^jpdfium_(qpdf_\w+|rust_\w+|abi_\w+|icu_\w+|brotli_\w+"
-    r"|luhn_validate|font_subset|free_buffer|free_string|init|init_ex|destroy|has_rust)$"
+    r"^jpdfium_(qpdf_\w+|rust_\w+|abi_\w+|pcre2_\w+|icu_\w+|flashtext_\w+|brotli_\w+"
+    r"|luhn_validate|font_classify|font_subset|free_buffer|free_string|init|init_ex|destroy|has_rust)$"
 )
 TEARDOWN = re.compile(r"(Close|close|Destroy|destroy|Exit|Free|free|Release|release|abandon|forget)")
 PDFIUM_SYMBOL = re.compile(r"^(FPDF|EPDF|FORM_|FSDK_)\w+$")

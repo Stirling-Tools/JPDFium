@@ -16,7 +16,7 @@ JEXTRACT = re.compile(r"\bJpdfiumH\.(jpdfium_[a-z0-9_]+)\(")
 
 # Bridge entry points that wrap a non-PDFium library; everything else is assumed to reach PDFium.
 NON_PDFIUM = re.compile(
-    r"^jpdfium_(rust_|has_rust|abi_|free|icu_|pcre2_|xmp_|flashtext_|font_|glyph_|qpdf_|brotli_|lcms_|openjpeg_|unibreak_)"
+    r"^jpdfium_(rust_|has_rust|abi_|free_|icu_|pcre2_|flashtext_|font_(classify|subset|covers_text|free_info)|text_shape|luhn_|glyph_|qpdf_|brotli_|lcms_|openjpeg_|unibreak_)"
 )
 
 SAFE = {

@@ -568,12 +568,13 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             if (max_bytes > 0 && static_cast<int64_t>(bw.buf.size()) > max_bytes)
                 return JPDFIUM_ERR_TOO_LARGE;
 
-            std::string staging;
-            FILE* f = open_staging_sibling(path, staging);
-            if (!f) return JPDFIUM_ERR_IO;
+            // Allocated before the file exists: a throw here leaves nothing to clean up.
             // The buffer must outlive the FILE*, so it stays in scope until after
             // fclose.
             std::vector<char> ioBuffer(kSaveIoBufferBytes);
+            std::string staging;
+            FILE* f = open_staging_sibling(path, staging);
+            if (!f) return JPDFIUM_ERR_IO;
             std::setvbuf(f, ioBuffer.data(), _IOFBF, ioBuffer.size());
             size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
             int closeRc = fclose(f);
@@ -589,12 +590,13 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             return JPDFIUM_OK;
         }
 
-        std::string staging;
-        FILE* f = open_staging_sibling(path, staging);
-        if (!f) return JPDFIUM_ERR_IO;
+        // Allocated before the file exists: a throw here leaves nothing to clean up.
         // The buffer must outlive the FILE*, so it stays in scope until after
         // fclose.
         std::vector<char> ioBuffer(kSaveIoBufferBytes);
+        std::string staging;
+        FILE* f = open_staging_sibling(path, staging);
+        if (!f) return JPDFIUM_ERR_IO;
         std::setvbuf(f, ioBuffer.data(), _IOFBF, ioBuffer.size());
 
         FileWriteContext ctx;
@@ -646,10 +648,6 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
-
     // Grows with realloc so the finished buffer IS the caller's buffer: the
     // old vector-then-malloc+memcpy tail copied every byte twice. The pointer
     // stays malloc-family owned, so jpdfium_free_buffer keeps working.
@@ -688,15 +686,23 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     mw.version = 1;
     mw.WriteBlock = MallocWriter::Write;
 
-    if (!FPDF_SaveAsCopy(w->core->doc, &mw, FPDF_NO_INCREMENTAL)) {
-        std::free(mw.buf);
-        return JPDFIUM_ERR_IO;
-    }
+    // The guard shim for this entry point is noexcept, so decodeDoc and the
+    // vector allocations below must not let an exception escape: the whole
+    // body runs inside this firewall so mw.buf is always released on failure.
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
-    // The sanitize stage works on vectors and may replace the buffer, so only
-    // the sanitize path funnels through one vector (same copies as before).
-    if (w->core->contentRedacted && w->core->sanitizeOnSave) {
-        try {
+        if (!FPDF_SaveAsCopy(w->core->doc, &mw, FPDF_NO_INCREMENTAL)) {
+            std::free(mw.buf);
+            mw.buf = nullptr;
+            return JPDFIUM_ERR_IO;
+        }
+
+        // The sanitize stage works on vectors and may replace the buffer, so only
+        // the sanitize path funnels through one vector (same copies as before).
+        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
             std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
             std::free(mw.buf);
             mw.buf = nullptr;
@@ -712,26 +718,28 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
             *data = out;
             *len = static_cast<int64_t>(sz);
             return JPDFIUM_OK;
-        } catch (...) {
-            // The vector or the sanitize stage can throw; the buffer must not
-            // leak, and this entry point must report instead of terminating.
+        }
+
+        if (mw.size == 0) {
             std::free(mw.buf);
             mw.buf = nullptr;
-            return JPDFIUM_ERR_NATIVE;
+            uint8_t* out = static_cast<uint8_t*>(std::malloc(1));
+            if (!out) return JPDFIUM_ERR_NATIVE;
+            *data = out;
+            *len = 0;
+            return JPDFIUM_OK;
         }
-    }
-
-    if (mw.size == 0) {
-        std::free(mw.buf);
-        uint8_t* out = static_cast<uint8_t*>(std::malloc(1));
-        if (!out) return JPDFIUM_ERR_NATIVE;
-        *data = out;
-        *len = 0;
+        *data = mw.buf;
+        *len = static_cast<int64_t>(mw.size);
         return JPDFIUM_OK;
+    } catch (...) {
+        // decodeDoc, hasUnappliedRedactMarks or a vector allocation can throw;
+        // the buffer from the partial save must not leak and this entry point
+        // must report instead of terminating.
+        std::free(mw.buf);
+        mw.buf = nullptr;
+        return JPDFIUM_ERR_NATIVE;
     }
-    *data = mw.buf;
-    *len = static_cast<int64_t>(mw.size);
-    return JPDFIUM_OK;
 }
 
 void jpdfium_doc_close(int64_t doc) noexcept {

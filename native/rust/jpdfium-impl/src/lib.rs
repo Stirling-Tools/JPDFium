@@ -951,7 +951,8 @@ fn decode_png(
     // arrive in Adam7 pass order rather than row by row.
     let interlaced = reader.info().interlaced;
     let direct = in_channels == out_channels && frame_size == out_size;
-    let mut frame = if direct {
+    let needs_frame = !direct && (in_channels == out_channels || interlaced);
+    let mut frame = if !needs_frame {
         Vec::new()
     } else {
         // vec![0u8; frame_size] aborts the process on OOM; the caller must get an error instead.

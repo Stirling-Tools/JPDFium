@@ -824,7 +824,7 @@ writer so no Java code runs inside a guarded PDFium call.
 module binds, per class, whether it reaches PDFium, and its safe replacement. Regenerate it with
 `python native/tools/downcall_inventory.py` after binding changes.
 
-Now: 465 symbols across 39 classes; 426 reach PDFium; 421 bound through a guard; 9 EmbedPDF
+Now: 465 symbols across 40 classes; 429 reach PDFium; 421 bound through a guard; 9 EmbedPDF
 annotation symbols have no guard shim; 19 have a safe `jpdf_*` replacement.
 
 ### Order

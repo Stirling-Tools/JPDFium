@@ -51,9 +51,9 @@ Optional OCR module (libjpdfium_ocr, built only when ONNX Runtime is fetched):
   (Apache-2.0 text: native/licenses/QPDF-APACHE-2.0.txt)
 - Clipper 6.4.2 - BSL-1.0: polygon offsetting ported in native/ocr/src/paddle.cpp
   (native/licenses/CLIPPER-BSL-1.0.txt)
-- PP-OCRv6 small models (PaddlePaddle) - Apache-2.0, fetched by digest at build
-  time (native/ocr/fetch-onnxruntime.sh, native/ocr/tools/fetch_profile.py),
-  not bundled
+- PP-OCRv6 small models (PaddlePaddle) - Apache-2.0, not bundled: fetched by the
+  operator with native/ocr/tools/fetch_profile.py and verified by digest when an
+  engine opens
 
 Rust helper (static-linked into libjpdfium):
 - lopdf - MIT

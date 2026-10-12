@@ -272,16 +272,18 @@ DetectorInput prepare_detector_input(const Image& source, const DetectorParams& 
     } else if (std::max(h, w) > params.limit_side_len) {
         ratio = static_cast<double>(params.limit_side_len) / (h > w ? h : w);
     }
-    // Clamp while the scaled size is still a double: `ratio` can drive the scaled width past
-    // INT_MAX for a degenerate aspect ratio (a 40,000,000 x 1 bitmap with the default
-    // limit_side_len of 64 scales the width to 2.56e9), and that cast would be undefined.
-    double scaled_h = h * ratio;
-    double scaled_w = w * ratio;
+    // Mirror upstream's int() truncations, but in double so a huge ratio cannot overflow int.
+    // Clamping in the untruncated double space would change the rounded detector input by a
+    // pixel and break parity with PaddleOCR (the scaled longer side can reach INT_MAX for a
+    // degenerate aspect ratio: a 40,000,000 x 1 bitmap with the default limit_side_len of 64
+    // scales the width to 2.56e9, and that cast would be undefined).
+    double scaled_h = std::trunc(h * ratio);
+    double scaled_w = std::trunc(w * ratio);
     const double longest = std::max(scaled_h, scaled_w);
     if (longest > params.max_side_limit) {
-        ratio *= static_cast<double>(params.max_side_limit) / longest;
-        scaled_h = h * ratio;
-        scaled_w = w * ratio;
+        const double limit_ratio = static_cast<double>(params.max_side_limit) / longest;
+        scaled_h = std::trunc(scaled_h * limit_ratio);
+        scaled_w = std::trunc(scaled_w * limit_ratio);
     }
     int resize_h = static_cast<int>(scaled_h);
     int resize_w = static_cast<int>(scaled_w);

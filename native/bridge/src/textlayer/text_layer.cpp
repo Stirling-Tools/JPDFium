@@ -1220,8 +1220,6 @@ const std::vector<uint8_t>& glyphless_font() {
 
 }  // namespace jpdf
 
-// --- api_text_layer.cpp (merged) ---
-
 extern "C" {
 
 jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* options,

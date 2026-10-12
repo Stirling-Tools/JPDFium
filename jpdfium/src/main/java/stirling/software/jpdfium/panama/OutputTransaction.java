@@ -164,7 +164,7 @@ public final class OutputTransaction implements AutoCloseable {
      */
     public static void publishStaged(Path staging, Path destination, boolean durable)
             throws IOException {
-        publishResolved(staging, resolveSymlinks(destination), durable);
+        publishResolved(staging, resolveSymlinks(destination.toAbsolutePath()), durable);
     }
 
     /**
@@ -201,7 +201,7 @@ public final class OutputTransaction implements AutoCloseable {
      *                     left untouched
      */
     public static Durability publishStagedDurable(Path staging, Path destination) throws IOException {
-        return publishDurableResolved(staging, resolveSymlinks(destination));
+        return publishDurableResolved(staging, resolveSymlinks(destination.toAbsolutePath()));
     }
 
     /**
