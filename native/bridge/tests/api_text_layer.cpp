@@ -841,9 +841,10 @@ void test_get_text_contract() {
     uint64_t needed = 0;
     CHECK_STATUS(jpdf_page_get_text(o.page, nullptr, 0, &needed), JPDF_OK, "sizing call");
     CHECK(needed > 1, "size includes text and NUL");
-    std::string small(4, '\0');
+    // Named `tiny`, not `small`: MSVC's <rpcndr.h> defines `small` as a macro.
+    std::string tiny(4, '\0');
     uint64_t again = 0;
-    CHECK_STATUS(jpdf_page_get_text(o.page, small.data(), small.size(), &again),
+    CHECK_STATUS(jpdf_page_get_text(o.page, tiny.data(), tiny.size(), &again),
                  JPDF_E_BUFFER_TOO_SMALL, "small buffer");
     CHECK(again == needed, "small buffer still reports the size");
     CHECK_STATUS(jpdf_page_get_text(o.page, nullptr, 0, nullptr), JPDF_E_INVALID_ARGUMENT,
