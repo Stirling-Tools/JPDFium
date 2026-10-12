@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <cmath>
+#include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -21,6 +24,7 @@
 #include <unistd.h>
 #endif
 
+#include "image_writer.h"
 #include "runtime/api_status.h"
 
 namespace jpdf {
@@ -271,15 +275,6 @@ OutputTransaction::~OutputTransaction() {
 
 // --- image_writer.cpp (merged) ---
 // image_writer.cpp - PNG and document output through an OutputTransaction.
-
-#include "image_writer.h"
-
-#include <cmath>
-#include <cstddef>
-#include <memory>
-
-#include "output_transaction.h"
-#include "runtime/api_status.h"
 
 namespace jpdf {
 
