@@ -110,6 +110,11 @@ public final class PdfCompressor {
     private static final int N_SUBFILTER = 11;
     private static final int N_NEEDLES = 12;
 
+    // The /ID key is matched byte-by-byte and its range is packed into a long, so the
+    // signed fast path performs no allocation of its own.
+    private static final int ID_KEY_LEN = 3;
+    private static final long NO_ID = -1L;
+
     // Cap on retained /Metadata offsets: bounds memory on a file that repeats
     // "/Metadata", while still covering the catalog stream in any real document.
     private static final int MAX_METADATA_REFS = 256;
@@ -192,7 +197,8 @@ public final class PdfCompressor {
         Markers markers = scanMarkers(sourceBytes);
         int pdfiumSignatures = signatureCount(doc);
         boolean signed = pdfiumSignatures > 0 || looksSignedByBytes(markers);
-        if (signed && originalBytesKnown && !doc.isContentModified()) {
+        if (signed && originalBytesKnown && !doc.isContentModified()
+                && serializesIdentically(sourceBytes, openStateBytes)) {
             // The true original bytes are available and the caller has not edited
             // the document since it was opened, so return them byte-for-byte.
             String detail = pdfiumSignatures > 0
@@ -434,6 +440,70 @@ public final class PdfCompressor {
         );
 
         return new CompressResultWithBytes(result, resultBytes);
+    }
+
+    // Edit tracking cannot see writes made through an untracked handle, so before
+    // returning the open-time bytes of a signed document, confirm that a fresh open
+    // of them serializes to the same bytes as the live document. Any doubt means
+    // "edited": an unneeded re-save is recoverable, a dropped redaction is not.
+    private static boolean serializesIdentically(byte[] sourceBytes, byte[] liveBytes) {
+        try (PdfDocument pristine = PdfDocument.open(sourceBytes)) {
+            return equalIgnoringInstanceId(pristine.saveBytes(), liveBytes);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return false;
+        }
+    }
+
+    // Byte equality except for the second trailer /ID string, which PDFium regenerates
+    // on every save (ISO 32000-1 14.4: it changes whenever the file is saved).
+    static boolean equalIgnoringInstanceId(byte[] a, byte[] b) {
+        if (a.length != b.length) {
+            return false;
+        }
+        long idA = instanceIdRange(a);
+        if (idA == NO_ID || idA != instanceIdRange(b)) {
+            return Arrays.equals(a, b);
+        }
+        int start = (int) (idA >>> 32);
+        int end = (int) idA;
+        return Arrays.equals(a, 0, start, b, 0, start)
+                && Arrays.equals(a, end, a.length, b, end, b.length);
+    }
+
+    // [start, end) of the second hex string in the last /ID array, packed into a long
+    // (or NO_ID). Packing keeps the comparison allocation-free: the range is compared
+    // positionally, never materialised as an array.
+    private static long instanceIdRange(byte[] pdf) {
+        int id = lastIndexOfIdKey(pdf);
+        if (id < 0) {
+            return NO_ID;
+        }
+        int firstOpen = indexOfByte(pdf, (byte) '<', id + ID_KEY_LEN);
+        int firstClose = firstOpen < 0 ? -1 : indexOfByte(pdf, (byte) '>', firstOpen + 1);
+        int secondOpen = firstClose < 0 ? -1 : indexOfByte(pdf, (byte) '<', firstClose + 1);
+        int secondClose = secondOpen < 0 ? -1 : indexOfByte(pdf, (byte) '>', secondOpen + 1);
+        return secondClose < 0 ? NO_ID : ((long) secondOpen << 32) | (secondClose + 1);
+    }
+
+    // Offset of the last "/ID" key, scanning backwards: it is in the trailer, so this
+    // touches a handful of bytes on any real document.
+    private static int lastIndexOfIdKey(byte[] pdf) {
+        for (int i = pdf.length - ID_KEY_LEN; i >= 0; i--) {
+            if (pdf[i] == '/' && pdf[i + 1] == 'I' && pdf[i + 2] == 'D') {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static int indexOfByte(byte[] haystack, byte needle, int from) {
+        for (int i = Math.max(from, 0); i < haystack.length; i++) {
+            if (haystack[i] == needle) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // Signature count PDFium reports; 0 when unavailable.

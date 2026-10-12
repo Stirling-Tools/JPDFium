@@ -176,6 +176,36 @@ class PdfCompressorGateTest {
     }
 
     @Test
+    void untrackedEditOfSignedDocumentIsNotDiscarded() throws Exception {
+        // An edit through the read handle bypasses edit tracking; compression must
+        // still notice the document changed rather than return the open-time bytes.
+        Path src = resource("/pdfs/general/irs_f1040.pdf");
+        byte[] original = Files.readAllBytes(src);
+        int beforeCount;
+        PdfCompressor.CompressResultWithBytes out;
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            try (PdfPage page = doc.page(0)) {
+                beforeCount = page.annotations().size();
+                PdfAnnotationBuilder.on(page.rawHandleForRead())
+                        .type(AnnotationType.SQUARE)
+                        .rect(72, 72, 144, 72)
+                        .color(255, 0, 0)
+                        .build();
+            }
+            assertFalse(doc.isContentModified(), "the read handle must bypass edit tracking");
+            out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+        }
+        assertFalse(Arrays.equals(original, out.bytes()),
+                "an edited signed document must not be returned verbatim");
+        try (PdfDocument reopened = PdfDocument.open(out.bytes());
+                PdfPage page = reopened.page(0)) {
+            assertEquals(beforeCount + 1, page.annotations().size(),
+                    "the untracked annotation must survive compression");
+        }
+    }
+
+    @Test
     void pageReorderOfSignedDocumentIsNotDiscarded() throws Exception {
         String[] before = new String[2];
         assertSignedEditSurvivesCompression(doc -> {
