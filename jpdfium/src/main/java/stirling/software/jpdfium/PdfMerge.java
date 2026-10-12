@@ -115,12 +115,12 @@ public final class PdfMerge {
                             }
                             result = tmpBookmarks;
                         }
-                        try (PdfDocument verify = PdfDocument.open(result)) {
-                            if (verify.pageCount() == pageOffset) {
-                                cleanup.remove(result);
-                                return PdfDocument.openTemp(result);
-                            }
+                        PdfDocument owned = PdfDocument.openTemp(result);
+                        if (owned.pageCount() == pageOffset) {
+                            cleanup.remove(result);
+                            return owned;
                         }
+                        owned.close();
                     }
                 } catch (Exception _) {
                     // Fall through to the in-memory paths below
@@ -219,13 +219,12 @@ public final class PdfMerge {
                     boolean done = false;
                     try {
                         if (QpdfLib.mergeFiles(paths, tmp, false)) {
-                            try (PdfDocument verify = PdfDocument.open(tmp)) {
-                                if (verify.pageCount() == expectedPages) {
-                                    PdfDocument owned = PdfDocument.openTemp(tmp);
-                                    done = true;
-                                    return owned;
-                                }
+                            PdfDocument owned = PdfDocument.openTemp(tmp);
+                            if (owned.pageCount() == expectedPages) {
+                                done = true;
+                                return owned;
                             }
+                            owned.close();
                         }
                     } finally {
                         if (!done) deleteQuietly(tmp);

@@ -557,10 +557,11 @@ public final class PdfSplit {
                 }
                 result = tmpBookmarks;
             }
-            try (PdfDocument verify = PdfDocument.open(result)) {
-                if (verify.pageCount() != pageIndices.length) return FileExtract.REJECTED;
-            }
             PdfDocument part = PdfDocument.openTemp(result);
+            if (part.pageCount() != pageIndices.length) {
+                part.close();
+                return FileExtract.REJECTED;
+            }
             cleanup.remove(result);
             return new FileExtract(part, false, false);
         } catch (Exception _) {
