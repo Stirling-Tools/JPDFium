@@ -82,7 +82,7 @@ public final class PdfAnnotationStats {
 
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 List<Annotation> annots = PdfAnnotations.list(rawPage);
 
                 if (!annots.isEmpty()) {

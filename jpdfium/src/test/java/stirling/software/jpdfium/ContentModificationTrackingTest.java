@@ -5,6 +5,14 @@ import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.doc.DocInfo;
 import stirling.software.jpdfium.doc.NUpLayout;
 import stirling.software.jpdfium.doc.PdfAnalytics;
+import stirling.software.jpdfium.doc.PdfAnnotationExporter;
+import stirling.software.jpdfium.doc.PdfAnnotationStats;
+import stirling.software.jpdfium.doc.PdfColumnExtractor;
+import stirling.software.jpdfium.doc.PdfDiff;
+import stirling.software.jpdfium.doc.PdfDuplicateDetector;
+import stirling.software.jpdfium.doc.PdfFontAuditor;
+import stirling.software.jpdfium.doc.PdfImageDpiReport;
+import stirling.software.jpdfium.doc.PdfLinkValidator;
 import stirling.software.jpdfium.doc.PdfPrint;
 import stirling.software.jpdfium.model.Rect;
 
@@ -113,6 +121,81 @@ class ContentModificationTrackingTest {
             assertNotNull(nup, "N-up layout must produce bytes");
             assertFalse(doc.isContentModified(),
                     "reading the source for an N-up layout must not mark it modified");
+        }
+    }
+
+    @Test
+    void fontAuditDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfFontAuditor.audit(doc), "font audit must produce a report");
+            assertFalse(doc.isContentModified(),
+                    "auditing fonts is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void imageDpiReportDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfImageDpiReport.analyze(doc), "DPI report must produce a result");
+            assertFalse(doc.isContentModified(),
+                    "measuring image DPI is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void annotationStatsDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfAnnotationStats.analyze(doc), "annotation stats must produce a result");
+            assertFalse(doc.isContentModified(),
+                    "summarising annotations is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void annotationExportDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfAnnotationExporter.export(doc), "annotation export must produce a list");
+            assertFalse(doc.isContentModified(),
+                    "exporting annotations is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void linkEnumerationDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfLinkValidator.enumerate(doc), "link enumeration must produce a list");
+            assertFalse(doc.isContentModified(),
+                    "enumerating links is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void columnExtractionDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfColumnExtractor.extractAll(doc, 0.5f),
+                    "column extraction must produce a result");
+            assertFalse(doc.isContentModified(),
+                    "extracting columns is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void duplicateDetectionDoesNotMarkModified() {
+        try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfDuplicateDetector.detect(doc),
+                    "duplicate detection must produce a result");
+            assertFalse(doc.isContentModified(),
+                    "detecting duplicates is read-only and must not mark the document modified");
+        }
+    }
+
+    @Test
+    void diffDoesNotMarkEitherDocumentModified() {
+        try (PdfDocument a = PdfDocument.open(TEXT_PDF);
+             PdfDocument b = PdfDocument.open(TEXT_PDF)) {
+            assertNotNull(PdfDiff.compare(a, b), "diff must produce a result");
+            assertFalse(a.isContentModified(), "the first diff input must stay unmodified");
+            assertFalse(b.isContentModified(), "the second diff input must stay unmodified");
         }
     }
 

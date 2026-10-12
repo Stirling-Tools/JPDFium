@@ -99,7 +99,7 @@ public final class PdfDuplicateDetector {
     private static long computeAverageHash(PdfDocument doc, int pageIndex) {
         int thumbSize = 8;
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             float w = page.size().width();
             float h = page.size().height();
 

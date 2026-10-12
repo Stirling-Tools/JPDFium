@@ -88,7 +88,7 @@ public final class PdfFontAuditor {
 
         for (int pageIdx = 0; pageIdx < doc.pageCount(); pageIdx++) {
             try (PdfPage page = doc.page(pageIdx)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int objCount;
                 try {
                     objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);

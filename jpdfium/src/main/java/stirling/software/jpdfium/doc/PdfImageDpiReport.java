@@ -68,7 +68,7 @@ public final class PdfImageDpiReport {
 
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int objCount;
                 try {
                     objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);

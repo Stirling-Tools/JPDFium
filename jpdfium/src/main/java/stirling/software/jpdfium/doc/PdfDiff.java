@@ -226,7 +226,7 @@ public final class PdfDiff {
 
     private static byte[] renderPage(PdfDocument doc, int pageIndex, int bmpW, int bmpH) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);
@@ -267,7 +267,7 @@ public final class PdfDiff {
 
     static String extractPageText(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
