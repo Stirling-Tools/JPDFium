@@ -96,18 +96,20 @@ public final class JpdfiumLib {
      */
     private static final long DEFAULT_MAX_RENDER_PIXELS = 0L;
 
-    static {
-        // Class init of NativeDomain starts the native runtime once per process.
-        NativeDomain.ensureStarted();
-    }
-
     private JpdfiumLib() {}
 
     /**
-     * Runs library init on first call. Document-less APIs (font registry)
-     * need this: without it their process-global state is unusable.
+     * Starts the native runtime (once per process). Document-less APIs (font
+     * registry) need this: without it their process-global state is unusable.
+     *
+     * <p>Deliberately not run from the class initializer: {@link NativeLoader}
+     * calls {@link #checkAbiCompatible()} while holding its load monitor, and
+     * starting the domain there would close the loader/domain
+     * class-initialization cycle.
      */
-    public static void ensureInitialized() {}
+    public static void ensureInitialized() {
+        NativeDomain.ensureStarted();
+    }
 
     /** Active renderer after init: 0 = AGG, 1 = Skia. */
     public static int activeRenderer() {
@@ -177,15 +179,17 @@ public final class JpdfiumLib {
      * <p>Safe because these are constant getters that touch no document, page
      * or mutable state. They read the same values the domain-guarded
      * {@link #abiVersion()} and {@link #abiQuery(int)} do; the domain adds
-     * nothing to a constant read.
+     * nothing to a constant read. They resolve through
+     * {@link NativeDomain.AbiProbe}, which uses a loader-only lookup so the
+     * handshake never waits on the domain's class initializer.
      */
     static int abiVersionUnguarded() {
-        return JpdfiumH.jpdfium_abi_version();
+        return NativeDomain.AbiProbe.version();
     }
 
     /** Unguarded {@link #abiQuery(int)}; see {@link #abiVersionUnguarded()}. */
     static long abiQueryUnguarded(int query) {
-        return JpdfiumH.jpdfium_abi_query(query);
+        return NativeDomain.AbiProbe.query(query);
     }
 
     /**

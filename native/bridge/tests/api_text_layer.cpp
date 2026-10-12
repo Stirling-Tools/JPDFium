@@ -74,7 +74,6 @@ JPDF_API void jpdf_guard_jpdfium_page_close(int64_t page) noexcept;
 JPDF_API int32_t jpdf_guard_jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags,
                                                       uint8_t** rgba, int32_t* width,
                                                       int32_t* height) noexcept;
-JPDF_API void jpdf_guard_jpdfium_free_buffer(uint8_t* buffer) noexcept;
 JPDF_API int64_t jpdf_guard_jpdfium_doc_raw_handle(int64_t doc) noexcept;
 JPDF_API int jpdf_guard_FPDF_GetPageCount(FPDF_DOCUMENT document) noexcept;
 JPDF_API FPDF_BOOL jpdf_guard_FPDF_SaveAsCopy(FPDF_DOCUMENT document, FPDF_FILEWRITE* pFileWrite,
@@ -136,7 +135,7 @@ std::vector<uint8_t> render_legacy() {
         int32_t w = 0, h = 0;
         if (jpdf_guard_jpdfium_render_page_flags(page, 36, 0, &rgba, &w, &h) == JPDFIUM_OK) {
             out.assign(rgba, rgba + static_cast<size_t>(w) * h * 4);
-            jpdf_guard_jpdfium_free_buffer(rgba);
+            jpdfium_free_buffer(rgba);
         }
         jpdf_guard_jpdfium_page_close(page);
     }

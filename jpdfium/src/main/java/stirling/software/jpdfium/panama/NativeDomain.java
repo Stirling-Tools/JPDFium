@@ -177,6 +177,53 @@ public final class NativeDomain {
         }
     }
 
+    /**
+     * Loader-only ABI probes.
+     *
+     * <p>Kept in a nested class and resolved straight through
+     * {@link SymbolLookup#loaderLookup()}: {@link NativeLoader} runs the ABI
+     * handshake while holding its load monitor, so probing the ABI through
+     * {@link Guards}/{@code symbol} there would initialise {@link NativeDomain}
+     * and close a cross-thread loader/domain class-initialization cycle (a thread
+     * initialising the domain waits for the loader monitor, the loader thread
+     * waits for the domain). Touching this class does not initialise the domain.
+     */
+    static final class AbiProbe {
+        private static final MethodHandle VERSION;
+        private static final MethodHandle QUERY;
+
+        static {
+            NativeLoader.ensureLoaded();
+            SymbolLookup lookup = SymbolLookup.loaderLookup();
+            VERSION = Linker.nativeLinker().downcallHandle(
+                    lookup.find("jpdfium_abi_version").orElseThrow(() -> new UnsatisfiedLinkError(
+                            "unresolved symbol: jpdfium_abi_version")),
+                    FunctionDescriptor.of(JAVA_INT));
+            QUERY = Linker.nativeLinker().downcallHandle(
+                    lookup.find("jpdfium_abi_query").orElseThrow(() -> new UnsatisfiedLinkError(
+                            "unresolved symbol: jpdfium_abi_query")),
+                    FunctionDescriptor.of(JAVA_LONG, JAVA_INT));
+        }
+
+        private AbiProbe() {}
+
+        static int version() {
+            try {
+                return (int) VERSION.invokeExact();
+            } catch (Throwable t) {
+                throw new JPDFiumException("jpdfium_abi_version failed", t);
+            }
+        }
+
+        static long query(int id) {
+            try {
+                return (long) QUERY.invokeExact(id);
+            } catch (Throwable t) {
+                throw new JPDFiumException("jpdfium_abi_query failed", t);
+            }
+        }
+    }
+
     /** The guard shim for {@code name}, or empty when the entry point is unguarded by design. */
     static Optional<MemorySegment> guard(String name) {
         return Guards.guard(name);

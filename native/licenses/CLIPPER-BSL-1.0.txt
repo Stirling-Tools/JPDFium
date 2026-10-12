@@ -2,6 +2,7 @@ Boost Software License - Version 1.0 - August 17th, 2003
 
 Applies to Clipper 6.4.2 (Angus Johnson), whose polygon offsetting is ported in
 native/ocr/src/paddle.cpp.
+Copyright : Angus Johnson 2010-2014
 
 Permission is hereby granted, free of charge, to any person or organization
 obtaining a copy of the software and accompanying documentation covered by

@@ -47,21 +47,6 @@ JPDF_API int32_t jpdf_guard_jpdfium_annot_remove_redact(int64_t page,
     return jpdfium_annot_remove_redact(page, annot_index);
 }
 
-JPDF_API int32_t jpdf_guard_jpdfium_brotli_decode(const uint8_t* compressed, int64_t compressedLen,
-                                                  uint8_t** output, int64_t* outputLen) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_brotli_decode(compressed, compressedLen, output, outputLen);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_brotli_to_flate(const uint8_t* compressed,
-                                                    int64_t compressedLen, uint8_t** flateOutput,
-                                                    int64_t* flateLen) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_brotli_to_flate(compressed, compressedLen, flateOutput, flateLen);
-}
-
 JPDF_API int32_t jpdf_guard_jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                         float h) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
@@ -173,46 +158,6 @@ JPDF_API int32_t jpdf_guard_jpdfium_doc_set_sanitize_on_save(int64_t doc, int32_
     return jpdfium_doc_set_sanitize_on_save(doc, enable);
 }
 
-JPDF_API int32_t jpdf_guard_jpdfium_flashtext_add_keyword(int64_t handle, const char* keyword,
-                                                          const char* label) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_flashtext_add_keyword(handle, keyword, label);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_flashtext_add_keywords_json(int64_t handle,
-                                                                const char* json) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_flashtext_add_keywords_json(handle, json);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_flashtext_create(int64_t* handle) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_flashtext_create(handle);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_flashtext_find(int64_t handle, const char* text,
-                                                   char** json_result) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_flashtext_find(handle, text, json_result);
-}
-
-JPDF_API void jpdf_guard_jpdfium_flashtext_free(int64_t handle) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Teardown);
-    if (!guard.admitted()) return;
-    jpdfium_flashtext_free(handle);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_font_classify(const uint8_t* data, int64_t len,
-                                                  char** json) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_font_classify(data, len, json);
-}
-
 JPDF_API int32_t jpdf_guard_jpdfium_font_covers_text(const uint8_t* data, int64_t len,
                                                      const int32_t* codepoints, int32_t count,
                                                      uint8_t* out_covered) noexcept {
@@ -249,53 +194,12 @@ JPDF_API int32_t jpdf_guard_jpdfium_font_repair_widths(int64_t doc, int32_t page
     return jpdfium_font_repair_widths(doc, page_index, fonts_fixed);
 }
 
-JPDF_API int32_t jpdf_guard_jpdfium_font_subset(const uint8_t* font_data, int64_t font_len,
-                                                const uint32_t* codepoints, int32_t num_codepoints,
-                                                int32_t retain_gids, uint8_t** out_data,
-                                                int64_t* out_len) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_font_subset(font_data, font_len, codepoints, num_codepoints, retain_gids,
-                               out_data, out_len);
-}
-
-JPDF_API void jpdf_guard_jpdfium_free_buffer(uint8_t* buffer) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Teardown);
-    if (!guard.admitted()) return;
-    jpdfium_free_buffer(buffer);
-}
-
-JPDF_API void jpdf_guard_jpdfium_free_string(char* str) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Teardown);
-    if (!guard.admitted()) return;
-    jpdfium_free_string(str);
-}
-
 JPDF_API int32_t jpdf_guard_jpdfium_generate_replacement_icc(int32_t numComponents,
                                                              uint8_t** output,
                                                              int64_t* outputLen) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     return jpdfium_generate_replacement_icc(numComponents, output, outputLen);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_icu_bidi_reorder(const char* text, char** result) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_icu_bidi_reorder(text, result);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_icu_break_sentences(const char* text,
-                                                        char** json_result) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_icu_break_sentences(text, json_result);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_icu_normalize_nfc(const char* text, char** result) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_icu_normalize_nfc(text, result);
 }
 
 JPDF_API int32_t jpdf_guard_jpdfium_image_to_pdf(const uint8_t* image_data, int64_t image_len,
@@ -324,12 +228,6 @@ JPDF_API int32_t jpdf_guard_jpdfium_jpx_to_raw(const uint8_t* data, int64_t len,
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     return jpdfium_jpx_to_raw(data, len, output, outputLen, width, height, components);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_luhn_validate(const char* number) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_luhn_validate(number);
 }
 
 JPDF_API int32_t jpdf_guard_jpdfium_metadata_strip(int64_t doc, const char** keys,
@@ -398,26 +296,6 @@ JPDF_API int32_t jpdf_guard_jpdfium_page_width(int64_t page, float* width) noexc
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     return jpdfium_page_width(page, width);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_pcre2_compile(const char* pattern, uint32_t flags,
-                                                  int64_t* handle) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_pcre2_compile(pattern, flags, handle);
-}
-
-JPDF_API void jpdf_guard_jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Teardown);
-    if (!guard.admitted()) return;
-    jpdfium_pcre2_free(pattern_handle);
-}
-
-JPDF_API int32_t jpdf_guard_jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text,
-                                                    char** json_result) noexcept {
-    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
-    if (!guard.admitted()) return {};
-    return jpdfium_pcre2_match_all(pattern_handle, text, json_result);
 }
 
 JPDF_API int32_t jpdf_guard_jpdfium_pdfio_try_repair(const uint8_t* input, int64_t inputLen,

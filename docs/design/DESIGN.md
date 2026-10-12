@@ -168,8 +168,10 @@ its objects exist.
 
 ## Legacy guards
 
-`jpdf_guard_<name>` exists for every legacy `jpdfium_*` export except the QPDF, Rust, ABI-probe
-and legacy-init functions, and for every PDFium symbol the Java bindings use. Each has the
+`jpdf_guard_<name>` exists for every legacy `jpdfium_*` export except the QPDF, Rust, ABI-probe,
+legacy-init and PDFium-free utility functions (PCRE2, ICU, FlashText, Brotli, Luhn, FreeType font
+classification and subsetting, and the `jpdfium_free_buffer`/`jpdfium_free_string` teardown
+helpers), and for every PDFium symbol the Java bindings use. Each has the
 signature of `<name>`. A refused admission returns a zero value (or nothing for `void`) without
 running `<name>`; `jpdf_guard_take_refusal()` then returns the status for the calling thread and
 clears it. Bindings must check it after every guarded call, because a zero `int32_t` status is
@@ -822,7 +824,7 @@ writer so no Java code runs inside a guarded PDFium call.
 module binds, per class, whether it reaches PDFium, and its safe replacement. Regenerate it with
 `python native/tools/downcall_inventory.py` after binding changes.
 
-Now: 465 symbols across 39 classes; 426 reach PDFium; 439 bound through a guard; 9 EmbedPDF
+Now: 465 symbols across 39 classes; 426 reach PDFium; 421 bound through a guard; 9 EmbedPDF
 annotation symbols have no guard shim; 19 have a safe `jpdf_*` replacement.
 
 ### Order
