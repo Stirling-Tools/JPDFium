@@ -64,6 +64,7 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
         }
+        doc.markContentModified();
     }
 
     /**
@@ -79,6 +80,7 @@ public final class PdfPageGeometry {
                     rect.x(), rect.y(),
                     rect.x() + rect.width(), rect.y() + rect.height());
         }
+        doc.markContentModified();
     }
 
     /**
@@ -320,6 +322,7 @@ public final class PdfPageGeometry {
             PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
             PdfPageBoxes.setArtBox(page.rawHandle(), rect);
         }
+        doc.markContentModified();
     }
 
     /**
@@ -380,6 +383,7 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setMediaBox(page.rawHandle(), 0, 0, size.width(), size.height());
         }
+        doc.markContentModified();
     }
 
     /**
