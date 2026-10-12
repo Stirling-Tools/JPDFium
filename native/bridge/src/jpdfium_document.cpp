@@ -650,36 +650,75 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
-    struct BufWriter : FPDF_FILEWRITE {
-        std::vector<uint8_t> buf;
+    // Grows with realloc so the finished buffer IS the caller's buffer: the
+    // old vector-then-malloc+memcpy tail copied every byte twice. The pointer
+    // stays malloc-family owned, so jpdfium_free_buffer keeps working.
+    struct MallocWriter : FPDF_FILEWRITE {
+        uint8_t* buf = nullptr;
+        size_t size = 0;
+        size_t cap = 0;
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
-            auto* bw = static_cast<BufWriter*>(self);
-            try {
-                auto* src = static_cast<const uint8_t*>(data);
-                bw->buf.insert(bw->buf.end(), src, src + size);
-                return 1;
-            } catch (...) {
-                return 0;  // never let exceptions cross the C callback
+            auto* mw = static_cast<MallocWriter*>(self);
+            if (size == 0) return 1;
+            const size_t need = mw->size + static_cast<size_t>(size);
+            if (need < mw->size) return 0;  // size_t wraparound
+            if (need > mw->cap) {
+                size_t ncap = mw->cap ? mw->cap : 65536;
+                while (ncap < need) {
+                    const size_t next = ncap * 2;
+                    if (next < ncap) {
+                        ncap = need;
+                        break;
+                    }
+                    ncap = next;
+                }
+                uint8_t* nbuf = static_cast<uint8_t*>(std::realloc(mw->buf, ncap));
+                if (!nbuf) return 0;
+                mw->buf = nbuf;
+                mw->cap = ncap;
             }
+            std::memcpy(mw->buf + mw->size, data, static_cast<size_t>(size));
+            mw->size = need;
+            return 1;
         }
-    } bw;
-    bw.version = 1;
-    bw.WriteBlock = BufWriter::Write;
+    } mw;
+    mw.version = 1;
+    mw.WriteBlock = MallocWriter::Write;
 
-    if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
+    if (!FPDF_SaveAsCopy(w->core->doc, &mw, FPDF_NO_INCREMENTAL)) {
+        std::free(mw.buf);
+        return JPDFIUM_ERR_IO;
+    }
 
-    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
-    if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+    // The sanitize stage works on vectors and may replace the buffer, so only
+    // the sanitize path funnels through one vector (same copies as before).
+    if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+        std::vector<uint8_t> vec(mw.buf, mw.buf + mw.size);
+        std::free(mw.buf);
+        int32_t sanitizeRc = applySanitizeStage(w, vec);
+        if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
+        size_t sz = vec.size();
+        // malloc(0) is permitted to return NULL, which is indistinguishable
+        // from an allocation failure; an empty save result is legitimate, so
+        // allocate one byte for it.
+        uint8_t* out = static_cast<uint8_t*>(std::malloc(sz ? sz : 1));
+        if (!out) return JPDFIUM_ERR_NATIVE;
+        if (sz) std::memcpy(out, vec.data(), sz);
+        *data = out;
+        *len = static_cast<int64_t>(sz);
+        return JPDFIUM_OK;
+    }
 
-    size_t sz = bw.buf.size();
-    // malloc(0) is permitted to return NULL, which is indistinguishable from an
-    // allocation failure; an empty save result is legitimate, so allocate one
-    // byte for it.
-    uint8_t* out = static_cast<uint8_t*>(malloc(sz ? sz : 1));
-    if (!out) return JPDFIUM_ERR_NATIVE;
-    if (sz) memcpy(out, bw.buf.data(), sz);
-    *data = out;
-    *len = static_cast<int64_t>(sz);
+    if (mw.size == 0) {
+        std::free(mw.buf);
+        uint8_t* out = static_cast<uint8_t*>(std::malloc(1));
+        if (!out) return JPDFIUM_ERR_NATIVE;
+        *data = out;
+        *len = 0;
+        return JPDFIUM_OK;
+    }
+    *data = mw.buf;
+    *len = static_cast<int64_t>(mw.size);
     return JPDFIUM_OK;
 }
 
