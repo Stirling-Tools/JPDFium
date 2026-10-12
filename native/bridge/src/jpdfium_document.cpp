@@ -518,6 +518,11 @@ bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
 }
 }  // namespace
 
+// Staging-file stdio buffer. PDFium hands the saver a stream of small blocks and
+// the platform default buffer turns each one into its own write(2), so a larger
+// buffer batches them. Shared by both save branches.
+static constexpr std::size_t kSaveIoBufferBytes = 256u * 1024u;
+
 int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                  int64_t* out_bytes) {
     try {
@@ -536,7 +541,8 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         }
 
         // Opt-in sanitize pass needs the whole serialization post-hoc, so it
-        // keeps the buffered path. The common case streams with no large buffer.
+        // keeps the buffered path. The common case streams block by block with no
+        // whole-document buffer.
         if (w->core->contentRedacted && w->core->sanitizeOnSave) {
             struct BufWriter : FPDF_FILEWRITE {
                 std::vector<uint8_t> buf;
@@ -565,6 +571,10 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             std::string staging;
             FILE* f = open_staging_sibling(path, staging);
             if (!f) return JPDFIUM_ERR_IO;
+            // The buffer must outlive the FILE*, so it stays in scope until after
+            // fclose.
+            std::vector<char> ioBuffer(kSaveIoBufferBytes);
+            std::setvbuf(f, ioBuffer.data(), _IOFBF, ioBuffer.size());
             size_t written = bw.buf.empty() ? 0 : fwrite(bw.buf.data(), 1, bw.buf.size(), f);
             int closeRc = fclose(f);
             if (written != bw.buf.size() || closeRc != 0) {
@@ -582,6 +592,10 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         std::string staging;
         FILE* f = open_staging_sibling(path, staging);
         if (!f) return JPDFIUM_ERR_IO;
+        // The buffer must outlive the FILE*, so it stays in scope until after
+        // fclose.
+        std::vector<char> ioBuffer(kSaveIoBufferBytes);
+        std::setvbuf(f, ioBuffer.data(), _IOFBF, ioBuffer.size());
 
         FileWriteContext ctx;
         ctx.version = 1;
