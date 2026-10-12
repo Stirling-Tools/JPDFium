@@ -1792,6 +1792,16 @@
           "jlong",
           "void*"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "void*",
+          "jint",
+          "void*"
+        ]
       }
     ],
     "upcalls": [
