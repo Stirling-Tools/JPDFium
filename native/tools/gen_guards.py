@@ -44,7 +44,11 @@ NEVER_GUARD = {"FPDF_InitLibrary", "FPDF_InitLibraryWithConfig", "FPDF_DestroyLi
 LIFETIME_OPEN = {
     "FPDF_CreateNewDocument": "document_opened",
     "FPDF_ImportNPagesToOne": "document_opened",
+    "EPDFPage_ExportAnnotationsAsDocument": "document_opened",
     "FPDFPage_New": "page_opened",
+    "EPDF_LoadPageNormalized": "page_opened",
+    "EPDFDoc_LoadPageByObjectNumber": "page_opened",
+    "EPDFDoc_LoadPageByObjectNumberNormalized": "page_opened",
 }
 LIFETIME_CLOSE = {
     "FPDF_CloseDocument": "document_closed",
@@ -208,6 +212,15 @@ def main() -> int:
     exported = set(opts.pdfium_exports.read_text().split())
     wanted = java_bound_pdfium_symbols()
     guarded = sorted(n for n in wanted if n in declared and n in exported)
+    # Every guarded factory that hands the caller a live PDFium document/page must be counted, or
+    # shutdown can destroy PDFium while that resource is still open. Fail rather than emit a shim
+    # that silently drops the accounting.
+    uncounted = [
+        n for n in guarded
+        if declared[n].ret in ("FPDF_PAGE", "FPDF_DOCUMENT") and n not in LIFETIME_OPEN
+    ]
+    if uncounted:
+        raise SystemExit(f"guarded factories without lifetime accounting: {uncounted}")
     skipped = sorted(wanted - set(guarded))
     used_headers = sorted({owner[n] for n in guarded})
     pdfium_shims = [shim(declared[n]) for n in guarded]

@@ -508,7 +508,7 @@ public final class PdfSplit {
             // Single durable commit: the native extractor filled the staging
             // file this method owns, so this is the only rename and the only
             // fsync on the extract-to-file path.
-            OutputTransaction.publishStaged(staged, output, true);
+            publishStagedFile(staged, output);
             staged = null;
             return true;
         } finally {

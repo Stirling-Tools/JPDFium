@@ -851,12 +851,13 @@ if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
         add_test(NAME ocr_engine COMMAND ocr_engine)
         set_tests_properties(ocr_engine PROPERTIES SKIP_RETURN_CODE 77)
         # ONNX Runtime is not instrumented: its own allocations and worker threads are excluded.
+        # Each sanitizer rejects the other's rule type, so the two live in separate files.
         if(JPDFIUM_SANITIZE MATCHES "address")
             set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
-                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers.supp")
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers_lsan.supp")
         elseif(JPDFIUM_SANITIZE MATCHES "thread")
             set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
-                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers.supp")
+                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers_tsan.supp")
         endif()
         if(NOT MSVC)
             target_compile_options(ocr_geometry PRIVATE -Wall -Wextra -Wpedantic -Werror)

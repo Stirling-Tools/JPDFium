@@ -457,14 +457,22 @@ JPDF_API FPDF_PAGE jpdf_guard_EPDFDoc_LoadPageByObjectNumber(FPDF_DOCUMENT docum
                                                              unsigned int obj_num) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return EPDFDoc_LoadPageByObjectNumber(document, obj_num);
+    auto result = EPDFDoc_LoadPageByObjectNumber(document, obj_num);
+    if (result != nullptr) {
+        jpdf::Domain::instance().page_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_PAGE jpdf_guard_EPDFDoc_LoadPageByObjectNumberNormalized(
     FPDF_DOCUMENT document, unsigned int obj_num) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return EPDFDoc_LoadPageByObjectNumberNormalized(document, obj_num);
+    auto result = EPDFDoc_LoadPageByObjectNumberNormalized(document, obj_num);
+    if (result != nullptr) {
+        jpdf::Domain::instance().page_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_EPDFDoc_RemoveNamedPage(FPDF_DOCUMENT document,
@@ -640,7 +648,11 @@ JPDF_API FPDF_DOCUMENT jpdf_guard_EPDFPage_ExportAnnotationsAsDocument(FPDF_PAGE
                                                                        int annot_count) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return EPDFPage_ExportAnnotationsAsDocument(page, annots, annot_count);
+    auto result = EPDFPage_ExportAnnotationsAsDocument(page, annots, annot_count);
+    if (result != nullptr) {
+        jpdf::Domain::instance().document_opened();
+    }
+    return result;
 }
 
 JPDF_API int jpdf_guard_EPDFPage_Flatten(FPDF_PAGE page, int usage) noexcept {
@@ -802,7 +814,11 @@ JPDF_API FPDF_PAGE jpdf_guard_EPDF_LoadPageNormalized(FPDF_DOCUMENT document, in
                                                       int* out_original_rotation) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
-    return EPDF_LoadPageNormalized(document, page_index, out_original_rotation);
+    auto result = EPDF_LoadPageNormalized(document, page_index, out_original_rotation);
+    if (result != nullptr) {
+        jpdf::Domain::instance().page_opened();
+    }
+    return result;
 }
 
 JPDF_API FPDF_BOOL jpdf_guard_EPDF_RemoveEncryption(FPDF_DOCUMENT document) noexcept {

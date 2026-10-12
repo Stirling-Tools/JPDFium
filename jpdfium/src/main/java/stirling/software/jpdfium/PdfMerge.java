@@ -409,8 +409,15 @@ public final class PdfMerge {
             return false;
         }
         try {
-            if (!QpdfLib.mergeFilesInto(paths, staged)
-                    || !OutputTransaction.isPublishableStaging(staged, 0)) {
+            boolean merged;
+            try {
+                merged = QpdfLib.mergeFilesInto(paths, staged);
+            } catch (JPDFiumException _) {
+                // A native or alias failure must reach the documented false
+                // contract so the caller can fall back in AUTO mode.
+                return false;
+            }
+            if (!merged || !OutputTransaction.isPublishableStaging(staged, 0)) {
                 return false;
             }
             // Single durable commit: the native writer filled the staging file

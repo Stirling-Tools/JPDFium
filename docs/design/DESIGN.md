@@ -124,7 +124,7 @@ map unknown negative values to an internal error, never to success.
 | `INVALID_HANDLE` | Token was never issued, or is malformed |
 | `STALE_HANDLE` | Token was valid once and has been closed |
 | `WRONG_HANDLE_TYPE` | Token is live but of another type |
-| `BUSY` | Close or shutdown refused while dependents exist; nothing changed |
+| `BUSY` | Close is refused without changing the handle when dependents exist; shutdown is refused and leaves the runtime `QUIESCING` while documents or pages remain |
 | `UNSUPPORTED` | Unknown flag, option, field or format |
 | `IO`, `PASSWORD`, `FORMAT`, `NOT_FOUND` | Input problems |
 | `LIMIT` | Pixel or byte budget exceeded |
@@ -132,7 +132,8 @@ map unknown negative values to an internal error, never to success.
 | `NOT_INITIALIZED`, `QUIESCING`, `STOPPED`, `FAILED` | Runtime state refuses the call |
 | `AUTHORITY` | The legacy bridge already owns PDFium in this process |
 | `REENTRANT` | Called from inside the domain |
-| `CANCELLED`, `TIMEOUT` | Reserved |
+| `CANCELLED` | Reserved |
+| `TIMEOUT` | Shutdown could not acquire the domain before the timeout |
 | `INTERNAL` | Unexpected native failure |
 | `UNSYNCED` | Destination was replaced, but the durability sync failed: the new bytes are visible, their crash durability is uncertain |
 
@@ -181,8 +182,10 @@ across this frame. The guard's only added work is atomic lifetime accounting, wh
 allocate and cannot throw.
 
 A small, fixed set of raw PDFium factories and their matching closes carry the same lifetime
-accounting as the bridge: `FPDF_CreateNewDocument`, `FPDF_ImportNPagesToOne` and `FPDFPage_New`
-record an open document or page when they return a non-null handle, and `FPDF_CloseDocument` and
+accounting as the bridge: `FPDF_CreateNewDocument`, `FPDF_ImportNPagesToOne`,
+`EPDFPage_ExportAnnotationsAsDocument`, `FPDFPage_New`, `EPDF_LoadPageNormalized`,
+`EPDFDoc_LoadPageByObjectNumber` and `EPDFDoc_LoadPageByObjectNumberNormalized` record an open
+document or page when they return a non-null handle, and `FPDF_CloseDocument` and
 `FPDF_ClosePage` record the matching close. So a document or page created through the raw bindings
 still keeps `jpdf_runtime_shutdown` returning `JPDF_E_BUSY` until it is closed through the matching
 raw close. Objects the bridge creates are counted once, by the bridge, because the bridge calls
