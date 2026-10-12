@@ -7,6 +7,7 @@
 #include <system_error>
 
 #include "api_status.h"
+#include "guard.h"
 #include "jpdfium_core.h"
 
 namespace jpdf {
@@ -233,3 +234,35 @@ Admission::~Admission() {
 }
 
 }  // namespace jpdf
+
+// --- guard.cpp (merged) ---
+// guard.cpp - refusal reporting for jpdf_guard_* shims.
+
+namespace jpdf {
+
+namespace {
+// A refused shim returns a zero value its caller cannot tell from success, so it is kept here.
+thread_local jpdf_status t_refusal = JPDF_OK;
+}  // namespace
+
+CallStart::CallStart() noexcept {
+    begin_call();
+}
+
+GuardScope::GuardScope(Purpose purpose) noexcept : admission_(purpose) {
+    // The refusal belongs to this call only: an admitted call clears any stale
+    // status so a caller that never took the refusal cannot leak it to the next one.
+    t_refusal = admission_.admitted() ? JPDF_OK : admission_.status();
+}
+
+}  // namespace jpdf
+
+extern "C" {
+
+jpdf_status jpdf_guard_take_refusal(void) noexcept {
+    const jpdf_status status = jpdf::t_refusal;
+    jpdf::t_refusal = JPDF_OK;
+    return status;
+}
+
+}  // extern "C"

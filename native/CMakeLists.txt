@@ -132,11 +132,8 @@ file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pd
 # The native domain and the jpdf_guard_* shims for jpdfium_* exist in both bridges, so the
 # stub serializes exactly like the real build.
 set(JPDFIUM_DOMAIN_SOURCES
-    bridge/src/runtime/api_status.cpp
     bridge/src/runtime/domain.cpp
     bridge/src/runtime/api_runtime.cpp
-    bridge/src/runtime/guard.cpp
-    bridge/src/runtime/api_module.cpp
     bridge/src/legacy/guards_bridge.cpp)
 
 # Stub library (always built for testing).

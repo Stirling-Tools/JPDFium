@@ -207,3 +207,209 @@ jpdf_status jpdf_runtime_resume(void) noexcept {
 }
 
 }  // extern "C"
+
+// --- api_status.cpp (merged) ---
+// api_status.cpp - thread-local error detail and struct-size validation.
+
+#include <cstring>
+#include <string>
+
+#include "api_status.h"
+
+namespace jpdf {
+
+namespace {
+thread_local std::string t_detail;
+thread_local bool t_failed = false;
+}  // namespace
+
+void begin_call() noexcept {
+    t_detail.clear();
+    t_failed = false;
+}
+
+jpdf_status fail(jpdf_status status, std::string_view detail, std::string_view more) noexcept {
+    // First failure wins so cleanup errors cannot overwrite the original cause.
+    if (!t_failed) {
+        t_failed = true;
+        try {
+            t_detail.assign(detail);
+            t_detail.append(more);
+        } catch (...) {
+            t_detail.clear();
+        }
+    }
+    return status;
+}
+
+jpdf_status copy_last_error(char* buffer, uint64_t capacity, uint64_t* required) noexcept {
+    const uint64_t needed = static_cast<uint64_t>(t_detail.size()) + 1;
+    if (required) *required = needed;
+    if (!buffer || capacity == 0) return JPDF_OK;
+    if (capacity < needed) return JPDF_E_BUFFER_TOO_SMALL;
+    std::memcpy(buffer, t_detail.c_str(), static_cast<size_t>(needed));
+    return JPDF_OK;
+}
+
+jpdf_status check_input_struct(const void* data, uint32_t caller_size, uint32_t min_size,
+                               uint32_t known_size, std::string_view name) noexcept {
+    if (caller_size < min_size) {
+        return fail(JPDF_E_INVALID_ARGUMENT, name, ".struct_size is below the 1.0 layout");
+    }
+    // A newer caller may only rely on fields this library knows, so unknown bytes must be zero.
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (uint32_t i = known_size; i < caller_size; ++i) {
+        if (bytes[i] != 0) {
+            return fail(JPDF_E_UNSUPPORTED, name, " sets fields this library does not know");
+        }
+    }
+    return JPDF_OK;
+}
+
+jpdf_status check_output_struct(uint32_t caller_size, uint32_t min_size,
+                                std::string_view name) noexcept {
+    if (caller_size < min_size) {
+        return fail(JPDF_E_INVALID_ARGUMENT, name, ".struct_size is below the 1.0 layout");
+    }
+    return JPDF_OK;
+}
+
+}  // namespace jpdf
+
+// --- api_module.cpp (merged) ---
+// api_module.cpp - jpdf_module_*: optional modules' objects in the core's handle table.
+
+#include <memory>
+#include <new>
+#include <utility>
+
+#include "api_status.h"
+#include "jpdfium_api.h"
+#include "objects/object_table.h"
+
+namespace jpdf {
+
+// An optional module's object, destroyed by the module's own function once nothing holds it.
+struct ModuleObject final : Object {
+    using Destroy = void (*)(void*);
+    ModuleObject(uint32_t object_kind, void* p, Destroy d) noexcept
+        : Object(ObjectType::Module), kind(object_kind), pointer(p), destroy(d) {}
+    ~ModuleObject() override {
+        if (destroy) destroy(pointer);
+    }
+    const uint32_t kind;
+    void* const pointer;
+    Destroy destroy;  // cleared when ownership never transferred
+};
+
+// Keeps a module object alive across one module call, even if its handle closes meanwhile.
+struct LeaseObject final : Object {
+    explicit LeaseObject(std::shared_ptr<ModuleObject> o) noexcept
+        : Object(ObjectType::Lease), object(std::move(o)) {}
+    const std::shared_ptr<ModuleObject> object;
+};
+
+// The process-wide object table. Never destroyed: bindings may release views from finalizers
+// during interpreter teardown.
+ObjectTable& objects() noexcept {
+    alignas(ObjectTable) static unsigned char storage[sizeof(ObjectTable)];
+    static ObjectTable* table = ::new (storage) ObjectTable();
+    return *table;
+}
+
+}  // namespace jpdf
+
+namespace {
+
+using jpdf::ModuleObject;
+
+// Like jpdf::guarded, but keeps the error detail: these run inside a module's own entry point,
+// often after it has recorded why it is failing.
+template <typename Body>
+jpdf_status nested(Body&& body) noexcept {
+    try {
+        return body();
+    } catch (const std::bad_alloc&) {
+        return jpdf::fail(JPDF_E_NO_MEMORY, "native allocation failed");
+    } catch (...) {
+        return jpdf::fail(JPDF_E_INTERNAL, "unexpected native exception");
+    }
+}
+
+// Resolves a module handle of the given kind; a live handle of another kind is the wrong type.
+jpdf_status resolve_module(jpdf_handle handle, uint32_t kind, std::shared_ptr<ModuleObject>* out) {
+    jpdf_status st = jpdf::objects().resolve_as(handle, jpdf::ObjectType::Module, out);
+    if (st != JPDF_OK) return jpdf::fail(st, "module handle rejected");
+    if ((*out)->kind != kind) {
+        out->reset();
+        return jpdf::fail(JPDF_E_WRONG_HANDLE_TYPE, "module handle is of another kind");
+    }
+    return JPDF_OK;
+}
+
+}  // namespace
+
+extern "C" {
+
+void jpdf_module_begin_call(void) noexcept {
+    jpdf::begin_call();
+}
+
+jpdf_status jpdf_module_fail(jpdf_status status, const char* detail) noexcept {
+    return jpdf::fail(status, detail ? detail : "");
+}
+
+jpdf_status jpdf_module_object_insert(uint32_t kind, void* object, jpdf_module_destroy_fn destroy,
+                                      jpdf_handle* out_handle) noexcept {
+    return nested([&] {
+        if (kind == 0 || !object || !destroy || !out_handle) {
+            return jpdf::fail(JPDF_E_INVALID_ARGUMENT,
+                              "kind, object, destroy and out are required");
+        }
+        // No destroyer until the table owns it: a throwing insert must leave ownership
+        // with the caller, and ~ModuleObject must not free an object it never accepted.
+        auto holder = std::make_shared<ModuleObject>(kind, object, nullptr);
+        jpdf_handle token = 0;
+        jpdf_status st = jpdf::objects().insert(holder, &token);
+        if (st != JPDF_OK) return jpdf::fail(st, "object table rejected the module object");
+        holder->destroy = destroy;
+        *out_handle = token;
+        return JPDF_OK;
+    });
+}
+
+jpdf_status jpdf_module_object_acquire(jpdf_handle handle, uint32_t kind, void** out_object,
+                                       jpdf_handle* out_lease) noexcept {
+    return nested([&] {
+        if (!out_object || !out_lease) return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "null output");
+        std::shared_ptr<ModuleObject> object;
+        jpdf_status st = resolve_module(handle, kind, &object);
+        if (st != JPDF_OK) return st;
+        void* const pointer = object->pointer;
+        jpdf_handle lease = 0;
+        st = jpdf::objects().insert(std::make_shared<jpdf::LeaseObject>(std::move(object)), &lease);
+        if (st != JPDF_OK) return jpdf::fail(st, "object table rejected the lease");
+        *out_object = pointer;
+        *out_lease = lease;
+        return JPDF_OK;
+    });
+}
+
+jpdf_status jpdf_module_lease_release(jpdf_handle lease) noexcept {
+    return nested([&] {
+        jpdf_status st = jpdf::objects().retire(lease, jpdf::ObjectType::Lease, nullptr);
+        return st == JPDF_OK ? st : jpdf::fail(st, "lease handle rejected");
+    });
+}
+
+jpdf_status jpdf_module_object_close(jpdf_handle handle, uint32_t kind) noexcept {
+    return nested([&] {
+        std::shared_ptr<ModuleObject> object;
+        jpdf_status st = resolve_module(handle, kind, &object);
+        if (st != JPDF_OK) return st;
+        st = jpdf::objects().retire(handle, jpdf::ObjectType::Module, nullptr);
+        return st == JPDF_OK ? st : jpdf::fail(st, "module handle rejected");
+    });
+}
+
+}  // extern "C"
