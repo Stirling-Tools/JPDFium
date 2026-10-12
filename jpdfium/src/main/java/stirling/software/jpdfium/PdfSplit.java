@@ -494,7 +494,7 @@ public final class PdfSplit {
             // output would corrupt the file when output aliases input (the document is
             // still open), and a failed save would leave a partial file, so an
             // unavailable staging file is refused rather than downgraded.
-            Path staged = options.createStagingFile(output);
+            Path staged = OutputTransaction.stagingFile(options, output);
             try {
                 // The commit below fsyncs the staging file and its directory, so
                 // the staged write itself must not duplicate that work.
@@ -519,7 +519,7 @@ public final class PdfSplit {
                                               Path output, StorageOptions options) throws IOException {
         Path staged;
         try {
-            staged = options.createStagingFile(output);
+            staged = OutputTransaction.stagingFile(options, output);
         } catch (IOException _) {
             return false;
         }

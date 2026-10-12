@@ -368,7 +368,7 @@ public final class PdfMerge {
             // inputs (src == output) are handled safely, matching the multi-input path.
             // Staging is never downgraded to a direct in-place copy: a failed copy would
             // truncate an existing destination, so an unavailable staging file is refused.
-            Path staged = options.createStagingFile(output);
+            Path staged = OutputTransaction.stagingFile(options, output);
             try {
                 Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
                 publishStagedFile(staged, output);
@@ -389,7 +389,7 @@ public final class PdfMerge {
 
         // Save through a staging file so the destination is replaced only after the
         // merge and the save both succeed; a failed save must not truncate it.
-        Path staged = options.createStagingFile(output);
+        Path staged = OutputTransaction.stagingFile(options, output);
         try {
             try (PdfDocument merged = mergeFiles(paths, options)) {
                 // The commit below fsyncs the staging file and its directory, so
@@ -413,7 +413,7 @@ public final class PdfMerge {
             throws IOException {
         Path staged;
         try {
-            staged = options.createStagingFile(output);
+            staged = OutputTransaction.stagingFile(options, output);
         } catch (IOException _) {
             return false;
         }

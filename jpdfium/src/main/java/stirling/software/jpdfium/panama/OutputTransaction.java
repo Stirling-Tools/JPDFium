@@ -2,6 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
+import stirling.software.jpdfium.model.StorageOptions;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -44,6 +45,18 @@ public final class OutputTransaction implements AutoCloseable {
 
     public static OutputTransaction begin(Path destination) throws IOException {
         return begin(destination, true);
+    }
+
+    /**
+     * Create a staging file beside the resolved {@code destination} so its publication is a
+     * rename, whatever the destination path itself points at.
+     *
+     * <p>An output that is a symlink is resolved first: staging beside the link could land on a
+     * different filesystem from the real target, and {@link #publishStagedDurable} would then be
+     * unable to move it atomically.
+     */
+    public static Path stagingFile(StorageOptions options, Path destination) throws IOException {
+        return options.createStagingFile(resolveSymlinks(destination.toAbsolutePath()));
     }
 
     /**

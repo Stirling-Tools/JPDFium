@@ -90,9 +90,17 @@ class PdfiumRuntimeTest {
     void eachNativeCallIsOneAdmission() throws Exception {
         long doc = openMinimal();
         try {
-            long before = PdfiumRuntime.stats().acquisitions();
-            JpdfiumLib.docPageCount(doc);
-            assertEquals(before + 1, PdfiumRuntime.stats().acquisitions());
+            // acquisitions counts the whole process: a background native call (a
+            // Cleaner-driven close, a leftover worker) between snapshots can only
+            // inflate the delta, never shrink it below the one admission this call
+            // performs. The minimum over several samples therefore pins it to 1.
+            long minDelta = Long.MAX_VALUE;
+            for (int i = 0; i < 8; i++) {
+                long before = PdfiumRuntime.stats().acquisitions();
+                JpdfiumLib.docPageCount(doc);
+                minDelta = Math.min(minDelta, PdfiumRuntime.stats().acquisitions() - before);
+            }
+            assertEquals(1, minDelta);
         } finally {
             JpdfiumLib.docClose(doc);
         }

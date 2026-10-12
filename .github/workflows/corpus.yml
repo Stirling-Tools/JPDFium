@@ -127,9 +127,10 @@ jobs:
       # unpinned version would reformat them and fail the diff check.
       - name: Install pinned clang-format
         run: |
-          python3 -m pip install --user clang-format==18.1.8
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          clang-format --version
+          python3 -m venv "$RUNNER_TEMP/cf-venv"
+          "$RUNNER_TEMP/cf-venv/bin/pip" install clang-format==18.1.8
+          echo "$RUNNER_TEMP/cf-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/cf-venv/bin/clang-format" --version
 
       - name: Fetch prebuilt PDFium (pinned)
         env:
