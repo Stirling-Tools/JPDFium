@@ -237,7 +237,6 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/pdf/api_document.cpp
         bridge/src/pdf/api_render.cpp
         bridge/src/pdf/api_raster.cpp
-        bridge/src/pdf/api_text.cpp
         bridge/src/images/pixels.cpp
         bridge/src/images/api_bitmap.cpp
         bridge/src/output/output_transaction.cpp

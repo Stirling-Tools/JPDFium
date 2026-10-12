@@ -460,6 +460,60 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
     }
 }
 
+// Extract N ranges from ONE source parse. The source (and its page objects,
+// which the destinations reference as foreign objects) stays alive until the
+// final range has been written.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char* in_path,
+                                                        const int32_t* pageIndices,
+                                                        const int32_t* rangeOffsets,
+                                                        int32_t rangeCount,
+                                                        const char* const* outPaths) {
+    if (!in_path || !pageIndices || !rangeOffsets || rangeCount <= 0 || !outPaths) return -1;
+    try {
+        auto src = QPDF::create();
+        src->processFile(in_path);
+        QPDFPageDocumentHelper src_pdh{*src};
+        auto allPages = src_pdh.getAllPages();
+        const int32_t totalPages = static_cast<int32_t>(allPages.size());
+        for (int32_t r = 0; r < rangeCount; ++r) {
+            const int32_t begin = rangeOffsets[r];
+            const int32_t end = rangeOffsets[r + 1];
+            if (begin < 0 || end < begin) return -1;
+            auto dest = QPDF::create();
+            dest->emptyPDF();
+            QPDFPageDocumentHelper dest_pdh{*dest};
+            for (int32_t i = begin; i < end; ++i) {
+                const int32_t idx = pageIndices[i];
+                if (idx >= 0 && idx < totalPages) dest_pdh.addPage(allPages[idx], false);
+            }
+            FILE* out = createOutputFile(outPaths[r]);
+            if (!out) {
+                std::fprintf(stderr, "jpdfium qpdf ranges: cannot open output %s\n", outPaths[r]);
+                return -1;
+            }
+            bool writerOwnsFile = false;
+            try {
+                QPDFWriter w{*dest};
+                w.setOutputFile("jpdfium-out", out, true);
+                writerOwnsFile = true;
+                w.setObjectStreamMode(qpdf_o_generate);
+                w.setCompressStreams(true);
+                w.write();
+            } catch (...) {
+                if (!writerOwnsFile) std::fclose(out);
+                throw;
+            }
+        }
+        return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium qpdf ranges file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf ranges file: unknown error\n");
+        return -1;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t inputLen,
                                                   const int32_t* pageIndices, int32_t pageCount,
                                                   uint8_t** output, int64_t* outputLen) {

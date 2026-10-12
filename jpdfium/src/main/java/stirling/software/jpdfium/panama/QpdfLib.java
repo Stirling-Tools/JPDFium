@@ -173,6 +173,11 @@ public final class QpdfLib {
             "jpdfium_qpdf_extract_pages_file",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 
+    // E1 experiment: one source parse serving every range.
+    private static final MethodHandle EXTRACT_RANGES_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_extract_ranges_file",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
+
     private static final MethodHandle SANITIZE_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_sanitize_file", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle ENCRYPT_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
@@ -188,6 +193,10 @@ public final class QpdfLib {
 
     public static boolean isExtractFileSupported() {
         return EXTRACT_PAGES_FILE_HANDLE != null;
+    }
+
+    public static boolean isExtractRangesSupported() {
+        return EXTRACT_RANGES_FILE_HANDLE != null;
     }
 
     public static boolean isSanitizeFileSupported() {
@@ -569,6 +578,69 @@ public final class QpdfLib {
         MemorySegment outSeg = call.cString(stagingTarget.toAbsolutePath().toString());
         return (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
                 inSeg, indicesSeg, pageIndices.length, outSeg);
+    }
+
+    /**
+     * E1 experiment: extract several ranges into several staging files with a single
+     * native source parse. Each entry of {@code indexRanges} is the absolute page index
+     * list for one output; {@code stagingTargets} is positionally aligned with it.
+     * Returns false when the capability is unavailable or the native call fails.
+     */
+    public static boolean extractRangesInto(Path input, List<int[]> indexRanges,
+                                            List<Path> stagingTargets) {
+        if (EXTRACT_RANGES_FILE_HANDLE == null || input == null || indexRanges == null
+                || stagingTargets == null || indexRanges.isEmpty()
+                || indexRanges.size() != stagingTargets.size()) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            for (Path out : stagingTargets) {
+                rejectAlias(List.of(input), out);
+            }
+            return invokeExtractRangesFile(call, input, indexRanges, stagingTargets) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf extract ranges to file failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeExtractRangesFile(QpdfCall call, Path input,
+                                               List<int[]> indexRanges, List<Path> stagingTargets)
+            throws Throwable {
+        int rangeCount = indexRanges.size();
+        int total = 0;
+        for (int[] r : indexRanges) {
+            total += r.length;
+        }
+        int[] flat = new int[total];
+        int[] offsets = new int[rangeCount + 1];
+        int pos = 0;
+        for (int i = 0; i < rangeCount; i++) {
+            offsets[i] = pos;
+            int[] r = indexRanges.get(i);
+            System.arraycopy(r, 0, flat, pos, r.length);
+            pos += r.length;
+        }
+        offsets[rangeCount] = pos;
+        MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+        MemorySegment indicesSeg = call.copyInts(flat);
+        MemorySegment offsetsSeg = call.copyInts(offsets);
+        MemorySegment outArraySeg = call.arena.allocate(ADDRESS, rangeCount);
+        for (int i = 0; i < rangeCount; i++) {
+            outArraySeg.setAtIndex(ADDRESS, i,
+                    call.cString(stagingTargets.get(i).toAbsolutePath().toString()));
+        }
+        return (int) EXTRACT_RANGES_FILE_HANDLE.invokeExact(
+                inSeg, indicesSeg, offsetsSeg, rangeCount, outArraySeg);
     }
 
     public static byte[] extractPages(byte[] input, int[] pageIndices) {

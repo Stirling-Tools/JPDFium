@@ -163,13 +163,32 @@ public final class PdfSplit {
             try {
                 List<Bookmark> sourceBookmarks = doc.bookmarks();
                 boolean snapshotRefused = false;
-                for (int[] range : ranges) {
-                    if (doc.structureEpoch() != epoch) {
-                        throw new JPDFiumException(
-                                "document mutated during split; outputs would mix snapshots");
+                // E1: when the native symbol exists, one source parse serves every
+                // range. Each outcome is aligned with `ranges`, so the existing
+                // part/rejected/fallback handling below is unchanged.
+                List<FileExtract> batched = null;
+                if (QpdfLib.isExtractRangesSupported()) {
+                    for (int[] range : ranges) {
+                        if (doc.structureEpoch() != epoch) {
+                            throw new JPDFiumException(
+                                    "document mutated during split; outputs would mix snapshots");
+                        }
+                        if (Thread.currentThread().isInterrupted()) {
+                            throw new JPDFiumException("split cancelled between outputs");
+                        }
                     }
-                    if (Thread.currentThread().isInterrupted()) {
-                        throw new JPDFiumException("split cancelled between outputs");
+                    batched = extractAllToTemp(reusable, ranges, sourceBookmarks, options);
+                }
+                int batchedIndex = 0;
+                for (int[] range : ranges) {
+                    if (batched == null) {
+                        if (doc.structureEpoch() != epoch) {
+                            throw new JPDFiumException(
+                                    "document mutated during split; outputs would mix snapshots");
+                        }
+                        if (Thread.currentThread().isInterrupted()) {
+                            throw new JPDFiumException("split cancelled between outputs");
+                        }
                     }
                     int count = range[1] - range[0] + 1;
                     int[] idx = new int[count];
@@ -177,9 +196,14 @@ public final class PdfSplit {
                     List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
                             : filterBookmarksForRange(sourceBookmarks, range[0], range[1]);
                     COUNTERS.sourceLoads.incrementAndGet();
-                    FileExtract extracted = snapshotRefused
-                            ? FileExtract.REFUSED
-                            : extractToTemp(reusable, idx, remapped, options);
+                    FileExtract extracted;
+                    if (batched != null) {
+                        extracted = batched.get(batchedIndex++);
+                    } else {
+                        extracted = snapshotRefused
+                                ? FileExtract.REFUSED
+                                : extractToTemp(reusable, idx, remapped, options);
+                    }
                     COUNTERS.outputWrites.incrementAndGet();
                     if (extracted.part() != null) {
                         results.add(extracted.part());
@@ -522,6 +546,77 @@ public final class PdfSplit {
             try {
                 Files.deleteIfExists(path);
             } catch (IOException _) {}
+        }
+    }
+
+    /**
+     * E1 experiment: extract every range in one native source parse, then apply the
+     * same per-part tail {@link #extractToTemp} applies (bookmark pass, page-count
+     * verify, temp-owned open). Returns one outcome per range, positionally aligned
+     * with {@code ranges}. A batch the native layer refuses degrades to
+     * {@link FileExtract#REFUSED} for every range, which the caller already handles.
+     */
+    private static List<FileExtract> extractAllToTemp(Path input, List<int[]> ranges,
+                                                      List<Bookmark> sourceBookmarks,
+                                                      StorageOptions options) {
+        int n = ranges.size();
+        List<int[]> indexRanges = new ArrayList<>(n);
+        for (int[] range : ranges) {
+            int count = range[1] - range[0] + 1;
+            int[] idx = new int[count];
+            for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+            indexRanges.add(idx);
+        }
+        List<Path> cleanup = new ArrayList<>();
+        List<Path> stagings = new ArrayList<>(n);
+        try {
+            try {
+                for (int i = 0; i < n; i++) {
+                    Path staging = options.createTempFile("jpdfium-split", ".pdf");
+                    cleanup.add(staging);
+                    stagings.add(staging);
+                }
+            } catch (Exception _) {
+                List<FileExtract> refused = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
+                return refused;
+            }
+            if (!QpdfLib.extractRangesInto(input, indexRanges, stagings)) {
+                List<FileExtract> refused = new ArrayList<>(n);
+                for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
+                return refused;
+            }
+            List<FileExtract> out = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) {
+                int[] idx = indexRanges.get(i);
+                Path staging = stagings.get(i);
+                List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
+                        : filterBookmarksForRange(sourceBookmarks, idx[0], idx[idx.length - 1]);
+                Path result = staging;
+                try {
+                    if (!remapped.isEmpty()) {
+                        Path tmpBookmarks = options.createTempFile("jpdfium-split-bm", ".pdf");
+                        cleanup.add(tmpBookmarks);
+                        try (PdfDocument part = PdfDocument.open(staging)) {
+                            PdfBookmarkEditor.setBookmarks(part, remapped, tmpBookmarks, false);
+                        }
+                        result = tmpBookmarks;
+                    }
+                    PdfDocument part = PdfDocument.openTemp(result);
+                    if (part.pageCount() != idx.length) {
+                        part.close();
+                        out.add(FileExtract.REJECTED);
+                        continue;
+                    }
+                    cleanup.remove(result);
+                    out.add(new FileExtract(part, false, false));
+                } catch (Exception _) {
+                    out.add(FileExtract.FAILED);
+                }
+            }
+            return out;
+        } finally {
+            for (Path leftover : cleanup) deleteQuietly(leftover);
         }
     }
 
