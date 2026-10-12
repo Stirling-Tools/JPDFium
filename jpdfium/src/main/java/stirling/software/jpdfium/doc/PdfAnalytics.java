@@ -52,7 +52,7 @@ public final class PdfAnalytics {
      * @return document statistics
      */
     public static DocumentStats analyze(PdfDocument doc, long fileSize) {
-        MemorySegment rawDoc = doc.rawHandle();
+        MemorySegment rawDoc = doc.rawHandleForRead();
         int pageCount = doc.pageCount();
 
         int totalWords = 0;
@@ -86,7 +86,7 @@ public final class PdfAnalytics {
                 } catch (Exception _) {}
 
                 // Page object stats
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 PageContentSummary pcs = PdfPageObjects.summarize(rawPage);
                 totalTextObjects += pcs.textObjectCount();
                 totalPathObjects += pcs.pathObjectCount();
@@ -109,7 +109,7 @@ public final class PdfAnalytics {
         Map<AnnotationType, Integer> annotCounts = new EnumMap<>(AnnotationType.class);
         for (int i = 0; i < pageCount; i++) {
             try (PdfPage page = doc.page(i)) {
-                for (Annotation a : PdfAnnotations.list(page.rawHandle())) {
+                for (Annotation a : PdfAnnotations.list(page.rawHandleForRead())) {
                     annotCounts.merge(a.type(), 1, Integer::sum);
                     totalAnnotations++;
                 }

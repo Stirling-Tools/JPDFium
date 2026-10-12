@@ -1010,8 +1010,11 @@ public final class PdfPage implements AutoCloseable {
         return rawDocSegment;
     }
 
-    /** {@link #rawHandle()} for library reads that cannot change the document. */
-    MemorySegment rawHandleForRead() {
+    /**
+     * {@link #rawHandle()} for library-internal reads that cannot change the document.
+     * Unlike {@link #rawHandle()}, taking it does not mark the owning document as modified.
+     */
+    public MemorySegment rawHandleForRead() {
         ensureOpen();
         return rawPageSegment;
     }
