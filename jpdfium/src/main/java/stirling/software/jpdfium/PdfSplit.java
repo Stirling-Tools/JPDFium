@@ -168,7 +168,7 @@ public final class PdfSplit {
                 // part/rejected/fallback handling below is unchanged.
                 List<FileExtract> batched = null;
                 if (QpdfLib.isExtractRangesSupported()) {
-                    for (int[] range : ranges) {
+                    for (int i = 0; i < ranges.size(); i++) {
                         if (doc.structureEpoch() != epoch) {
                             throw new JPDFiumException(
                                     "document mutated during split; outputs would mix snapshots");
