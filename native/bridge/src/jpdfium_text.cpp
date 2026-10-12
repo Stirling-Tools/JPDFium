@@ -3,6 +3,7 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
@@ -85,6 +86,45 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
     return result;
 }
 
+// Fast, allocation-free JSON number writers for the text getters below.
+// Output contract: byte-identical to the ostringstream default formatting
+// they replace (verified: snprintf("%.6g") reproduces `os << double/float`
+// for 0, -0.0, coords, 1e-5, 1e21, 123456.5, 1/3, inf/-inf/nan, and the
+// hand-rolled decimal writers match `os << int/unsigned` exactly).
+static void append_g(std::string& s, double v) {
+    // %.6g of a double needs at most ~14 bytes ("-1.23456e-308"); 32 always
+    // fits, but grow rather than truncate if a platform ever disagrees.
+    char buf[32];
+    int n = std::snprintf(buf, sizeof(buf), "%.6g", v);
+    if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
+        s.append(buf, static_cast<size_t>(n));
+        return;
+    }
+    std::string big(64, '\0');
+    n = std::snprintf(big.data(), big.size(), "%.6g", v);
+    if (n > 0) s.append(big.data(), static_cast<size_t>(n));
+}
+
+static void append_uint(std::string& s, unsigned int v) {
+    char buf[16];
+    char* p = buf + sizeof(buf);
+    do {
+        *--p = static_cast<char>('0' + v % 10);
+        v /= 10;
+    } while (v != 0);
+    s.append(p, static_cast<size_t>((buf + sizeof(buf)) - p));
+}
+
+static void append_int(std::string& s, int v) {
+    if (v < 0) {
+        s += '-';
+        // Negate in unsigned domain so INT_MIN is exact.
+        append_uint(s, static_cast<unsigned int>(-(static_cast<long long>(v))));
+    } else {
+        append_uint(s, static_cast<unsigned int>(v));
+    }
+}
+
 int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     try {
         PageWrapper* pw = decodePage(page);
@@ -95,8 +135,9 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
-        std::ostringstream os;
-        os << '[';
+        std::string s;
+        s.reserve(static_cast<size_t>(count) * 88 + 2);
+        s += '[';
         bool first = true;
 
         for (int i = 0; i < count; ++i) {
@@ -114,14 +155,28 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
                 oy = b;
             }
 
-            if (!first) os << ',';
+            if (!first) s += ',';
             first = false;
-            os << "{\"i\":" << i << ",\"u\":" << uni << ",\"ox\":" << ox << ",\"oy\":" << oy
-               << ",\"l\":" << l << ",\"r\":" << r << ",\"b\":" << b << ",\"t\":" << t << '}';
+            s += "{\"i\":";
+            append_int(s, i);
+            s += ",\"u\":";
+            append_uint(s, uni);
+            s += ",\"ox\":";
+            append_g(s, ox);
+            s += ",\"oy\":";
+            append_g(s, oy);
+            s += ",\"l\":";
+            append_g(s, l);
+            s += ",\"r\":";
+            append_g(s, r);
+            s += ",\"b\":";
+            append_g(s, b);
+            s += ",\"t\":";
+            append_g(s, t);
+            s += '}';
         }
-        os << ']';
+        s += ']';
 
-        std::string s = os.str();
         char* out = static_cast<char*>(malloc(s.size() + 1));
         if (!out) return JPDFIUM_ERR_NATIVE;
         memcpy(out, s.c_str(), s.size() + 1);
@@ -148,8 +203,9 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         if (!tp) return JPDFIUM_ERR_NATIVE;
 
         int count = FPDFText_CountChars(tp.get());
-        std::ostringstream os;
-        os << '[';
+        std::string s;
+        s.reserve(static_cast<size_t>(count) * 112 + 2);
+        s += '[';
         bool first = true;
 
         char fontbuf[256];
@@ -171,19 +227,35 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
             float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
 
-            if (!first) os << ',';
+            if (!first) s += ',';
             first = false;
-            os << "{\"i\":" << i << ",\"u\":" << uni << ",\"x\":" << l << ",\"y\":" << b
-               << ",\"w\":" << (r - l) << ",\"h\":" << (t - b) << ",\"font\":\"";
-            for (char c : std::string(fontbuf)) {
-                if (c == '"' || c == '\\') os << '\\';
-                os << c;
+            s += "{\"i\":";
+            append_int(s, i);
+            s += ",\"u\":";
+            append_uint(s, uni);
+            s += ",\"x\":";
+            append_g(s, l);
+            s += ",\"y\":";
+            append_g(s, b);
+            s += ",\"w\":";
+            append_g(s, r - l);
+            s += ",\"h\":";
+            append_g(s, t - b);
+            s += ",\"font\":\"";
+            // Bounded scan of the zeroed buffer instead of a per-char
+            // std::string(fontbuf) temporary; output is identical.
+            const size_t fnlen = strnlen(fontbuf, sizeof(fontbuf));
+            for (size_t k = 0; k < fnlen; ++k) {
+                const char c = fontbuf[k];
+                if (c == '"' || c == '\\') s += '\\';
+                s += c;
             }
-            os << "\",\"size\":" << size << '}';
+            s += "\",\"size\":";
+            append_g(s, size);
+            s += '}';
         }
-        os << ']';
+        s += ']';
 
-        std::string s = os.str();
         char* out = static_cast<char*>(malloc(s.size() + 1));
         if (!out) return JPDFIUM_ERR_NATIVE;
         memcpy(out, s.c_str(), s.size() + 1);
