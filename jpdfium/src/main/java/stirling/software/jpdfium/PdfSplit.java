@@ -168,14 +168,12 @@ public final class PdfSplit {
                 // part/rejected/fallback handling below is unchanged.
                 List<FileExtract> batched = null;
                 if (QpdfLib.isExtractRangesSupported()) {
-                    for (int i = 0; i < ranges.size(); i++) {
-                        if (doc.structureEpoch() != epoch) {
-                            throw new JPDFiumException(
-                                    "document mutated during split; outputs would mix snapshots");
-                        }
-                        if (Thread.currentThread().isInterrupted()) {
-                            throw new JPDFiumException("split cancelled between outputs");
-                        }
+                    if (doc.structureEpoch() != epoch) {
+                        throw new JPDFiumException(
+                                "document mutated during split; outputs would mix snapshots");
+                    }
+                    if (Thread.currentThread().isInterrupted()) {
+                        throw new JPDFiumException("split cancelled between outputs");
                     }
                     batched = extractAllToTemp(reusable, ranges, sourceBookmarks, options);
                 }
@@ -517,8 +515,15 @@ public final class PdfSplit {
             return false;
         }
         try {
-            if (!QpdfLib.extractPagesInto(input, pageIndices, staged)
-                    || !OutputTransaction.isPublishableStaging(staged, 0)) {
+            // A thrown JPDFiumException must fall back like a false return so AUTO
+            // mode still recovers instead of failing the whole split.
+            boolean extracted;
+            try {
+                extracted = QpdfLib.extractPagesInto(input, pageIndices, staged);
+            } catch (JPDFiumException _) {
+                return false;
+            }
+            if (!extracted || !OutputTransaction.isPublishableStaging(staged, 0)) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -581,7 +586,15 @@ public final class PdfSplit {
                 for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
                 return refused;
             }
-            if (!QpdfLib.extractRangesInto(input, indexRanges, stagings)) {
+            // A thrown JPDFiumException (native failure, rejected alias) must fall
+            // back exactly like a false return, so AUTO mode still recovers per range.
+            boolean extracted;
+            try {
+                extracted = QpdfLib.extractRangesInto(input, indexRanges, stagings);
+            } catch (JPDFiumException _) {
+                extracted = false;
+            }
+            if (!extracted) {
                 List<FileExtract> refused = new ArrayList<>(n);
                 for (int i = 0; i < n; i++) refused.add(FileExtract.REFUSED);
                 return refused;

@@ -660,6 +660,9 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
         static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
             auto* mw = static_cast<MallocWriter*>(self);
             if (size == 0) return 1;
+            // Same callback contract as FileWriteContext::Write: a null buffer
+            // with a non-zero size is a PDFium violation, not a memcpy source.
+            if (!data) return 0;
             const size_t need = mw->size + static_cast<size_t>(size);
             if (need < mw->size) return 0;  // size_t wraparound
             if (need > mw->cap) {

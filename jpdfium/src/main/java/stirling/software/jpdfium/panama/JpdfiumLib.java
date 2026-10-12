@@ -5,6 +5,7 @@ import java.awt.image.DataBufferInt;
 import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.PdfCorruptException;
 import stirling.software.jpdfium.exception.PdfPasswordException;
@@ -1142,6 +1143,15 @@ public final class JpdfiumLib {
     private static final int RENDER_TARGET_POOL_MAX = 4;
 
     /**
+     * Total native bytes the pool may retain for the life of the process. This is a deliberate
+     * bound, not an incidental one: the pool keeps its targets forever (the shared arena is never
+     * closed), so without it {@link #RENDER_TARGET_POOL_MAX} slots of
+     * {@link #RENDER_TARGET_MAX_BYTES} each could pin up to 256 MiB with nothing reporting it.
+     * Once the budget is spent, every later render falls back to a one-shot confined arena.
+     */
+    private static final long RENDER_TARGET_RETAINED_MAX_BYTES = 128L * 1024 * 1024;
+
+    /**
      * Reusable render targets, borrowed and returned around each render. Held in a shared,
      * process-lifetime arena so any thread may use one and the memory outlives the caller's
      * thread. Initialised lazily so nothing is allocated until the first render.
@@ -1150,24 +1160,38 @@ public final class JpdfiumLib {
         static final Arena ARENA = Arena.ofShared();
         static final ArrayDeque<MemorySegment> FREE = new ArrayDeque<>();
         static final AtomicInteger ALLOCATED = new AtomicInteger();
+        static final AtomicLong RETAINED_BYTES = new AtomicLong();
     }
 
     /**
      * Borrows a pooled render target of at least {@code byteLen} bytes, or {@code null} when the
-     * page is too large to pool or the pool is exhausted. Every non-null result must be handed back
-     * to {@link #releaseRenderTarget(MemorySegment)}.
+     * page is too large to pool or the pool is exhausted. Reuses the smallest target that fits, so
+     * a small request never pins the largest slot. Every non-null result must be handed back to
+     * {@link #releaseRenderTarget(MemorySegment)}.
      */
     private static MemorySegment borrowRenderTarget(long byteLen) {
         synchronized (RenderTargetPool.FREE) {
-            for (var it = RenderTargetPool.FREE.iterator(); it.hasNext(); ) {
-                MemorySegment target = it.next();
-                if (target.byteSize() >= byteLen) {
-                    it.remove();
-                    return target;
+            MemorySegment best = null;
+            for (MemorySegment target : RenderTargetPool.FREE) {
+                if (target.byteSize() >= byteLen
+                        && (best == null || target.byteSize() < best.byteSize())) {
+                    best = target;
                 }
             }
-            if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX) {
+            if (best != null) {
+                for (var it = RenderTargetPool.FREE.iterator(); it.hasNext(); ) {
+                    if (it.next() == best) {
+                        it.remove();
+                        break;
+                    }
+                }
+                return best;
+            }
+            if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX
+                    && RenderTargetPool.RETAINED_BYTES.get() + byteLen
+                            <= RENDER_TARGET_RETAINED_MAX_BYTES) {
                 RenderTargetPool.ALLOCATED.incrementAndGet();
+                RenderTargetPool.RETAINED_BYTES.addAndGet(byteLen);
                 return RenderTargetPool.ARENA.allocate(byteLen);
             }
         }

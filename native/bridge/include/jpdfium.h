@@ -579,11 +579,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
 // Extract N page ranges from ONE source parse. pageIndices is a flat list;
 // rangeOffsets holds rangeCount+1 entries indexing into it. The source is kept
 // alive until the last range is written.
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char* in_path,
-                                                        const int32_t* pageIndices,
-                                                        const int32_t* rangeOffsets,
-                                                        int32_t rangeCount,
-                                                        const char* const* outPaths);
+//
+// Caller contract: rangeOffsets must be non-decreasing, rangeOffsets[rangeCount]
+// must equal the length of pageIndices, and outPaths must hold rangeCount
+// entries. The native side cannot bound pageIndices by itself.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
+    const char* in_path, const int32_t* pageIndices, const int32_t* rangeOffsets,
+    int32_t rangeCount, const char* const* outPaths) JPDFIUM_NOEXCEPT;
 
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004

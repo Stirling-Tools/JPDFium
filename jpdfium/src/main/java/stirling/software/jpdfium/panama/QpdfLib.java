@@ -593,6 +593,11 @@ public final class QpdfLib {
                 || indexRanges.size() != stagingTargets.size()) {
             return false;
         }
+        for (int[] range : indexRanges) {
+            if (range == null || range.length == 0) {
+                return false;
+            }
+        }
         Semaphore held = null;
         try {
             held = acquireSlot();
@@ -619,7 +624,7 @@ public final class QpdfLib {
         int rangeCount = indexRanges.size();
         int total = 0;
         for (int[] r : indexRanges) {
-            total += r.length;
+            total = Math.addExact(total, r.length);
         }
         int[] flat = new int[total];
         int[] offsets = new int[rangeCount + 1];

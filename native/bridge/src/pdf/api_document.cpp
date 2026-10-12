@@ -4,6 +4,7 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -232,7 +233,9 @@ jpdf_status jpdf_page_get_text(jpdf_handle page, char* buffer, uint64_t capacity
             utf16.resize(2 * (static_cast<size_t>(count) + 1));
             const int written = FPDFText_GetText(loaded.text, 0, count,
                                                  reinterpret_cast<unsigned short*>(utf16.data()));
-            units = written > 0 ? static_cast<size_t>(written) - 1 : 0;
+            units = written > 0
+                        ? std::min(static_cast<size_t>(written) - 1, static_cast<size_t>(count))
+                        : 0;
         }
         const std::string text = utf16le_to_utf8(utf16, units);
         *required = static_cast<uint64_t>(text.size()) + 1;

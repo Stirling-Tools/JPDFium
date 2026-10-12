@@ -463,11 +463,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
 // Extract N ranges from ONE source parse. The source (and its page objects,
 // which the destinations reference as foreign objects) stays alive until the
 // final range has been written.
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char* in_path,
-                                                        const int32_t* pageIndices,
-                                                        const int32_t* rangeOffsets,
-                                                        int32_t rangeCount,
-                                                        const char* const* outPaths) {
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
+    const char* in_path, const int32_t* pageIndices, const int32_t* rangeOffsets,
+    int32_t rangeCount, const char* const* outPaths) JPDFIUM_NOEXCEPT {
     if (!in_path || !pageIndices || !rangeOffsets || rangeCount <= 0 || !outPaths) return -1;
     try {
         auto src = QPDF::create();
@@ -475,6 +473,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char* in_path,
         QPDFPageDocumentHelper src_pdh{*src};
         auto allPages = src_pdh.getAllPages();
         const int32_t totalPages = static_cast<int32_t>(allPages.size());
+        // Validate every range before writing anything: a malformed offset array
+        // must fail here, while no output file exists yet, rather than after some
+        // ranges are already on disk. Native code cannot bound pageIndices, so the
+        // caller must guarantee rangeOffsets[rangeCount] == the flat array length.
+        for (int32_t r = 0; r < rangeCount; ++r) {
+            if (rangeOffsets[r] < 0 || rangeOffsets[r + 1] < rangeOffsets[r]) return -1;
+        }
         for (int32_t r = 0; r < rangeCount; ++r) {
             const int32_t begin = rangeOffsets[r];
             const int32_t end = rangeOffsets[r + 1];

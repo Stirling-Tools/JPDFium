@@ -3,11 +3,14 @@
 #include <fpdf_text.h>
 #include <fpdfview.h>
 
+#include <charconv>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "jpdfium.h"
@@ -88,21 +91,21 @@ static std::vector<uint16_t> utf8_to_utf16le(const char* utf8) {
 
 // Fast, allocation-free JSON number writers for the text getters below.
 // Output contract: byte-identical to the ostringstream default formatting
-// they replace (verified: snprintf("%.6g") reproduces `os << double/float`
-// for 0, -0.0, coords, 1e-5, 1e21, 123456.5, 1/3, inf/-inf/nan, and the
-// hand-rolled decimal writers match `os << int/unsigned` exactly).
+// they replace (0, -0.0, coords, 1e-5, 1e21, 123456.5, 1/3 all match; the
+// hand-rolled decimal writers match `os << int/unsigned` exactly). Non-finite
+// values are written as 0 because JSON has no infinities or NaN.
 static void append_g(std::string& s, double v) {
-    // %.6g of a double needs at most ~14 bytes ("-1.23456e-308"); 32 always
-    // fits, but grow rather than truncate if a platform ever disagrees.
-    char buf[32];
-    int n = std::snprintf(buf, sizeof(buf), "%.6g", v);
-    if (n > 0 && static_cast<size_t>(n) < sizeof(buf)) {
-        s.append(buf, static_cast<size_t>(n));
+    if (!std::isfinite(v)) {
+        s += '0';
         return;
     }
-    std::string big(64, '\0');
-    n = std::snprintf(big.data(), big.size(), "%.6g", v);
-    if (n > 0) s.append(big.data(), static_cast<size_t>(n));
+    // to_chars is locale-independent; snprintf("%.6g") follows the C locale
+    // set by setlocale(), so a comma-decimal host locale would emit "1,5".
+    char buf[64];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::general, 6);
+    if (res.ec == std::errc()) {
+        s.append(buf, static_cast<size_t>(res.ptr - buf));
+    }
 }
 
 static void append_uint(std::string& s, unsigned int v) {
@@ -136,7 +139,7 @@ int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
 
         int count = FPDFText_CountChars(tp.get());
         std::string s;
-        s.reserve(static_cast<size_t>(count) * 88 + 2);
+        s.reserve(static_cast<size_t>(count > 0 ? count : 0) * 88 + 2);
         s += '[';
         bool first = true;
 
@@ -204,7 +207,7 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
 
         int count = FPDFText_CountChars(tp.get());
         std::string s;
-        s.reserve(static_cast<size_t>(count) * 112 + 2);
+        s.reserve(static_cast<size_t>(count > 0 ? count : 0) * 112 + 2);
         s += '[';
         bool first = true;
 
