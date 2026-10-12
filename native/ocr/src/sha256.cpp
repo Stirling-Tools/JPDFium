@@ -1,9 +1,9 @@
 // sha256.cpp - FIPS 180-4 SHA-256.
 
-#include "paddle.h"
-
 #include <algorithm>
 #include <cstring>
+
+#include "paddle.h"
 
 namespace jpdf::ocr {
 
