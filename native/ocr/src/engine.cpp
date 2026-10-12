@@ -3,7 +3,6 @@
 #include "engine.h"
 
 #include <algorithm>
-#include <numeric>
 
 namespace jpdf::ocr {
 
@@ -62,14 +61,18 @@ jpdf_status Engine::recognize(const Image& image, OcrResult* out, std::string* d
     std::vector<Detection> kept;
     std::vector<Recognition> texts;
     {
-        std::vector<Image> crops;
+        // Planning every crop needs no pixels; the pixels are materialized one recognizer batch at
+        // a time inside recognize_crops, so peak crop memory is bounded by the batch, not by the
+        // detection count.
+        std::vector<CropPlan> plans;
+        plans.reserve(boxes.size());
         for (const Detection& d : boxes) {
-            Image crop;
-            if (!crop_box(image, d.box, &crop)) continue;  // empty crops are dropped, as upstream
-            crops.push_back(std::move(crop));
+            CropPlan plan;
+            if (!plan_crop(d.box, &plan)) continue;  // empty crops are dropped, as upstream
+            plans.push_back(plan);
             kept.push_back(d);
         }
-        if ((st = recognize_crops(crops, &texts, detail)) != JPDF_OK) return st;
+        if ((st = recognize_crops(image, plans, &texts, detail)) != JPDF_OK) return st;
     }  // crop pixels are released before the text lines are assembled
 
     out->width = image.width;
@@ -90,29 +93,32 @@ jpdf_status Engine::recognize(const Image& image, OcrResult* out, std::string* d
     return JPDF_OK;
 }
 
-// Crops sorted by aspect ratio, then batched; each batch is padded to its widest crop.
-jpdf_status Engine::recognize_crops(const std::vector<Image>& crops, std::vector<Recognition>* out,
-                                    std::string* detail) const {
-    out->assign(crops.size(), Recognition{});
-    std::vector<size_t> order(crops.size());
-    std::iota(order.begin(), order.end(), size_t{0});
-    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        return crops[a].width / static_cast<double>(crops[a].height) <
-               crops[b].width / static_cast<double>(crops[b].height);
-    });
+// Crops sorted by aspect ratio, then batched; each batch is padded to its widest crop. Only one
+// batch's pixels are held at a time, and each batch is released before the next is materialized.
+jpdf_status Engine::recognize_crops(const Image& image, const std::vector<CropPlan>& plans,
+                                    std::vector<Recognition>* out, std::string* detail) const {
+    out->assign(plans.size(), Recognition{});
+    const std::vector<size_t> order = crop_order(plans);
     const RecognizerParams& rp = profile_.rec;
     const size_t batch = static_cast<size_t>(rp.batch_size);
     std::vector<float> tensor, probs;
     std::vector<int64_t> shape;
+    std::vector<Image> crops;
     for (size_t start = 0; start < order.size(); start += batch) {
         const size_t n = std::min(batch, order.size() - start);
+        crops.assign(n, Image{});
         int width = 0;
-        for (size_t i = 0; i < n; ++i)
-            width = std::max(width, recognizer_width(crops[order[start + i]], rp));
+        for (size_t i = 0; i < n; ++i) {
+            if (!materialize_crop(image, plans[order[start + i]], &crops[i])) {
+                *detail = "crop geometry changed between planning and materialization";
+                return JPDF_E_FORMAT;
+            }
+            width = std::max(width, recognizer_width(crops[i], rp));
+        }
         const size_t per_image = static_cast<size_t>(3) * rp.height * width;
         tensor.assign(per_image * n, 0.f);
         for (size_t i = 0; i < n; ++i) {
-            recognizer_input(crops[order[start + i]], rp, width, tensor.data() + per_image * i);
+            recognizer_input(crops[i], rp, width, tensor.data() + per_image * i);
         }
         jpdf_status st = recognizer_->run(
             tensor.data(), {static_cast<int64_t>(n), 3, rp.height, width}, &probs, &shape, detail);
@@ -129,6 +135,7 @@ jpdf_status Engine::recognize_crops(const std::vector<Image>& crops, std::vector
                 ctc_decode(probs.data() + i * static_cast<size_t>(steps) * classes, steps, classes,
                            profile_.characters);
         }
+        crops.clear();  // release this batch's pixels before the next is materialized
     }
     return JPDF_OK;
 }

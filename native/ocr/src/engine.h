@@ -102,8 +102,8 @@ class Engine {
     }
 
    private:
-    jpdf_status recognize_crops(const std::vector<Image>& crops, std::vector<Recognition>* out,
-                                std::string* detail) const;
+    jpdf_status recognize_crops(const Image& image, const std::vector<CropPlan>& plans,
+                                std::vector<Recognition>* out, std::string* detail) const;
 
     Profile profile_;
     std::unique_ptr<Session> detector_;

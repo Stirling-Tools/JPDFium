@@ -1,10 +1,12 @@
 // ocr_geometry.cpp - the OCR pre/post-processing against outputs recorded from the reference
 // stack (OpenCV 4.10, pyclipper, paddlex 3.7) by make_golden.py. No models, no ONNX Runtime.
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -227,6 +229,62 @@ void test_ctc() {
     check(empty.text.empty() && empty.score == 0.0, "all blank decodes to nothing with score 0");
 }
 
+void test_plan_and_order() {
+    // Boxes of assorted aspect ratios: the tall ones are turned a quarter turn by crop_box, two
+    // share an aspect ratio (a stable tie), and one is degenerate (dropped). This exercises both
+    // the metadata sort key and the batched original-index mapping without any model.
+    const jpdf::ocr::Quad boxes[] = {
+        {{{4, 6}, {70, 6}, {70, 20}, {4, 20}}},
+        {{{30, 2}, {44, 2}, {44, 55}, {30, 55}}},  // tall, becomes landscape after the turn
+        {{{10, 10}, {60, 14}, {58, 30}, {8, 26}}},
+        {{{14, 2}, {28, 2}, {28, 55}, {14, 55}}},  // same aspect as the second box -> stable tie
+        {{{5, 5}, {5, 5}, {5, 5}, {5, 5}}},        // degenerate: crop_box drops it
+        {{{20, 40}, {60, 42}, {58, 60}, {18, 58}}},
+        {{{0, 0}, {80, 0}, {80, 3}, {0, 3}}},
+    };
+    const jpdf::ocr::Image img{image(23, 80, 60), 80, 60};
+
+    // Reference: exactly what the old pipeline held, the materialized crops, plus the plans.
+    std::vector<jpdf::ocr::Image> ref_crops;
+    std::vector<jpdf::ocr::CropPlan> plans;
+    for (const jpdf::ocr::Quad& box : boxes) {
+        jpdf::ocr::Image crop;
+        if (jpdf::ocr::crop_box(img, box, &crop)) ref_crops.push_back(std::move(crop));
+        jpdf::ocr::CropPlan plan;
+        if (jpdf::ocr::plan_crop(box, &plan)) plans.push_back(plan);
+    }
+    check(ref_crops.size() == plans.size(), "planning drops the same crops as materializing");
+    check(ref_crops.size() == 6, "the one degenerate box is dropped");
+    for (size_t i = 0; i < ref_crops.size() && i < plans.size(); ++i) {
+        check(plans[i].width == ref_crops[i].width && plans[i].height == ref_crops[i].height,
+              "planned size " + std::to_string(i) + " matches the materialized crop");
+    }
+
+    // The old key was the materialized crop's width/height; the metadata must reproduce it.
+    std::vector<size_t> want_order(ref_crops.size());
+    std::iota(want_order.begin(), want_order.end(), size_t{0});
+    std::stable_sort(want_order.begin(), want_order.end(), [&](size_t a, size_t b) {
+        return ref_crops[a].width / static_cast<double>(ref_crops[a].height) <
+               ref_crops[b].width / static_cast<double>(ref_crops[b].height);
+    });
+    const std::vector<size_t> got_order = jpdf::ocr::crop_order(plans);
+    check(got_order == want_order, "metadata order equals the materialized aspect-ratio order");
+
+    // Results written a batch at a time must address the same original indices as before.
+    const size_t batch = 2;
+    const size_t sentinel = 32;  // larger than any index a box could map to
+    std::vector<size_t> old_writes(ref_crops.size(), sentinel), new_writes(plans.size(), sentinel);
+    for (size_t start = 0; start < want_order.size(); start += batch) {
+        const size_t n = std::min(batch, want_order.size() - start);
+        for (size_t i = 0; i < n; ++i) old_writes[want_order[start + i]] = start + i;
+    }
+    for (size_t start = 0; start < got_order.size(); start += batch) {
+        const size_t n = std::min(batch, got_order.size() - start);
+        for (size_t i = 0; i < n; ++i) new_writes[got_order[start + i]] = start + i;
+    }
+    check(old_writes == new_writes, "batched results land on the original indices");
+}
+
 }  // namespace
 
 int main() {
@@ -238,6 +296,7 @@ int main() {
     test_crop();
     test_recognizer_input();
     test_ctc();
+    test_plan_and_order();
     std::printf("=== failures: %d ===\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

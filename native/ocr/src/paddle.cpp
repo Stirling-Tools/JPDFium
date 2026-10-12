@@ -365,7 +365,7 @@ void sort_boxes(std::vector<Detection>* boxes) {
     }
 }
 
-bool crop_box(const Image& image, const Quad& box, Image* out) {
+bool plan_crop(const Quad& box, CropPlan* plan) {
     const std::vector<Point> corners(box.begin(), box.end());
     float short_side = 0;
     const std::array<Point2f, 4> q = mini_box(corners, &short_side);
@@ -376,30 +376,56 @@ bool crop_box(const Image& image, const Quad& box, Image* out) {
     const int crop_w = static_cast<int>(std::max(norm(q[0], q[1]), norm(q[2], q[3])));
     const int crop_h = static_cast<int>(std::max(norm(q[0], q[3]), norm(q[1], q[2])));
     if (crop_w <= 0 || crop_h <= 0) return false;
-    std::vector<uint8_t> warped(static_cast<size_t>(crop_w) * crop_h * 3);
+    const bool rotated = static_cast<double>(crop_h) / crop_w >= 1.5;
+    plan->quad = q;
+    plan->rotated = rotated;
+    plan->width = rotated ? crop_h : crop_w;
+    plan->height = rotated ? crop_w : crop_h;
+    return true;
+}
+
+bool materialize_crop(const Image& image, const CropPlan& plan, Image* out) {
+    const int warp_w = plan.rotated ? plan.height : plan.width;
+    const int warp_h = plan.rotated ? plan.width : plan.height;
+    std::vector<uint8_t> warped(static_cast<size_t>(warp_w) * warp_h * 3);
     if (!warp_perspective_cubic(image.pixels.data(), image.width, image.height, image.width * 3, 3,
-                                q.data(), crop_w, crop_h, warped.data())) {
+                                plan.quad.data(), warp_w, warp_h, warped.data())) {
         return false;
     }
-    if (static_cast<double>(crop_h) / crop_w >= 1.5) {
+    if (plan.rotated) {
         // np.rot90: a quarter turn counter-clockwise.
-        out->width = crop_h;
-        out->height = crop_w;
+        out->width = plan.width;
+        out->height = plan.height;
         out->pixels.resize(warped.size());
         for (int r = 0; r < out->height; ++r) {
             for (int c = 0; c < out->width; ++c) {
                 const uint8_t* s =
-                    warped.data() + (static_cast<size_t>(c) * crop_w + (crop_w - 1 - r)) * 3;
+                    warped.data() + (static_cast<size_t>(c) * warp_w + (warp_w - 1 - r)) * 3;
                 std::copy_n(s, 3,
                             out->pixels.data() + (static_cast<size_t>(r) * out->width + c) * 3);
             }
         }
     } else {
-        out->width = crop_w;
-        out->height = crop_h;
+        out->width = plan.width;
+        out->height = plan.height;
         out->pixels = std::move(warped);
     }
     return true;
+}
+
+bool crop_box(const Image& image, const Quad& box, Image* out) {
+    CropPlan plan;
+    return plan_crop(box, &plan) && materialize_crop(image, plan, out);
+}
+
+std::vector<size_t> crop_order(const std::vector<CropPlan>& plans) {
+    std::vector<size_t> order(plans.size());
+    std::iota(order.begin(), order.end(), size_t{0});
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return plans[a].width / static_cast<double>(plans[a].height) <
+               plans[b].width / static_cast<double>(plans[b].height);
+    });
+    return order;
 }
 
 int recognizer_width(const Image& crop, const RecognizerParams& params) {

@@ -63,6 +63,24 @@ void sort_boxes(std::vector<Detection>* boxes);
 // CropByPolys(quad): the min-area rectangle warped upright, turned 90 degrees if tall.
 bool crop_box(const Image& image, const Quad& box, Image* out);
 
+// The crop crop_box would produce, precomputed from the box alone so crops can be ordered before
+// any pixel buffer exists. width/height are the materialized crop's, after the tall quarter turn.
+struct CropPlan {
+    std::array<Point2f, 4> quad;
+    int width = 0;
+    int height = 0;
+    bool rotated = false;
+};
+
+// Fills PLAN from BOX without materializing pixels; false when crop_box would drop the crop.
+bool plan_crop(const Quad& box, CropPlan* plan);
+
+// Materializes one planned crop exactly as crop_box would.
+bool materialize_crop(const Image& image, const CropPlan& plan, Image* out);
+
+// The order crops are recognized in: ascending width/height, stable in the input order.
+std::vector<size_t> crop_order(const std::vector<CropPlan>& plans);
+
 // OCRReisizeNormImg for one crop, padded with zeros to batch_width columns.
 void recognizer_input(const Image& crop, const RecognizerParams& params, int batch_width,
                       float* out);
