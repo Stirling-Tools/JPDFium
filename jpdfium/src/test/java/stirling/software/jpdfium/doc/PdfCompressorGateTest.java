@@ -4,13 +4,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.Watermark;
 import stirling.software.jpdfium.WatermarkApplier;
+import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.text.PdfTextExtractor;
 
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -144,6 +149,108 @@ class PdfCompressorGateTest {
                             .anyMatch(w -> w.contains("modified after it was opened")),
                     "the signature warning must explain the document was edited: "
                             + out.result().warnings());
+        }
+    }
+
+    @Test
+    void annotationAddedToSignedDocumentIsNotDiscarded() throws Exception {
+        AtomicInteger beforeCount = new AtomicInteger(-1);
+        assertSignedEditSurvivesCompression(doc -> {
+            try (PdfPage page = doc.page(0)) {
+                beforeCount.set(page.annotations().size());
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.SQUARE)
+                        .rect(72, 72, 144, 72)
+                        .color(255, 0, 0)
+                        .build();
+            }
+        }, reopened -> {
+            try (PdfPage page = reopened.page(0)) {
+                List<Annotation> annotations = page.annotations();
+                assertEquals(beforeCount.get() + 1, annotations.size(),
+                        "the added annotation must survive compression");
+                assertEquals(AnnotationType.SQUARE, annotations.get(annotations.size() - 1).type(),
+                        "the surviving annotation must be the added square");
+            }
+        });
+    }
+
+    @Test
+    void pageReorderOfSignedDocumentIsNotDiscarded() throws Exception {
+        String[] before = new String[2];
+        assertSignedEditSurvivesCompression(doc -> {
+            before[0] = PdfTextExtractor.extractPage(doc, 0).plainText();
+            before[1] = PdfTextExtractor.extractPage(doc, 1).plainText();
+            assertFalse(before[0].equals(before[1]),
+                    "the fixture pages must differ for the reorder check to be meaningful");
+            PdfPageReorder.swapPages(doc, 0, 1);
+        }, reopened -> {
+            assertEquals(before[1], PdfTextExtractor.extractPage(reopened, 0).plainText(),
+                    "page 0 of the output must hold the pre-edit page 1 content");
+            assertEquals(before[0], PdfTextExtractor.extractPage(reopened, 1).plainText(),
+                    "page 1 of the output must hold the pre-edit page 0 content");
+        });
+    }
+
+    @Test
+    void mediaBoxChangeOnSignedDocumentIsNotDiscarded() throws Exception {
+        assertSignedEditSurvivesCompression(doc -> {
+            try (PdfPage page = doc.page(0)) {
+                page.setMediaBox(Rect.of(0, 0, 300, 300));
+            }
+        }, reopened -> {
+            try (PdfPage page = reopened.page(0)) {
+                assertEquals(Rect.of(0, 0, 300, 300), page.getMediaBox(),
+                        "the media box edit must survive compression");
+            }
+        });
+    }
+
+    @Test
+    void readingSignedDocumentKeepsItByteIdentical() throws Exception {
+        Path src = resource("/pdfs/general/irs_f1040.pdf");
+        byte[] original = Files.readAllBytes(src);
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            doc.metadata();
+            doc.bookmarks();
+            doc.signatures();
+            doc.attachments();
+            try (PdfPage page = doc.page(0)) {
+                page.annotations();
+                page.links();
+            }
+            assertFalse(doc.isContentModified(), "read-only calls must not flag the document as modified");
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+            assertArrayEquals(original, out.bytes(),
+                    "a signed document that was only read must still be returned byte-for-byte");
+        }
+    }
+
+    @FunctionalInterface
+    private interface DocumentEdit {
+        void apply(PdfDocument doc) throws Exception;
+    }
+
+    private static void assertSignedEditSurvivesCompression(DocumentEdit edit, DocumentEdit verify)
+            throws Exception {
+        Path src = resource("/pdfs/general/irs_f1040.pdf");
+        byte[] original = Files.readAllBytes(src);
+        try (PdfDocument doc = PdfDocument.open(src)) {
+            edit.apply(doc);
+            assertTrue(doc.isContentModified(), "the edit must flag the signed document as modified");
+            PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
+                    doc, CompressOptions.builder().preset(CompressPreset.LOSSLESS).build());
+            assertFalse(Arrays.equals(original, out.bytes()),
+                    "an edited signed document must be serialized, not returned verbatim");
+            assertTrue(
+                    out.result().warnings().stream()
+                            .anyMatch(w -> w.contains("modified after it was opened")),
+                    "the signature warning must explain the document was edited: "
+                            + out.result().warnings());
+            try (PdfDocument reopened = PdfDocument.open(out.bytes())) {
+                verify.apply(reopened);
+            }
         }
     }
 }

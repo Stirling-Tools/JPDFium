@@ -1174,7 +1174,7 @@ public final class PdfDocument implements AutoCloseable {
             }
         }
         try (PdfPage p = page(pageIndex)) {
-            int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandle());
+            int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandleForRead());
             return r * 90;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -1301,8 +1301,19 @@ public final class PdfDocument implements AutoCloseable {
      * built-in operations. It keeps working, but the domain makes no promise
      * about it; prefer the typed API, which is the migration target for scoped
      * advanced access in a future major version.
+     *
+     * <p><strong>Edit tracking:</strong> JPDFium cannot see what is done through the
+     * handle, so taking it marks the document as modified ({@link #isContentModified()}).
+     * Compression then no longer returns the open-time bytes of a signed document.
      */
     public MemorySegment rawHandle() {
+        ensureOpen();
+        markContentModified();
+        return rawDocSegment;
+    }
+
+    /** {@link #rawHandle()} for library reads that cannot change the document. */
+    MemorySegment rawHandleForRead() {
         ensureOpen();
         return rawDocSegment;
     }
@@ -1311,7 +1322,7 @@ public final class PdfDocument implements AutoCloseable {
      * Get all document metadata as key->value map.
      */
     public Map<String, String> metadata() {
-        return PdfMetadata.of(rawHandle()).all();
+        return PdfMetadata.of(rawHandleForRead()).all();
     }
 
     /**
@@ -1320,7 +1331,7 @@ public final class PdfDocument implements AutoCloseable {
     public Optional<String> metadata(String tag) {
         for (MetadataTag metadataTag : MetadataTag.values()) {
             if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
-                return PdfMetadata.of(rawHandle()).get(metadataTag);
+                return PdfMetadata.of(rawHandleForRead()).get(metadataTag);
             }
         }
         return Optional.empty();
@@ -1360,21 +1371,30 @@ public final class PdfDocument implements AutoCloseable {
      * Get the document's complete bookmark tree.
      */
     public List<Bookmark> bookmarks() {
-        return PdfBookmarks.list(rawHandle());
+        return PdfBookmarks.list(rawHandleForRead());
     }
 
     /**
      * Find a bookmark by title.
      */
     public Optional<Bookmark> findBookmark(String title) {
-        return PdfBookmarks.find(rawHandle(), title);
+        return PdfBookmarks.find(rawHandleForRead(), title);
     }
 
     /**
      * Get all digital signatures in the document.
      */
     public List<Signature> signatures() {
-        return PdfSignatures.list(rawHandle());
+        return PdfSignatures.list(rawHandleForRead());
+    }
+
+    /** Number of digital signatures PDFium finds, without reading their details. */
+    public int signatureCount() {
+        MemorySegment raw = rawHandleForRead();
+        if (raw == null || raw.equals(MemorySegment.NULL)) {
+            return 0;
+        }
+        return PdfSignatures.count(raw);
     }
 
     /**
@@ -1409,7 +1429,7 @@ public final class PdfDocument implements AutoCloseable {
      * Get all embedded file attachments.
      */
     public List<Attachment> attachments() {
-        return PdfAttachments.list(rawHandle());
+        return PdfAttachments.list(rawHandleForRead());
     }
 
     /**
@@ -1420,7 +1440,7 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean addAttachment(String name, byte[] contents) {
-        boolean added = PdfAttachments.add(rawHandle(), name, contents);
+        boolean added = PdfAttachments.add(rawHandleForRead(), name, contents);
         if (added) markContentModified();
         return added;
     }
@@ -1432,7 +1452,7 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean deleteAttachment(int index) {
-        boolean deleted = PdfAttachments.delete(rawHandle(), index);
+        boolean deleted = PdfAttachments.delete(rawHandleForRead(), index);
         if (deleted) markContentModified();
         return deleted;
     }
@@ -1489,9 +1509,12 @@ public final class PdfDocument implements AutoCloseable {
      * only by {@link JpdfiumLib} and its companions.
      * External callers bypassing this method bypass all closed-document checks and
      * thread-safety contracts enforced by this class.
+     *
+     * <p>Like {@link #rawHandle()}, taking it marks the document as modified.
      */
     public long nativeHandle() {
         ensureOpen();
+        markContentModified();
         return handle;
     }
 

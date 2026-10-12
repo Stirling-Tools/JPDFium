@@ -7,7 +7,6 @@ import stirling.software.jpdfium.panama.RustBridgeBindings;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -437,14 +436,10 @@ public final class PdfCompressor {
         return new CompressResultWithBytes(result, resultBytes);
     }
 
-    // Signature count using PDFium's raw document handle; 0 when unavailable.
+    // Signature count PDFium reports; 0 when unavailable.
     private static int signatureCount(PdfDocument doc) {
         try {
-            MemorySegment raw = doc.rawHandle();
-            if (raw == null || raw.equals(MemorySegment.NULL)) {
-                return 0;
-            }
-            return PdfSignatures.count(raw);
+            return doc.signatureCount();
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             return 0;
