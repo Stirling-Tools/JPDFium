@@ -494,11 +494,12 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
         if (!path || !*path) return JPDFIUM_ERR_INVALID;
         if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
-        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         // A redaction that stopped half-way leaves the surviving content
         // extractable (see DocCore::hasIncompleteRedaction): refuse every save
-        // until the caller resolves the page.
+        // until the caller resolves the page. Checked before the pending-marks
+        // guard so the caller sees the more specific error.
         if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
         if (out_bytes) *out_bytes = 0;
 
         // Alias protection first: both the sanitize branch (staging + rename
@@ -607,10 +608,10 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
     // Same contract as jpdfium_doc_save_to_file: a half-finished redaction is
-    // not savable.
+    // not savable, and that refusal wins over the pending-marks one.
     if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+    if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
