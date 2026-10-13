@@ -11,12 +11,38 @@ sed_i() {
     rm -f "${file}.bak"
 }
 
+# GitHub answers git traffic with HTTP 429 when the whole prebuild matrix clones
+# at once, and other transient RPC/network failures happen too. Retry a few
+# times before surfacing the failure.
+git_retry() {
+    local attempt
+    for attempt in 1 2 3; do
+        if "$@"; then
+            return 0
+        fi
+        echo "  git: '$*' failed (attempt ${attempt}/3), retrying in 15s..." >&2
+        sleep 15
+    done
+    return 1
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET_DIR="${SCRIPT_DIR}/pdfium"
 BUILD_DIR="${SCRIPT_DIR}/pdfium-src"
 DEPOT_TOOLS_DIR="${BUILD_DIR}/depot_tools"
 EMBEDPDF_REPO="https://github.com/embedpdf/pdfium.git"
 EMBEDPDF_BRANCH="embedpdf/main"
+
+# Authenticate github.com HTTPS clones with the workflow token when one is
+# available: unauthenticated git requests get rate limited (HTTP 429) once the
+# ~18 prebuild matrix runners all hit github.com at the same time. Silently
+# skipped for local runs without a token.
+if [ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+    git config --global credential.helper store
+    printf 'https://x-access-token:%s@github.com\n' "${GH_TOKEN:-${GITHUB_TOKEN}}" > "${HOME}/.git-credentials"
+    chmod 600 "${HOME}/.git-credentials"
+    echo "  git: authenticating github.com clones with the workflow token"
+fi
 
 # ---------- musl / Alpine libc adjustments (must run before gclient sync) ----------
 # depot_tools' vpython wrapper downloads a GLIBC-built CPython and builds a venv
@@ -29,15 +55,11 @@ EMBEDPDF_BRANCH="embedpdf/main"
 if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     export VPYTHON_BYPASS="manually managed python not supported by chrome operations"
     echo "  musl/Alpine: VPYTHON_BYPASS set - gclient will use the system python3"
-    # gsutil's own check rejects Python 3.14+; relax it when the interpreter
-    # could not be pinned to a supported version.
-    depot_dir="$(dirname "$(command -v gclient 2>/dev/null || echo .)")"
-    for g in "$depot_dir/third_party/gsutil/gsutil" "$depot_dir/gsutil.py"; do
-        [ -f "$g" ] || continue
-        grep -q "gsutil requires Python version" "$g" 2>/dev/null || continue
-        sed -i 's/(3, 14)/(3, 99)/g; s/(3,14)/(3,99)/g' "$g" 2>/dev/null || true
-        echo "  musl/Alpine: relaxed the gsutil Python bound in $g"
-    done
+    # NOTE: the gsutil that depot_tools downloads (5.35) refuses to run on
+    # Python 3.14, which is what Alpine 3.24 ships. The version gate lives inside
+    # that downloaded zip, not in depot_tools, so it cannot be patched here;
+    # native/ci/alpine-exec.sh pins the container to Alpine 3.23 (Python 3.12)
+    # instead.
 fi
 
 # ---------- argument handling ----------
@@ -182,7 +204,11 @@ PDFIUM_SRC="${BUILD_DIR}/pdfium"
 # platforms - strip it out before sync.
 if [ ! -d "${PDFIUM_SRC}/.git" ]; then
     echo "[2/7] Pre-cloning source so DEPS can be patched..."
-    git clone --depth=1 --branch "${EMBEDPDF_BRANCH}" "${EMBEDPDF_REPO}" "${PDFIUM_SRC}"
+    if ! git_retry git clone --depth=1 --branch "${EMBEDPDF_BRANCH}" "${EMBEDPDF_REPO}" "${PDFIUM_SRC}"; then
+        # A half-finished clone would make the retry fail on "already exists".
+        rm -rf "${PDFIUM_SRC}"
+        git_retry git clone --depth=1 --branch "${EMBEDPDF_BRANCH}" "${EMBEDPDF_REPO}" "${PDFIUM_SRC}"
+    fi
 fi
 
 cd "${PDFIUM_SRC}"
@@ -191,7 +217,7 @@ cd "${PDFIUM_SRC}"
 # every matrix runner builds byte-identical inputs. Otherwise stay on the branch.
 if [ -n "${EMBEDPDF_PIN_SHA:-}" ]; then
     echo "  Pinning to SHA ${EMBEDPDF_PIN_SHA}..."
-    git fetch --depth=1 origin "${EMBEDPDF_PIN_SHA}"
+    git_retry git fetch --depth=1 origin "${EMBEDPDF_PIN_SHA}"
     git checkout --detach "${EMBEDPDF_PIN_SHA}"
 else
     CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -393,6 +419,60 @@ if target in src:
 PY_EOF
 fi
 
+# The EmbedPDF fork's fpdfsdk/ tree lags its own core/fxge: it still calls the
+# pre-rename CFX_GEModule::Get()->UseSkiaRenderer(), while core/fxge/cfx_gemodule.h
+# only declares the static CFX_GEModule::IsSkiaRenderer() (matching upstream).
+# The mismatch only compiles when pdf_use_skia=false, so enabling Skia (our
+# config) is what unearths it. Rewrite every stale call site.
+SKIA_ACCESSOR_GREP=(grep -rl --include='*.cpp' --include='*.h' --exclude-dir=third_party --exclude-dir=out)
+while IFS= read -r stale_skia; do
+    echo "  Renaming legacy UseSkiaRenderer() call in ${stale_skia}..."
+    sed_i 's/CFX_GEModule::Get()->UseSkiaRenderer()/CFX_GEModule::IsSkiaRenderer()/g' "${stale_skia}"
+done < <("${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null || true)
+if "${SKIA_ACCESSOR_GREP[@]}" -q 'UseSkiaRenderer' . 2>/dev/null; then
+    echo "  WARNING: UseSkiaRenderer is still referenced in:" >&2
+    "${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null | sed 's/^/    /' >&2
+fi
+
+# PartitionAlloc's internal_allocator_forward.h uses unqualified size_t with only
+# <new>/<type_traits> included. That works with Chromium's bundled libc++ (the
+# only configuration upstream builds) but breaks with GCC 14's libstdc++ on the
+# linux-x64 rows: "error: unknown type name 'size_t'". Make the header
+# self-contained rather than switching linux-x64 to libc++.
+PARTITION_ALLOC_HEADER="base/allocator/partition_allocator/src/partition_alloc/internal_allocator_forward.h"
+if [ -f "${PARTITION_ALLOC_HEADER}" ] && ! grep -q '#include <cstddef>' "${PARTITION_ALLOC_HEADER}"; then
+    echo "  Adding <cstddef> include to partition_alloc internal_allocator_forward.h..."
+    python3 - "${PARTITION_ALLOC_HEADER}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+if '#include <cstddef>' not in src and '#include <new>' in src:
+    with open(path, 'w') as f:
+        f.write(src.replace('#include <new>', '#include <cstddef>\n#include <new>', 1))
+    print("  Added <cstddef> to internal_allocator_forward.h.")
+PY_EOF
+fi
+
+# Chromium's build/ dep hard-pins the Windows SDK it was tested with
+# (SDK_VERSION = '10.0.28000.0' in build/toolchain/win/setup_toolchain.py) and
+# passes it to vcvarsall.bat. The GitHub windows runners do not have that SDK
+# installed, so setup_toolchain.py aborts with an INCLUDE pointing at a missing
+# SDK. The workflow exports the newest SDK that IS installed as
+# JPDFIUM_WIN_SDK; repin the constant to it (an older-but-present SDK builds
+# PDFium fine).
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        WIN_TOOLCHAIN_SETUP="build/toolchain/win/setup_toolchain.py"
+        if [ -n "${JPDFIUM_WIN_SDK:-}" ] && [ -f "${WIN_TOOLCHAIN_SETUP}" ]; then
+            echo "  Pinning Windows SDK_VERSION to ${JPDFIUM_WIN_SDK}..."
+            sed_i "s/^SDK_VERSION = '.*'/SDK_VERSION = '${JPDFIUM_WIN_SDK}'/" "${WIN_TOOLCHAIN_SETUP}"
+        elif [ -z "${JPDFIUM_WIN_SDK:-}" ]; then
+            echo "  WARNING: JPDFIUM_WIN_SDK is not set; leaving the pinned SDK_VERSION in place." >&2
+        fi
+        ;;
+esac
+
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
 OUT_DIR="out/Release"
@@ -440,10 +520,10 @@ case "$JPDFIUM_BUILD_MODE" in
         GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
         ;;
     v8)
-        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false v8_enable_sandbox=false'
         ;;
     xfa)
-        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=true pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
+        GN_ARGS='is_debug=false is_component_build=true pdf_is_standalone=true pdf_enable_v8=true pdf_enable_xfa=true pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false v8_enable_sandbox=false'
         ;;
     static)
         GN_ARGS='is_debug=false is_component_build=false pdf_is_complete_lib=true pdf_is_standalone=true pdf_enable_v8=false pdf_enable_xfa=false pdf_use_skia=true pdf_use_agg=true pdf_use_partition_alloc=true use_remoteexec=false clang_use_chrome_plugins=false treat_warnings_as_errors=false symbol_level=0 use_sysroot=false use_custom_libcxx=false use_allocator_shim=false'
