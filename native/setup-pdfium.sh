@@ -490,15 +490,26 @@ fi
 # only declares the static CFX_GEModule::IsSkiaRenderer() (matching upstream).
 # The mismatch only compiles when pdf_use_skia=false, so enabling Skia (our
 # config) is what unearths it. Rewrite every stale call site.
-SKIA_ACCESSOR_GREP=(grep -rl --include='*.cpp' --include='*.h' --exclude-dir=third_party --exclude-dir=out)
-while IFS= read -r stale_skia; do
-    echo "  Renaming legacy UseSkiaRenderer() call in ${stale_skia}..."
-    sed_i 's/CFX_GEModule::Get()->UseSkiaRenderer()/CFX_GEModule::IsSkiaRenderer()/g' "${stale_skia}"
-done < <("${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null || true)
-if "${SKIA_ACCESSOR_GREP[@]}" -q 'UseSkiaRenderer' . 2>/dev/null; then
-    echo "  WARNING: UseSkiaRenderer is still referenced in:" >&2
-    "${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null | sed 's/^/    /' >&2
-fi
+python3 - <<'PY_EOF'
+import os
+target = 'CFX_GEModule::Get()->UseSkiaRenderer()'
+replacement = 'CFX_GEModule::IsSkiaRenderer()'
+for root, dirs, files in os.walk('.'):
+    if 'third_party' in root or 'out' in root:
+        continue
+    for fname in files:
+        if fname.endswith(('.cpp', '.h', '.cc')):
+            p = os.path.join(root, fname)
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            if target in content:
+                print(f"  Renaming legacy UseSkiaRenderer() call in {p}...")
+                with open(p, 'w', encoding='utf-8') as f:
+                    f.write(content.replace(target, replacement))
+PY_EOF
 
 # PartitionAlloc's internal_allocator_forward.h uses unqualified size_t with only
 # <new>/<type_traits> included. That works with Chromium's bundled libc++ (the
