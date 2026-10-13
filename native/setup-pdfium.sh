@@ -658,11 +658,12 @@ for arg in "\$@"; do
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
             ;;
         *)
-            filtered="\$filtered \"\$arg\""
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
             ;;
     esac
 done
-eval exec "${SYS_CLANG}" \$filtered
+eval exec "${SYS_CLANG}" -D_LIBCPP_HAS_MUSL_LIBC \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang"
         fi
@@ -675,11 +676,12 @@ for arg in "\$@"; do
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
             ;;
         *)
-            filtered="\$filtered \"\$arg\""
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
             ;;
     esac
 done
-eval exec "${SYS_CLANGXX}" \$filtered
+eval exec "${SYS_CLANGXX}" -D_LIBCPP_HAS_MUSL_LIBC \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
