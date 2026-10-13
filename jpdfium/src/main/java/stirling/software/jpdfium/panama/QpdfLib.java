@@ -202,6 +202,46 @@ public final class QpdfLib {
         return DECRYPT_FILE_HANDLE != null;
     }
 
+    /** True when the bundled library exposes the QPDFJob API needed to copy encryption. */
+    public static boolean isCopyEncryptionSupported() {
+        return QpdfEncryptionCopy.isSupported();
+    }
+
+    /**
+     * Copy the source's encryption to an unencrypted input using either original password.
+     * Inputs and output must be distinct files. Returns false only when the native API is absent;
+     * other failures throw and leave the destination unchanged. No document bytes enter Java heap.
+     */
+    public static boolean copyEncryptionToFile(Path input, Path output, Path source, String password) {
+        if (input == null || output == null || source == null || password == null) {
+            throw new IllegalArgumentException("input, output, source and password must not be null");
+        }
+        if (password.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("password must not contain NUL");
+        }
+        if (!isCopyEncryptionSupported()) return false;
+        Semaphore held;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf encryption copy interrupted while waiting for a job slot", e);
+        }
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            rejectAlias(List.of(input, source), output);
+            QpdfEncryptionCopy.copy(input, source, password, tx.staging());
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IOException("qpdf encryption copy interrupted before publication");
+            }
+            tx.publish(null);
+            return true;
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf encryption copy failed", e);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /**
      * Optimize a PDF in memory via the bundled qpdf library.
      *

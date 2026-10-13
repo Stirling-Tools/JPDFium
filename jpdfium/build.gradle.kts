@@ -501,7 +501,10 @@ tasks.register<Test>("nativeSmokeTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.smoke", "true")
-    filter { includeTestsMatching("*NativeSmokeTest") }
+    filter {
+        includeTestsMatching("*NativeSmokeTest")
+        includeTestsMatching("*PdfEncryptionCopyTest")
+    }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     // CI has no access to the HTML report; a load failure must name the
     // missing library in the console.
