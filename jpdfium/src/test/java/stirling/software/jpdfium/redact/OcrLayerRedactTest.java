@@ -5,7 +5,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.model.Rect;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 
 import stirling.software.jpdfium.redact.RedactTestPages.Line;
 import stirling.software.jpdfium.redact.RedactTestPages.Outcome;
@@ -92,5 +94,24 @@ class OcrLayerRedactTest {
         String after = text(o.pdf());
         assertTrue(after.contains("Jane Doe"), "the line above keeps its OCR text: " + after);
         assertTrue(after.contains("Example Road"), "the line below keeps its OCR text: " + after);
+    }
+    /**
+     * The placeholder glyph is narrower than the advance the OCR tool gives each
+     * char, so glyph boxes stop short of both ends of the scanned word.
+     * redact-test-ocr-latin.pdf is the ocrmypdf text layer, scan removed, of a 12pt
+     * Arial alphabet; "EFGH" advances over x=93.60..125.04.
+     */
+    @Test
+    void ocrLayerCoverSpansTheWholeAdvanceOfTheWord() throws Exception {
+        Outcome o = redact(Files.readAllBytes(fixture("redact-test-ocr-latin.pdf")), "EFGH", true);
+
+        Rect c = o.covers().stream().min(Comparator.comparingDouble(Rect::x)).orElseThrow();
+        float tolerance = 0.05f;
+        assertTrue(c.x() <= 93.60f + tolerance, "cover reaches the start of the word: " + c);
+        assertTrue(c.x() + c.width() >= 125.04f - tolerance, "cover reaches the end of the word: " + c);
+    }
+
+    private static Path fixture(String name) throws Exception {
+        return Path.of(OcrLayerRedactTest.class.getResource("/pdfs/redact/" + name).toURI());
     }
 }
