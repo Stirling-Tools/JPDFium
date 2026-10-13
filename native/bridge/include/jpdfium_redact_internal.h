@@ -157,6 +157,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                             const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false);
 bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& out,
                   std::string& err);
+bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
                          const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
