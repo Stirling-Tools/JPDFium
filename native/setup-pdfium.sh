@@ -727,6 +727,18 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     # and lld (installed by apk add clang lld in musl.sh). Replace the glibc LLVM
     # binaries with symlinks/wrappers to the system toolchain so compilation and
     # linking run natively on musl.
+    # Diagnostic: Alpine's /bin/sh is busybox ash. Chromium hands the compiler
+    # shell-escaped flags that can contain '*' (see the clang wrapper below). If
+    # this shell expands that escaped star, the argument reaches clang already
+    # globbed and no wrapper can repair it. Log the behaviour once so CI shows
+    # which layer is responsible.
+    PROBE_DIR="$(mktemp -d)"
+    : > "${PROBE_DIR}/args.gn"
+    : > "${PROBE_DIR}/build.ninja"
+    PROBE_OUT="$(cd "${PROBE_DIR}" && /bin/sh -c 'printf "%s" -DSK=\(\(\(FREETYPE_MAJOR\)\ \*\ 0x01000000\)')"
+    rm -rf "${PROBE_DIR}"
+    echo "  musl/Alpine sh glob probe: [${PROBE_OUT}]"
+
     LLVM_BIN_DIR="third_party/llvm-build/Release+Asserts/bin"
     if [ -d "${LLVM_BIN_DIR}" ]; then
         echo "  musl/Alpine: redirecting third_party/llvm-build to Alpine system toolchain..."
@@ -738,82 +750,74 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
         SYS_AR="$(command -v llvm-ar || command -v ar || true)"
 
         if [ -n "${SYS_CLANG}" ]; then
+            rm -f "${LLVM_BIN_DIR}/clang"
             cat > "${LLVM_BIN_DIR}/clang" <<WRAPPER_EOF
 #!/bin/sh
-filtered=""
+# Chromium hands clang shell-escaped flags, so one argv can legitimately carry
+# spaces, parentheses and '*' (for example
+# -DSK_FREETYPE_MINIMUM_RUNTIME_VERSION=(((FREETYPE_MAJOR) * 0x01000000) | ...)).
+# Re-parsing those through eval expanded that '*' as a glob against the build
+# directory, which broke SkFontHost_FreeType.cpp with "token is not a valid
+# binary operator in a preprocessor subexpression". Rotate the filtered
+# arguments through the positional parameters instead: every byte of every
+# argument survives untouched.
+n=\$#
+i=0
 has_c_file=0
 has_x=0
 is_compile_only=0
-for arg in "\$@"; do
+while [ "\$i" -lt "\$n" ]; do
+    arg=\$1
+    shift
     case "\$arg" in
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            i=\$((i + 1))
+            continue
             ;;
-        *.c)
-            has_c_file=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        -c)
-            is_compile_only=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        -x)
-            has_x=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        *)
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
+        *.c) has_c_file=1 ;;
+        -c) is_compile_only=1 ;;
+        -x) has_x=1 ;;
     esac
+    set -- "\$@" "\$arg"
+    i=\$((i + 1))
 done
-extra_lang=""
 if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
-    extra_lang="-x c"
+    exec "${SYS_CLANG}" --driver-mode=gcc -x c "\$@"
 fi
-eval exec "${SYS_CLANG}" --driver-mode=gcc \$extra_lang \$filtered
+exec "${SYS_CLANG}" --driver-mode=gcc "\$@"
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang"
         fi
         if [ -n "${SYS_CLANGXX}" ]; then
+            rm -f "${LLVM_BIN_DIR}/clang++"
             cat > "${LLVM_BIN_DIR}/clang++" <<WRAPPER_EOF
 #!/bin/sh
-filtered=""
+# Same rotation scheme as the clang wrapper: never re-parse argv through eval,
+# because Chromium's escaped flag values legitimately contain '*' and spaces.
+n=\$#
+i=0
 has_c_file=0
 has_x=0
 is_compile_only=0
-for arg in "\$@"; do
+while [ "\$i" -lt "\$n" ]; do
+    arg=\$1
+    shift
     case "\$arg" in
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            i=\$((i + 1))
+            continue
             ;;
-        *.c)
-            has_c_file=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        -c)
-            is_compile_only=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        -x)
-            has_x=1
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
-        *)
-            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
-            filtered="\$filtered '\$escaped'"
-            ;;
+        *.c) has_c_file=1 ;;
+        -c) is_compile_only=1 ;;
+        -x) has_x=1 ;;
     esac
+    set -- "\$@" "\$arg"
+    i=\$((i + 1))
 done
-extra_lang=""
 if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
-    extra_lang="-x c"
+    exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE -x c "\$@"
 fi
-eval exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE \$extra_lang \$filtered
+exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE "\$@"
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
