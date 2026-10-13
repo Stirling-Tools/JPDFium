@@ -330,6 +330,43 @@ bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, doubl
     return true;
 }
 
+namespace {
+// Glyph boxes of every char on one text page, read on first use so that covering
+// many matches reads each box once. Valid only while that text page is open and
+// the page is unchanged.
+class CharBoxCache {
+   public:
+    struct Box {
+        double l = 0, r = 0, b = 0, t = 0;
+        bool ok = false;  // has a box with height
+    };
+
+    explicit CharBoxCache(FPDF_TEXTPAGE textPage) : textPage_(textPage) {}
+
+    FPDF_TEXTPAGE textPage() const {
+        return textPage_;
+    }
+
+    const std::vector<Box>& boxes() {
+        if (loaded_) return boxes_;
+        loaded_ = true;
+        int n = FPDFText_CountChars(textPage_);
+        boxes_.resize(n > 0 ? static_cast<size_t>(n) : 0);
+        for (int i = 0; i < n; ++i) {
+            Box& box = boxes_[static_cast<size_t>(i)];
+            box.ok =
+                FPDFText_GetCharBox(textPage_, i, &box.l, &box.r, &box.b, &box.t) && box.t > box.b;
+        }
+        return boxes_;
+    }
+
+   private:
+    FPDF_TEXTPAGE textPage_;
+    bool loaded_ = false;
+    std::vector<Box> boxes_;
+};
+}  // namespace
+
 // Union of character boxes: `cover` from matchCharBox, `glyph` from the glyph
 // boxes alone. They differ only where invisible text was extended.
 struct CoverBounds {
@@ -361,8 +398,7 @@ struct CoverBounds {
 // glyph boxes stops short of any other character above, below or beside it:
 // small print can sit closer to the neighbouring line than the invisible-text
 // band is tall, and the redaction removes every character its box touches.
-static void fitCover(FPDF_TEXTPAGE textPage, TextMatch& m, const CoverBounds& bounds,
-                     float padding) {
+static void fitCover(CharBoxCache& chars, TextMatch& m, const CoverBounds& bounds, float padding) {
     double bottom = bounds.coverB;
     double top = bounds.coverT;
     double left = bounds.l, right = bounds.r;
@@ -372,11 +408,12 @@ static void fitCover(FPDF_TEXTPAGE textPage, TextMatch& m, const CoverBounds& bo
         std::sort(own.begin(), own.end());
         constexpr double kClearance = 0.1;
         double topLimit = 1e9, bottomLimit = -1e9, leftLimit = -1e9, rightLimit = 1e9;
-        int n = FPDFText_CountChars(textPage);
-        for (int i = 0; i < n; ++i) {
-            if (std::binary_search(own.begin(), own.end(), i)) continue;
-            double l, r, b, t;
-            if (!FPDFText_GetCharBox(textPage, i, &l, &r, &b, &t) || t <= b) continue;
+        FPDF_TEXTPAGE textPage = chars.textPage();
+        const auto& boxes = chars.boxes();
+        for (int i = 0; i < static_cast<int>(boxes.size()); ++i) {
+            const CharBoxCache::Box& box = boxes[static_cast<size_t>(i)];
+            if (!box.ok || std::binary_search(own.begin(), own.end(), i)) continue;
+            double l = box.l, r = box.r, b = box.b, t = box.t;
             if (r > bounds.l && l < bounds.r) {
                 if (b >= bounds.glyphT) {
                     topLimit = std::min(topLimit, b - kClearance);
@@ -432,20 +469,25 @@ static bool addCharBox(FPDF_TEXTPAGE textPage, int index, CoverBounds& bounds, d
 
 // Rebuild a TextMatch bbox from its char indices (used after grapheme or
 // cluster extension so the painted cover encloses everything removed).
-bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
+static bool recomputeMatchBbox(CharBoxCache& chars, TextMatch& m) {
     CoverBounds bounds;
     for (int ci : m.charIndices) {
         double l, r, b, t;
-        addCharBox(textPage, ci, bounds, &l, &r, &b, &t);
+        addCharBox(chars.textPage(), ci, bounds, &l, &r, &b, &t);
     }
     if (!bounds.any) return false;
-    fitCover(textPage, m, bounds, 0.0f);
+    fitCover(chars, m, bounds, 0.0f);
     return true;
+}
+
+bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
+    CharBoxCache chars(textPage);
+    return recomputeMatchBbox(chars, m);
 }
 
 // Append the chars covered by a PCRE2 match [start,start+len) of the search
 // buffer into a TextMatch, computing its cover box.
-static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idxMap, int start,
+static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap, int start,
                              int len, float padding, std::vector<TextMatch>& out) {
     TextMatch tm;
     CoverBounds bounds;
@@ -453,19 +495,19 @@ static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idx
         int ci = idxMap[k];
         tm.charIndices.push_back(ci);
         double l, r, b, t;
-        addCharBox(textPage, ci, bounds, &l, &r, &b, &t);  // skips unmapped chars
+        addCharBox(chars.textPage(), ci, bounds, &l, &r, &b, &t);  // skips unmapped chars
     }
     if (!bounds.any) return;
-    fitCover(textPage, tm, bounds, padding);
+    fitCover(chars, tm, bounds, padding);
     out.push_back(std::move(tm));
 }
 
 #ifdef JPDFIUM_HAS_PCRE2
 // Run a compiled PCRE2 pattern over the search buffer -> TextMatch vector.
 // Non-overlapping matches (same iteration model as wsregex_iterator).
-void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
-                         const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
-                         std::vector<TextMatch>& out) {
+static void collectPcre2Matches(CharBoxCache& chars, const std::u32string& text,
+                                const std::vector<int>& idxMap, const Pcre2Pattern& pc,
+                                float padding, std::vector<TextMatch>& out) {
     size_t offset = 0;
     while (offset <= text.size()) {
         int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
@@ -480,10 +522,17 @@ void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
             offset = start + 1;
             continue;
         }
-        appendMatchChars(textPage, idxMap, static_cast<int>(start), static_cast<int>(end - start),
+        appendMatchChars(chars, idxMap, static_cast<int>(start), static_cast<int>(end - start),
                          padding, out);
         offset = end;
     }
+}
+
+void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
+                         const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
+                         std::vector<TextMatch>& out) {
+    CharBoxCache chars(textPage);
+    collectPcre2Matches(chars, text, idxMap, pc, padding, out);
 }
 
 // Escape regex metacharacters for literal matching.
@@ -544,6 +593,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                       std::vector<TextMatch>& matches,
                       std::vector<Pcre2Pattern>* outCompiledPatterns, int& rejectedPatterns,
                       int& compiledCount) {
+    CharBoxCache chars(tp);
     uint64_t sig = computePatternSignature(words, wordCount, wholeWord, caseSensitive, useRegex);
     std::string key = buildCanonicalKey(words, wordCount, wholeWord, caseSensitive, useRegex);
     if (core && !core->redactPatternCache) {
@@ -595,8 +645,8 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                     offset = start + 1;
                     continue;
                 }
-                appendMatchChars(tp, idxMap, static_cast<int>(start), static_cast<int>(end - start),
-                                 padding, matches);
+                appendMatchChars(chars, idxMap, static_cast<int>(start),
+                                 static_cast<int>(end - start), padding, matches);
                 offset = end;
             }
             if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
@@ -609,7 +659,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                 Pcre2Pattern pc;
                 if (createPatternFromCode(cached->codes[wi], cached->jst, pc)) {
                     compiledCount++;
-                    collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                    collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
                     if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
                 } else {
                     // Wrapper allocation (match data/context) failed under
@@ -644,7 +694,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                     pc.jst = sharedJst;
                     pcre2_jit_stack_assign(pc.mctx, nullptr, sharedJst);
                 }
-                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
                 if (cache) {
                     newCodes.push_back(pc.code);
                     if (!sharedJst && pc.jst) sharedJst = pc.jst;
@@ -678,6 +728,7 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
     set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()), unicodeSeq.size(),
                              "", brks.data());
     // brks[i] = whether a break exists BEFORE char i.
+    CharBoxCache chars(textPage);
     for (auto& m : matches) {
         int first = -1, last = -1;
         for (int ci : m.charIndices) {
@@ -715,7 +766,7 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
         // Rebuild the (possibly extended) char index list.
         m.charIndices.clear();
         for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
-        recomputeMatchBbox(textPage, m);
+        recomputeMatchBbox(chars, m);
     }
 #else
     (void)textPage;
@@ -831,6 +882,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
     }
 
     // Extend every match span to full clusters within each object.
+    CharBoxCache chars(tp);
     for (auto& m : matches) {
         std::unordered_map<FPDF_PAGEOBJECT, int> firstPos, lastPos;
         for (int ci : m.charIndices) {
@@ -932,7 +984,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
             std::sort(m.charIndices.begin(), m.charIndices.end());
             m.charIndices.erase(std::unique(m.charIndices.begin(), m.charIndices.end()),
                                 m.charIndices.end());
-            recomputeMatchBbox(tp, m);
+            recomputeMatchBbox(chars, m);
         }
     }
 
