@@ -432,10 +432,37 @@ fi
 # nothing. Every component row then failed linking libpdfium with hundreds of undefined Skia symbols
 # (SkSurface::getCanvas, SkPaint::SkPaint, SkImageInfo::Make, ...). skia_config defines SKIA_DLL for both
 # Skia's own targets and its consumers exactly when Skia is a shared library (is_component_build &&
-# pdf_use_skia, after the sed below), which is precisely when the export annotation is required.
 if [ -f skia/BUILD.gn ] && grep -q 'if (is_component_build) {' skia/BUILD.gn; then
     echo "  Patching skia/BUILD.gn to gate SKIA_DLL on pdf_use_skia..."
     sed_i 's/if (is_component_build) {/if (is_component_build \&\& pdf_use_skia) {/g' skia/BUILD.gn
+fi
+# When pdf_use_skia=true in component mode, component("skia") compiles Skia as a shared library
+# (libskia.so / libskia.dylib / skia.dll). cpdf_path_redactor.cpp depends on SkDashPath, which lives
+# in skia_utils_private. Upstream SkDashPathPriv.h does NOT decorate the SkDashPath namespace functions
+# with SK_API, so libskia exports nothing from SkDashPath under hidden visibility, failing the libpdfium
+# SOLINK with undefined symbol: SkDashPath::ValidDashPath / CalcDashParameters / InternalFilter.
+# Export SkDashPath functions via SK_API in SkDashPathPriv.h if not already annotated.
+SK_DASH_PRIV="third_party/skia/src/utils/SkDashPathPriv.h"
+if [ -f "${SK_DASH_PRIV}" ] && ! grep -q 'SK_API.*ValidDashPath' "${SK_DASH_PRIV}"; then
+    echo "  Patching SkDashPathPriv.h to annotate SkDashPath with SK_API..."
+    python3 - "${SK_DASH_PRIV}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+replacements = [
+    ("void CalcDashParameters(", "SK_API void CalcDashParameters("),
+    ("bool FilterDashPath(", "SK_API bool FilterDashPath("),
+    ("bool InternalFilter(", "SK_API bool InternalFilter("),
+    ("bool ValidDashPath(", "SK_API bool ValidDashPath("),
+]
+for old, new in replacements:
+    if old in src and new not in src:
+        src = src.replace(old, new, 1)
+with open(path, 'w') as f:
+    f.write(src)
+print("  Annotated SkDashPath functions with SK_API.")
+PY_EOF
 fi
 SK_USER_CONFIG="skia/config/SkPdfiumUserConfig.h"
 if [ -f "${SK_USER_CONFIG}" ] && grep -q '#define SK_API COMPONENT_EXPORT(SKIA)' "${SK_USER_CONFIG}"; then
@@ -555,13 +582,24 @@ case "$(uname -s)" in
             done
             if [ -f "${WIN_BUILD_GN}" ] && [ -n "${WIN_SDK_DDKVER}" ]; then
                 CHROMIUM_NTDDI="$(grep -oE 'NTDDI_VERSION=NTDDI_[0-9A-Z_]+' "${WIN_BUILD_GN}" | head -n 1 | cut -d= -f2)"
-                if [ -n "${CHROMIUM_NTDDI}" ] && ! grep -q "^#define ${CHROMIUM_NTDDI}[[:space:]]" "${WIN_SDK_DDKVER}"; then
-                    SDK_NTDDI="$(sed -n 's/^#define \(NTDDI_WIN[0-9A-Z_]*\) \(0x[0-9A-Fa-f]*\).*/\2 \1/p' "${WIN_SDK_DDKVER}" | sort | tail -n 1 | cut -d' ' -f2)"
+                if [ -n "${CHROMIUM_NTDDI}" ]; then
+                    SDK_NTDDI="$(python3 - "${WIN_SDK_DDKVER}" "${CHROMIUM_NTDDI}" <<'PY_EOF'
+import sys, re
+header, target = sys.argv[1], sys.argv[2]
+with open(header, 'rb') as f:
+    text = f.read().decode('utf-8', errors='ignore').replace('\r', '')
+if re.search(r'^#define\s+' + re.escape(target) + r'\b', text, re.M):
+    sys.exit(0)
+defs = re.findall(r'^#define\s+(NTDDI_WIN[0-9A-Za-z_]*)\s+(0x[0-9A-Fa-f]+)', text, re.M)
+if not defs:
+    sys.exit(1)
+defs.sort(key=lambda x: int(x[1], 16))
+print(defs[-1][0])
+PY_EOF
+)"
                     if [ -n "${SDK_NTDDI}" ]; then
                         echo "  Repinning NTDDI_VERSION ${CHROMIUM_NTDDI} -> ${SDK_NTDDI} (not declared by SDK ${JPDFIUM_WIN_SDK})..."
                         sed_i "s/NTDDI_VERSION=${CHROMIUM_NTDDI}/NTDDI_VERSION=${SDK_NTDDI}/" "${WIN_BUILD_GN}"
-                    else
-                        echo "  WARNING: SDK ${JPDFIUM_WIN_SDK} declares neither ${CHROMIUM_NTDDI} nor any NTDDI_WIN* macro in ${WIN_SDK_DDKVER}." >&2
                     fi
                 fi
             fi
@@ -591,6 +629,46 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
         mv "${HOST_PYTHON3}" "${HOST_PYTHON3}.glibc"
         printf '#!/bin/sh\nexec "%s" "$@"\n' "${HOST_PYTHON3_BIN}" > "${HOST_PYTHON3}"
         chmod +x "${HOST_PYTHON3}"
+    fi
+
+    # Chromium's DEPS downloads glibc binaries of Clang/LLD under
+    # third_party/llvm-build/Release+Asserts/bin. On Alpine/musl, running those
+    # glibc binaries directly fails (either crashing with unexpected "(" when
+    # executed as a script on arm64 or dying in multithreaded libstdc++ synchronization
+    # under gcompat with std::system_error on x64). Alpine ships native musl clang
+    # and lld (installed by apk add clang lld in musl.sh). Replace the glibc LLVM
+    # binaries with symlinks/wrappers to the system toolchain so compilation and
+    # linking run natively on musl.
+    LLVM_BIN_DIR="third_party/llvm-build/Release+Asserts/bin"
+    if [ -d "${LLVM_BIN_DIR}" ]; then
+        echo "  musl/Alpine: redirecting third_party/llvm-build to Alpine system toolchain..."
+        SYS_CLANG="$(command -v clang || true)"
+        SYS_CLANGXX="$(command -v clang++ || true)"
+        SYS_LLD="$(command -v ld.lld || command -v lld || true)"
+        SYS_READELF="$(command -v llvm-readelf || command -v readelf || true)"
+        SYS_NM="$(command -v llvm-nm || command -v nm || true)"
+        SYS_AR="$(command -v llvm-ar || command -v ar || true)"
+
+        if [ -n "${SYS_CLANG}" ]; then
+            ln -sf "${SYS_CLANG}" "${LLVM_BIN_DIR}/clang"
+        fi
+        if [ -n "${SYS_CLANGXX}" ]; then
+            ln -sf "${SYS_CLANGXX}" "${LLVM_BIN_DIR}/clang++"
+        fi
+        if [ -n "${SYS_LLD}" ]; then
+            ln -sf "${SYS_LLD}" "${LLVM_BIN_DIR}/ld.lld"
+            ln -sf "${SYS_LLD}" "${LLVM_BIN_DIR}/lld"
+            ln -sf "${SYS_LLD}" "${LLVM_BIN_DIR}/lld-link"
+        fi
+        if [ -n "${SYS_READELF}" ]; then
+            ln -sf "${SYS_READELF}" "${LLVM_BIN_DIR}/llvm-readelf"
+        fi
+        if [ -n "${SYS_NM}" ]; then
+            ln -sf "${SYS_NM}" "${LLVM_BIN_DIR}/llvm-nm"
+        fi
+        if [ -n "${SYS_AR}" ]; then
+            ln -sf "${SYS_AR}" "${LLVM_BIN_DIR}/llvm-ar"
+        fi
     fi
 fi
 
@@ -704,7 +782,8 @@ fi
 # Expect EmbedPDF fork patches may be needed; iterate via the Prebuild PDFium CI.
 if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
-    echo "  musl/Alpine target: use_custom_libcxx=true, use_sysroot=false"
+    GN_ARGS="${GN_ARGS} use_clang_modules=false"
+    echo "  musl/Alpine target: use_custom_libcxx=true, use_clang_modules=false, use_sysroot=false"
 fi
 
 # Windows has no system libc++, so use_custom_libcxx=false produces broken
