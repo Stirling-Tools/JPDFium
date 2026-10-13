@@ -110,6 +110,26 @@ class MultiLineMatchRedactTest {
         }
     }
 
+    /**
+     * markRedactWords documents its return value as the number of REDACT
+     * annotations created, and a wrapped match creates one annotation per box.
+     * Reporting the logical match count instead under-counts by one per wrap.
+     */
+    @Test
+    void markRedactWordsReportsEveryAnnotationItCreated() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(wrappedParagraph());
+                PdfPage page = doc.page(0)) {
+            int created = page.markRedactWords(
+                    new String[]{"authority\\s+confirmed\\s+that\\s+dredging"},
+                    0xFF000000, 0f, false, true, true);
+
+            assertEquals(2, created, "one annotation per line of the wrapped match");
+            assertEquals(2, page.pendingRedactionCount(),
+                    "the reported count is the annotations on the page: "
+                            + page.pendingRedactionsJson());
+        }
+    }
+
     private static void assertMatchedWordsGone(String text, String... words) {
         for (String word : words) {
             assertFalse(text.contains(word), "'" + word + "' must be redacted: " + text);

@@ -73,6 +73,11 @@ struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
+    // A redaction mutated the page and then stopped (JPDFIUM_ERR_REDACT_INCOMPLETE).
+    // The applied boxes already removed content while the rest of the match is
+    // still extractable, so every save path refuses until a later redaction
+    // commit on the affected page succeeds.
+    bool redactionIncomplete = false;
     int32_t unappliedRedactMarksCount = 0;
     // Structural generation: bumped whenever native state is freed and
     // replaced (document reload, page raster replacement). Pages capture it
@@ -111,6 +116,12 @@ struct DocCore {
 
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
+    }
+
+    // True while a redaction that stopped half-way has not been resolved by a
+    // later successful commit - see redactionIncomplete.
+    bool hasIncompleteRedaction() const {
+        return redactionIncomplete;
     }
 
     void addRedactLiteral(const char* s) {

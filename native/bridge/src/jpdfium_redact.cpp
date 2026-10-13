@@ -196,6 +196,20 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
     }
 }
 
+// A redaction that mutates the page and then stops (JPDFIUM_ERR_REDACT_INCOMPLETE)
+// leaves the surviving half of the match extractable, so record the applied zones
+// and the fact that the operation did not finish. DocCore::hasIncompleteRedaction
+// then makes every save path fail closed until the caller resolves the page
+// (commit or clear its pending redactions).
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<FS_RECTF>& applied) {
+    if (!pw || !pw->core) return;
+    pw->core->contentRedacted = true;
+    pw->core->redactionIncomplete = true;
+    for (const auto& ar : applied) {
+        pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+    }
+}
+
 int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
                                int32_t remove_content) noexcept {
     PageWrapper* pw = decodePage(page);
@@ -312,14 +326,12 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
             FPDFText_ClosePage(tp);
-            // The applied boxes already removed content, so the redacted-save
-            // guards (no incremental save, sanitize on save) must hold.
-            if (pw->core) {
-                pw->core->contentRedacted = true;
-                for (const auto& ar : appliedRects) {
-                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
-                }
-            }
+            // The applied boxes already removed content while the surviving half
+            // of the match is still extractable: a full save would ship a
+            // half-redacted document, so keep the redacted-save guards (no
+            // incremental save, sanitize on save) AND fail every save until the
+            // caller resolves the page.
+            markRedactionIncomplete(pw, appliedRects);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
@@ -535,14 +547,12 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
             FPDFText_ClosePage(tp);
-            // The applied boxes already removed content, so the redacted-save
-            // guards (no incremental save, sanitize on save) must hold.
-            if (pw->core) {
-                pw->core->contentRedacted = true;
-                for (const auto& ar : appliedRects) {
-                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
-                }
-            }
+            // The applied boxes already removed content while the surviving half
+            // of the match is still extractable: a full save would ship a
+            // half-redacted document, so keep the redacted-save guards (no
+            // incremental save, sanitize on save) AND fail every save until the
+            // caller resolves the page.
+            markRedactionIncomplete(pw, appliedRects);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
@@ -823,7 +833,11 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 
         FPDFText_ClosePage(tp);
 
-        if (matchCount) *matchCount = logicalMatchCount(matches);
+        // The documented contract of this entry point is the number of REDACT
+        // annotations created, and a match wrapped across lines or columns creates
+        // one annotation per box, so report the boxes actually created instead of
+        // the logical match count.
+        if (matchCount) *matchCount = createdCount;
 
         if (createdCount > 0 && pw->core) {
             // Saving with uncommitted marks would ship intact text under red marks.
@@ -946,6 +960,9 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             if (pw->core) {
                 pw->core->contentRedacted = true;
+                // Committing resolved any earlier half-finished redaction on this
+                // page, so the document is savable again.
+                pw->core->redactionIncomplete = false;
                 for (const auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
@@ -1022,6 +1039,9 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             FPDFPage_RemoveAnnot(pw->page, redactIndices[i]);
         }
         if (pw->core) {
+            // The fission fallback completed the redaction: resolve any earlier
+            // half-finished state so the document can be saved again.
+            pw->core->redactionIncomplete = false;
             pw->core->unappliedRedactMarksCount =
                 std::max(0, pw->core->unappliedRedactMarksCount -
                                 static_cast<int32_t>(redactIndices.size()));
@@ -1044,6 +1064,9 @@ int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) 
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
     if (w->core->contentRedacted) return JPDFIUM_ERR_REDACTED_SAVE;
     if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    // A redaction that stopped half-way is not savable at all (see
+    // DocCore::hasIncompleteRedaction), incremental or not.
+    if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
 
     struct BufWriter : FPDF_FILEWRITE {
         std::vector<uint8_t> buf;
