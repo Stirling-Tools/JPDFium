@@ -173,6 +173,9 @@ static constexpr double kMarkBelowBaselineEm = 0.45;
 static constexpr double kOcrSidePadEm = 0.2;
 static constexpr double kOcrGrowEm = 0.35;
 static constexpr double kInkDpi = 200.0;
+// Upper bound on the rendered page, in pixels: 16 Mpx is 64 MB of BGRx and puts
+// an A0 sheet at ~100 dpi instead of failing the cover pass outright.
+static constexpr double kMaxInkPixels = 16.0e6;
 
 // Font size of a character in page space, or 0 when it cannot be derived:
 // generated chars (the spaces and line breaks PDFium inserts) have no text
@@ -202,30 +205,49 @@ namespace {
 struct InkRaster {
     FPDF_PAGE page = nullptr;
     bool rendered = false;
-    int w = 0, h = 0;
+    int w = 0, h = 0, stride = 0;
     double scale = 0, pageH = 0;
-    std::vector<uint8_t> dark;  // 1 where the rendered page is ink
+    FPDF_BITMAP bitmap = nullptr;     // rendered page, kept for the whole scope
+    std::span<const uint8_t> pixels;  // its buffer, stride * h bytes
 };
 thread_local InkRaster t_ink;
+
+// Releases the rendered page a scope was holding, if any.
+void resetInkRaster() {
+    if (t_ink.bitmap) FPDFBitmap_Destroy(t_ink.bitmap);
+    t_ink = InkRaster();
+}
+
+// Ink test on the rendered page: dark enough to be print, not paper.
+bool inkAt(int y, int x) {
+    const uint8_t* px = t_ink.pixels.data() + static_cast<size_t>(y) * t_ink.stride +
+                        static_cast<size_t>(x) * 4;
+    return (px[0] + px[1] + px[2]) < 3 * 128;
+}
 }  // namespace
 
 ScopedCoverPage::ScopedCoverPage(FPDF_PAGE page) {
-    t_ink = InkRaster();
+    resetInkRaster();
     t_ink.page = page;
 }
 
 ScopedCoverPage::~ScopedCoverPage() {
-    t_ink = InkRaster();
+    resetInkRaster();
 }
 
 // Renders the cover page once per scope, before any redaction is applied to it.
 static bool ensureInkRaster() {
     if (!t_ink.page) return false;
-    if (t_ink.rendered) return !t_ink.dark.empty();
+    if (t_ink.rendered) return t_ink.bitmap != nullptr;
     t_ink.rendered = true;
     double pw = FPDF_GetPageWidthF(t_ink.page), ph = FPDF_GetPageHeightF(t_ink.page);
-    t_ink.scale = kInkDpi / 72.0;
     t_ink.pageH = ph;
+    // kInkDpi decides how finely a scanned glyph is resolved; the buffer it
+    // implies is what a very large page makes expensive, so the scale backs off
+    // to kMaxInkPixels rather than losing the covers. Every threshold below is
+    // em-relative and keeps its page-space meaning at the coarser scale.
+    double base = kInkDpi / 72.0;
+    t_ink.scale = pw * ph * base * base > kMaxInkPixels ? std::sqrt(kMaxInkPixels / (pw * ph)) : base;
     t_ink.w = static_cast<int>(pw * t_ink.scale);
     t_ink.h = static_cast<int>(ph * t_ink.scale);
     if (t_ink.w <= 0 || t_ink.h <= 0) return false;
@@ -233,17 +255,19 @@ static bool ensureInkRaster() {
     if (!bmp) return false;
     FPDFBitmap_FillRect(bmp, 0, 0, t_ink.w, t_ink.h, 0xFFFFFFFF);
     FPDF_RenderPageBitmap(bmp, t_ink.page, 0, 0, t_ink.w, t_ink.h, 0, 0);
-    const auto* buf = static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bmp));
-    int stride = FPDFBitmap_GetStride(bmp);
-    t_ink.dark.assign(static_cast<size_t>(t_ink.w) * t_ink.h, 0);
-    for (int y = 0; y < t_ink.h; ++y)
-        for (int x = 0; x < t_ink.w; ++x) {
-            const uint8_t* px = buf + static_cast<size_t>(y) * stride + static_cast<size_t>(x) * 4;
-            t_ink.dark[static_cast<size_t>(y) * t_ink.w + x] = (px[0] + px[1] + px[2]) < 3 * 128;
-        }
-    FPDFBitmap_Destroy(bmp);
+    t_ink.bitmap = bmp;
+    t_ink.stride = FPDFBitmap_GetStride(bmp);
+    t_ink.pixels = {static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bmp)),
+                    static_cast<size_t>(t_ink.stride) * static_cast<size_t>(t_ink.h)};
     return true;
 }
+
+namespace {
+// Component-walk scratch, kept per thread so a page's matches do not each pay
+// for a fresh window-sized allocation.
+thread_local std::vector<char> t_scratchSeen;
+thread_local std::vector<int> t_scratchStack;
+}  // namespace
 
 // Extends [bottom, top] over the scanned glyphs the cover slices through. A glyph
 // counts when its ink reaches the middle of the cover, so it belongs to this
@@ -264,20 +288,19 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
     int midA = rTop + (rBot - rTop) * 3 / 10, midB = rBot - (rBot - rTop) * 3 / 10;
     int w = x1 - x0, h = y1 - y0;
     if (h <= 0) return;
-    auto dark = [&](int cy, int cx) {
-        return t_ink.dark[static_cast<size_t>(cy + y0) * t_ink.w + cx + x0] != 0;
-    };
-    std::vector<char> seen(static_cast<size_t>(w) * h, 0);
-    std::vector<int> stack;
+    std::vector<char>& seen = t_scratchSeen;
+    seen.assign(static_cast<size_t>(w) * h, 0);
+    std::vector<int>& stack = t_scratchStack;
+    stack.clear();
     int newTop = rTop, newBot = rBot;
     for (int sy = 0; sy < h; ++sy)
         for (int sx = 0; sx < w; ++sx) {
             size_t si = static_cast<size_t>(sy) * w + sx;
-            if (seen[si] || !dark(sy, sx)) continue;
+            if (seen[si] || !inkAt(sy + y0, sx + x0)) continue;
             int minY = sy + y0, maxY = minY;
             bool mid = false, clipped = false;
             seen[si] = 1;
-            stack.assign(1, static_cast<int>(si));
+            stack.push_back(static_cast<int>(si));
             while (!stack.empty()) {
                 int i = stack.back();
                 stack.pop_back();
@@ -291,7 +314,7 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
                         int ny = cy + dy, nx = cx + dx;
                         if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue;
                         size_t ni = static_cast<size_t>(ny) * w + nx;
-                        if (seen[ni] || !dark(ny, nx)) continue;
+                        if (seen[ni] || !inkAt(ny + y0, nx + x0)) continue;
                         seen[ni] = 1;
                         stack.push_back(static_cast<int>(ni));
                     }
