@@ -187,7 +187,10 @@ jobs:
           # IS present so setup-pdfium.sh can repin the constant to it.
           sdk_root="/c/Program Files (x86)/Windows Kits/10/include"
           if [ -d "$sdk_root" ]; then
-            newest_sdk="$(ls -1 "$sdk_root" | sort -V | tail -n 1)"
+            # include/ also holds non-version directories (for example "wdf"),
+            # and "wdf" sorts last under `sort -V`, so filter down to real 10.x
+            # SDK version directories before picking the newest one.
+            newest_sdk="$(ls -1 "$sdk_root" | grep -E '^10\.' | sort -V | tail -n 1)"
             echo "JPDFIUM_WIN_SDK=$newest_sdk" >> "$GITHUB_ENV"
           fi
 

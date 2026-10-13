@@ -127,6 +127,27 @@ esac
 # Bootstrap depot_tools (downloads bundled Python, cipd, etc.)
 (cd "${DEPOT_TOOLS_DIR}" && bash ensure_bootstrap 2>/dev/null || true)
 
+# depot_tools' `python3` shim (python-bin/python3) refuses to run until
+# ${DEPOT_TOOLS_DIR}/python3_bin_reldir.txt names the directory holding the
+# bundled CPython; otherwise it aborts with
+#   python3_bin_reldir.txt not found. need to initialize depot_tools by
+#   running gclient, update_depot_tools or ensure_bootstrap.
+# ensure_bootstrap cannot produce that file on musl: the CPython it downloads
+# links against glibc and cannot execute on Alpine, so the file is never
+# written and `gn gen` (which goes through this shim) dies. Point the shim at
+# the interpreter the rest of the build already uses - the musl branch exports
+# VPYTHON_BYPASS for the same reason, so gclient sync already runs on the
+# system python3.
+if [ ! -f "${DEPOT_TOOLS_DIR}/python3_bin_reldir.txt" ]; then
+    SYSTEM_PYTHON3="$(command -v python3 || true)"
+    if [ -n "${SYSTEM_PYTHON3}" ]; then
+        echo "  ensure_bootstrap produced no usable CPython; wiring depot_tools' python3 shim to ${SYSTEM_PYTHON3}..."
+        mkdir -p "${DEPOT_TOOLS_DIR}/python3_bin_alpine"
+        ln -sf "${SYSTEM_PYTHON3}" "${DEPOT_TOOLS_DIR}/python3_bin_alpine/python3"
+        printf 'python3_bin_alpine\n' > "${DEPOT_TOOLS_DIR}/python3_bin_reldir.txt"
+    fi
+fi
+
 # Prevent depot_tools from auto-updating (speeds up repeated runs)
 export DEPOT_TOOLS_UPDATE=0
 
@@ -393,23 +414,31 @@ fi
 # On Windows component builds without full Skia (pdf_use_skia=false), skia_config must not define SKIA_DLL,
 # and SkPdfiumUserConfig.h must not define SK_API as COMPONENT_EXPORT(SKIA). Otherwise SkPathBuilder/SkStrokeRec
 # symbols get marked __declspec(dllimport) while being statically linked into pdfium.dll, causing lld-link LNK4217.
+#
+# The gate below must key off SKIA_DLL, never off PDF_USE_SKIA. PDF_USE_SKIA is only added by
+# pdfium_common_config to PDFium's own targets, so Skia's own translation units (skia_core_and_effects, the
+# skia component) never see it. Gating on it left Skia's definitions with an empty SK_API, which - combined
+# with Chromium's hidden default visibility for component builds - made libskia.dylib/.so/.dll link but export
+# nothing. Every component row then failed linking libpdfium with hundreds of undefined Skia symbols
+# (SkSurface::getCanvas, SkPaint::SkPaint, SkImageInfo::Make, ...). skia_config defines SKIA_DLL for both
+# Skia's own targets and its consumers exactly when Skia is a shared library (is_component_build &&
+# pdf_use_skia, after the sed below), which is precisely when the export annotation is required.
 if [ -f skia/BUILD.gn ] && grep -q 'if (is_component_build) {' skia/BUILD.gn; then
     echo "  Patching skia/BUILD.gn to gate SKIA_DLL on pdf_use_skia..."
     sed_i 's/if (is_component_build) {/if (is_component_build \&\& pdf_use_skia) {/g' skia/BUILD.gn
 fi
 SK_USER_CONFIG="skia/config/SkPdfiumUserConfig.h"
 if [ -f "${SK_USER_CONFIG}" ] && grep -q '#define SK_API COMPONENT_EXPORT(SKIA)' "${SK_USER_CONFIG}"; then
-    echo "  Patching SkPdfiumUserConfig.h to gate SK_API export on PDF_USE_SKIA..."
+    echo "  Patching SkPdfiumUserConfig.h to gate SK_API export on SKIA_DLL..."
     python3 - "${SK_USER_CONFIG}" <<'PY_EOF'
 import sys
 path = sys.argv[1]
 with open(path) as f:
     src = f.read()
 target = "#define SK_API COMPONENT_EXPORT(SKIA)"
-replacement = """#if defined(PDF_USE_SKIA)
+replacement = """#if defined(SKIA_DLL)
 #define SK_API COMPONENT_EXPORT(SKIA)
 #else
-#undef SKIA_DLL
 #define SK_API
 #endif"""
 if target in src:
@@ -451,6 +480,28 @@ if '#include <cstddef>' not in src and '#include <new>' in src:
     with open(path, 'w') as f:
         f.write(src.replace('#include <new>', '#include <cstddef>\n#include <new>', 1))
     print("  Added <cstddef> to internal_allocator_forward.h.")
+PY_EOF
+fi
+
+# GCC 14's libstdc++ stopped pulling <cstdint> in transitively, and the fork's
+# constants/form_flags.h declares uint32_t constants without including anything
+# at all, so the linux-x64 rows stop with
+#   ../../constants/form_flags.h:13:11: error: unknown type name 'uint32_t'
+# (configurations that use Chromium's bundled libc++ never see this). Make the
+# header self-contained instead of switching linux-x64 to libc++.
+FORM_FLAGS_HEADER="constants/form_flags.h"
+if [ -f "${FORM_FLAGS_HEADER}" ] && ! grep -q '#include <cstdint>' "${FORM_FLAGS_HEADER}"; then
+    echo "  Adding <cstdint> include to constants/form_flags.h..."
+    python3 - "${FORM_FLAGS_HEADER}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+guard = '#define CONSTANTS_FORM_FLAGS_H_\n'
+if '#include <cstdint>' not in src and guard in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(guard, guard + '\n#include <cstdint>\n', 1))
+    print("  Added <cstdint> to form_flags.h.")
 PY_EOF
 fi
 
