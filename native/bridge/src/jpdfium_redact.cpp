@@ -404,6 +404,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 
     try {
         ScratchGuard scratchGuard;
+        ScopedCoverPage coverPage(pw->page);
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 

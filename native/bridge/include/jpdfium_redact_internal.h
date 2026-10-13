@@ -157,6 +157,16 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                             const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false);
 bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& out,
                   std::string& err);
+// The page whose scan OCR covers are fitted to, for the lifetime of the scope.
+// Its rendering is taken on first use, so the scope must open before any
+// redaction is applied to the page. Covers fitted outside a scope skip the scan.
+class ScopedCoverPage {
+   public:
+    explicit ScopedCoverPage(FPDF_PAGE page);
+    ~ScopedCoverPage();
+    ScopedCoverPage(const ScopedCoverPage&) = delete;
+    ScopedCoverPage& operator=(const ScopedCoverPage&) = delete;
+};
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,

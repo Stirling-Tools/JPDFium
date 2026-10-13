@@ -165,6 +165,14 @@ bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& ou
 // OCR'd scans: this band holds all the ink of 97% of scanned words.
 static constexpr double kInkBelowBaselineEm = 0.30;
 static constexpr double kInkAboveBaselineEm = 1.05;
+// Arabic marks under a letter (hamza below, kasra) hang below that band.
+static constexpr double kMarkBelowBaselineEm = 0.45;
+// OCR word boxes sit a few pixels inside the scanned ink, so an OCR cover
+// reaches this far past each end of a word, and follows a scanned glyph it
+// cuts through this far up or down.
+static constexpr double kOcrSidePadEm = 0.2;
+static constexpr double kOcrGrowEm = 0.35;
+static constexpr double kInkDpi = 200.0;
 
 // Font size of a character in page space, or 0 when it cannot be derived:
 // generated chars (the spaces and line breaks PDFium inserts) have no text
@@ -186,6 +194,116 @@ static double charEm(FPDF_TEXTPAGE textPage, int index, FS_MATRIX* matrix) {
 // around the baseline instead. The font's own ascent/descent box is not used: OCR
 // fonts declare a far taller one, which reaches into the neighbouring line and
 // removes its words from the text layer.
+static bool hasMarkBelow(unsigned int cp) {
+    return cp == 0x0625 || cp == 0x0650 || cp == 0x064D || cp == 0x0655 || cp == 0x0656;
+}
+
+namespace {
+struct InkRaster {
+    FPDF_PAGE page = nullptr;
+    bool rendered = false;
+    int w = 0, h = 0;
+    double scale = 0, pageH = 0;
+    std::vector<uint8_t> dark;  // 1 where the rendered page is ink
+};
+thread_local InkRaster t_ink;
+}  // namespace
+
+ScopedCoverPage::ScopedCoverPage(FPDF_PAGE page) {
+    t_ink = InkRaster();
+    t_ink.page = page;
+}
+
+ScopedCoverPage::~ScopedCoverPage() {
+    t_ink = InkRaster();
+}
+
+// Renders the cover page once per scope, before any redaction is applied to it.
+static bool ensureInkRaster() {
+    if (!t_ink.page) return false;
+    if (t_ink.rendered) return !t_ink.dark.empty();
+    t_ink.rendered = true;
+    double pw = FPDF_GetPageWidthF(t_ink.page), ph = FPDF_GetPageHeightF(t_ink.page);
+    t_ink.scale = kInkDpi / 72.0;
+    t_ink.pageH = ph;
+    t_ink.w = static_cast<int>(pw * t_ink.scale);
+    t_ink.h = static_cast<int>(ph * t_ink.scale);
+    if (t_ink.w <= 0 || t_ink.h <= 0) return false;
+    FPDF_BITMAP bmp = FPDFBitmap_Create(t_ink.w, t_ink.h, 0);
+    if (!bmp) return false;
+    FPDFBitmap_FillRect(bmp, 0, 0, t_ink.w, t_ink.h, 0xFFFFFFFF);
+    FPDF_RenderPageBitmap(bmp, t_ink.page, 0, 0, t_ink.w, t_ink.h, 0, 0);
+    const auto* buf = static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bmp));
+    int stride = FPDFBitmap_GetStride(bmp);
+    t_ink.dark.assign(static_cast<size_t>(t_ink.w) * t_ink.h, 0);
+    for (int y = 0; y < t_ink.h; ++y)
+        for (int x = 0; x < t_ink.w; ++x) {
+            const uint8_t* px = buf + static_cast<size_t>(y) * stride + static_cast<size_t>(x) * 4;
+            t_ink.dark[static_cast<size_t>(y) * t_ink.w + x] = (px[0] + px[1] + px[2]) < 3 * 128;
+        }
+    FPDFBitmap_Destroy(bmp);
+    return true;
+}
+
+// Extends [bottom, top] over the scanned glyphs the cover slices through. A glyph
+// counts when its ink reaches the middle of the cover, so it belongs to this
+// line and not to a neighbour poking in, and ends within kOcrGrowEm of the edge
+// it crosses: a descender tip, a stacked mark, the top of a line the OCR placed
+// too low.
+static void growToInk(double l, double r, double em, double* bottom, double* top) {
+    if (!ensureInkRaster()) return;
+    auto rowOf = [](double y) {
+        return static_cast<int>(std::lround((t_ink.pageH - y) * t_ink.scale));
+    };
+    int x0 = std::max(0, static_cast<int>(l * t_ink.scale));
+    int x1 = std::min(t_ink.w, static_cast<int>(r * t_ink.scale) + 1);
+    int rTop = rowOf(*top), rBot = rowOf(*bottom);
+    if (x1 <= x0 || rBot - rTop < 4) return;
+    int cap = std::max(1, static_cast<int>(kOcrGrowEm * em * t_ink.scale));
+    int y0 = std::max(0, rTop - cap - 1), y1 = std::min(t_ink.h, rBot + cap + 1);
+    int midA = rTop + (rBot - rTop) * 3 / 10, midB = rBot - (rBot - rTop) * 3 / 10;
+    int w = x1 - x0, h = y1 - y0;
+    if (h <= 0) return;
+    auto dark = [&](int cy, int cx) {
+        return t_ink.dark[static_cast<size_t>(cy + y0) * t_ink.w + cx + x0] != 0;
+    };
+    std::vector<char> seen(static_cast<size_t>(w) * h, 0);
+    std::vector<int> stack;
+    int newTop = rTop, newBot = rBot;
+    for (int sy = 0; sy < h; ++sy)
+        for (int sx = 0; sx < w; ++sx) {
+            size_t si = static_cast<size_t>(sy) * w + sx;
+            if (seen[si] || !dark(sy, sx)) continue;
+            int minY = sy + y0, maxY = minY;
+            bool mid = false, clipped = false;
+            seen[si] = 1;
+            stack.assign(1, static_cast<int>(si));
+            while (!stack.empty()) {
+                int i = stack.back();
+                stack.pop_back();
+                int cy = i / w, cx = i % w, py = cy + y0;
+                minY = std::min(minY, py);
+                maxY = std::max(maxY, py);
+                mid |= py >= midA && py < midB;
+                clipped |= cy == 0 || cy == h - 1;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int ny = cy + dy, nx = cx + dx;
+                        if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue;
+                        size_t ni = static_cast<size_t>(ny) * w + nx;
+                        if (seen[ni] || !dark(ny, nx)) continue;
+                        seen[ni] = 1;
+                        stack.push_back(static_cast<int>(ni));
+                    }
+            }
+            if (!mid || clipped) continue;
+            newTop = std::min(newTop, minY);
+            newBot = std::max(newBot, maxY + 1);
+        }
+    *top = std::max(*top, t_ink.pageH - newTop / t_ink.scale);
+    *bottom = std::min(*bottom, t_ink.pageH - newBot / t_ink.scale);
+}
+
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
     FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
@@ -207,6 +325,8 @@ bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, doubl
     }
     *b = std::min(*b, oy - kInkBelowBaselineEm * em);
     *t = std::max(*t, oy + kInkAboveBaselineEm * em);
+    if (hasMarkBelow(FPDFText_GetUnicode(textPage, index)))
+        *b = std::min(*b, oy - kMarkBelowBaselineEm * em);
     return true;
 }
 
@@ -215,6 +335,7 @@ bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, doubl
 struct CoverBounds {
     double l = 0, r = 0, coverB = 0, coverT = 0, glyphB = 0, glyphT = 0;
     bool any = false;
+    double ocrEm = 0;  // largest em of the invisible (OCR) chars; 0 when there are none
 
     void add(double cl, double cr, double cb, double ct, double gb, double gt) {
         if (!any) {
@@ -237,35 +358,62 @@ struct CoverBounds {
 };
 
 // Sets the match box from `bounds`. The part of the cover that extends past the
-// glyph boxes stops short of any other character above or below it: small print
-// can sit closer to the neighbouring line than the invisible-text band is tall,
-// and the redaction removes every character its box touches.
+// glyph boxes stops short of any other character above, below or beside it:
+// small print can sit closer to the neighbouring line than the invisible-text
+// band is tall, and the redaction removes every character its box touches.
 static void fitCover(FPDF_TEXTPAGE textPage, TextMatch& m, const CoverBounds& bounds,
                      float padding) {
     double bottom = bounds.coverB;
     double top = bounds.coverT;
-    if (bottom < bounds.glyphB || top > bounds.glyphT) {
+    double left = bounds.l, right = bounds.r;
+    bool ocr = bounds.ocrEm > 0;
+    if (ocr || bottom < bounds.glyphB || top > bounds.glyphT) {
         std::vector<int> own = m.charIndices;
         std::sort(own.begin(), own.end());
         constexpr double kClearance = 0.1;
+        double topLimit = 1e9, bottomLimit = -1e9, leftLimit = -1e9, rightLimit = 1e9;
         int n = FPDFText_CountChars(textPage);
         for (int i = 0; i < n; ++i) {
             if (std::binary_search(own.begin(), own.end(), i)) continue;
             double l, r, b, t;
             if (!FPDFText_GetCharBox(textPage, i, &l, &r, &b, &t) || t <= b) continue;
-            if (r <= bounds.l || l >= bounds.r) continue;
-            if (b >= bounds.glyphT) {
-                top = std::min(top, b - kClearance);
-            } else if (t <= bounds.glyphB) {
-                bottom = std::max(bottom, t + kClearance);
+            if (r > bounds.l && l < bounds.r) {
+                if (b >= bounds.glyphT) {
+                    topLimit = std::min(topLimit, b - kClearance);
+                } else if (t <= bounds.glyphB) {
+                    bottomLimit = std::max(bottomLimit, t + kClearance);
+                }
+                continue;
+            }
+            if (!ocr || std::min(t, bounds.glyphT) <= std::max(b, bounds.glyphB)) continue;
+            unsigned int u = FPDFText_GetUnicode(textPage, i);
+            if (u == ' ' || u == 0xA0 || u == '\t' || u == '\r' || u == '\n') continue;
+            FS_RECTF loose;
+            if (FPDFText_GetLooseCharBox(textPage, i, &loose) && loose.right > loose.left) {
+                l = std::min(l, static_cast<double>(loose.left));
+                r = std::max(r, static_cast<double>(loose.right));
+            }
+            if (r <= bounds.l) {
+                leftLimit = std::max(leftLimit, std::min(r + kClearance, bounds.l));
+            } else if (l >= bounds.r) {
+                rightLimit = std::min(rightLimit, std::max(l - kClearance, bounds.r));
+            } else if (r < 0.5 * (bounds.l + bounds.r)) {
+                leftLimit = std::max(leftLimit, bounds.l);
+            } else {
+                rightLimit = std::min(rightLimit, bounds.r);
             }
         }
-        top = std::max(top, bounds.glyphT);
-        bottom = std::min(bottom, bounds.glyphB);
+        if (ocr) {
+            growToInk(bounds.l, bounds.r, bounds.ocrEm, &bottom, &top);
+            left = std::max(bounds.l - kOcrSidePadEm * bounds.ocrEm, leftLimit);
+            right = std::min(bounds.r + kOcrSidePadEm * bounds.ocrEm, rightLimit);
+        }
+        top = std::max(std::min(top, topLimit), bounds.glyphT);
+        bottom = std::min(std::max(bottom, bottomLimit), bounds.glyphB);
     }
-    m.bboxL = static_cast<float>(bounds.l - padding);
+    m.bboxL = static_cast<float>(left - padding);
     m.bboxB = static_cast<float>(bottom - padding);
-    m.bboxR = static_cast<float>(bounds.r + padding);
+    m.bboxR = static_cast<float>(right + padding);
     m.bboxT = static_cast<float>(top + padding);
 }
 
@@ -276,6 +424,9 @@ static bool addCharBox(FPDF_TEXTPAGE textPage, int index, CoverBounds& bounds, d
     double gl, gr, gb, gt;
     if (!FPDFText_GetCharBox(textPage, index, &gl, &gr, &gb, &gt)) return false;
     bounds.add(*l, *r, *b, *t, gb, gt);
+    FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
+    if (obj && FPDFTextObj_GetTextRenderMode(obj) == FPDF_TEXTRENDERMODE_INVISIBLE)
+        bounds.ocrEm = std::max(bounds.ocrEm, charEm(textPage, index, nullptr));
     return true;
 }
 
