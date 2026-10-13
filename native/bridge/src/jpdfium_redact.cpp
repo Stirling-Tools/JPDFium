@@ -312,6 +312,14 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
             FPDFText_ClosePage(tp);
+            // The applied boxes already removed content, so the redacted-save
+            // guards (no incremental save, sanitize on save) must hold.
+            if (pw->core) {
+                pw->core->contentRedacted = true;
+                for (const auto& ar : appliedRects) {
+                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+                }
+            }
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
@@ -527,6 +535,14 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         // a match split across lines no longer matches once one piece is gone.
         if (!epdfOk && !appliedRects.empty()) {
             FPDFText_ClosePage(tp);
+            // The applied boxes already removed content, so the redacted-save
+            // guards (no incremental save, sanitize on save) must hold.
+            if (pw->core) {
+                pw->core->contentRedacted = true;
+                for (const auto& ar : appliedRects) {
+                    pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+                }
+            }
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
