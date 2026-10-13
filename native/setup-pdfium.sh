@@ -653,9 +653,27 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
             cat > "${LLVM_BIN_DIR}/clang" <<WRAPPER_EOF
 #!/bin/sh
 filtered=""
+has_c_file=0
+has_x=0
+is_compile_only=0
 for arg in "\$@"; do
     case "\$arg" in
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            ;;
+        *.c)
+            has_c_file=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
+            ;;
+        -c)
+            is_compile_only=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
+            ;;
+        -x)
+            has_x=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
             ;;
         *)
             escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
@@ -663,7 +681,11 @@ for arg in "\$@"; do
             ;;
     esac
 done
-eval exec "${SYS_CLANG}" --driver-mode=gcc \$filtered
+extra_lang=""
+if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
+    extra_lang="-x c"
+fi
+eval exec "${SYS_CLANG}" --driver-mode=gcc \$extra_lang \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang"
         fi
@@ -671,9 +693,27 @@ WRAPPER_EOF
             cat > "${LLVM_BIN_DIR}/clang++" <<WRAPPER_EOF
 #!/bin/sh
 filtered=""
+has_c_file=0
+has_x=0
+is_compile_only=0
 for arg in "\$@"; do
     case "\$arg" in
         -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            ;;
+        *.c)
+            has_c_file=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
+            ;;
+        -c)
+            is_compile_only=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
+            ;;
+        -x)
+            has_x=1
+            escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
+            filtered="\$filtered '\$escaped'"
             ;;
         *)
             escaped=\$(printf '%s\n' "\$arg" | sed "s/'/'\\\\''/g")
@@ -681,7 +721,11 @@ for arg in "\$@"; do
             ;;
     esac
 done
-eval exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC \$filtered
+extra_lang=""
+if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
+    extra_lang="-x c"
+fi
+eval exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE \$extra_lang \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
