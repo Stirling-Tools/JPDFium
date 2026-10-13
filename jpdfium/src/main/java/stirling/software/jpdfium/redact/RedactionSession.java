@@ -84,6 +84,9 @@ public final class RedactionSession implements AutoCloseable {
         @Override public int matchCount() { return 1; }
     }
 
+    /** Matching options that decide whether two word marks can share one commit call. */
+    private record WordOptions(float padding, boolean wholeWord, boolean useRegex, boolean caseSensitive) {}
+
     private RedactionSession(PdfDocument document, boolean ownsDocument) {
         this.document = document;
         this.ownsDocument = ownsDocument;
@@ -362,20 +365,31 @@ public final class RedactionSession implements AutoCloseable {
 
         int totalCommitted = 0;
         try (PdfPage page = document.page(pageIndex)) {
+            // A commit replays the page's content once, so every word mark that
+            // keeps its matching options is folded into the previous call rather
+            // than paying that replay again. Region marks keep their own slot.
+            WordOptions runOptions = null;
+            List<String> runWords = new ArrayList<>();
             for (PendingMark mark : marks) {
                 switch (mark) {
                     case WordMark wordMark -> {
-                        int committed = page.redactWordsEx(wordMark.words(), argbColor,
-                                wordMark.padding(), wordMark.wholeWord(), wordMark.useRegex(),
-                                removeContent, wordMark.caseSensitive());
-                        totalCommitted += committed;
+                        WordOptions options = new WordOptions(wordMark.padding(), wordMark.wholeWord(),
+                                wordMark.useRegex(), wordMark.caseSensitive());
+                        if (!options.equals(runOptions)) {
+                            totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
+                            runOptions = options;
+                        }
+                        Collections.addAll(runWords, wordMark.words());
                     }
                     case RegionMark regionMark -> {
+                        totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
+                        runOptions = null;
                         page.redactRegion(regionMark.rect(), argbColor, removeContent);
                         totalCommitted += 1;
                     }
                 }
             }
+            totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
             // The mark phase created real REDACT annotations on the page as a
             // preview. After replaying the marks the content is gone - drop
             // the annotations BEFORE flattening so they are not baked into
@@ -385,6 +399,29 @@ public final class RedactionSession implements AutoCloseable {
             page.flatten();
         }
         return totalCommitted;
+    }
+
+    /**
+     * Replays a run of word marks as a single native call, which renders the
+     * page's covers once instead of once per mark. A no-op for an empty run.
+     *
+     * <p>The whole run is matched against the page as it stands when the run
+     * starts, not against the text the previous call left behind. Literal words
+     * become one non-overlapping search with the longest word preferred, so
+     * {@code "foo"} and {@code "foobar"} mark a single span over
+     * {@code "foobar"} and the returned count is that search's match count.
+     * Regular expressions are each compiled and scanned on their own, so two
+     * patterns that overlap can both match and the count can exceed what
+     * separate calls would return. Marks with different matching options, and
+     * region marks, always start a new call.
+     */
+    private static int commitRun(PdfPage page, List<String> runWords, WordOptions options,
+                                 int argbColor, boolean removeContent) {
+        if (options == null) return 0;
+        int committed = page.redactWordsEx(runWords.toArray(String[]::new), argbColor, options.padding(),
+                options.wholeWord(), options.useRegex(), removeContent, options.caseSensitive());
+        runWords.clear();
+        return committed;
     }
 
     /**

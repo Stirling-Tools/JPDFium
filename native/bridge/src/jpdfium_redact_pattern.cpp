@@ -161,70 +161,406 @@ bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& ou
 }
 #endif
 
-// Rebuild a TextMatch bbox from its char indices (used after grapheme or
-// cluster extension so the painted cover encloses everything removed).
-bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
-    double xmin = std::numeric_limits<double>::max();
-    double ymin = std::numeric_limits<double>::max();
-    double xmax = std::numeric_limits<double>::lowest();
-    double ymax = std::numeric_limits<double>::lowest();
-    bool any = false;
-    for (int ci : m.charIndices) {
-        double l, r, b, t;
-        if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;
-        any = true;
-        if (l < xmin) xmin = l;
-        if (b < ymin) ymin = b;
-        if (r > xmax) xmax = r;
-        if (t > ymax) ymax = t;
-    }
-    if (!any) return false;
-    m.bboxL = static_cast<float>(xmin);
-    m.bboxB = static_cast<float>(ymin);
-    m.bboxR = static_cast<float>(xmax);
-    m.bboxT = static_cast<float>(ymax);
+// Where printed text sits relative to its baseline, in em. Measured on
+// OCR'd scans: this band holds all the ink of 97% of scanned words.
+static constexpr double kInkBelowBaselineEm = 0.30;
+static constexpr double kInkAboveBaselineEm = 1.05;
+// Arabic marks under a letter (hamza below, kasra) hang below that band.
+static constexpr double kMarkBelowBaselineEm = 0.45;
+// OCR word boxes sit a few pixels inside the scanned ink, so an OCR cover
+// reaches this far past each end of a word, and follows a scanned glyph it
+// cuts through this far up or down.
+static constexpr double kOcrSidePadEm = 0.2;
+static constexpr double kOcrGrowEm = 0.35;
+static constexpr double kInkDpi = 200.0;
+// Upper bound on the rendered page, in pixels: 16 Mpx is 64 MB of BGRx and puts
+// an A0 sheet at ~100 dpi instead of failing the cover pass outright.
+static constexpr double kMaxInkPixels = 16.0e6;
+
+// Font size of a character in page space, or 0 when it cannot be derived:
+// generated chars (the spaces and line breaks PDFium inserts) have no text
+// object to take a size from.
+static double charEm(FPDF_TEXTPAGE textPage, int index, FS_MATRIX* matrix) {
+    if (!FPDFText_GetTextObject(textPage, index)) return 0;
+    FS_MATRIX m;
+    if (!FPDFText_GetMatrix(textPage, index, &m)) return 0;
+    if (matrix) *matrix = m;
+    double size = FPDFText_GetFontSize(textPage, index);
+    double scale = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+    return size > 0 && scale > 0 ? size * scale : 0;
+}
+
+// The box a redaction must cover for one character. Invisible text (render
+// mode 3) is how OCR tools lay a text layer over a scan: its glyph box comes
+// from a placeholder font and is shorter than the printed word underneath.
+// For upright invisible text the box spans the band printed text occupies
+// around the baseline instead. The font's own ascent/descent box is not used: OCR
+// fonts declare a far taller one, which reaches into the neighbouring line and
+// removes its words from the text layer.
+static bool hasMarkBelow(unsigned int cp) {
+    return cp == 0x0625 || cp == 0x0650 || cp == 0x064D || cp == 0x0655 || cp == 0x0656;
+}
+
+namespace {
+// The component walk is window-sized, so its buffers are kept per thread
+// instead of re-allocated for every match - but only while they stay small.
+thread_local std::vector<char> t_scratchSeen;
+thread_local std::vector<int> t_scratchStack;
+constexpr size_t kMaxScratchRetained = 65536;
+
+struct InkRaster {
+    FPDF_PAGE page = nullptr;
+    bool rendered = false;
+    int w = 0, h = 0, stride = 0;
+    double scale = 0;
+    // page-space origin of the rendered area
+    double boxLeft = 0, boxTop = 0;
+    FPDF_BITMAP bitmap = nullptr;     // rendered page, kept for the whole scope
+    std::span<const uint8_t> pixels;  // its buffer, stride * h bytes
+};
+thread_local InkRaster t_ink;
+
+// Drops scratch a single large match left behind: the walk window can span the
+// whole raster, far beyond what the next match on this thread needs.
+void trimScratch() {
+    if (t_scratchSeen.capacity() > kMaxScratchRetained) std::vector<char>().swap(t_scratchSeen);
+    if (t_scratchStack.capacity() > kMaxScratchRetained) std::vector<int>().swap(t_scratchStack);
+}
+
+// Releases the rendered page a scope was holding, if any.
+void resetInkRaster() {
+    if (t_ink.bitmap) FPDFBitmap_Destroy(t_ink.bitmap);
+    t_ink = InkRaster();
+    trimScratch();
+}
+
+// Ink test on the rendered page: dark enough to be print, not paper.
+bool inkAt(int y, int x) {
+    size_t offset = static_cast<size_t>(y) * t_ink.stride + static_cast<size_t>(x) * 4;
+    const uint8_t* px = t_ink.pixels.data() + offset;
+    return (px[0] + px[1] + px[2]) < 3 * 128;
+}
+}  // namespace
+
+ScopedCoverPage::ScopedCoverPage(FPDF_PAGE page) {
+    resetInkRaster();
+    t_ink.page = page;
+}
+
+ScopedCoverPage::~ScopedCoverPage() {
+    resetInkRaster();
+}
+
+// Renders the cover page once per scope, before any redaction is applied to it.
+static bool ensureInkRaster() {
+    if (!t_ink.page) return false;
+    if (t_ink.rendered) return t_ink.bitmap != nullptr;
+    t_ink.rendered = true;
+    // A rotated page renders on its side, so page-space glyph boxes no longer
+    // line up with raster rows; the cover keeps the glyph box in that case.
+    if (FPDFPage_GetRotation(t_ink.page) != 0) return false;
+    FS_RECTF box;
+    if (!FPDF_GetPageBoundingBox(t_ink.page, &box)) return false;
+    double pw = box.right - box.left, ph = box.top - box.bottom;
+    if (pw <= 0 || ph <= 0) return false;
+    t_ink.boxLeft = box.left;
+    t_ink.boxTop = box.top;
+    // kInkDpi decides how finely a scanned glyph is resolved; the buffer it
+    // implies is what a very large page makes expensive, so the scale backs off
+    // to kMaxInkPixels rather than losing the covers. Every threshold below is
+    // em-relative and keeps its page-space meaning at the coarser scale.
+    double base = kInkDpi / 72.0;
+    double pixels = pw * ph * base * base;
+    t_ink.scale = pixels > kMaxInkPixels ? std::sqrt(kMaxInkPixels / (pw * ph)) : base;
+    t_ink.w = static_cast<int>(pw * t_ink.scale);
+    t_ink.h = static_cast<int>(ph * t_ink.scale);
+    if (t_ink.w <= 0 || t_ink.h <= 0) return false;
+    FPDF_BITMAP bmp = FPDFBitmap_Create(t_ink.w, t_ink.h, 0);
+    if (!bmp) return false;
+    FPDFBitmap_FillRect(bmp, 0, 0, t_ink.w, t_ink.h, 0xFFFFFFFF);
+    FPDF_RenderPageBitmap(bmp, t_ink.page, 0, 0, t_ink.w, t_ink.h, 0, 0);
+    t_ink.bitmap = bmp;
+    t_ink.stride = FPDFBitmap_GetStride(bmp);
+    t_ink.pixels = {static_cast<const uint8_t*>(FPDFBitmap_GetBuffer(bmp)),
+                    static_cast<size_t>(t_ink.stride) * static_cast<size_t>(t_ink.h)};
     return true;
 }
 
+// Extends [bottom, top] over the scanned glyphs the cover slices through. A glyph
+// counts when its ink reaches the middle of the cover, so it belongs to this
+// line and not to a neighbour poking in, and ends within kOcrGrowEm of the edge
+// it crosses: a descender tip, a stacked mark, the top of a line the OCR placed
+// too low.
+static void growToInk(double l, double r, double em, double* bottom, double* top) {
+    if (!std::isfinite(l) || !std::isfinite(r) || !std::isfinite(em) || em <= 0) return;
+    if (!ensureInkRaster()) return;
+    // Everything below becomes an index into the raster, and a crafted file can
+    // hold any text matrix: clamp to the rendered box before narrowing.
+    const double boxRight = t_ink.boxLeft + t_ink.w / t_ink.scale;
+    const double boxBottom = t_ink.boxTop - t_ink.h / t_ink.scale;
+    auto colOf = [&](double x) {
+        double clamped = std::clamp(x, t_ink.boxLeft, boxRight) - t_ink.boxLeft;
+        double px = std::clamp(clamped * t_ink.scale, 0.0, static_cast<double>(t_ink.w));
+        return static_cast<int>(px);
+    };
+    auto rowOf = [&](double y) {
+        double clamped = t_ink.boxTop - std::clamp(y, boxBottom, t_ink.boxTop);
+        double px = std::clamp(clamped * t_ink.scale, 0.0, static_cast<double>(t_ink.h));
+        return static_cast<int>(px);
+    };
+    int x0 = colOf(l);
+    int x1 = std::min(t_ink.w, colOf(r) + 1);
+    int rTop = rowOf(*top), rBot = rowOf(*bottom);
+    if (x1 <= x0 || rBot - rTop < 4) return;
+    double capPx = std::clamp(kOcrGrowEm * em * t_ink.scale, 1.0, static_cast<double>(t_ink.h));
+    int cap = static_cast<int>(capPx);
+    int y0 = std::max(0, rTop - cap - 1), y1 = std::min(t_ink.h, rBot + cap + 1);
+    int midA = rTop + (rBot - rTop) * 3 / 10, midB = rBot - (rBot - rTop) * 3 / 10;
+    int w = x1 - x0, h = y1 - y0;
+    if (h <= 0) return;
+    std::vector<char>& seen = t_scratchSeen;
+    seen.assign(static_cast<size_t>(w) * h, 0);
+    std::vector<int>& stack = t_scratchStack;
+    stack.clear();
+    int newTop = rTop, newBot = rBot;
+    for (int sy = 0; sy < h; ++sy)
+        for (int sx = 0; sx < w; ++sx) {
+            size_t si = static_cast<size_t>(sy) * w + sx;
+            if (seen[si] || !inkAt(sy + y0, sx + x0)) continue;
+            int minY = sy + y0, maxY = minY;
+            bool mid = false, clipped = false;
+            seen[si] = 1;
+            stack.push_back(static_cast<int>(si));
+            while (!stack.empty()) {
+                int i = stack.back();
+                stack.pop_back();
+                int cy = i / w, cx = i % w, py = cy + y0;
+                minY = std::min(minY, py);
+                maxY = std::max(maxY, py);
+                mid |= py >= midA && py < midB;
+                clipped |= cy == 0 || cy == h - 1;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int ny = cy + dy, nx = cx + dx;
+                        if (ny < 0 || ny >= h || nx < 0 || nx >= w) continue;
+                        size_t ni = static_cast<size_t>(ny) * w + nx;
+                        if (seen[ni] || !inkAt(ny + y0, nx + x0)) continue;
+                        seen[ni] = 1;
+                        stack.push_back(static_cast<int>(ni));
+                    }
+            }
+            if (!mid || clipped) continue;
+            newTop = std::min(newTop, minY);
+            newBot = std::max(newBot, maxY + 1);
+        }
+    *top = std::max(*top, t_ink.boxTop - newTop / t_ink.scale);
+    *bottom = std::min(*bottom, t_ink.boxTop - newBot / t_ink.scale);
+}
+
+bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
+    if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
+    FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
+    if (!obj || FPDFTextObj_GetTextRenderMode(obj) != FPDF_TEXTRENDERMODE_INVISIBLE) return true;
+    FS_MATRIX m;
+    double em = charEm(textPage, index, &m);
+    double ox, oy;
+    if (em <= 0 || !FPDFText_GetCharOrigin(textPage, index, &ox, &oy)) return true;
+    // Rotated or mirrored layers keep the glyph box: the band is vertical.
+    bool upright =
+        m.d > 0 && std::fabs(m.b) <= 0.01f * std::fabs(m.a) && std::fabs(m.c) <= 0.01f * m.d;
+    if (!upright) return true;
+    // The placeholder glyph is narrower than the advance the OCR tool gave the
+    // char, so the box also spans that advance.
+    FS_RECTF loose;
+    if (FPDFText_GetLooseCharBox(textPage, index, &loose) && loose.right > loose.left) {
+        *l = std::min(*l, static_cast<double>(loose.left));
+        *r = std::max(*r, static_cast<double>(loose.right));
+    }
+    *b = std::min(*b, oy - kInkBelowBaselineEm * em);
+    *t = std::max(*t, oy + kInkAboveBaselineEm * em);
+    if (hasMarkBelow(FPDFText_GetUnicode(textPage, index)))
+        *b = std::min(*b, oy - kMarkBelowBaselineEm * em);
+    return true;
+}
+
+namespace {
+// Glyph boxes of every char on one text page, read on first use so that covering
+// many matches reads each box once. Valid only while that text page is open and
+// the page is unchanged.
+class CharBoxCache {
+   public:
+    struct Box {
+        double l = 0, r = 0, b = 0, t = 0;
+        bool ok = false;  // has a box with height
+    };
+
+    explicit CharBoxCache(FPDF_TEXTPAGE textPage) : textPage_(textPage) {}
+
+    FPDF_TEXTPAGE textPage() const {
+        return textPage_;
+    }
+
+    const std::vector<Box>& boxes() {
+        if (loaded_) return boxes_;
+        loaded_ = true;
+        int n = FPDFText_CountChars(textPage_);
+        boxes_.resize(n > 0 ? static_cast<size_t>(n) : 0);
+        for (int i = 0; i < n; ++i) {
+            Box& box = boxes_[static_cast<size_t>(i)];
+            box.ok =
+                FPDFText_GetCharBox(textPage_, i, &box.l, &box.r, &box.b, &box.t) && box.t > box.b;
+        }
+        return boxes_;
+    }
+
+   private:
+    FPDF_TEXTPAGE textPage_;
+    bool loaded_ = false;
+    std::vector<Box> boxes_;
+};
+}  // namespace
+
+// Union of character boxes: `cover` from matchCharBox, `glyph` from the glyph
+// boxes alone. They differ only where invisible text was extended.
+struct CoverBounds {
+    double l = 0, r = 0, coverB = 0, coverT = 0, glyphB = 0, glyphT = 0;
+    bool any = false;
+    double ocrEm = 0;  // largest em of the invisible (OCR) chars; 0 when there are none
+
+    void add(double cl, double cr, double cb, double ct, double gb, double gt) {
+        if (!any) {
+            l = cl;
+            r = cr;
+            coverB = cb;
+            coverT = ct;
+            glyphB = gb;
+            glyphT = gt;
+            any = true;
+            return;
+        }
+        l = std::min(l, cl);
+        r = std::max(r, cr);
+        coverB = std::min(coverB, cb);
+        coverT = std::max(coverT, ct);
+        glyphB = std::min(glyphB, gb);
+        glyphT = std::max(glyphT, gt);
+    }
+};
+
+// Sets the match box from `bounds`. The part of the cover that extends past the
+// glyph boxes stops short of any other character above, below or beside it:
+// small print can sit closer to the neighbouring line than the invisible-text
+// band is tall, and the redaction removes every character its box touches.
+static void fitCover(CharBoxCache& chars, TextMatch& m, const CoverBounds& bounds, float padding) {
+    double bottom = bounds.coverB;
+    double top = bounds.coverT;
+    double left = bounds.l, right = bounds.r;
+    bool ocr = bounds.ocrEm > 0;
+    if (ocr || bottom < bounds.glyphB || top > bounds.glyphT) {
+        std::vector<int> own = m.charIndices;
+        std::sort(own.begin(), own.end());
+        constexpr double kClearance = 0.1;
+        double topLimit = 1e9, bottomLimit = -1e9, leftLimit = -1e9, rightLimit = 1e9;
+        FPDF_TEXTPAGE textPage = chars.textPage();
+        const auto& boxes = chars.boxes();
+        for (int i = 0; i < static_cast<int>(boxes.size()); ++i) {
+            const CharBoxCache::Box& box = boxes[static_cast<size_t>(i)];
+            if (!box.ok || std::binary_search(own.begin(), own.end(), i)) continue;
+            double l = box.l, r = box.r, b = box.b, t = box.t;
+            if (r > bounds.l && l < bounds.r) {
+                if (b >= bounds.glyphT) {
+                    topLimit = std::min(topLimit, b - kClearance);
+                } else if (t <= bounds.glyphB) {
+                    bottomLimit = std::max(bottomLimit, t + kClearance);
+                }
+                continue;
+            }
+            if (!ocr || std::min(t, bounds.glyphT) <= std::max(b, bounds.glyphB)) continue;
+            unsigned int u = FPDFText_GetUnicode(textPage, i);
+            if (u == ' ' || u == 0xA0 || u == '\t' || u == '\r' || u == '\n') continue;
+            FS_RECTF loose;
+            if (FPDFText_GetLooseCharBox(textPage, i, &loose) && loose.right > loose.left) {
+                l = std::min(l, static_cast<double>(loose.left));
+                r = std::max(r, static_cast<double>(loose.right));
+            }
+            if (r <= bounds.l) {
+                leftLimit = std::max(leftLimit, std::min(r + kClearance, bounds.l));
+            } else if (l >= bounds.r) {
+                rightLimit = std::min(rightLimit, std::max(l - kClearance, bounds.r));
+            } else if (r < 0.5 * (bounds.l + bounds.r)) {
+                leftLimit = std::max(leftLimit, bounds.l);
+            } else {
+                rightLimit = std::min(rightLimit, bounds.r);
+            }
+        }
+        if (ocr) {
+            growToInk(bounds.l, bounds.r, bounds.ocrEm, &bottom, &top);
+            left = std::max(bounds.l - kOcrSidePadEm * bounds.ocrEm, leftLimit);
+            right = std::min(bounds.r + kOcrSidePadEm * bounds.ocrEm, rightLimit);
+        }
+        top = std::max(std::min(top, topLimit), bounds.glyphT);
+        bottom = std::min(std::max(bottom, bottomLimit), bounds.glyphB);
+    }
+    m.bboxL = static_cast<float>(left - padding);
+    m.bboxB = static_cast<float>(bottom - padding);
+    m.bboxR = static_cast<float>(right + padding);
+    m.bboxT = static_cast<float>(top + padding);
+}
+
+// Adds one character to `bounds`; false when it has no box.
+static bool addCharBox(FPDF_TEXTPAGE textPage, int index, CoverBounds& bounds, double* l, double* r,
+                       double* b, double* t) {
+    if (!matchCharBox(textPage, index, l, r, b, t)) return false;
+    double gl, gr, gb, gt;
+    if (!FPDFText_GetCharBox(textPage, index, &gl, &gr, &gb, &gt)) return false;
+    bounds.add(*l, *r, *b, *t, gb, gt);
+    FPDF_PAGEOBJECT obj = FPDFText_GetTextObject(textPage, index);
+    if (obj && FPDFTextObj_GetTextRenderMode(obj) == FPDF_TEXTRENDERMODE_INVISIBLE)
+        bounds.ocrEm = std::max(bounds.ocrEm, charEm(textPage, index, nullptr));
+    return true;
+}
+
+// Rebuild a TextMatch bbox from its char indices (used after grapheme or
+// cluster extension so the painted cover encloses everything removed).
+static bool recomputeMatchBbox(CharBoxCache& chars, TextMatch& m) {
+    CoverBounds bounds;
+    for (int ci : m.charIndices) {
+        double l, r, b, t;
+        addCharBox(chars.textPage(), ci, bounds, &l, &r, &b, &t);
+    }
+    if (!bounds.any) return false;
+    fitCover(chars, m, bounds, 0.0f);
+    return true;
+}
+
+bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m) {
+    CharBoxCache chars(textPage);
+    return recomputeMatchBbox(chars, m);
+}
+
 // Append the chars covered by a PCRE2 match [start,start+len) of the search
-// buffer into a TextMatch, computing the tight bbox.
-static void appendMatchChars(FPDF_TEXTPAGE textPage, const std::vector<int>& idxMap, int start,
+// buffer into a TextMatch, computing its cover box.
+static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap, int start,
                              int len, float padding, std::vector<TextMatch>& out) {
     TextMatch tm;
-    double xmin = std::numeric_limits<double>::max();
-    double ymin = std::numeric_limits<double>::max();
-    double xmax = std::numeric_limits<double>::lowest();
-    double ymax = std::numeric_limits<double>::lowest();
-    bool anyBox = false;
+    CoverBounds bounds;
     for (int k = start; k < start + len && k < static_cast<int>(idxMap.size()); ++k) {
         int ci = idxMap[k];
         tm.charIndices.push_back(ci);
         double l, r, b, t;
-        if (!FPDFText_GetCharBox(textPage, ci, &l, &r, &b, &t)) continue;  // skip unmapped
-        anyBox = true;
-        if (l < xmin) xmin = l;
-        if (b < ymin) ymin = b;
-        if (r > xmax) xmax = r;
-        if (t > ymax) ymax = t;
+        addCharBox(chars.textPage(), ci, bounds, &l, &r, &b, &t);  // skips unmapped chars
     }
-    if (!anyBox) return;
-    xmin -= padding;
-    ymin -= padding;
-    xmax += padding;
-    ymax += padding;
-    tm.bboxL = static_cast<float>(xmin);
-    tm.bboxB = static_cast<float>(ymin);
-    tm.bboxR = static_cast<float>(xmax);
-    tm.bboxT = static_cast<float>(ymax);
+    if (!bounds.any) return;
+    fitCover(chars, tm, bounds, padding);
     out.push_back(std::move(tm));
 }
 
 #ifdef JPDFIUM_HAS_PCRE2
 // Run a compiled PCRE2 pattern over the search buffer -> TextMatch vector.
 // Non-overlapping matches (same iteration model as wsregex_iterator).
-void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
-                         const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
-                         std::vector<TextMatch>& out) {
+static void collectPcre2Matches(CharBoxCache& chars, const std::u32string& text,
+                                const std::vector<int>& idxMap, const Pcre2Pattern& pc,
+                                float padding, std::vector<TextMatch>& out) {
     size_t offset = 0;
     while (offset <= text.size()) {
         int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
@@ -239,10 +575,17 @@ void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
             offset = start + 1;
             continue;
         }
-        appendMatchChars(textPage, idxMap, static_cast<int>(start), static_cast<int>(end - start),
+        appendMatchChars(chars, idxMap, static_cast<int>(start), static_cast<int>(end - start),
                          padding, out);
         offset = end;
     }
+}
+
+void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
+                         const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
+                         std::vector<TextMatch>& out) {
+    CharBoxCache chars(textPage);
+    collectPcre2Matches(chars, text, idxMap, pc, padding, out);
 }
 
 // Escape regex metacharacters for literal matching.
@@ -303,6 +646,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                       std::vector<TextMatch>& matches,
                       std::vector<Pcre2Pattern>* outCompiledPatterns, int& rejectedPatterns,
                       int& compiledCount) {
+    CharBoxCache chars(tp);
     uint64_t sig = computePatternSignature(words, wordCount, wholeWord, caseSensitive, useRegex);
     std::string key = buildCanonicalKey(words, wordCount, wholeWord, caseSensitive, useRegex);
     if (core && !core->redactPatternCache) {
@@ -354,8 +698,8 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                     offset = start + 1;
                     continue;
                 }
-                appendMatchChars(tp, idxMap, static_cast<int>(start), static_cast<int>(end - start),
-                                 padding, matches);
+                appendMatchChars(chars, idxMap, static_cast<int>(start),
+                                 static_cast<int>(end - start), padding, matches);
                 offset = end;
             }
             if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
@@ -368,7 +712,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                 Pcre2Pattern pc;
                 if (createPatternFromCode(cached->codes[wi], cached->jst, pc)) {
                     compiledCount++;
-                    collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                    collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
                     if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
                 } else {
                     // Wrapper allocation (match data/context) failed under
@@ -403,7 +747,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                     pc.jst = sharedJst;
                     pcre2_jit_stack_assign(pc.mctx, nullptr, sharedJst);
                 }
-                collectPcre2Matches(tp, wtext, idxMap, pc, padding, matches);
+                collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
                 if (cache) {
                     newCodes.push_back(pc.code);
                     if (!sharedJst && pc.jst) sharedJst = pc.jst;
@@ -437,6 +781,7 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
     set_graphemebreaks_utf32(reinterpret_cast<const utf32_t*>(unicodeSeq.data()), unicodeSeq.size(),
                              "", brks.data());
     // brks[i] = whether a break exists BEFORE char i.
+    CharBoxCache chars(textPage);
     for (auto& m : matches) {
         int first = -1, last = -1;
         for (int ci : m.charIndices) {
@@ -474,7 +819,7 @@ void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>
         // Rebuild the (possibly extended) char index list.
         m.charIndices.clear();
         for (int ci = first; ci <= last; ci++) m.charIndices.push_back(ci);
-        recomputeMatchBbox(textPage, m);
+        recomputeMatchBbox(chars, m);
     }
 #else
     (void)textPage;
@@ -590,6 +935,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
     }
 
     // Extend every match span to full clusters within each object.
+    CharBoxCache chars(tp);
     for (auto& m : matches) {
         std::unordered_map<FPDF_PAGEOBJECT, int> firstPos, lastPos;
         for (int ci : m.charIndices) {
@@ -691,7 +1037,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
             std::sort(m.charIndices.begin(), m.charIndices.end());
             m.charIndices.erase(std::unique(m.charIndices.begin(), m.charIndices.end()),
                                 m.charIndices.end());
-            recomputeMatchBbox(tp, m);
+            recomputeMatchBbox(chars, m);
         }
     }
 
