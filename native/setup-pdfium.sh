@@ -663,7 +663,7 @@ for arg in "\$@"; do
             ;;
     esac
 done
-eval exec "${SYS_CLANG}" -D_LIBCPP_HAS_MUSL_LIBC \$filtered
+eval exec "${SYS_CLANG}" --driver-mode=gcc \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang"
         fi
@@ -681,7 +681,7 @@ for arg in "\$@"; do
             ;;
     esac
 done
-eval exec "${SYS_CLANGXX}" -D_LIBCPP_HAS_MUSL_LIBC \$filtered
+eval exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC \$filtered
 WRAPPER_EOF
             chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
