@@ -542,6 +542,59 @@ if '#include <cstdint>' not in src and guard in src:
 PY_EOF
 fi
 
+# PartitionAlloc's aarch64_support.h defines HAS_HW_CAPS on any Linux/arm64 and
+# then includes <sys/ifunc.h> plus <asm/hwcap.h>, and its IsBtiEnabled/IsMteEnabled
+# bodies use _IFUNC_ARG_HWCAP and struct __ifunc_arg_t from that glibc-only header.
+# musl has neither, so the linux-musl-arm64 rows died with
+#   ../../base/allocator/partition_alloc/src/partition_alloc/aarch64_support.h:19:10:
+#   fatal error: 'sys/ifunc.h' file not found
+# Merely guarding the include is not enough (the macro/struct uses would then fail),
+# so gate HAS_HW_CAPS on the header being present; musl then takes the existing
+# #else path (forward declare __ifunc_arg_t, both helpers return false).
+AARCH64_SUPPORT_HEADER="base/allocator/partition_allocator/src/partition_alloc/aarch64_support.h"
+if [ -f "${AARCH64_SUPPORT_HEADER}" ] && ! grep -q 'PA_PDFIUM_HAS_IFUNC_HEADER' "${AARCH64_SUPPORT_HEADER}"; then
+    echo "  Gating partition_alloc HAS_HW_CAPS on <sys/ifunc.h> availability..."
+    python3 - "${AARCH64_SUPPORT_HEADER}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """#if PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_LINUX)
+#define HAS_HW_CAPS
+#endif
+
+#if PA_BUILDFLAG(PA_ARCH_CPU_ARM64) && defined(HAS_HW_CAPS)
+#include <asm/hwcap.h>
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif"""
+replacement = """#if defined(__has_include)
+#if __has_include(<sys/ifunc.h>)
+#define PA_PDFIUM_HAS_IFUNC_HEADER 1
+#endif
+#else
+#define PA_PDFIUM_HAS_IFUNC_HEADER 1
+#endif
+
+#if (PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_LINUX)) && defined(PA_PDFIUM_HAS_IFUNC_HEADER)
+#define HAS_HW_CAPS
+#endif
+#undef PA_PDFIUM_HAS_IFUNC_HEADER
+
+#if PA_BUILDFLAG(PA_ARCH_CPU_ARM64) && defined(HAS_HW_CAPS)
+#include <asm/hwcap.h>
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Gated HAS_HW_CAPS on <sys/ifunc.h> in aarch64_support.h.")
+PY_EOF
+fi
+
 # Chromium's build/ dep hard-pins the Windows SDK it was tested with
 # (SDK_VERSION = '10.0.28000.0' in build/toolchain/win/setup_toolchain.py) and
 # passes it to vcvarsall.bat. The GitHub windows runners do not have that SDK
