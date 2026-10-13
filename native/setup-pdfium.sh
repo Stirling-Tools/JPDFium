@@ -595,6 +595,41 @@ if target in src:
 PY_EOF
 fi
 
+# PartitionAlloc's tagging.cc also includes <sys/ifunc.h> when HAS_MEMORY_TAGGING
+# is enabled. musl libc does not have <sys/ifunc.h>, so guard the include.
+TAGGING_CC="base/allocator/partition_allocator/src/partition_alloc/tagging.cc"
+if [ -f "${TAGGING_CC}" ] && ! grep -q '__has_include(<sys/ifunc.h>)' "${TAGGING_CC}"; then
+    echo "  Guarding <sys/ifunc.h> in partition_alloc tagging.cc..."
+    python3 - "${TAGGING_CC}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+#include <arm_acle.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#include <sys/ifunc.h>"""
+replacement = """#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+#include <arm_acle.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#if defined(__has_include)
+#if __has_include(<sys/ifunc.h>)
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif
+#else
+#include <sys/ifunc.h>
+#endif"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Guarded <sys/ifunc.h> in tagging.cc.")
+PY_EOF
+fi
+
 # Chromium's build/ dep hard-pins the Windows SDK it was tested with
 # (SDK_VERSION = '10.0.28000.0' in build/toolchain/win/setup_toolchain.py) and
 # passes it to vcvarsall.bat. The GitHub windows runners do not have that SDK
