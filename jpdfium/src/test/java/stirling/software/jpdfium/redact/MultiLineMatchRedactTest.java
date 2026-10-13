@@ -18,6 +18,7 @@ import stirling.software.jpdfium.redact.RedactTestPages.Line;
 import stirling.software.jpdfium.redact.RedactTestPages.Outcome;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static stirling.software.jpdfium.redact.RedactTestPages.LEADING;
 import static stirling.software.jpdfium.redact.RedactTestPages.pdf;
@@ -43,6 +44,7 @@ class MultiLineMatchRedactTest {
             assertTrue(c.height() < LEADING, "a cover must not span two lines: " + c);
         }
         String after = text(o.pdf());
+        assertMatchedWordsGone(after, "authority", "confirmed", "dredging");
         assertTrue(after.contains("The harbour"), "neighbours on the first line survive: " + after);
         assertTrue(after.contains("of the north"), "neighbours on the second line survive: " + after);
         assertTrue(after.contains("channel will begin in spring."), after);
@@ -59,6 +61,7 @@ class MultiLineMatchRedactTest {
             assertTrue(c.height() < LEADING, "a cover must stay on one line: " + c);
         }
         String after = text(o.pdf());
+        assertMatchedWordsGone(after, "during", "morning", "peak");
         for (String survivor : List.of("Bus Timetable Changes", "The number twelve bus will run",
                 "every fifteen minutes", "Evening services", "on route nine will be extended",
                 "until half past eleven.")) {
@@ -78,6 +81,7 @@ class MultiLineMatchRedactTest {
             assertTrue(c.x() + c.width() < 220f || c.x() > 300f, "a cover must not span the gutter: " + c);
         }
         String after = text(o.pdf());
+        assertMatchedWordsGone(after, "Sam", "Jane", "Roe");
         assertTrue(after.contains("Signed by") && after.contains("witness"), after);
     }
 
@@ -99,9 +103,16 @@ class MultiLineMatchRedactTest {
                     .filter(o -> o.type() == PageObjectType.PATH)
                     .map(PageObject::bounds)
                     .toList();
+            assertFalse(covers.isEmpty(), "the matches are covered");
             for (Rect c : covers) {
                 assertTrue(c.width() > 0f, "every cover has width: " + covers);
             }
+        }
+    }
+
+    private static void assertMatchedWordsGone(String text, String... words) {
+        for (String word : words) {
+            assertFalse(text.contains(word), "'" + word + "' must be redacted: " + text);
         }
     }
 }

@@ -300,15 +300,19 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
             FPDFPage_CloseAnnot(annot);
-            // Once one box is applied the text page indexes freed objects, so the
-            // fission fallback would read them. Skip the box; the post-redaction
-            // check still covers its text.
-            if (!ok && !appliedRects.empty()) continue;
             if (!ok) {
                 epdfOk = false;
                 break;
             }
             appliedRects.push_back(rect);
+        }
+        // Once one box is applied, tp indexes objects that redaction freed, so the
+        // fission fallback cannot finish the page. The post-redaction check cannot
+        // stand in for the unapplied boxes either: it re-matches whole patterns, and
+        // a match split across lines no longer matches once one piece is gone.
+        if (!epdfOk && !appliedRects.empty()) {
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
@@ -511,15 +515,19 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
             FPDFPage_CloseAnnot(annot);
-            // Once one box is applied the text page indexes freed objects, so the
-            // fission fallback would read them. Skip the box; the post-redaction
-            // check still covers its text.
-            if (!ok && !appliedRects.empty()) continue;
             if (!ok) {
                 epdfOk = false;
                 break;
             }
             appliedRects.push_back(rect);
+        }
+        // Once one box is applied, tp indexes objects that redaction freed, so the
+        // fission fallback cannot finish the page. The post-redaction check cannot
+        // stand in for the unapplied boxes either: it re-matches whole patterns, and
+        // a match split across lines no longer matches once one piece is gone.
+        if (!epdfOk && !appliedRects.empty()) {
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
