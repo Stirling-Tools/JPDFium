@@ -202,26 +202,42 @@ static bool hasMarkBelow(unsigned int cp) {
 }
 
 namespace {
+// The component walk is window-sized, so its buffers are kept per thread
+// instead of re-allocated for every match - but only while they stay small.
+thread_local std::vector<char> t_scratchSeen;
+thread_local std::vector<int> t_scratchStack;
+constexpr size_t kMaxScratchRetained = 65536;
+
 struct InkRaster {
     FPDF_PAGE page = nullptr;
     bool rendered = false;
     int w = 0, h = 0, stride = 0;
-    double scale = 0, pageH = 0;
+    double scale = 0;
+    // page-space origin of the rendered area
+    double boxLeft = 0, boxTop = 0;
     FPDF_BITMAP bitmap = nullptr;     // rendered page, kept for the whole scope
     std::span<const uint8_t> pixels;  // its buffer, stride * h bytes
 };
 thread_local InkRaster t_ink;
 
+// Drops scratch a single large match left behind: the walk window can span the
+// whole raster, far beyond what the next match on this thread needs.
+void trimScratch() {
+    if (t_scratchSeen.capacity() > kMaxScratchRetained) std::vector<char>().swap(t_scratchSeen);
+    if (t_scratchStack.capacity() > kMaxScratchRetained) std::vector<int>().swap(t_scratchStack);
+}
+
 // Releases the rendered page a scope was holding, if any.
 void resetInkRaster() {
     if (t_ink.bitmap) FPDFBitmap_Destroy(t_ink.bitmap);
     t_ink = InkRaster();
+    trimScratch();
 }
 
 // Ink test on the rendered page: dark enough to be print, not paper.
 bool inkAt(int y, int x) {
-    const uint8_t* px = t_ink.pixels.data() + static_cast<size_t>(y) * t_ink.stride +
-                        static_cast<size_t>(x) * 4;
+    size_t offset = static_cast<size_t>(y) * t_ink.stride + static_cast<size_t>(x) * 4;
+    const uint8_t* px = t_ink.pixels.data() + offset;
     return (px[0] + px[1] + px[2]) < 3 * 128;
 }
 }  // namespace
@@ -240,14 +256,22 @@ static bool ensureInkRaster() {
     if (!t_ink.page) return false;
     if (t_ink.rendered) return t_ink.bitmap != nullptr;
     t_ink.rendered = true;
-    double pw = FPDF_GetPageWidthF(t_ink.page), ph = FPDF_GetPageHeightF(t_ink.page);
-    t_ink.pageH = ph;
+    // A rotated page renders on its side, so page-space glyph boxes no longer
+    // line up with raster rows; the cover keeps the glyph box in that case.
+    if (FPDFPage_GetRotation(t_ink.page) != 0) return false;
+    FS_RECTF box;
+    if (!FPDF_GetPageBoundingBox(t_ink.page, &box)) return false;
+    double pw = box.right - box.left, ph = box.top - box.bottom;
+    if (pw <= 0 || ph <= 0) return false;
+    t_ink.boxLeft = box.left;
+    t_ink.boxTop = box.top;
     // kInkDpi decides how finely a scanned glyph is resolved; the buffer it
     // implies is what a very large page makes expensive, so the scale backs off
     // to kMaxInkPixels rather than losing the covers. Every threshold below is
     // em-relative and keeps its page-space meaning at the coarser scale.
     double base = kInkDpi / 72.0;
-    t_ink.scale = pw * ph * base * base > kMaxInkPixels ? std::sqrt(kMaxInkPixels / (pw * ph)) : base;
+    double pixels = pw * ph * base * base;
+    t_ink.scale = pixels > kMaxInkPixels ? std::sqrt(kMaxInkPixels / (pw * ph)) : base;
     t_ink.w = static_cast<int>(pw * t_ink.scale);
     t_ink.h = static_cast<int>(ph * t_ink.scale);
     if (t_ink.w <= 0 || t_ink.h <= 0) return false;
@@ -262,28 +286,34 @@ static bool ensureInkRaster() {
     return true;
 }
 
-namespace {
-// Component-walk scratch, kept per thread so a page's matches do not each pay
-// for a fresh window-sized allocation.
-thread_local std::vector<char> t_scratchSeen;
-thread_local std::vector<int> t_scratchStack;
-}  // namespace
-
 // Extends [bottom, top] over the scanned glyphs the cover slices through. A glyph
 // counts when its ink reaches the middle of the cover, so it belongs to this
 // line and not to a neighbour poking in, and ends within kOcrGrowEm of the edge
 // it crosses: a descender tip, a stacked mark, the top of a line the OCR placed
 // too low.
 static void growToInk(double l, double r, double em, double* bottom, double* top) {
+    if (!std::isfinite(l) || !std::isfinite(r) || !std::isfinite(em) || em <= 0) return;
     if (!ensureInkRaster()) return;
-    auto rowOf = [](double y) {
-        return static_cast<int>(std::lround((t_ink.pageH - y) * t_ink.scale));
+    // Everything below becomes an index into the raster, and a crafted file can
+    // hold any text matrix: clamp to the rendered box before narrowing.
+    const double boxRight = t_ink.boxLeft + t_ink.w / t_ink.scale;
+    const double boxBottom = t_ink.boxTop - t_ink.h / t_ink.scale;
+    auto colOf = [&](double x) {
+        double clamped = std::clamp(x, t_ink.boxLeft, boxRight) - t_ink.boxLeft;
+        double px = std::clamp(clamped * t_ink.scale, 0.0, static_cast<double>(t_ink.w));
+        return static_cast<int>(px);
     };
-    int x0 = std::max(0, static_cast<int>(l * t_ink.scale));
-    int x1 = std::min(t_ink.w, static_cast<int>(r * t_ink.scale) + 1);
+    auto rowOf = [&](double y) {
+        double clamped = t_ink.boxTop - std::clamp(y, boxBottom, t_ink.boxTop);
+        double px = std::clamp(clamped * t_ink.scale, 0.0, static_cast<double>(t_ink.h));
+        return static_cast<int>(px);
+    };
+    int x0 = colOf(l);
+    int x1 = std::min(t_ink.w, colOf(r) + 1);
     int rTop = rowOf(*top), rBot = rowOf(*bottom);
     if (x1 <= x0 || rBot - rTop < 4) return;
-    int cap = std::max(1, static_cast<int>(kOcrGrowEm * em * t_ink.scale));
+    double capPx = std::clamp(kOcrGrowEm * em * t_ink.scale, 1.0, static_cast<double>(t_ink.h));
+    int cap = static_cast<int>(capPx);
     int y0 = std::max(0, rTop - cap - 1), y1 = std::min(t_ink.h, rBot + cap + 1);
     int midA = rTop + (rBot - rTop) * 3 / 10, midB = rBot - (rBot - rTop) * 3 / 10;
     int w = x1 - x0, h = y1 - y0;
@@ -323,8 +353,8 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
             newTop = std::min(newTop, minY);
             newBot = std::max(newBot, maxY + 1);
         }
-    *top = std::max(*top, t_ink.pageH - newTop / t_ink.scale);
-    *bottom = std::min(*bottom, t_ink.pageH - newBot / t_ink.scale);
+    *top = std::max(*top, t_ink.boxTop - newTop / t_ink.scale);
+    *bottom = std::min(*bottom, t_ink.boxTop - newBot / t_ink.scale);
 }
 
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {

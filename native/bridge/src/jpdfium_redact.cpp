@@ -206,6 +206,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
     }
 
     try {
+        ScopedCoverPage coverPage(pw->page);
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
@@ -731,6 +732,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 
     try {
         ScratchGuard scratchGuard;
+        ScopedCoverPage coverPage(pw->page);
         FPDF_TEXTPAGE tp = FPDFText_LoadPage(pw->page);
         if (!tp) return JPDFIUM_ERR_NATIVE;
 

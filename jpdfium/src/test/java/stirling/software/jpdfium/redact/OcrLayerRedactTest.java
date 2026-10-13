@@ -1,6 +1,9 @@
 package stirling.software.jpdfium.redact;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.model.Rect;
@@ -13,6 +16,7 @@ import stirling.software.jpdfium.redact.RedactTestPages.Line;
 import stirling.software.jpdfium.redact.RedactTestPages.Outcome;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static stirling.software.jpdfium.redact.RedactTestPages.SIZE;
 import static stirling.software.jpdfium.redact.RedactTestPages.pdf;
@@ -60,12 +64,15 @@ class OcrLayerRedactTest {
 
         Outcome heading = redact(page, "Wholesale Ltd", false);
         assertEquals(1, heading.matches());
-        assertTrue(text(heading.pdf()).contains("Anytown EX1 2MP www.example.com"),
-                "the small print below keeps its text: " + text(heading.pdf()));
+        String afterHeading = text(heading.pdf());
+        assertFalse(afterHeading.contains("Wholesale Ltd"), "the redacted heading is gone: " + afterHeading);
+        assertTrue(afterHeading.contains("Anytown EX1 2MP www.example.com"),
+                "the small print below keeps its text: " + afterHeading);
 
         Outcome smallPrint = redact(page, "2MP", false);
         assertEquals(1, smallPrint.matches());
         String after = text(smallPrint.pdf());
+        assertFalse(after.contains("2MP"), "the redacted postcode is gone: " + after);
         assertTrue(after.contains("Electronics Wholesale Ltd"), "the line above keeps its text: " + after);
         assertTrue(after.contains("sales@example.com"), "the line below keeps its text: " + after);
     }
@@ -81,6 +88,7 @@ class OcrLayerRedactTest {
     @Test
     void ocrLayerCoverSpansTheScannedWordButNotItsNeighbours() throws Exception {
         var url = OcrLayerRedactTest.class.getResource("/pdfs/redact/redact-test-ocr-layer.pdf");
+        byte[] original = Files.readAllBytes(Path.of(url.toURI()));
         Outcome o = redact(Path.of(url.toURI()), "jane.doe@example.com");
 
         assertEquals(1, o.matches());
@@ -91,10 +99,17 @@ class OcrLayerRedactTest {
         assertTrue(c.y() <= 93.12f + tolerance, "cover reaches the descenders: " + c);
         assertTrue(c.y() + c.height() < 109.66f, "cover stays below the line above's ink: " + c);
         assertTrue(c.y() > 92.04f, "cover stays above the line below's ink: " + c);
+        // Both ends, not just one: a cover that spanned the whole line would pass
+        // a one-sided check while it redacted the neighbouring words too.
+        assertTrue(c.x() > 55f && c.x() < 95f, "cover starts at the word: " + c);
+        assertTrue(c.x() + c.width() > 195f && c.x() + c.width() < 275f, "cover ends at the word: " + c);
+        assertCoverHidesTheScan(original, o.pdf(), c);
         String after = text(o.pdf());
+        assertFalse(after.contains("jane.doe@example.com"), "the redacted word is gone: " + after);
         assertTrue(after.contains("Jane Doe"), "the line above keeps its OCR text: " + after);
         assertTrue(after.contains("Example Road"), "the line below keeps its OCR text: " + after);
     }
+
     /**
      * The placeholder glyph is narrower than the advance the OCR tool gives each
      * char, so glyph boxes stop short of both ends of the scanned word.
@@ -105,10 +120,54 @@ class OcrLayerRedactTest {
     void ocrLayerCoverSpansTheWholeAdvanceOfTheWord() throws Exception {
         Outcome o = redact(Files.readAllBytes(fixture("redact-test-ocr-latin.pdf")), "EFGH", true);
 
+        // The alphabet carries the sequence in both cases and matching is
+        // case-insensitive, so both occurrences are matched and covered; the
+        // bounds below are those of the leftmost (upper-case) one.
+        assertEquals(2, o.matches(), "both occurrences are matched");
+        assertEquals(o.matches(), o.covers().size(), "every match gets a cover");
         Rect c = o.covers().stream().min(Comparator.comparingDouble(Rect::x)).orElseThrow();
         float tolerance = 0.05f;
         assertTrue(c.x() <= 93.60f + tolerance, "cover reaches the start of the word: " + c);
         assertTrue(c.x() + c.width() >= 125.04f - tolerance, "cover reaches the end of the word: " + c);
+        assertFalse(text(o.pdf()).contains("EFGH"), "the redacted word is gone: " + text(o.pdf()));
+    }
+
+    /**
+     * Bounds alone accept a correctly sized path that is unfilled or transparent,
+     * so the saved page is rendered and the cover's interior must be a flat cover
+     * where the scan's ink was. The same area of the original proves the check can
+     * see the ink it is supposed to hide.
+     */
+    private static void assertCoverHidesTheScan(byte[] original, byte[] redacted, Rect cover) throws Exception {
+        float scale = 150f / 72f;
+        float hidden = darkFraction(redacted, cover, scale);
+        float visible = darkFraction(original, cover, scale);
+        assertTrue(hidden >= 0.98f || hidden <= 0.02f,
+                "cover interior is flat, not the scan: " + hidden + " in " + cover);
+        assertTrue(Math.abs(hidden - visible) > 0.5f,
+                "the printed word is no longer visible: " + hidden + " was " + visible + " in " + cover);
+    }
+
+    private static float darkFraction(byte[] pdf, Rect cover, float scale) throws Exception {
+        try (var doc = Loader.loadPDF(pdf)) {
+            var image = new PDFRenderer(doc).renderImageWithDPI(0, scale * 72f, ImageType.RGB);
+            float pageHeight = doc.getPage(0).getCropBox().getHeight();
+            int x0 = Math.round((cover.x() + 1f) * scale);
+            int x1 = Math.round((cover.x() + cover.width() - 1f) * scale) - 1;
+            int y0 = Math.round((pageHeight - cover.y() - cover.height() + 1f) * scale);
+            int y1 = Math.round((pageHeight - cover.y() - 1f) * scale) - 1;
+            int dark = 0;
+            int total = 0;
+            for (int y = Math.max(0, y0); y <= Math.min(image.getHeight() - 1, y1); y++) {
+                for (int x = Math.max(0, x0); x <= Math.min(image.getWidth() - 1, x1); x++) {
+                    int rgb = image.getRGB(x, y);
+                    total++;
+                    if (((rgb >> 16) & 0xFF) + ((rgb >> 8) & 0xFF) + (rgb & 0xFF) < 3 * 100) dark++;
+                }
+            }
+            assertTrue(total > 0, "cover maps onto the rendered page: " + cover);
+            return (float) dark / total;
+        }
     }
 
     private static Path fixture(String name) throws Exception {

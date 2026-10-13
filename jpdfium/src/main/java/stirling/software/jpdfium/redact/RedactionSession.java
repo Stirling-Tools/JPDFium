@@ -404,6 +404,16 @@ public final class RedactionSession implements AutoCloseable {
     /**
      * Replays a run of word marks as a single native call, which renders the
      * page's covers once instead of once per mark. A no-op for an empty run.
+     *
+     * <p>The whole run is matched against the page as it stands when the run
+     * starts, not against the text the previous call left behind. Literal words
+     * become one non-overlapping search with the longest word preferred, so
+     * {@code "foo"} and {@code "foobar"} mark a single span over
+     * {@code "foobar"} and the returned count is that search's match count.
+     * Regular expressions are each compiled and scanned on their own, so two
+     * patterns that overlap can both match and the count can exceed what
+     * separate calls would return. Marks with different matching options, and
+     * region marks, always start a new call.
      */
     private static int commitRun(PdfPage page, List<String> runWords, WordOptions options,
                                  int argbColor, boolean removeContent) {
