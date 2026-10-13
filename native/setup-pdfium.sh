@@ -650,10 +650,38 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
         SYS_AR="$(command -v llvm-ar || command -v ar || true)"
 
         if [ -n "${SYS_CLANG}" ]; then
-            ln -sf "${SYS_CLANG}" "${LLVM_BIN_DIR}/clang"
+            cat > "${LLVM_BIN_DIR}/clang" <<WRAPPER_EOF
+#!/bin/sh
+filtered=""
+for arg in "\$@"; do
+    case "\$arg" in
+        -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            ;;
+        *)
+            filtered="\$filtered \"\$arg\""
+            ;;
+    esac
+done
+eval exec "${SYS_CLANG}" \$filtered
+WRAPPER_EOF
+            chmod +x "${LLVM_BIN_DIR}/clang"
         fi
         if [ -n "${SYS_CLANGXX}" ]; then
-            ln -sf "${SYS_CLANGXX}" "${LLVM_BIN_DIR}/clang++"
+            cat > "${LLVM_BIN_DIR}/clang++" <<WRAPPER_EOF
+#!/bin/sh
+filtered=""
+for arg in "\$@"; do
+    case "\$arg" in
+        -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            ;;
+        *)
+            filtered="\$filtered \"\$arg\""
+            ;;
+    esac
+done
+eval exec "${SYS_CLANGXX}" \$filtered
+WRAPPER_EOF
+            chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
         if [ -n "${SYS_LLD}" ]; then
             ln -sf "${SYS_LLD}" "${LLVM_BIN_DIR}/ld.lld"
