@@ -660,10 +660,26 @@ void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
     collectPcre2Matches(chars, text, idxMap, pc, padding, out);
 }
 
-// Escape regex metacharacters for literal matching.
+// Must stay in sync with FastKeywordIndex.isKeywordSpace(), the prefilter that
+// decides which pages reach this matcher.
+static bool isLiteralSpace(char32_t ch) {
+    return ch == U' ' || ch == U'\t' || ch == U'\r' || ch == U'\n' || ch == U'\u00A0' ||
+           ch == U'\u2007' || ch == U'\u202F' || ch == U'\u2028' || ch == U'\u2029';
+}
+
+// Escape regex metacharacters for literal matching. A whitespace run matches
+// any whitespace run, so a phrase still matches where the page wraps it onto
+// the next line (the text page puts a line break there, not a space).
 static std::u32string escapeLiteral(const std::u32string& raw) {
     std::u32string out;
+    bool inSpace = false;
     for (char32_t ch : raw) {
+        if (isLiteralSpace(ch)) {
+            if (!inSpace) out += U"\\s+";
+            inSpace = true;
+            continue;
+        }
+        inSpace = false;
         if (ch == U'\\' || ch == U'^' || ch == U'$' || ch == U'.' || ch == U'|' || ch == U'?' ||
             ch == U'*' || ch == U'+' || ch == U'(' || ch == U')' || ch == U'[' || ch == U']' ||
             ch == U'{' || ch == U'}') {
