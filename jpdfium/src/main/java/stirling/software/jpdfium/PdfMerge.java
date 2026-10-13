@@ -141,7 +141,7 @@ public final class PdfMerge {
         MemorySegment rawDestination = destinationDoc.rawHandle();
         int insertIndex = destinationDoc.pageCount();
         for (int i = 1; i < documents.size(); i++) {
-            PdfPageImporter.importPages(rawDestination, documents.get(i).rawHandle(), null, insertIndex);
+            PdfPageImporter.importPages(rawDestination, documents.get(i).rawHandleForRead(), null, insertIndex);
             insertIndex = destinationDoc.pageCount();
         }
 
@@ -276,7 +276,7 @@ public final class PdfMerge {
                 }
                 pageOffset += sourceDoc.pageCount();
 
-                PdfPageImporter.importPages(rawDestination, sourceDoc.rawHandle(), null, insertIndex);
+                PdfPageImporter.importPages(rawDestination, sourceDoc.rawHandleForRead(), null, insertIndex);
                 insertIndex = destinationDoc.pageCount();
             }
             PdfDocument detached = detachWithBookmarks(destinationDoc, mergedBookmarks, options);

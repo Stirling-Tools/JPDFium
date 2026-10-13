@@ -988,9 +988,13 @@ public final class PdfPage implements AutoCloseable {
      * {@link PdfDocument#rawHandle()}, direct use bypasses the admission and
      * ordering enforced for built-in operations. It keeps working, but the
      * domain makes no promise about it.
+     *
+     * <p><strong>Edit tracking:</strong> taking the handle marks the owning document as
+     * modified, as {@link PdfDocument#rawHandle()} does.
      */
     public MemorySegment rawHandle() {
         ensureOpen();
+        ownerDoc.markContentModified();
         return rawPageSegment;
     }
 
@@ -998,9 +1002,28 @@ public final class PdfPage implements AutoCloseable {
      * Returns the raw FPDF_DOCUMENT MemorySegment from this page's parent document.
      *
      * <p><strong>Lifetime:</strong> same contract as {@link #rawHandle()}: invalid
-     * after this page is closed.
+     * after this page is closed. Taking it marks the owning document as modified.
      */
     public MemorySegment rawDocHandle() {
+        ensureOpen();
+        ownerDoc.markContentModified();
+        return rawDocSegment;
+    }
+
+    /**
+     * {@link #rawHandle()} for library-internal reads that cannot change the document.
+     * Unlike {@link #rawHandle()}, taking it does not mark the owning document as modified.
+     *
+     * <p>Do not write through the returned handle: such writes are invisible to
+     * {@link PdfDocument#isContentModified()}.
+     */
+    public MemorySegment rawHandleForRead() {
+        ensureOpen();
+        return rawPageSegment;
+    }
+
+    /** {@link #rawDocHandle()} for library reads that cannot change the document. */
+    MemorySegment rawDocHandleForRead() {
         ensureOpen();
         return rawDocSegment;
     }
@@ -1009,28 +1032,28 @@ public final class PdfPage implements AutoCloseable {
      * List all annotations on this page.
      */
     public List<Annotation> annotations() {
-        return PdfAnnotations.list(rawHandle());
+        return PdfAnnotations.list(rawHandleForRead());
     }
 
     /**
      * List all hyperlinks on this page.
      */
     public List<PdfLink> links() {
-        return PdfLinks.list(rawDocHandle(), rawHandle());
+        return PdfLinks.list(rawDocHandleForRead(), rawHandleForRead());
     }
 
     /**
      * Get the structure tree (tagged structure) for this page.
      */
     public List<StructElement> structureTree() {
-        return PdfStructureTree.get(rawHandle());
+        return PdfStructureTree.get(rawHandleForRead());
     }
 
     /**
      * Get the decoded thumbnail image data for this page.
      */
     public Optional<byte[]> thumbnail() {
-        return PdfThumbnails.getDecoded(rawHandle());
+        return PdfThumbnails.getDecoded(rawHandleForRead());
     }
 
     /**
@@ -1043,7 +1066,7 @@ public final class PdfPage implements AutoCloseable {
      * @return the thumbnail image, or empty if the page has no embedded thumbnail
      */
     public Optional<BufferedImage> thumbnailImage() {
-        return PdfThumbnails.getAsImage(rawHandle());
+        return PdfThumbnails.getAsImage(rawHandleForRead());
     }
 
     /** Flatten all annotations (including applied redactions) into page content. */
@@ -1151,6 +1174,7 @@ public final class PdfPage implements AutoCloseable {
     public void setMediaBox(Rect box) {
         ensureOpen();
         PdfPageBoxes.setMediaBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -1167,6 +1191,7 @@ public final class PdfPage implements AutoCloseable {
     public void setBleedBox(Rect box) {
         ensureOpen();
         PdfPageBoxes.setBleedBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -1183,6 +1208,7 @@ public final class PdfPage implements AutoCloseable {
     public void setTrimBox(Rect box) {
         ensureOpen();
         PdfPageBoxes.setTrimBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -1199,6 +1225,7 @@ public final class PdfPage implements AutoCloseable {
     public void setArtBox(Rect box) {
         ensureOpen();
         PdfPageBoxes.setArtBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -1292,9 +1319,12 @@ public final class PdfPage implements AutoCloseable {
      * only by {@link JpdfiumLib} and its companions.
      * External callers bypassing this method bypass all closed-page checks and
      * thread-safety contracts enforced by this class.
+     *
+     * <p>Taking it marks the owning document as modified, as {@link #rawHandle()} does.
      */
     public long nativeHandle() {
         ensureOpen();
+        ownerDoc.markContentModified();
         return handle;
     }
 

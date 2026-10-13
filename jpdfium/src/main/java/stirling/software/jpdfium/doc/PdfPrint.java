@@ -96,7 +96,7 @@ public final class PdfPrint {
         // Create a new document with the impositioned pages
         PdfDocument result = createEmptyDoc();
         MemorySegment rawResult = result.rawHandle();
-        MemorySegment rawSrc = doc.rawHandle();
+        MemorySegment rawSrc = doc.rawHandleForRead();
 
         for (int[] pair : sheetPages) {
             // Create a new blank page at sheet size

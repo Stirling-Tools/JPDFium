@@ -286,8 +286,8 @@ public final class PdfSplit {
         }
 
         PdfDocument destinationDoc = createEmptyDocument();
-        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
-        PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandle(), pageIndices, 0);
+        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandleForRead());
+        PdfPageImporter.importPagesByIndex(destinationDoc.rawHandle(), doc.rawHandleForRead(), pageIndices, 0);
         return detach(destinationDoc, remappedBookmarks, options);
     }
 
@@ -382,8 +382,8 @@ public final class PdfSplit {
         String pageRangeSpec = (fromPage + 1) + "-" + (toPage + 1);
 
         PdfDocument destinationDoc = createEmptyDocument();
-        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandle());
-        PdfPageImporter.importPages(destinationDoc.rawHandle(), doc.rawHandle(), pageRangeSpec, 0);
+        PdfPageImporter.copyViewerPreferences(destinationDoc.rawHandle(), doc.rawHandleForRead());
+        PdfPageImporter.importPages(destinationDoc.rawHandle(), doc.rawHandleForRead(), pageRangeSpec, 0);
         return detach(destinationDoc, remappedBookmarks, options);
     }
 
