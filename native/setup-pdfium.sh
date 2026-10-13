@@ -145,6 +145,16 @@ if [ ! -f "${DEPOT_TOOLS_DIR}/python3_bin_reldir.txt" ]; then
         mkdir -p "${DEPOT_TOOLS_DIR}/python3_bin_alpine"
         ln -sf "${SYSTEM_PYTHON3}" "${DEPOT_TOOLS_DIR}/python3_bin_alpine/python3"
         printf 'python3_bin_alpine\n' > "${DEPOT_TOOLS_DIR}/python3_bin_reldir.txt"
+        # ensure_bootstrap also failed to install the CIPD vpython3 package, so
+        # vpython3 would abort with ".../.cipd_bin/vpython3: No such file or
+        # directory" (seen after a transient HTTP 403 from
+        # chrome-infra-packages.appspot.com) and take gclient sync down with it.
+        # VPYTHON_BYPASS makes the wrapper exec the system python3 directly, so a
+        # CIPD outage can no longer fail the row.
+        export VPYTHON_BYPASS="manually managed python not supported by chrome operations"
+        if [ -n "${GITHUB_ENV:-}" ]; then
+            printf 'VPYTHON_BYPASS=%s\n' "${VPYTHON_BYPASS}" >> "${GITHUB_ENV}"
+        fi
     fi
 fi
 
@@ -512,17 +522,77 @@ fi
 # SDK. The workflow exports the newest SDK that IS installed as
 # JPDFIUM_WIN_SDK; repin the constant to it (an older-but-present SDK builds
 # PDFium fine).
+#
+# Repinning the SDK version alone is not enough: the same build/ revision also
+# hard-codes the NTDDI version it expects the SDK to implement, and the SDK
+# headers switch declarations on it. At build_revision ebdaeefa (EmbedPDF
+# ed2f716) that is "NTDDI_VERSION=NTDDI_WIN11_BR" (0x0A000012, Windows 11 26H1
+# / SDK 10.0.28000). The newest SDK the runners have is 10.0.26100, whose
+# sdkddkver.h stops at NTDDI_WIN11_GE (0x0A000010), so the undefined identifier
+# evaluates to 0 and every "#if (NTDDI_VERSION >= NTDDI_VISTA)" guard in the
+# SDK's own headers takes the wrong branch: minwinbase.h stops declaring
+# FILE_INFO_BY_HANDLE_CLASS and fileapi.h(1081) / winbase.h(9388) fail with
+# "error: unknown type name 'FILE_INFO_BY_HANDLE_CLASS'" while compiling
+# PartitionAlloc's log_message.obj / logging.obj. Repin the define to the newest
+# macro the installed SDK does declare (for 26100 that is NTDDI_WIN11_GE, the
+# configuration the last green run used).
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         WIN_TOOLCHAIN_SETUP="build/toolchain/win/setup_toolchain.py"
         if [ -n "${JPDFIUM_WIN_SDK:-}" ] && [ -f "${WIN_TOOLCHAIN_SETUP}" ]; then
             echo "  Pinning Windows SDK_VERSION to ${JPDFIUM_WIN_SDK}..."
             sed_i "s/^SDK_VERSION = '.*'/SDK_VERSION = '${JPDFIUM_WIN_SDK}'/" "${WIN_TOOLCHAIN_SETUP}"
+
+            WIN_BUILD_GN="build/config/win/BUILD.gn"
+            WIN_SDK_DDKVER=""
+            for sdk_root in "/c/Program Files (x86)/Windows Kits/10/include" "/c/Program Files/Windows Kits/10/include"; do
+                for sdk_sub in um shared; do
+                    if [ -f "${sdk_root}/${JPDFIUM_WIN_SDK}/${sdk_sub}/sdkddkver.h" ]; then
+                        WIN_SDK_DDKVER="${sdk_root}/${JPDFIUM_WIN_SDK}/${sdk_sub}/sdkddkver.h"
+                        break 2
+                    fi
+                done
+            done
+            if [ -f "${WIN_BUILD_GN}" ] && [ -n "${WIN_SDK_DDKVER}" ]; then
+                CHROMIUM_NTDDI="$(grep -oE 'NTDDI_VERSION=NTDDI_[0-9A-Z_]+' "${WIN_BUILD_GN}" | head -n 1 | cut -d= -f2)"
+                if [ -n "${CHROMIUM_NTDDI}" ] && ! grep -q "^#define ${CHROMIUM_NTDDI}[[:space:]]" "${WIN_SDK_DDKVER}"; then
+                    SDK_NTDDI="$(sed -n 's/^#define \(NTDDI_WIN[0-9A-Z_]*\) \(0x[0-9A-Fa-f]*\).*/\2 \1/p' "${WIN_SDK_DDKVER}" | sort | tail -n 1 | cut -d' ' -f2)"
+                    if [ -n "${SDK_NTDDI}" ]; then
+                        echo "  Repinning NTDDI_VERSION ${CHROMIUM_NTDDI} -> ${SDK_NTDDI} (not declared by SDK ${JPDFIUM_WIN_SDK})..."
+                        sed_i "s/NTDDI_VERSION=${CHROMIUM_NTDDI}/NTDDI_VERSION=${SDK_NTDDI}/" "${WIN_BUILD_GN}"
+                    else
+                        echo "  WARNING: SDK ${JPDFIUM_WIN_SDK} declares neither ${CHROMIUM_NTDDI} nor any NTDDI_WIN* macro in ${WIN_SDK_DDKVER}." >&2
+                    fi
+                fi
+            fi
         elif [ -z "${JPDFIUM_WIN_SDK:-}" ]; then
             echo "  WARNING: JPDFIUM_WIN_SDK is not set; leaving the pinned SDK_VERSION in place." >&2
         fi
         ;;
 esac
+
+# GN runs some of its build steps through Chromium's DEPS-provided host CPython
+# (third_party/cpython3/host/bin/python3). That binary is built against glibc, so
+# on Alpine it cannot run at all:
+#   ERROR at //build/toolchain/concurrent_links.gni:155:19: Script returned
+#   non-zero exit code.
+#     _command_dict = exec_script("get_concurrent_links.py", _args, "scope")
+#   Error relocating .../third_party/cpython3/host/bin/python3:
+#   posix_fallocate64: symbol not found        (preadv64v2/pwritev64v2 on arm64)
+#   Returned 127.
+# Replace it with a shim that execs the system python3 (same reasoning as the
+# VPYTHON_BYPASS export above). Done after gclient sync so the download hook
+# cannot overwrite it again.
+if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
+    HOST_PYTHON3="third_party/cpython3/host/bin/python3"
+    if [ -f "${HOST_PYTHON3}" ] && [ "$(head -c 2 "${HOST_PYTHON3}")" != "#!" ]; then
+        HOST_PYTHON3_BIN="$(command -v python3 || echo python3)"
+        echo "  musl/Alpine: replacing the glibc host python3 with ${HOST_PYTHON3_BIN}..."
+        mv "${HOST_PYTHON3}" "${HOST_PYTHON3}.glibc"
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "${HOST_PYTHON3_BIN}" > "${HOST_PYTHON3}"
+        chmod +x "${HOST_PYTHON3}"
+    fi
+fi
 
 # ---------- Step 5: GN configuration ----------
 echo "[5/7] Configuring GN build..."
