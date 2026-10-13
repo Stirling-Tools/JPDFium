@@ -8,7 +8,8 @@ import stirling.software.jpdfium.panama.NativeRuntime;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfEncryptionCopyUnavailableTest {
