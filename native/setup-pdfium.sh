@@ -490,26 +490,55 @@ fi
 # only declares the static CFX_GEModule::IsSkiaRenderer() (matching upstream).
 # The mismatch only compiles when pdf_use_skia=false, so enabling Skia (our
 # config) is what unearths it. Rewrite every stale call site.
-python3 - <<'PY_EOF'
+#
+# The first version of this used a bare `python3 - <<EOF` with a CWD-relative
+# `os.walk('.')`; in the musl container it printed nothing at all (no rename line,
+# no traceback) and the compiler still saw the legacy call at
+# fpdfsdk/fpdf_progressive.cpp:50, so the rewrite now walks the explicit source
+# root, reports exactly what it touched and hard-fails if the stale call survives.
+PDFIUM_SRC_ROOT="${PDFIUM_SRC:-$(pwd)}"
+if [ ! -f "${PDFIUM_SRC_ROOT}/fpdfsdk/fpdf_progressive.cpp" ]; then
+    echo "ERROR: ${PDFIUM_SRC_ROOT}/fpdfsdk/fpdf_progressive.cpp not found - cannot rewrite the legacy UseSkiaRenderer() call" >&2
+    exit 1
+fi
+python3 - "${PDFIUM_SRC_ROOT}" <<'PY_EOF'
 import os
-target = 'CFX_GEModule::Get()->UseSkiaRenderer()'
-replacement = 'CFX_GEModule::IsSkiaRenderer()'
-for root, dirs, files in os.walk('.'):
-    if 'third_party' in root or 'out' in root:
-        continue
-    for fname in files:
-        if fname.endswith(('.cpp', '.h', '.cc')):
-            p = os.path.join(root, fname)
-            try:
-                with open(p, 'r', encoding='utf-8') as f:
-                    content = f.read()
-            except Exception:
-                continue
-            if target in content:
-                print(f"  Renaming legacy UseSkiaRenderer() call in {p}...")
-                with open(p, 'w', encoding='utf-8') as f:
-                    f.write(content.replace(target, replacement))
+import sys
+
+root = sys.argv[1]
+expression = 'CFX_GEModule::Get()->UseSkiaRenderer()'
+normalized = 'CFX_GEModule::IsSkiaRenderer()'
+identifier = 'UseSkiaRenderer'
+
+changed = []
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in ('third_party', '.git', 'out')]
+    for fname in filenames:
+        if not fname.endswith(('.cpp', '.h', '.cc')):
+            continue
+        p = os.path.join(dirpath, fname)
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            continue
+        if identifier not in content:
+            continue
+        # Rewrite the exact expression first (calling a static member through -> is
+        # legal but the fork dropped the member), then any remaining bare use.
+        rewritten = content.replace(expression, normalized).replace(identifier, 'IsSkiaRenderer')
+        if rewritten != content:
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(rewritten)
+            changed.append(os.path.relpath(p, root))
+print(f"  Rewrote legacy UseSkiaRenderer() call in {len(changed)} file(s): {changed}")
 PY_EOF
+LEGACY_RENDERER_LEFT="$(grep -rl 'UseSkiaRenderer' "${PDFIUM_SRC_ROOT}/fpdfsdk" "${PDFIUM_SRC_ROOT}/core" "${PDFIUM_SRC_ROOT}/public" "${PDFIUM_SRC_ROOT}/samples" 2>/dev/null || true)"
+if [ -n "${LEGACY_RENDERER_LEFT}" ]; then
+    echo "ERROR: legacy UseSkiaRenderer() still present after the rewrite in:" >&2
+    echo "${LEGACY_RENDERER_LEFT}" >&2
+    exit 1
+fi
 
 # PartitionAlloc's internal_allocator_forward.h uses unqualified size_t with only
 # <new>/<type_traits> included. That works with Chromium's bundled libc++ (the
