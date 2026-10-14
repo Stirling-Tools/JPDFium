@@ -490,14 +490,54 @@ fi
 # only declares the static CFX_GEModule::IsSkiaRenderer() (matching upstream).
 # The mismatch only compiles when pdf_use_skia=false, so enabling Skia (our
 # config) is what unearths it. Rewrite every stale call site.
-SKIA_ACCESSOR_GREP=(grep -rl --include='*.cpp' --include='*.h' --exclude-dir=third_party --exclude-dir=out)
-while IFS= read -r stale_skia; do
-    echo "  Renaming legacy UseSkiaRenderer() call in ${stale_skia}..."
-    sed_i 's/CFX_GEModule::Get()->UseSkiaRenderer()/CFX_GEModule::IsSkiaRenderer()/g' "${stale_skia}"
-done < <("${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null || true)
-if "${SKIA_ACCESSOR_GREP[@]}" -q 'UseSkiaRenderer' . 2>/dev/null; then
-    echo "  WARNING: UseSkiaRenderer is still referenced in:" >&2
-    "${SKIA_ACCESSOR_GREP[@]}" 'UseSkiaRenderer' . 2>/dev/null | sed 's/^/    /' >&2
+#
+# The first version of this used a bare `python3 - <<EOF` with a CWD-relative
+# `os.walk('.')`; in the musl container it printed nothing at all (no rename line,
+# no traceback) and the compiler still saw the legacy call at
+# fpdfsdk/fpdf_progressive.cpp:50, so the rewrite now walks the explicit source
+# root, reports exactly what it touched and hard-fails if the stale call survives.
+PDFIUM_SRC_ROOT="${PDFIUM_SRC:-$(pwd)}"
+if [ ! -f "${PDFIUM_SRC_ROOT}/fpdfsdk/fpdf_progressive.cpp" ]; then
+    echo "ERROR: ${PDFIUM_SRC_ROOT}/fpdfsdk/fpdf_progressive.cpp not found - cannot rewrite the legacy UseSkiaRenderer() call" >&2
+    exit 1
+fi
+python3 - "${PDFIUM_SRC_ROOT}" <<'PY_EOF'
+import os
+import sys
+
+root = sys.argv[1]
+expression = 'CFX_GEModule::Get()->UseSkiaRenderer()'
+normalized = 'CFX_GEModule::IsSkiaRenderer()'
+identifier = 'UseSkiaRenderer'
+
+changed = []
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in ('third_party', '.git', 'out')]
+    for fname in filenames:
+        if not fname.endswith(('.cpp', '.h', '.cc')):
+            continue
+        p = os.path.join(dirpath, fname)
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception:
+            continue
+        if identifier not in content:
+            continue
+        # Rewrite the exact expression first (calling a static member through -> is
+        # legal but the fork dropped the member), then any remaining bare use.
+        rewritten = content.replace(expression, normalized).replace(identifier, 'IsSkiaRenderer')
+        if rewritten != content:
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(rewritten)
+            changed.append(os.path.relpath(p, root))
+print(f"  Rewrote legacy UseSkiaRenderer() call in {len(changed)} file(s): {changed}")
+PY_EOF
+LEGACY_RENDERER_LEFT="$(grep -rl 'UseSkiaRenderer' "${PDFIUM_SRC_ROOT}/fpdfsdk" "${PDFIUM_SRC_ROOT}/core" "${PDFIUM_SRC_ROOT}/public" "${PDFIUM_SRC_ROOT}/samples" 2>/dev/null || true)"
+if [ -n "${LEGACY_RENDERER_LEFT}" ]; then
+    echo "ERROR: legacy UseSkiaRenderer() still present after the rewrite in:" >&2
+    echo "${LEGACY_RENDERER_LEFT}" >&2
+    exit 1
 fi
 
 # PartitionAlloc's internal_allocator_forward.h uses unqualified size_t with only
@@ -539,6 +579,131 @@ if '#include <cstdint>' not in src and guard in src:
     with open(path, 'w') as f:
         f.write(src.replace(guard, guard + '\n#include <cstdint>\n', 1))
     print("  Added <cstdint> to form_flags.h.")
+PY_EOF
+fi
+
+# PartitionAlloc's aarch64_support.h defines HAS_HW_CAPS on any Linux/arm64 and
+# then includes <sys/ifunc.h> plus <asm/hwcap.h>, and its IsBtiEnabled/IsMteEnabled
+# bodies use _IFUNC_ARG_HWCAP and struct __ifunc_arg_t from that glibc-only header.
+# musl has neither, so the linux-musl-arm64 rows died with
+#   ../../base/allocator/partition_alloc/src/partition_alloc/aarch64_support.h:19:10:
+#   fatal error: 'sys/ifunc.h' file not found
+# Merely guarding the include is not enough (the macro/struct uses would then fail),
+# so gate HAS_HW_CAPS on the header being present; musl then takes the existing
+# #else path (forward declare __ifunc_arg_t, both helpers return false).
+AARCH64_SUPPORT_HEADER="base/allocator/partition_allocator/src/partition_alloc/aarch64_support.h"
+if [ -f "${AARCH64_SUPPORT_HEADER}" ] && ! grep -q 'PA_PDFIUM_HAS_IFUNC_HEADER' "${AARCH64_SUPPORT_HEADER}"; then
+    echo "  Gating partition_alloc HAS_HW_CAPS on <sys/ifunc.h> availability..."
+    python3 - "${AARCH64_SUPPORT_HEADER}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """#if PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_LINUX)
+#define HAS_HW_CAPS
+#endif
+
+#if PA_BUILDFLAG(PA_ARCH_CPU_ARM64) && defined(HAS_HW_CAPS)
+#include <asm/hwcap.h>
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif"""
+replacement = """#if defined(__has_include)
+#if __has_include(<sys/ifunc.h>)
+#define PA_PDFIUM_HAS_IFUNC_HEADER 1
+#endif
+#else
+#define PA_PDFIUM_HAS_IFUNC_HEADER 1
+#endif
+
+#if (PA_BUILDFLAG(IS_ANDROID) || PA_BUILDFLAG(IS_LINUX)) && defined(PA_PDFIUM_HAS_IFUNC_HEADER)
+#define HAS_HW_CAPS
+#endif
+#undef PA_PDFIUM_HAS_IFUNC_HEADER
+
+#if PA_BUILDFLAG(PA_ARCH_CPU_ARM64) && defined(HAS_HW_CAPS)
+#include <asm/hwcap.h>
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Gated HAS_HW_CAPS on <sys/ifunc.h> in aarch64_support.h.")
+PY_EOF
+fi
+
+# PartitionAlloc's tagging.cc also includes <sys/ifunc.h> when HAS_MEMORY_TAGGING
+# is enabled. musl libc does not have <sys/ifunc.h>, so guard the include.
+TAGGING_CC="base/allocator/partition_allocator/src/partition_alloc/tagging.cc"
+if [ -f "${TAGGING_CC}" ] && ! grep -q '__has_include(<sys/ifunc.h>)' "${TAGGING_CC}"; then
+    echo "  Guarding <sys/ifunc.h> in partition_alloc tagging.cc..."
+    python3 - "${TAGGING_CC}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+#include <arm_acle.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#include <sys/ifunc.h>"""
+replacement = """#if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
+#include <arm_acle.h>
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#if defined(__has_include)
+#if __has_include(<sys/ifunc.h>)
+#include <sys/ifunc.h>
+#else
+struct __ifunc_arg_t;
+#endif
+#else
+#include <sys/ifunc.h>
+#endif"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Guarded <sys/ifunc.h> in tagging.cc.")
+PY_EOF
+fi
+
+# musl's dynamic loader cannot resolve PartitionAlloc's MTE ifuncs across shared
+# objects, so the linux-musl-arm64 component smoke test dies with
+#   dlopen failed: Error relocating libbase_allocator_..._allocator_core.so:
+#   _ZN15partition_alloc8internal21RemaskPointerInternalEPv: symbol not found
+# (RemaskPointerInternal/TagMemoryRange*Internal are __attribute__((ifunc)) under
+# #if PA_BUILDFLAG(HAS_MEMORY_TAGGING); the same-page static row is fine because
+# the symbol then lives in the same object). has_memory_tagging is computed in
+# partition_alloc.gni for every arm64+clang Linux target, and the resolver would
+# return the NoOp variants on musl anyway (our aarch64_support.h gate already
+# forces IsBtiEnabled/IsMteEnabled to false), so turn the feature off for musl
+# and keep the ifunc symbols out of the build entirely.
+PA_GNI="base/allocator/partition_allocator/partition_alloc.gni"
+if [ "${JPDFIUM_LIBC:-}" = "musl" ] && [ -f "${PA_GNI}" ] && \
+    ! grep -q 'JPDFIUM musl: memory tagging off' "${PA_GNI}"; then
+    echo "  Disabling PartitionAlloc memory tagging for musl..."
+    python3 - "${PA_GNI}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """has_memory_tagging = current_cpu == "arm64" && is_clang && !is_asan &&
+                     !is_hwasan && (is_linux || is_android)"""
+replacement = """# JPDFIUM musl: memory tagging off. The ifunc-based MTE helpers
+# (RemaskPointerInternal and friends) cannot be resolved by musl's loader in a
+# component build, and the resolvers would pick the NoOp variants on musl anyway.
+has_memory_tagging = false  # JPDFIUM musl: memory tagging off"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Disabled HAS_MEMORY_TAGGING in partition_alloc.gni.")
+elif 'JPDFIUM musl: memory tagging off' in src:
+    print("  HAS_MEMORY_TAGGING already disabled in partition_alloc.gni.")
+else:
+    raise SystemExit("ERROR: has_memory_tagging block not found in " + path)
 PY_EOF
 fi
 
@@ -639,6 +804,18 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     # and lld (installed by apk add clang lld in musl.sh). Replace the glibc LLVM
     # binaries with symlinks/wrappers to the system toolchain so compilation and
     # linking run natively on musl.
+    # Diagnostic: Alpine's /bin/sh is busybox ash. Chromium hands the compiler
+    # shell-escaped flags that can contain '*' (see the clang wrapper below). If
+    # this shell expands that escaped star, the argument reaches clang already
+    # globbed and no wrapper can repair it. Log the behaviour once so CI shows
+    # which layer is responsible.
+    PROBE_DIR="$(mktemp -d)"
+    : > "${PROBE_DIR}/args.gn"
+    : > "${PROBE_DIR}/build.ninja"
+    PROBE_OUT="$(cd "${PROBE_DIR}" && /bin/sh -c 'printf "%s" -DSK=\(\(\(FREETYPE_MAJOR\)\ \*\ 0x01000000\)')"
+    rm -rf "${PROBE_DIR}"
+    echo "  musl/Alpine sh glob probe: [${PROBE_OUT}]"
+
     LLVM_BIN_DIR="third_party/llvm-build/Release+Asserts/bin"
     if [ -d "${LLVM_BIN_DIR}" ]; then
         echo "  musl/Alpine: redirecting third_party/llvm-build to Alpine system toolchain..."
@@ -650,10 +827,76 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
         SYS_AR="$(command -v llvm-ar || command -v ar || true)"
 
         if [ -n "${SYS_CLANG}" ]; then
-            ln -sf "${SYS_CLANG}" "${LLVM_BIN_DIR}/clang"
+            rm -f "${LLVM_BIN_DIR}/clang"
+            cat > "${LLVM_BIN_DIR}/clang" <<WRAPPER_EOF
+#!/bin/sh
+# Chromium hands clang shell-escaped flags, so one argv can legitimately carry
+# spaces, parentheses and '*' (for example
+# -DSK_FREETYPE_MINIMUM_RUNTIME_VERSION=(((FREETYPE_MAJOR) * 0x01000000) | ...)).
+# Re-parsing those through eval expanded that '*' as a glob against the build
+# directory, which broke SkFontHost_FreeType.cpp with "token is not a valid
+# binary operator in a preprocessor subexpression". Rotate the filtered
+# arguments through the positional parameters instead: every byte of every
+# argument survives untouched.
+n=\$#
+i=0
+has_c_file=0
+has_x=0
+is_compile_only=0
+while [ "\$i" -lt "\$n" ]; do
+    arg=\$1
+    shift
+    case "\$arg" in
+        -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            i=\$((i + 1))
+            continue
+            ;;
+        *.c) has_c_file=1 ;;
+        -c) is_compile_only=1 ;;
+        -x) has_x=1 ;;
+    esac
+    set -- "\$@" "\$arg"
+    i=\$((i + 1))
+done
+if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
+    exec "${SYS_CLANG}" --driver-mode=gcc -x c "\$@"
+fi
+exec "${SYS_CLANG}" --driver-mode=gcc "\$@"
+WRAPPER_EOF
+            chmod +x "${LLVM_BIN_DIR}/clang"
         fi
         if [ -n "${SYS_CLANGXX}" ]; then
-            ln -sf "${SYS_CLANGXX}" "${LLVM_BIN_DIR}/clang++"
+            rm -f "${LLVM_BIN_DIR}/clang++"
+            cat > "${LLVM_BIN_DIR}/clang++" <<WRAPPER_EOF
+#!/bin/sh
+# Same rotation scheme as the clang wrapper: never re-parse argv through eval,
+# because Chromium's escaped flag values legitimately contain '*' and spaces.
+n=\$#
+i=0
+has_c_file=0
+has_x=0
+is_compile_only=0
+while [ "\$i" -lt "\$n" ]; do
+    arg=\$1
+    shift
+    case "\$arg" in
+        -fdiagnostics-show-inlining-chain|-fno-lifetime-dse|-fsanitize-ignore-for-ubsan-feature=*|-Wa,--crel*|-Wa,--allow-experimental-crel*)
+            i=\$((i + 1))
+            continue
+            ;;
+        *.c) has_c_file=1 ;;
+        -c) is_compile_only=1 ;;
+        -x) has_x=1 ;;
+    esac
+    set -- "\$@" "\$arg"
+    i=\$((i + 1))
+done
+if [ "\$has_c_file" = "1" ] && [ "\$is_compile_only" = "1" ] && [ "\$has_x" = "0" ]; then
+    exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE -x c "\$@"
+fi
+exec "${SYS_CLANGXX}" --driver-mode=g++ -D_LIBCPP_HAS_MUSL_LIBC -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE "\$@"
+WRAPPER_EOF
+            chmod +x "${LLVM_BIN_DIR}/clang++"
         fi
         if [ -n "${SYS_LLD}" ]; then
             ln -sf "${SYS_LLD}" "${LLVM_BIN_DIR}/ld.lld"
