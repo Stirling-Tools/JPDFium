@@ -18,6 +18,15 @@ on:
         description: 'Dry run: build + sign + upload artifacts but do NOT publish to Central Portal (use to verify signing without shipping)'
         type: boolean
         default: false
+      # One checkbox per natives platform; unticked ones are not built.
+      linux-x64: { description: 'Build linux-x64', type: boolean, default: true }
+      linux-arm64: { description: 'Build linux-arm64', type: boolean, default: true }
+      linux-musl-x64: { description: 'Build linux-musl-x64', type: boolean, default: true }
+      linux-musl-arm64: { description: 'Build linux-musl-arm64', type: boolean, default: true }
+      darwin-x64: { description: 'Build darwin-x64', type: boolean, default: true }
+      darwin-arm64: { description: 'Build darwin-arm64', type: boolean, default: true }
+      windows-x64: { description: 'Build windows-x64', type: boolean, default: true }
+      windows-arm64: { description: 'Build windows-arm64', type: boolean, default: true }
 
 permissions:
   contents: read
@@ -86,11 +95,15 @@ jobs:
 
       - name: Configure natives build matrix
         id: set-matrix
+        env:
+          INPUTS: ${{ toJSON(inputs) }}
         run: |
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"}]}' >> "$GITHUB_OUTPUT"
+            ALL='{"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"}]}'
+            # Push/PR runs have no inputs, so every platform builds.
+            echo "matrix=$(echo "$ALL" | jq -c --argjson in "$INPUTS" '.include |= map(select($in[.platform] != false))')" >> "$GITHUB_OUTPUT"
           fi
 
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
@@ -839,9 +852,14 @@ jobs:
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
         run: |
-          # Snapshots use the -SNAPSHOT version from gradle.properties and skip the
-          # finalize step - the Central Portal snapshots repo is mutable.
-          ./gradlew \
+          # Snapshots skip the finalize step - the Central Portal snapshots repo is mutable.
+          # Off main, publish <branch>-SNAPSHOT so branches don't overwrite main's.
+          VERSION=$(sed -n 's/^jpdfium.version=//p' gradle.properties)
+          if [ "$GITHUB_REF_NAME" != main ]; then
+            VERSION="$(echo "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')-SNAPSHOT"
+          fi
+          echo "Publishing $VERSION"
+          ./gradlew -Pjpdfium.version="$VERSION" \
             :jpdfium:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-bom:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-spring:publishAllPublicationsToCentralPortalRepository \
