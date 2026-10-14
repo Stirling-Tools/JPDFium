@@ -107,7 +107,7 @@ public final class PdfColumnExtractor {
         }
 
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);

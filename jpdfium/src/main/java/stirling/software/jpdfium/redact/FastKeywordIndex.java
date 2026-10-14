@@ -134,7 +134,10 @@ final class FastKeywordIndex {
             sb.append(Character.toChars(folded));
             i += Character.charCount(codePoint);
         }
-        String key = sb.toString();
+        String key = collapseWhitespace(sb.toString());
+        if (key.isEmpty()) {
+            return;
+        }
         char firstChar = key.charAt(0);
         TrieNode curr;
         if (firstChar < 128) {
@@ -188,8 +191,49 @@ final class FastKeywordIndex {
         return false;
     }
 
+    // Must stay in sync with isLiteralSpace() in jpdfium_redact_pattern.cpp: the
+    // native matcher lets a space in a keyword match any whitespace run (a phrase
+    // wrapped onto the next line has a line break there), so the prefilter has to
+    // treat every run as one space or it drops those pages.
+    private static boolean isKeywordSpace(char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\u00A0'
+                || c == '\u2007' || c == '\u202F' || c == '\u2028' || c == '\u2029';
+    }
+
+    private static boolean needsCollapse(char[] text, int len) {
+        for (int i = 0; i < len; i++) {
+            char c = text[i];
+            if (isKeywordSpace(c) && (c != ' ' || (i + 1 < len && isKeywordSpace(text[i + 1])))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String collapseWhitespace(CharSequence text) {
+        StringBuilder sb = new StringBuilder(text.length());
+        boolean inSpace = false;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (isKeywordSpace(c)) {
+                if (!inSpace) {
+                    sb.append(' ');
+                }
+                inSpace = true;
+                continue;
+            }
+            inSpace = false;
+            sb.append(c);
+        }
+        return sb.toString();
+    }
+
     void findMatches(char[] text, int len, boolean wholeWord, Set<String> out) {
         if (text == null || len == 0 || keywordCount == 0) {
+            return;
+        }
+        if (needsCollapse(text, len)) {
+            findMatches(collapseWhitespace(new String(text, 0, len)), wholeWord, out);
             return;
         }
         if (!caseSensitive && needsConservativeFallback && containsSupplementary(text, len)) {
@@ -211,6 +255,7 @@ final class FastKeywordIndex {
         if (text == null || text.isEmpty() || keywordCount == 0) {
             return;
         }
+        text = collapseWhitespace(text);
         if (!caseSensitive && needsConservativeFallback && containsSupplementary(text)) {
             out.addAll(allKeywords);
             return;

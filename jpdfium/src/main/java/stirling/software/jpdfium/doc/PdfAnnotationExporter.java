@@ -49,7 +49,7 @@ public final class PdfAnnotationExporter {
         List<AnnotationData> result = new ArrayList<>();
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);

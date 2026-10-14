@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.redact;
 
+import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.exception.RedactedSaveException;
@@ -11,6 +12,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Objects;
 
+import stirling.software.jpdfium.redact.RedactTestPages.Line;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -19,10 +22,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import static stirling.software.jpdfium.redact.RedactTestPages.pdf;
+import static stirling.software.jpdfium.redact.RedactTestPages.text;
 
 /**
  * Unit tests for the two-phase {@link RedactionSession} API.
- * Runs against the stub native library.
+ * Runs against the stub native library. Tests that state what real PDFium finds
+ * in a page's own text probe for it first and skip when only the stub is loaded.
  */
 @SuppressWarnings({"PMD.AvoidDuplicateLiterals", "PMD.UseExplicitTypes"})
 class RedactionSessionTest {
@@ -356,5 +364,58 @@ class RedactionSessionTest {
         }
 
         assertArrayEquals(run1, run2, "Redaction output bytes must be deterministic across identical runs");
+    }
+
+    /**
+     * A run of marks with the same options is matched in one pass over the page as
+     * it stands when the run starts: {@code "foo"} and {@code "foobar"} mark the
+     * single {@code "foobar"} span, longest alternative first, instead of resolving
+     * one call after the other.
+     */
+    @Test
+    void overlappingLiteralMarksCommitAsOneNonOverlappingSearch() throws Exception {
+        byte[] page = pdf(RenderingMode.FILL, new Line(72f, 700f, "foobar"), new Line(72f, 680f, "keeper"));
+        assumePageText(page, "keeper");
+
+        try (var session = RedactionSession.open(page)) {
+            session.markWordsOnPage(0, new String[]{"foo"}, 0xFF000000, 0f, false, false, false);
+            session.markWordsOnPage(0, new String[]{"foobar"}, 0xFF000000, 0f, false, false, false);
+
+            assertEquals(1, session.commitPage(0), "the overlapping pair marks one span");
+
+            String after = text(session.saveBytes());
+            assertFalse(after.contains("foo"), "the redacted word is gone: " + after);
+            assertTrue(after.contains("keeper"), "the neighbour keeps its text: " + after);
+        }
+    }
+
+    /**
+     * Every pattern in a run is compiled and scanned on its own, so two patterns
+     * that overlap both match. Sequential calls would scan the text the first call
+     * left behind, where the second pattern no longer matches.
+     */
+    @Test
+    void overlappingRegexMarksAreEachScanned() throws Exception {
+        byte[] page = pdf(RenderingMode.FILL, new Line(72f, 700f, "abc"));
+        assumePageText(page, "abc");
+
+        try (var session = RedactionSession.open(page)) {
+            session.markWordsOnPage(0, new String[]{"ab"}, 0xFF000000, 0f, false, true, false);
+            session.markWordsOnPage(0, new String[]{"bc"}, 0xFF000000, 0f, false, true, false);
+
+            assertEquals(2, session.commitPage(0), "each overlapping pattern matches independently");
+        }
+    }
+
+    /**
+     * The probe word is absent from the stub library's fixed text, so a run against
+     * the stub finds nothing and the test skips instead of asserting on it.
+     */
+    private static void assumePageText(byte[] page, String probeWord) throws Exception {
+        int probe;
+        try (var session = RedactionSession.open(page)) {
+            probe = session.markWordsOnPage(0, new String[]{probeWord}, 0xFF000000, 0f, false, false, false);
+        }
+        assumeTrue(probe > 0, "the loaded native library does not read the page's text");
     }
 }

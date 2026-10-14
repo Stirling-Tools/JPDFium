@@ -77,7 +77,7 @@ public final class DocInfo {
 
     public static DocInfo analyze(PdfDocument doc, long fileSize) {
         Builder b = new Builder();
-        MemorySegment rawDoc = doc.rawHandle();
+        MemorySegment rawDoc = doc.rawHandleForRead();
 
         b.pdfVersion = getPdfVersion(rawDoc);
 
@@ -114,7 +114,7 @@ public final class DocInfo {
                 }
 
                 // Image count via page objects
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 try {
                     int objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
                     for (int j = 0; j < objCount; j++) {

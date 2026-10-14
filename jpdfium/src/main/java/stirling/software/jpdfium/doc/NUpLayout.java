@@ -83,7 +83,7 @@ public final class NUpLayout {
      */
     public byte[] toBytes() {
         return PdfPageImporter.importNPagesToOne(
-                doc.rawHandle(), outputWidth, outputHeight, cols, rows);
+                doc.rawHandleForRead(), outputWidth, outputHeight, cols, rows);
     }
 
     /**
@@ -122,7 +122,7 @@ public final class NUpLayout {
                 MemorySegment nupDoc;
                 try {
                     nupDoc = (MemorySegment) PageImportBindings.FPDF_ImportNPagesToOne
-                            .invokeExact(doc.rawHandle(), outputWidth, outputHeight,
+                            .invokeExact(doc.rawHandleForRead(), outputWidth, outputHeight,
                                     (long) cols, (long) rows);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);

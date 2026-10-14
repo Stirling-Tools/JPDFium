@@ -126,6 +126,18 @@ try (var document = PdfDocument.open(Path.of("secure.pdf"), "user123")) {
 
 `PdfEncryption.encrypt` also has an overload taking a key length of 128 or 256, plus `decrypt`, `isQpdfAvailable`, `securityRevision`, `unlockOwner`, `isOwnerUnlocked`, and `removeEncryption`. The file-oriented `PdfSecurity` class exposes the same operations with an explicit permission bitmask, and adds `encryptBytes` and `decryptBytes`.
 
+To retain an original document's protection after processing an unencrypted working copy:
+
+```java
+import stirling.software.jpdfium.doc.PdfSecurity;
+
+PdfSecurity.copyEncryption(processedPath, outputPath, originalPath, knownPassword);
+```
+
+Either original password is sufficient. Both passwords, permission flags, and encryption settings are retained, including an unknown second password. `PdfSecurity.isCopyEncryptionSupported()` checks for the bundled native capability; no separate qpdf executable is needed. The input must be unencrypted, the source encrypted, and the output distinct from both. A failed operation leaves an existing destination untouched and removes temporary output.
+
+This copies encryption, not source content or digital signatures. The application must enforce editing permissions and signature restrictions. Copying also reuses the source encryption key; use `encrypt` with explicitly chosen passwords when a fresh key is required.
+
 Permissions are a raw PDFium bitmask with no named constants in the Java API. `PdfDocument.permissions()` returns the same value for the open document, and returns 0 when the document is not encrypted.
 
 To encrypt a document that is already open, `PdfEncryption.setEncryption` applies AES-256 to the in-memory handle. It must be called before saving, and the encryption takes effect during the save.

@@ -181,6 +181,18 @@ jobs:
           echo "C:\\Program Files\\Git\\cmd" >> "$GITHUB_PATH"
           # Avoid depot_tools trying to pull Google's internal VS toolchain.
           echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" >> "$GITHUB_ENV"
+          # Chromium's build/ dep pins SDK_VERSION = 10.0.28000.0 and hands it to
+          # vcvarsall.bat, but this image does not have that SDK installed, so
+          # setup_toolchain.py fails on a missing SDK. Export the newest SDK that
+          # IS present so setup-pdfium.sh can repin the constant to it.
+          sdk_root="/c/Program Files (x86)/Windows Kits/10/include"
+          if [ -d "$sdk_root" ]; then
+            # include/ also holds non-version directories (for example "wdf"),
+            # and "wdf" sorts last under `sort -V`, so filter down to real 10.x
+            # SDK version directories before picking the newest one.
+            newest_sdk="$(ls -1 "$sdk_root" | grep -E '^10\.' | sort -V | tail -n 1)"
+            echo "JPDFIUM_WIN_SDK=$newest_sdk" >> "$GITHUB_ENV"
+          fi
 
       - name: Build PDFium at pinned SHA
         if: matrix.libc != 'musl'
@@ -189,6 +201,7 @@ jobs:
           TARGET_CPU: ${{ matrix.target_cpu }}
           JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
           JPDFIUM_LIBC: ${{ matrix.libc }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Override the branch pointer used by setup-pdfium.sh so every
           # matrix job builds the exact same commit even if embedpdf/main
@@ -206,6 +219,7 @@ jobs:
           EMBEDPDF_PIN_SHA: ${{ needs.resolve-sha.outputs.sha }}
           JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
           JPDFIUM_LIBC: musl
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium
 
       # Real musl validation: the freshly-built PDFium must actually LOAD and RUN
