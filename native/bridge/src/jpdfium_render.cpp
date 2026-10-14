@@ -585,40 +585,56 @@ void jpdfium_free_buffer(uint8_t* buffer) noexcept {
     free(buffer);
 }
 
-int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi) {
+namespace {
+
+struct RasterTarget {
+    double w_pt = 0.0;
+    double h_pt = 0.0;
+    int w_px = 0;
+    int h_px = 0;
+};
+
+// Page geometry -> validated pixel size for `dpi` (the same rules the
+// single-page entry point has always applied).
+bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
+    const double w_pt = FPDF_GetPageWidth(page);
+    const double h_pt = FPDF_GetPageHeight(page);
+    // Reject non-finite geometry explicitly: every comparison against NaN is
+    // false, so a NaN page size or dpi would otherwise reach the
+    // floating-point to integer conversion below, which is undefined.
+    if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0 || dpi <= 0) {
+        return false;
+    }
+    // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
+    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
+    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
+    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
+        w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels) {
+        return false;
+    }
+    // Clamp positive dimensions to at least one pixel: truncation alone would
+    // reject a page that rounds to one pixel, which PDFBox and the Java bounds
+    // check both accept.
+    out->w_pt = w_pt;
+    out->h_pt = h_pt;
+    out->w_px = std::max(1, static_cast<int>(w_px_d));
+    out->h_px = std::max(1, static_cast<int>(h_px_d));
+    return true;
+}
+
+// Renders `page` (geometry in `target`) into `bmp` and replaces the page at
+// `pageIndex` with an image of that bitmap. `bmp` is caller-owned so a
+// document-wide pass can reuse one allocation across pages of equal size; it is
+// filled white here because a page does not paint its own background and a
+// reused bitmap may still hold the previous page's pixels. `page` is closed
+// before the page tree is restructured.
+int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page, UniqueBitmap& bmp,
+                            const RasterTarget& target) {
     try {
-        DocWrapper* dw = decodeDoc(docHandle);
-        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
-
-        UniquePage page(FPDF_LoadPage(dw->core->doc, pageIndex));
-        if (!page) return JPDFIUM_ERR_NOT_FOUND;
-
-        double w_pt = FPDF_GetPageWidth(page.get());
-        double h_pt = FPDF_GetPageHeight(page.get());
-        // Reject non-finite geometry explicitly: every comparison against NaN is
-        // false, so a NaN page size or dpi would otherwise reach the
-        // floating-point to integer conversion below, which is undefined.
-        if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0 ||
-            dpi <= 0) {
-            return JPDFIUM_ERR_INVALID;
-        }
-        // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
-        const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
-        const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
-        if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
-            w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels) {
-            return JPDFIUM_ERR_INVALID;
-        }
-        // Clamp positive dimensions to at least one pixel: truncation alone would
-        // reject a page that rounds to one pixel, which PDFBox and the Java bounds
-        // check both accept.
-        int w_px = std::max(1, static_cast<int>(w_px_d));
-        int h_px = std::max(1, static_cast<int>(h_px_d));
-
-        // Own the bitmap immediately: for a large page this is megabytes, and
-        // every later failure path must release it.
-        UniqueBitmap bmp(FPDFBitmap_Create(w_px, h_px, 0 /*no alpha*/));
-        if (!bmp) return JPDFIUM_ERR_NATIVE;
+        const double w_pt = target.w_pt;
+        const double h_pt = target.h_pt;
+        const int w_px = target.w_px;
+        const int h_px = target.h_px;
         FPDFBitmap_FillRect(bmp.get(), 0, 0, w_px, h_px, 0xFFFFFFFF);
 #ifdef JPDFIUM_HAS_SKIA
         if (g_jpdfiumUseSkia) {
@@ -684,6 +700,63 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         ++dw->core->generation;
         return JPDFIUM_OK;
 
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+}  // namespace
+
+int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi) {
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+
+        UniquePage page(FPDF_LoadPage(dw->core->doc, pageIndex));
+        if (!page) return JPDFIUM_ERR_NOT_FOUND;
+
+        RasterTarget target;
+        if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
+
+        // Own the bitmap immediately: for a large page this is megabytes, and
+        // every later failure path must release it.
+        UniqueBitmap bmp(FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/));
+        if (!bmp) return JPDFIUM_ERR_NATIVE;
+        return rasterize_page_into(dw, pageIndex, page, bmp, target);
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+        if (dpi <= 0) return JPDFIUM_ERR_INVALID;
+
+        const int count = FPDF_GetPageCount(dw->core->doc);
+        // One render bitmap for the whole pass: pages of equal size reuse the
+        // allocation instead of mapping a fresh frame per page, so a 100-page
+        // document allocates one frame rather than 100. It is re-created only
+        // when the page size changes, so mixed-size documents still work.
+        UniqueBitmap bmp;
+        int bmp_w = 0;
+        int bmp_h = 0;
+        for (int i = 0; i < count; ++i) {
+            UniquePage page(FPDF_LoadPage(dw->core->doc, i));
+            if (!page) return JPDFIUM_ERR_NOT_FOUND;
+            RasterTarget target;
+            if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
+            if (!bmp || bmp_w != target.w_px || bmp_h != target.h_px) {
+                bmp.reset(FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/));
+                if (!bmp) return JPDFIUM_ERR_NATIVE;
+                bmp_w = target.w_px;
+                bmp_h = target.h_px;
+            }
+            const int32_t rc = rasterize_page_into(dw, i, page, bmp, target);
+            if (rc != JPDFIUM_OK) return rc;
+        }
+        return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

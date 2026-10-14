@@ -1459,6 +1459,29 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Bakes annotations and form fields into page content on every page in a
+     * single native pass. The document handle stays file-backed and no page is
+     * materialized in the Java heap.
+     */
+    public static void docFlattenAnnotations(long doc) {
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_doc_flatten_annotations(doc), "docFlattenAnnotations");
+        });
+    }
+
+    /**
+     * Rasterizes every page at {@code dpi} and replaces its content with the
+     * resulting image, in a single native pass that reuses one render bitmap
+     * for the whole document instead of allocating a frame per page.
+     */
+    public static void docFlattenToImages(long doc, int dpi) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_doc_flatten_to_images(doc, dpi), "docFlattenToImages");
+        });
+    }
+
+    /**
      * Mark phase: create a REDACT annotation at the given rectangle.
      * No content is modified - only an annotation is stored.
      *

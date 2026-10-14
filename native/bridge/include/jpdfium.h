@@ -221,6 +221,23 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words,
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
+// Document-wide flatten in one call: the whole pass runs inside the native
+// library, so a caller flattens N pages with a single cross-boundary call and
+// no per-page handle churn. Both keep the file-backed document handle; neither
+// materializes the document in the Java heap.
+//
+// jpdfium_doc_flatten_annotations: bake annotations/form fields into page
+// content on every page (FPDFPage_Flatten). Returns JPDFIUM_OK when every page
+// flattened or had nothing to do.
+//
+// jpdfium_doc_flatten_to_images: rasterize every page at `dpi` and replace its
+// content with the resulting image. One render bitmap is reused for the whole
+// pass (re-created only when the page size changes), so a multi-page document
+// allocates a single frame instead of one per page. On failure the first
+// failing page reports the error; earlier pages stay flattened.
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
+
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
 JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json);
 

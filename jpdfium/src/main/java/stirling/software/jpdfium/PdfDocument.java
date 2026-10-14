@@ -977,11 +977,12 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <ul>
      *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
-     *       the content stream. Text remains selectable. Uses native PDFium
-     *       {@code jpdfium_page_flatten}.</li>
+     *       the content stream. Text remains selectable. One native pass over the
+     *       document ({@code jpdfium_doc_flatten_annotations}).</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
-     *       replacing all content with an image. Nothing is selectable. Uses native
-     *       PDFium {@code jpdfium_page_to_image}.</li>
+     *       replacing all content with an image. Nothing is selectable. One native
+     *       pass over the document ({@code jpdfium_doc_flatten_to_images}) that
+     *       reuses a single render bitmap for every page of the same size.</li>
      * </ul>
      *
      * @param mode what to flatten (see {@link FlattenMode})
@@ -989,19 +990,18 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void flatten(FlattenMode mode, int dpi) {
         ensureOpen();
-        int count = pageCount();
-        for (int i = 0; i < count; i++) {
-            switch (mode) {
-                case ANNOTATIONS -> {
-                    long pageHandle = JpdfiumLib.pageOpen(handle, i);
-                    try {
-                        JpdfiumLib.pageFlatten(pageHandle);
-                    } finally {
-                        JpdfiumLib.pageClose(pageHandle);
-                    }
-                    markContentModified();
-                }
-                case FULL -> convertPageToImage(i, dpi);
+        switch (mode) {
+            case ANNOTATIONS -> {
+                // One native pass: no per-page handle, admission or lambda, and
+                // the document handle stays file-backed throughout.
+                JpdfiumLib.docFlattenAnnotations(handle);
+                markContentModified();
+            }
+            case FULL -> {
+                // One native pass with a single reused render bitmap; the page
+                // tree churn and the frame allocation both stay native.
+                JpdfiumLib.docFlattenToImages(handle, dpi);
+                invalidateOpenPages();
             }
         }
     }

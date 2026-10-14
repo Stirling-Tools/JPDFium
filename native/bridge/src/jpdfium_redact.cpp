@@ -374,6 +374,26 @@ int32_t jpdfium_page_flatten(int64_t page) noexcept {
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+        const int count = FPDF_GetPageCount(dw->core->doc);
+        // One native pass instead of three cross-boundary calls per page: the
+        // document handle stays file-backed and no Java page objects are made.
+        for (int i = 0; i < count; ++i) {
+            UniquePage page(FPDF_LoadPage(dw->core->doc, i));
+            if (!page) return JPDFIUM_ERR_NOT_FOUND;
+            const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
+            if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) return JPDFIUM_ERR_NATIVE;
+        }
+        ++dw->core->generation;
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
 // Word-list redaction with padding
 // words: null-terminated array of null-terminated UTF-8 strings
 // padding: extra points added around each match bounding box
