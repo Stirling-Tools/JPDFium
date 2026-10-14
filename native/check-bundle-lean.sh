@@ -6,7 +6,7 @@ DIST_DIR="${1:?usage: check-bundle-lean.sh <dist-dir> [platform]}"
 PLATFORM="${2:-}"
 
 case "$PLATFORM" in
-    linux-*|vips-linux-*)   OS=linux ;;
+    linux-*|vips-linux-*|freebsd-*|openbsd-*)   OS=linux ;;
     darwin-*|vips-darwin-*) OS=darwin ;;
     windows-*|vips-windows-*) OS=windows ;;
     *)
