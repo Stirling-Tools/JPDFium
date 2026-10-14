@@ -688,6 +688,9 @@ if(JPDFIUM_BUILD_TESTS)
         target_include_directories(api_safety PRIVATE bridge/include bridge/src)
         if(MSVC)
             target_compile_options(api_safety PRIVATE /W4 /WX)
+            # The suite reads a scratch font path and getenv like the harnesses above, so it
+            # needs the same CRT deprecation opt-out that /WX would otherwise reject.
+            target_compile_definitions(api_safety PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
         else()
             target_compile_options(api_safety PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
