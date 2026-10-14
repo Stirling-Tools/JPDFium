@@ -1,5 +1,4 @@
 // jpdfium_qpdf.cpp - In-process qpdf structural optimization (FFM, no CLI).
-//
 // jpdfium_qpdf_optimize drives the bundled qpdf library entirely in memory via
 // its QPDF/QPDFWriter C++ API.
 
@@ -34,7 +33,6 @@ namespace {
 
 // Create the output with owner-only permissions on POSIX (CodeQL
 // cpp/world-writable-file-creation); Windows has no mode argument here.
-//
 // Callers pass Java-created staging files, so O_TRUNC (overwrite) is correct
 // - but O_NOFOLLOW still refuses a symlink swapped in for the staging file
 // after Java created it.
@@ -188,6 +186,87 @@ QpdfResult extractPages(std::span<const uint8_t> input, const int32_t* pageIndic
                 dest_pdh.addPage(allPages[idx], false);
             }
         }
+
+        QPDFWriter w{*dest};
+        w.setOutputMemory();
+        w.setObjectStreamMode(qpdf_o_generate);
+        w.setCompressStreams(true);
+        w.write();
+        return {w.getBufferSharedPointer(), ""};
+    } catch (const std::exception& e) {
+        return {nullptr, e.what()};
+    }
+}
+
+// Draw one page's content onto another page through a caller-supplied affine
+// matrix, preserving vectors, fonts and shading end to end.
+QpdfResult stampPage(std::span<const uint8_t> destBytes, std::span<const uint8_t> srcBytes,
+                     int32_t destPageIndex, int32_t srcPageIndex, double a, double b, double c,
+                     double d, double e, double f) {
+    try {
+        auto dest = QPDF::create();
+        dest->processMemoryFile("stamp-dest", reinterpret_cast<const char*>(destBytes.data()),
+                                destBytes.size());
+        auto src = QPDF::create();
+        src->processMemoryFile("stamp-src", reinterpret_cast<const char*>(srcBytes.data()),
+                               srcBytes.size());
+        src->setImmediateCopyFrom(true);
+
+        QPDFPageDocumentHelper destPdh{*dest};
+        QPDFPageDocumentHelper srcPdh{*src};
+        // Page attributes (/Resources, /MediaBox, /Rotate) are inheritable;
+        // push them down so the keys read below are the effective ones.
+        destPdh.pushInheritedAttributesToPage();
+        srcPdh.pushInheritedAttributesToPage();
+
+        auto destPages = destPdh.getAllPages();
+        auto srcPages = srcPdh.getAllPages();
+        if (destPageIndex < 0 || static_cast<size_t>(destPageIndex) >= destPages.size()) {
+            return {nullptr, "stamp destination page index out of range"};
+        }
+        if (srcPageIndex < 0 || static_cast<size_t>(srcPageIndex) >= srcPages.size()) {
+            return {nullptr, "stamp source page index out of range"};
+        }
+        auto destPage = destPages[static_cast<size_t>(destPageIndex)];
+        auto srcPage = srcPages[static_cast<size_t>(srcPageIndex)];
+
+        QPDFObjectHandle form = srcPage.getFormXObjectForPage(true);
+        if (!form.isIndirect()) {
+            form = src->makeIndirectObject(form);
+        }
+        // copyForeignObject copies the form's stream data and its transitive
+        // references (fonts, images, shading) into the destination file.
+        QPDFObjectHandle foreign = dest->copyForeignObject(form);
+
+        QPDFObjectHandle pageDict = destPage.getObjectHandle();
+        QPDFObjectHandle resources = pageDict.getKey("/Resources");
+        if (!resources.isDictionary()) {
+            resources = QPDFObjectHandle::newDictionary();
+            pageDict.replaceKey("/Resources", resources);
+        }
+        QPDFObjectHandle xobjects = resources.getKey("/XObject");
+        if (!xobjects.isDictionary()) {
+            xobjects = QPDFObjectHandle::newDictionary();
+            resources.replaceKey("/XObject", xobjects);
+        }
+        // Deterministic unique name inside the destination resource dictionary:
+        // stamping the same destination twice must not shadow the first stamp.
+        std::string name = "/JpdfiumStamp";
+        for (int suffix = 2; xobjects.hasKey(name); ++suffix) {
+            name = "/JpdfiumStamp" + std::to_string(suffix);
+        }
+        xobjects.replaceKey(name, foreign);
+
+        char content[256];
+        int written = std::snprintf(content, sizeof content, "q\n%g %g %g %g %g %g cm\n%s Do\nQ\n", a,
+                                    b, c, d, e, f, name.c_str());
+        if (written <= 0 || static_cast<size_t>(written) >= sizeof content) {
+            return {nullptr, "stamp matrix formatting failed"};
+        }
+        destPage.addPageContents(
+            QPDFObjectHandle::newStream(dest.get(),
+                                        std::string(content, static_cast<size_t>(written))),
+            false);
 
         QPDFWriter w{*dest};
         w.setOutputMemory();
@@ -491,6 +570,39 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages(const uint8_t* input, int64_t 
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_stamp_page(const uint8_t* dest, int64_t destLen,
+                                               const uint8_t* src, int64_t srcLen,
+                                               int32_t destPageIndex, int32_t srcPageIndex, double a,
+                                               double b, double c, double d, double e, double f,
+                                               uint8_t** output, int64_t* outputLen) {
+    try {
+        if (!dest || destLen <= 0 || !src || srcLen <= 0 || !output || !outputLen) return -1;
+        *output = nullptr;
+        *outputLen = 0;
+
+        auto result = stampPage({dest, static_cast<size_t>(destLen)},
+                                {src, static_cast<size_t>(srcLen)}, destPageIndex, srcPageIndex, a,
+                                b, c, d, e, f);
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf stamp page: %s\n", result.error.c_str());
+            return -1;
+        }
+
+        auto& buf = result.buffer;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt(const uint8_t* input, int64_t inputLen,
                                             const char* userPassword, const char* ownerPassword,
                                             int32_t permissions, int32_t keyLength,
@@ -776,6 +888,17 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char*, const char*, int3
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char*, const int32_t*, int32_t,
                                                        const char*) {
+    return -1;
+}
+
+// Stamping needs real object-graph surgery, so there is no meaningful
+// pass-through: report the operation as unavailable.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_stamp_page(const uint8_t*, int64_t, const uint8_t*, int64_t,
+                                               int32_t, int32_t, double, double, double, double,
+                                               double, double, uint8_t** output,
+                                               int64_t* outputLen) {
+    if (output) *output = nullptr;
+    if (outputLen) *outputLen = 0;
     return -1;
 }
 

@@ -361,23 +361,49 @@ public final class QpdfLib {
         }
     }
 
+    /** True when the native page-stamping downcall resolved (qpdf build). */
+    public static boolean isStampSupported() {
+        return JpdfiumH.jpdfium_qpdf_stamp_page$address() != null;
+    }
+
+    /**
+     * Draw one page of {@code source} onto a page of {@code destination} through the affine matrix
+     * {@code [a b c d e f]} (PDF {@code cm} order), preserving vectors, text and shading.
+     */
+    public static byte[] stampPage(byte[] destination, byte[] source, int destPageIndex,
+            int srcPageIndex, double a, double b, double c, double d, double e, double f) {
+        if (!isStampSupported() || destination == null || destination.length == 0 || source == null
+                || source.length == 0) {
+            return null;
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment destSeg = call.copyBytes(destination);
+            MemorySegment srcSeg = call.copyBytes(source);
+            int rc = JpdfiumH.jpdfium_qpdf_stamp_page(destSeg, destination.length, srcSeg,
+                    source.length, destPageIndex, srcPageIndex, a, b, c, d, e, f, call.outPtr,
+                    call.outLen);
+            if (rc != 0) {
+                return null;
+            }
+            return call.copyAndFree("qpdfStampPage");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf page stamp failed", t);
+        }
+    }
+
+    /**
+     * Convenience form of {@link #stampPage} that scales the source page uniformly and translates
+     * it, i.e. the matrix {@code [scale 0 0 scale x y]}. This matches the usual "place this page at
+     */
+    public static byte[] stampPageAt(byte[] destination, byte[] source, int destPageIndex,
+            int srcPageIndex, double x, double y, double scale) {
+        return stampPage(destination, source, destPageIndex, srcPageIndex, scale, 0, 0, scale, x, y);
+    }
+
     /**
      * Optimize a PDF file on disk via the bundled qpdf library, reading the
      * input from disk and writing the result straight to disk. No document
-     * bytes cross the FFI boundary, so this stays flat in Java heap.
-     *
-     * <p>The native writer targets a sibling staging file; {@code output} is
-     * replaced only after success plus a non-empty staging check, so a failed
-     * optimize never leaves a partial destination behind.
-     *
-     * @param input input PDF file path
-     * @param output destination PDF file path
-     * @param flags qpdf optimize flags
-     * @param objectStreamMode qpdf object-stream mode
-     * @param streamDataMode qpdf stream-data mode
-     * @param decodeLevel qpdf decode level
-     * @return true on success; false if the file operation is unavailable.
-     *         Native failures throw {@link JPDFiumException}.
      */
     public static boolean optimizeFile(Path input, Path output, int flags,
                                        int objectStreamMode, int streamDataMode,

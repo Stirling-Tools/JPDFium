@@ -1037,6 +1037,101 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Whether this native build exports the Rust vector SVG to PDF converter.
+     * The stub bridge does not, so callers that require a vector page should
+     */
+    public static boolean isSvgToPdfAvailable() {
+        if (RustBindings.jpdfium_has_rust == null) {
+            return false;
+        }
+        try {
+            return (int) RustBindings.jpdfium_has_rust.invokeExact() == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Convert an SVG document to a one-page PDF whose content stays vector with
+     * the Rust svg2pdf writer.
+     */
+    public static byte[] svgToPdfBytes(byte[] svg, int width, int height, boolean embedText) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cSvg = arena.allocateFrom(JAVA_BYTE, svg);
+            int flag = embedText ? 1 : 0;
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_rust_svg_to_pdf(cSvg, svg.length, width, height, flag,
+                        ADDR_SCRATCH, LONG_SCRATCH), "svgToPdf");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "svgToPdf", false);
+                if (ptr == null) {
+                    throw new JPDFiumException("svgToPdf returned no buffer");
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
+    /**
+     * Extracts the page's shading definitions as a compact text payload, so a
+     * PDF-to-SVG exporter can emit real {@code <linearGradient>} / {@code <radialGradient>}
+     * instead of a raster fallback. Returns {@code null} when the page has none.
+     */
+    public static byte[] pageGradients(byte[] pdf, int pageIndex) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cPdf = arena.allocateFrom(JAVA_BYTE, pdf);
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_page_gradients(cPdf, pdf.length, pageIndex,
+                        ADDR_SCRATCH, LONG_SCRATCH), "pageGradients");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "pageGradients", false);
+                if (ptr == null || len <= 0) {
+                    return null;
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
+    /**
+     * File-backed variant of {@link #pageGradients(byte[], int)} that reads the document
+     * from disk and parses it once for every requested page. A {@code null} or empty
+     * {@code pageIndices} selects all pages; the payload marks each section with
+     * {@code #PAGE <index>} so the caller can route it. Returns {@code null} when no
+     * requested page has shadings.
+     */
+    public static byte[] pageGradientsFile(Path path, int[] pageIndices) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cPath = arena.allocateFrom(path.toAbsolutePath().toString());
+            int count = pageIndices == null ? 0 : pageIndices.length;
+            MemorySegment cPages = count == 0 ? MemorySegment.NULL
+                    : arena.allocateFrom(JAVA_INT, pageIndices);
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_page_gradients_file(cPath, cPages, count,
+                        ADDR_SCRATCH, LONG_SCRATCH), "pageGradientsFile");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "pageGradientsFile", false);
+                if (ptr == null || len <= 0) {
+                    return null;
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
+    /**
      * Fast path that returns a heap {@link RenderResult}. Avoids the
      * {@link RenderedPageView} wrapper (object + {@link AtomicBoolean}
      * + cleanup lambda) so the common {@code page.renderAt()} call stays allocation-lean;
