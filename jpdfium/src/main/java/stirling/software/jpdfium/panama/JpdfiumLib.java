@@ -1155,7 +1155,12 @@ public final class JpdfiumLib {
 
     /** Snapshot of the render-target pool, for validating reuse behaviour in production. */
     public record RenderTargetPoolStats(
-            long retainedBytes, int pooled, long hits, long misses, long fallbacks) {}
+            long retainedBytes,
+            int allocated,
+            int idleTargets,
+            long hits,
+            long misses,
+            long fallbacks) {}
 
     /**
      * Reusable render targets, borrowed and returned around each render. Each target owns its own
@@ -1193,10 +1198,10 @@ public final class JpdfiumLib {
     /**
      * Borrows a pooled render target of at least {@code byteLen} bytes, or {@code null} when the
      * page is too large to pool or the pool is exhausted. Reuses the smallest target that fits, so
-     * a small request never pins the largest slot; when every slot holds a smaller target the
-     * smallest idle one is retired, so monotonic growth (thumbnail then full page) cannot saturate
-     * the pool with undersized buffers. Every non-null result must be handed back to
-     * {@link #releaseRenderTarget(RenderTargetPool.Target)}.
+     * a small request never pins the largest slot; when no idle target fits, undersized idle ones
+     * are retired until a slot and the byte budget allow a replacement, so neither slot exhaustion
+     * nor byte-budget exhaustion can permanently disable pooling. Every non-null result must be
+     * handed back to {@link #releaseRenderTarget(RenderTargetPool.Target)}.
      */
     private static RenderTargetPool.Target borrowRenderTarget(long byteLen) {
         synchronized (RenderTargetPool.FREE) {
@@ -1212,27 +1217,33 @@ public final class JpdfiumLib {
                 RenderTargetPool.HITS.incrementAndGet();
                 return best;
             }
-            // Retire a strictly smaller idle target so its slot can be reused; a bigger one would
-            // have matched above, and retiring an equal-sized slot would only thrash.
-            boolean freed = false;
-            if (RenderTargetPool.ALLOCATED.get() >= RENDER_TARGET_POOL_MAX) {
-                RenderTargetPool.Target smallest = RenderTargetPool.smallestIdle();
-                if (smallest != null && smallest.segment().byteSize() < byteLen) {
-                    RenderTargetPool.retire(smallest);
-                    freed = true;
-                }
+            // Make room for a fresh target by retiring undersized idle ones until both a slot and
+            // the byte budget allow it. A target that fits would have matched above, so every idle
+            // one here is smaller than the request, and a borrowed target is never retired.
+            while (RenderTargetPool.ALLOCATED.get() >= RENDER_TARGET_POOL_MAX
+                    || RenderTargetPool.RETAINED_BYTES.get() + byteLen
+                            > RENDER_TARGET_RETAINED_MAX_BYTES) {
+                RenderTargetPool.Target victim = RenderTargetPool.smallestIdle();
+                if (victim == null) break;  // only borrowed targets are left
+                RenderTargetPool.retire(victim);
             }
-            if ((freed || RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX)
+            if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX
                     && RenderTargetPool.RETAINED_BYTES.get() + byteLen
                             <= RENDER_TARGET_RETAINED_MAX_BYTES) {
-                // Allocate before counting: a failed allocation must not consume the
-                // pool budget, or repeated failures would starve later renders.
+                // Own the arena before counting, and close it on failure: a rejected allocation
+                // must not charge the budget, and a provisional shared arena must not escape.
                 Arena arena = Arena.ofShared();
-                MemorySegment target = arena.allocate(byteLen);
+                RenderTargetPool.Target target;
+                try {
+                    target = new RenderTargetPool.Target(arena, arena.allocate(byteLen));
+                } catch (RuntimeException | Error e) {
+                    arena.close();
+                    throw e;
+                }
                 RenderTargetPool.ALLOCATED.incrementAndGet();
                 RenderTargetPool.RETAINED_BYTES.addAndGet(byteLen);
                 RenderTargetPool.MISSES.incrementAndGet();
-                return new RenderTargetPool.Target(arena, target);
+                return target;
             }
             RenderTargetPool.FALLBACKS.incrementAndGet();
         }
@@ -1245,11 +1256,12 @@ public final class JpdfiumLib {
         }
     }
 
-    /** Current render-target pool counters: retained bytes and hit/miss/fallback totals. */
+    /** Current render-target pool counters: retained bytes, targets, and hit/miss/fallback totals. */
     public static RenderTargetPoolStats renderTargetPoolStats() {
         synchronized (RenderTargetPool.FREE) {
             return new RenderTargetPoolStats(
                     RenderTargetPool.RETAINED_BYTES.get(),
+                    RenderTargetPool.ALLOCATED.get(),
                     RenderTargetPool.FREE.size(),
                     RenderTargetPool.HITS.get(),
                     RenderTargetPool.MISSES.get(),

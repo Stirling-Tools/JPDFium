@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfenv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -638,6 +639,84 @@ void test_font_concurrency() {
     CHECK(unexpected.load() == 0, "concurrent FreeType calls refuse garbage cleanly");
 }
 
+// A valid font exercises the successful path (face creation, real coverage, classification), which
+// the garbage-byte test above cannot. The repo ships no font fixture, so this uses a system font
+// and skips loudly when none is present. Concurrent results must match a serial baseline.
+std::vector<uint8_t> load_system_font() {
+    const char* candidates[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Verdana.ttf",
+    };
+    for (const char* path : candidates) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) continue;
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+        if (!bytes.empty()) return bytes;
+    }
+    return {};
+}
+
+void test_font_concurrency_with_font() {
+    const std::vector<uint8_t> font = load_system_font();
+    if (font.empty()) {
+        std::printf("SKIP font concurrency: no system font fixture found\n");
+        return;
+    }
+    const int32_t codepoints[3] = {0x41, 0x72, 0x20AC};
+    uint8_t base_cov[3] = {0, 0, 0};
+    char* base_json = nullptr;
+    CHECK_STATUS(
+        jpdfium_font_covers_text(font.data(), (int64_t)font.size(), codepoints, 3, base_cov),
+        JPDFIUM_OK, "serial coverage on a real font");
+    CHECK_STATUS(jpdfium_font_classify(font.data(), (int64_t)font.size(), &base_json), JPDFIUM_OK,
+                 "serial classification on a real font");
+    const std::string baseline = base_json ? base_json : "";
+    if (base_json) jpdfium_free_string(base_json);
+
+    std::atomic<int> mismatches{0};
+    std::atomic<bool> go{false};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&, t] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            for (int i = 0; i < 100; ++i) {
+                // Mix valid and invalid inputs against the one shared library.
+                const bool valid = ((t + i) % 4) != 0;
+                const std::vector<uint8_t>& data = valid ? font : std::vector<uint8_t>(512, 0x7F);
+                if ((t + i) % 2 == 0) {
+                    char* json = nullptr;
+                    const int32_t rc =
+                        jpdfium_font_classify(data.data(), (int64_t)data.size(), &json);
+                    if (valid) {
+                        if (rc != JPDFIUM_OK || !json || std::string(json) != baseline)
+                            ++mismatches;
+                    } else if (rc == JPDFIUM_OK) {
+                        ++mismatches;
+                    }
+                    if (json) jpdfium_free_string(json);
+                } else {
+                    uint8_t cov[3] = {9, 9, 9};
+                    const int32_t rc = jpdfium_font_covers_text(data.data(), (int64_t)data.size(),
+                                                                codepoints, 3, cov);
+                    if (valid) {
+                        if (rc != JPDFIUM_OK || std::memcmp(cov, base_cov, sizeof cov) != 0)
+                            ++mismatches;
+                    } else if (rc == JPDFIUM_OK) {
+                        ++mismatches;
+                    }
+                }
+            }
+        });
+    }
+    go.store(true, std::memory_order_release);
+    for (std::thread& th : threads) th.join();
+    CHECK(mismatches.load() == 0, "concurrent real-font calls match the serial baseline");
+}
+
 }  // namespace
 
 // --- raster + rectify suite (merged from api_raster.cpp) ---
@@ -969,6 +1048,25 @@ void test_rounding_matches_python() {
     CHECK(st == JPDF_OK && r.width == 2550 && r.height == 3300, "dpi rounded to 6 decimals");
 }
 
+// Half-to-even must come from the helper, not the thread's floating-point rounding mode, which
+// std::nearbyint would follow. The 2.5 px case is exact, so it must stay 2 under every mode, and
+// the caller's mode must survive the call.
+void test_rounding_mode_independent() {
+    const int saved = std::fegetround();
+    const std::string pdf =
+        write("roundmode.pdf", one_page("/MediaBox [0 0 5 5]", "0 g 0 0 5 5 re f"));
+    const int modes[] = {FE_TONEAREST, FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO};
+    jpdf_status st;
+    for (const int mode : modes) {
+        if (std::fesetround(mode) != 0) continue;
+        const auto r = rasterize(pdf, raster(36, 36, JPDF_RASTER_GRAY), "roundmode.png", &st);
+        CHECK(st == JPDF_OK && r.width == 2 && r.height == 2,
+              "2.5 px stays 2 regardless of the rounding mode");
+        CHECK(std::fegetround() == mode, "rasterization preserves the caller's rounding mode");
+    }
+    std::fesetround(saved);
+}
+
 void test_rotation_and_boxes() {
     const std::string letter = (scratch() / "letter.pdf").string();
     jpdf_status st;
@@ -1210,6 +1308,7 @@ int run_raster_suite() {
     }
     test_sizes_dpi_and_devices();
     test_rounding_matches_python();
+    test_rounding_mode_independent();
     test_rotation_and_boxes();
     test_rejections();
     test_pixel_kernels();
@@ -1234,6 +1333,7 @@ int main() {
     test_output_transaction(path);
     test_concurrent_renders(path);
     test_font_concurrency();
+    test_font_concurrency_with_font();
     test_close_races(path);
     g_failures += raster_suite::run_raster_suite();
     test_shutdown(path);

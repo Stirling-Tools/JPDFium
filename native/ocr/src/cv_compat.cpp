@@ -17,7 +17,9 @@ namespace jpdf::ocr {
 
 namespace {
 
-// cvRound / saturate_cast<int>(double): round half to even.
+// cvRound / saturate_cast<int>(double): round half to even. std::lrint follows the thread's
+// floating-point rounding mode, matching OpenCV's cvRound, so these conversions are intentionally
+// NOT mode-independent; the raster/OCR entry points call them under the default mode.
 inline int round_int(double v) {
     return static_cast<int>(std::lrint(v));
 }
