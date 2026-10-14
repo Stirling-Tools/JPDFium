@@ -1,12 +1,14 @@
 package stirling.software.jpdfium.spring;
 
 /**
- * JPDFium configuration properties for Spring Boot auto-configuration.
+ * Property holder for the settings a Spring Boot application exposes under the
+ * {@code jpdfium} prefix.
  *
- * <p>Placeholder for future Spring Boot integration. When Spring Boot auto-configure
- * is added, this will be {@code @ConfigurationProperties(prefix = "jpdfium")}.
+ * <p>The class carries no annotations and is not bound by the container. Add
+ * {@code @ConfigurationProperties(prefix = "jpdfium")} in your application to
+ * have these values injected.
  *
- * <p><b>Future application.yml Example</b></p>
+ * <p><b>Example application.yml</b></p>
  * <pre>{@code
  * jpdfium:
  *   native-path: /opt/jpdfium/lib   # custom native library path

@@ -94,6 +94,11 @@ public final class PdfPage implements AutoCloseable {
         return pageIndex;
     }
 
+    /**
+     * Page size in PDF points (1/72 inch), read from the current media box.
+     *
+     * @return width and height in points
+     */
     public PageSize size() {
         ensureOpen();
         // One coarse domain admission for both dimensions, not two leaf dispatches.
@@ -101,18 +106,46 @@ public final class PdfPage implements AutoCloseable {
         return new PageSize(info.width(), info.height());
     }
 
+    /**
+     * Render the page to a raw RGBA pixel buffer at the given DPI, over a white background.
+     *
+     * @param dpi render resolution in DPI; must be positive
+     * @return rendered pixels and the resulting dimensions
+     */
     public RenderResult renderAt(int dpi) {
         return renderAt(dpi, false, null);
     }
 
+    /**
+     * Render the page to a raw RGBA pixel buffer, optionally with a transparent background.
+     *
+     * @param dpi         render resolution in DPI; must be positive
+     * @param transparent true for a transparent background, false for white
+     * @return rendered pixels and the resulting dimensions
+     */
     public RenderResult renderAt(int dpi, boolean transparent) {
         return renderAt(dpi, transparent, null);
     }
 
+    /**
+     * Render the page to a raw RGBA pixel buffer with explicit render quality.
+     *
+     * @param dpi     render resolution in DPI; must be positive
+     * @param quality render quality flags; null uses PDFium defaults
+     * @return rendered pixels and the resulting dimensions
+     */
     public RenderResult renderAt(int dpi, RenderQuality quality) {
         return renderAt(dpi, false, quality);
     }
 
+    /**
+     * Render the page to a raw RGBA pixel buffer with explicit transparency and quality.
+     *
+     * @param dpi         render resolution in DPI; must be positive
+     * @param transparent true for a transparent background, false for white
+     * @param quality     render quality flags; null uses PDFium defaults
+     * @return rendered pixels and the resulting dimensions
+     */
     public RenderResult renderAt(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
         requirePositiveDpi(dpi);
@@ -139,6 +172,13 @@ public final class PdfPage implements AutoCloseable {
         return renderImage(dpi, false);
     }
 
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with explicit quality.
+     *
+     * @param dpi     render resolution in DPI
+     * @param quality render quality flags; null uses PDFium defaults
+     * @return rendered image
+     */
     public BufferedImage renderImage(int dpi, RenderQuality quality) {
         return renderImage(dpi, false, quality);
     }
@@ -154,6 +194,14 @@ public final class PdfPage implements AutoCloseable {
         return renderImage(dpi, transparent, null);
     }
 
+    /**
+     * Render the page to a {@link BufferedImage} with explicit transparency and quality.
+     *
+     * @param dpi         render resolution in DPI
+     * @param transparent true for ARGB with transparent background, false for RGB over white
+     * @param quality     render quality flags; null uses PDFium defaults
+     * @return rendered image
+     */
     public BufferedImage renderImage(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
         requirePositiveDpi(dpi);
@@ -314,11 +362,28 @@ public final class PdfPage implements AutoCloseable {
         renderInto(targetBitmap, width, height, RenderFlags.REVERSE_BYTE_ORDER | RenderFlags.ANNOTATIONS);
     }
 
+    /**
+     * Render into a pre-allocated native segment with explicit quality
+     * (BGRA byte order, annotations on).
+     *
+     * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param quality      render quality flags; null renders with annotations only
+     */
     public void renderInto(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
         int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
         renderInto(targetBitmap, width, height, flags);
     }
 
+    /**
+     * Render into a pre-allocated native segment with explicit PDFium render flags.
+     *
+     * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param flags        PDFium render flags
+     */
     public void renderInto(MemorySegment targetBitmap, int width, int height, int flags) {
         ensureOpen();
         JpdfiumLib.checkRenderIntoArgs(targetBitmap, width, height);
@@ -343,6 +408,16 @@ public final class PdfPage implements AutoCloseable {
         renderInto(MemorySegment.ofBuffer(directBuffer), width, height);
     }
 
+    /**
+     * Start a progressive render with explicit quality (BGRA byte order,
+     * annotations on); see {@link #startProgressiveRender(MemorySegment, int, int, int)}.
+     *
+     * @param targetBitmap caller-owned bitmap the native layer renders into across steps
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param quality      render quality flags; null renders with annotations only
+     * @return session driving the incremental render
+     */
     public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
         int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
         return startProgressiveRender(targetBitmap, width, height, flags);
@@ -453,6 +528,12 @@ public final class PdfPage implements AutoCloseable {
         }
     }
 
+    /**
+     * Incremental render session: rasterises a large page in chunks so a caller
+     * can report progress or cancel mid-render. Obtained from
+     * {@link #startProgressiveRender(MemorySegment, int, int, int)}; {@link #step()}
+     * advances the render and {@link #close()} releases native state. Not thread-safe.
+     */
     public static final class ProgressiveSession implements AutoCloseable {
         private final PdfPage owner;
         private final MemorySegment rawPage;
@@ -522,6 +603,10 @@ public final class PdfPage implements AutoCloseable {
             NATIVE_ALREADY_RETIRED
         }
 
+        /**
+         * Request cancellation of the render; the next {@link #step()} returns a
+         * terminal status. A no-op once the session has been retired.
+         */
         public void cancel() {
             if (closed.get()) {
                 return;
@@ -533,6 +618,12 @@ public final class PdfPage implements AutoCloseable {
             }
         }
 
+        /**
+         * Advance the render by one chunk.
+         *
+         * @return the new status; anything other than {@code TO_BE_CONTINUED} is terminal
+         * @throws IllegalStateException if the owning page was closed or invalidated
+         */
         public ProgressiveStatus step() {
             if (closed.get()) {
                 return ProgressiveStatus.DONE;
@@ -560,6 +651,7 @@ public final class PdfPage implements AutoCloseable {
             }
         }
 
+        /** Retire the session and release its native progressive context. */
         @Override
         public void close() {
             closeInternal(Retirement.NATIVE_LIVE);
@@ -1349,6 +1441,10 @@ public final class PdfPage implements AutoCloseable {
         }
     }
 
+    /**
+     * Close this page handle and release native state. Idempotent; also retires
+     * any in-flight {@link ProgressiveSession}.
+     */
     @Override
     public void close() {
         // Lifecycle: OPEN → teardown under this monitor → CLOSED.
