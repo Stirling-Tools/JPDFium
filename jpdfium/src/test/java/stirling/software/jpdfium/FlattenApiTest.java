@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -77,7 +78,24 @@ class FlattenApiTest {
             }
             doc.save(fixture);
         }
+        int[] saved = countsOf(fixture);
+        int[] source = countsOf(TWO_PAGE_PDF);
+        assertTrue(
+                saved.length == 2 && saved[saved.length - 1] > 0,
+                "the two-page fixture must keep a last-page annotation through save, but it reads "
+                        + Arrays.toString(saved)
+                        + "; the source "
+                        + TWO_PAGE_PDF
+                        + " reads "
+                        + Arrays.toString(source));
         return fixture;
+    }
+
+    /** Reads every page's annotation count from a PDF on disk. */
+    private static int[] countsOf(Path pdf) throws IOException {
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            return annotationCounts(doc);
+        }
     }
 
     /** Flattens the whole document and records every page's annotation count around the pass. */
@@ -114,7 +132,11 @@ class FlattenApiTest {
         assertArrayEquals(perPage.before(), batched.before(), label + ": fixture annotations");
         assertTrue(
                 batched.before()[batched.before().length - 1] > 0,
-                label + ": the last page must carry an annotation to flatten");
+                () ->
+                        label
+                                + ": the last page must carry an annotation to flatten, but the"
+                                + " fixture reads "
+                                + Arrays.toString(batched.before()));
         assertArrayEquals(perPage.after(), batched.after(), label + ": annotations left behind");
         assertEquals(batched.before().length, batched.pages().size(), label + ": pages rendered");
         for (int i = 0; i < batched.pages().size(); i++) {
