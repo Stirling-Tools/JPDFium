@@ -36,7 +36,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - run: bash native/build-stub.sh
-      - run: ./gradlew javadoc --no-daemon
+      - name: Build Javadoc
+        run: |
+          set -o pipefail
+          # Maven Central rate-limits shared-runner IPs (HTTP 429) mid-download;
+          # retry those and fail immediately on a real Javadoc/source error.
+          LOG="$RUNNER_TEMP/javadoc.log"
+          for attempt in 1 2 3; do
+            if ./gradlew javadoc --no-daemon 2>&1 | tee "$LOG"; then exit 0; fi
+            if ! grep -Eq '429|Too Many Requests|Could not (GET|download)|Connection reset|Read timed out' "$LOG"; then
+              echo "Javadoc failed for a non-network reason; not retrying"
+              exit 1
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Transient dependency download failure (attempt $attempt/3); retrying in 20s"
+              sleep 20
+            fi
+          done
+          exit 1
 
   editorconfig:
     name: EditorConfig + whitespace hygiene
