@@ -98,7 +98,13 @@ struct DocCore {
     void* redactPatternCache = nullptr;
     void (*redactPatternDeleter)(void*) = nullptr;
 
+    // Scratch raster frame for the per-page flatten path, reused by size.
+    FPDF_BITMAP rasterFrame = nullptr;
+    int32_t rasterFrameWidth = 0;
+    int32_t rasterFrameHeight = 0;
+
     ~DocCore() {
+        if (rasterFrame) FPDFBitmap_Destroy(rasterFrame);
         clearRedactPatternCache();
     }
 

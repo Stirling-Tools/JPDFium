@@ -625,27 +625,27 @@ bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
 // `pageIndex` with an image of that bitmap. `bmp` is filled white first: a page does not paint its
 // own background, and a reused bitmap may still hold the previous page's pixels. `page` is closed
 // before the page tree is restructured.
-int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page, UniqueBitmap& bmp,
+int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page, FPDF_BITMAP bmp,
                             const RasterTarget& target) {
     try {
         const double w_pt = target.w_pt;
         const double h_pt = target.h_pt;
         const int w_px = target.w_px;
         const int h_px = target.h_px;
-        FPDFBitmap_FillRect(bmp.get(), 0, 0, w_px, h_px, 0xFFFFFFFF);
+        FPDFBitmap_FillRect(bmp, 0, 0, w_px, h_px, 0xFFFFFFFF);
 #ifdef JPDFIUM_HAS_SKIA
         if (g_jpdfiumUseSkia) {
             FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
                                 static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
             FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
-            FPDF_RenderPageBitmapWithMatrix(bmp.get(), page.get(), &matrix, &clip,
+            FPDF_RenderPageBitmapWithMatrix(bmp, page.get(), &matrix, &clip,
                                             FPDF_ANNOT | FPDF_PRINTING);
         } else {
-            FPDF_RenderPageBitmap(bmp.get(), page.get(), 0, 0, w_px, h_px, 0,
+            FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0,
                                   FPDF_ANNOT | FPDF_PRINTING);
         }
 #else
-        FPDF_RenderPageBitmap(bmp.get(), page.get(), 0, 0, w_px, h_px, 0,
+        FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0,
                               FPDF_ANNOT | FPDF_PRINTING);
 #endif
 
@@ -680,7 +680,7 @@ int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page,
 
         // SetBitmap copies the pixels into the object, so the bitmap is no longer
         // needed afterwards and is released with bmp.
-        if (!FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp.get())) return JPDFIUM_ERR_NATIVE;
+        if (!FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp)) return JPDFIUM_ERR_NATIVE;
 
         FS_MATRIX matrix = {static_cast<float>(w_pt), 0, 0, static_cast<float>(h_pt), 0, 0};
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
@@ -715,11 +715,21 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         RasterTarget target;
         if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
 
-        // Own the bitmap immediately: for a large page this is megabytes, and
-        // every later failure path must release it.
-        UniqueBitmap bmp(FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/));
-        if (!bmp) return JPDFIUM_ERR_NATIVE;
-        return rasterize_page_into(dw, pageIndex, page, bmp, target);
+        // One raster frame per open document: a fresh page-size bitmap per call
+        // costs a new mapping and its first-touch faults on every page.
+        DocCore& core = *dw->core;
+        if (core.rasterFrame && (core.rasterFrameWidth != target.w_px ||
+                                 core.rasterFrameHeight != target.h_px)) {
+            FPDFBitmap_Destroy(core.rasterFrame);
+            core.rasterFrame = nullptr;
+        }
+        if (!core.rasterFrame) {
+            core.rasterFrame = FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/);
+            core.rasterFrameWidth = target.w_px;
+            core.rasterFrameHeight = target.h_px;
+        }
+        if (!core.rasterFrame) return JPDFIUM_ERR_NATIVE;
+        return rasterize_page_into(dw, pageIndex, page, core.rasterFrame, target);
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
@@ -750,7 +760,7 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
                 bmp_w = target.w_px;
                 bmp_h = target.h_px;
             }
-            const int32_t rc = rasterize_page_into(dw, i, page, bmp, target);
+            const int32_t rc = rasterize_page_into(dw, i, page, bmp.get(), target);
             if (rc != JPDFIUM_OK) return rc;
         }
         return JPDFIUM_OK;
