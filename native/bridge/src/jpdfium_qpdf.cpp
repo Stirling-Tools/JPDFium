@@ -28,6 +28,7 @@
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFPageDocumentHelper.hh>
 #include <qpdf/QPDFWriter.hh>
+#include <qpdf/QUtil.hh>
 
 namespace {
 
@@ -662,8 +663,29 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
         // Open the encrypted source with whichever password the caller knows.
         // The source document is only read for its encryption dictionary, so it
         // never has to be written back out.
-        auto source = QPDF::create();
-        source->processFile(source_path, password);
+        //
+        // Pre-256-bit encryption imposes single-byte PDFDocEncoding passwords
+        // while our caller hands us UTF-8, and QPDF::processFile performs no
+        // conversion, so walk the same alternative encodings that QPDFJob tries
+        // for the command line. Without this an AES-128 source protected with a
+        // password that needs a second encoding would refuse a password that
+        // the equivalent qpdf command line accepts.
+        std::vector<std::string> candidates = QUtil::possible_repaired_encodings(password);
+        if (candidates.size() > 1) {
+            // Report the supplied password's own failure if every form fails.
+            candidates.push_back(password);
+        }
+        std::shared_ptr<QPDF> source;
+        for (auto iter = candidates.begin(); iter != candidates.end(); ++iter) {
+            auto attempt = QPDF::create();
+            try {
+                attempt->processFile(source_path, iter->c_str());
+                source = std::move(attempt);
+                break;
+            } catch (const QPDFExc&) {
+                if (iter + 1 == candidates.end()) throw;
+            }
+        }
         // A plaintext source carries no protection to copy. Refusing here keeps
         // a caller from publishing an unprotected file and believing it is
         // protected.
