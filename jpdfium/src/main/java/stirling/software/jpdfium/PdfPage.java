@@ -95,7 +95,10 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Page size in PDF points (1/72 inch), read from the current media box.
+     * Page size in PDF points (1/72 inch), as PDFium reports it: the crop box
+     * intersected with the media box, with the width and height swapped on a page
+     * rotated by 90 or 270 degrees. Use {@link #getMediaBox()} for the unrotated
+     * media box and {@link #getCropBox()} for the crop box.
      *
      * @return width and height in points
      */

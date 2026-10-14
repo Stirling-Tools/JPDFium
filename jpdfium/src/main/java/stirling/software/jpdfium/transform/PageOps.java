@@ -14,10 +14,12 @@ import java.util.List;
  * {@link BufferedImage}.
  *
  * <p>Flattening folds annotations into the page content stream so they no longer
- * appear as separate objects; the {@link FlattenMode} and {@code dpi} overloads
- * additionally rasterise the page. {@link #convertToImage} replaces a page with a
- * single image, while {@link #renderPage} rasterises without modifying the document.
- * Every operation mutates the document in place and is persisted by a later
+ * appear as separate objects. {@link FlattenMode#ANNOTATIONS} keeps the page
+ * content and bakes the annotations into it; {@link FlattenMode#FULL} rasterises
+ * the page instead, replacing it with a single image. {@link #convertToImage}
+ * replaces a page with an image, while
+ * {@link #renderPage} rasterises without modifying the document. Mutating
+ * operations update the document in place and are persisted by a later
  * {@link PdfDocument#save(Path)}.
  *
  * <p><b>Usage Example</b></p>

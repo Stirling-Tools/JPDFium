@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit;
  * Orchestrates page-level operations with optional streaming (low-memory)
  * and parallel (multi-threaded) processing.
  *
- * <h3>Modes</h3>
+ * <h2>Modes</h2>
  * <ul>
  *   <li><b>Sequential</b> - processes pages in order on the calling thread.</li>
  *   <li><b>Streaming</b> - processes pages one at a time with periodic save/reload
@@ -34,7 +34,7 @@ import java.util.concurrent.TimeUnit;
  *       with streaming flush to keep memory low.</li>
  * </ul>
  *
- * <h3>Thread Safety &amp; PDFium</h3>
+ * <h2>Thread Safety &amp; PDFium</h2>
  * <p>PDFium's internal state (font renderer, document loader, page parser) is
  * <b>not thread-safe</b> - even across independent document instances. All
  * PDFium native calls must be serialized. Since 1.0.4 the library does this
@@ -45,7 +45,7 @@ import java.util.concurrent.TimeUnit;
  * image processing, I/O) across threads while PDFium calls are pipelined
  * through the lock. The more Java work per page, the better the speedup.
  *
- * <h3>Usage</h3>
+ * <h2>Usage</h2>
  * <pre>{@code
  * // Modify pages with streaming low-memory mode
  * PdfPipeline.processAndSave(input, output,
