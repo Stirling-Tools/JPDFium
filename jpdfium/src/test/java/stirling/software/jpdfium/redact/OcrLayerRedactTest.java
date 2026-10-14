@@ -111,6 +111,20 @@ class OcrLayerRedactTest {
     }
 
     /**
+     * redact-test-ocr-hebrew-points.pdf: the ocrmypdf text layer, scan removed, of a
+     * 12pt page of Hebrew letters and pointed letters. Tesseract gives the points no
+     * advance, so their glyph boxes have no width and sit on the edge of a cover
+     * built from the letters around them.
+     */
+    @Test
+    void everyCharOfAPointedHebrewOcrLayerIsRemoved() throws Exception {
+        Outcome o = redact(Files.readAllBytes(fixture("redact-test-ocr-hebrew-points.pdf")), "\\S+", true);
+
+        assertTrue(o.matches() > 0);
+        assertEquals("", text(o.pdf()).strip());
+    }
+
+    /**
      * The placeholder glyph is narrower than the advance the OCR tool gives each
      * char, so glyph boxes stop short of both ends of the scanned word.
      * redact-test-ocr-latin.pdf is the ocrmypdf text layer, scan removed, of a 12pt

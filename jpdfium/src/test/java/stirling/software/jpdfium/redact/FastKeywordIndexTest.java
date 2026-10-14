@@ -25,6 +25,23 @@ class FastKeywordIndexTest {
     }
 
     @Test
+    void phraseMatchesAcrossALineBreakAndWhitespaceRuns() {
+        FastKeywordIndex index = FastKeywordIndex.create(List.of("authority confirmed that dredging"), false);
+        char[] page = "The harbour authority confirmed\r\nthat dredging of the north".toCharArray();
+        Set<String> fromChars = new HashSet<>();
+        index.findMatches(page, page.length, true, fromChars);
+        assertTrue(fromChars.contains("authority confirmed that dredging"));
+
+        Set<String> fromString = new HashSet<>();
+        index.findMatches("authority\u00A0 confirmed  \n that dredging", true, fromString);
+        assertTrue(fromString.contains("authority confirmed that dredging"));
+
+        Set<String> joined = new HashSet<>();
+        index.findMatches("authorityconfirmedthatdredging", false, joined);
+        assertFalse(joined.contains("authority confirmed that dredging"), "a space still needs whitespace");
+    }
+
+    @Test
     void testWholeWordBoundary() {
         FastKeywordIndex index = FastKeywordIndex.create(List.of("cat", "dog"), false);
         Set<String> wholeMatches = new HashSet<>();

@@ -40,9 +40,13 @@ static constexpr int kMaxFormNesting = 40;
 
 static constexpr FS_MATRIX kIdentityMatrix{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
 
+// One redaction box. A pattern match that wraps across lines or columns is
+// split into one TextMatch per line so each box covers only its own line;
+// the pieces share a group, which is what callers count as one match.
 struct TextMatch {
     std::vector<int> charIndices;                      // text-page char indices for matched chars
     float bboxL = 0, bboxB = 0, bboxR = 0, bboxT = 0;  // tight aggregate bbox (PDF coords)
+    int group = -1;                                    // -1: a match on its own
 };
 
 // PCRE2 matching layer (replaces std::wregex entirely).
@@ -169,6 +173,7 @@ class ScopedCoverPage {
 };
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
+int32_t logicalMatchCount(const std::vector<TextMatch>& matches);
 void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
                          const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
                          std::vector<TextMatch>& out);

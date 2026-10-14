@@ -110,6 +110,29 @@ struct ScratchGuard {
     }
 };
 
+// A redaction that mutates the page and then stops (JPDFIUM_ERR_REDACT_INCOMPLETE)
+// leaves the surviving content extractable, so record the applied zones and the
+// page whose redaction did not finish. DocCore::hasIncompleteRedaction then makes
+// every save path fail closed until a later commit actually resolves THAT page;
+// the record is per page, so a commit elsewhere cannot clear the failure.
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<FS_RECTF>& applied) {
+    if (!pw || !pw->core) return;
+    pw->core->contentRedacted = true;
+    pw->core->incompleteRedactPages.insert(pw->pageIndex);
+    for (const auto& ar : applied) {
+        pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+    }
+}
+
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch>& applied) {
+    if (!pw || !pw->core) return;
+    pw->core->contentRedacted = true;
+    pw->core->incompleteRedactPages.insert(pw->pageIndex);
+    for (const auto& m : applied) {
+        pw->core->addRedactZone(pw->pageIndex, m.bboxL, m.bboxB, m.bboxR, m.bboxT);
+    }
+}
+
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
                               int32_t remove_content) noexcept {
     PageWrapper* pw = decodePage(page);
@@ -156,27 +179,18 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         int32_t rc =
             objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
         FPDFText_ClosePage(tp);
-        if (rc != JPDFIUM_OK) return rc;
+        if (rc != JPDFIUM_OK) {
+            // objectFissionRedact mutates the page before it audits, so a
+            // half-finished region redaction has already destroyed content.
+            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+            return rc;
+        }
 
         // Audit 1 (text): reload the text page and confirm no glyph box
         // still intersects the redaction region. An audit that cannot even
         // run is a loud unverifiable error - never a silent pass.
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        bool remaining = false;
-        int n = FPDFText_CountChars(audit);
-        for (int ci = 0; ci < n; ++ci) {
-            double l, r, b, t;
-            if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
-            if (charInRect(l, b, r, t, x, y, x + w, y + h)) {
-                remaining = true;
-                break;
-            }
-        }
-        FPDFText_ClosePage(audit);
-        if (remaining) return JPDFIUM_ERR_REDACT_INCOMPLETE;
-
-        // Audit 2 (objects): see auditNoSurvivorsInRegion.
         std::vector<FS_RECTF> regions;
         FS_RECTF r;
         r.left = x;
@@ -184,7 +198,29 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         r.right = x + w;
         r.top = y + h;
         regions.push_back(r);
+
+        bool remaining = false;
+        int n = FPDFText_CountChars(audit);
+        for (int ci = 0; ci < n; ++ci) {
+            double l, r2, b, t;
+            if (!FPDFText_GetCharBox(audit, ci, &l, &r2, &b, &t)) continue;
+            if (charInRect(l, b, r2, t, x, y, x + w, y + h)) {
+                remaining = true;
+                break;
+            }
+        }
+        FPDFText_ClosePage(audit);
+        if (remaining) {
+            // The fission engine already removed content in this region while
+            // glyphs that must be gone are still extractable, so record the page
+            // as half-redacted: every save fails until a later commit resolves it.
+            markRedactionIncomplete(pw, regions);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
+
+        // Audit 2 (objects): see auditNoSurvivorsInRegion.
         if (!auditNoSurvivorsInRegion(pw->page, regions, paintedCovers)) {
+            markRedactionIncomplete(pw, regions);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         // Sanitize-stage bookkeeping: annotations intersecting this zone are
@@ -195,6 +231,9 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
     }
 }
+
+// (markRedactionIncomplete* live above jpdfium_redact_region so every
+// incomplete-redaction return path can record the page it half-finished.)
 
 int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
                                int32_t remove_content) noexcept {
@@ -306,6 +345,20 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             }
             appliedRects.push_back(rect);
         }
+        // Once one box is applied, tp indexes objects that redaction freed, so the
+        // fission fallback cannot finish the page. The post-redaction check cannot
+        // stand in for the unapplied boxes either: it re-matches whole patterns, and
+        // a match split across lines no longer matches once one piece is gone.
+        if (!epdfOk && !appliedRects.empty()) {
+            FPDFText_ClosePage(tp);
+            // The applied boxes already removed content while the surviving half
+            // of the match is still extractable: a full save would ship a
+            // half-redacted document, so keep the redacted-save guards (no
+            // incremental save, sanitize on save) AND fail every save until the
+            // caller resolves the page.
+            markRedactionIncomplete(pw, appliedRects);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
             tp = nullptr;
@@ -339,7 +392,12 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
             FPDFText_ClosePage(tp);
             tp = nullptr;
-            if (rc != JPDFIUM_OK) return rc;
+            if (rc != JPDFIUM_OK) {
+                // The fission engine mutates the page before it audits: a
+                // half-finished fallback redaction must fail every save closed.
+                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+                return rc;
+            }
         }
 
         // Audit loop: re-extract the page text and verify the pattern no
@@ -358,7 +416,16 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
 #endif
         std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
         FPDFText_ClosePage(audit);
-        if (!remaining.empty() || actualFp != expectedFp) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (!remaining.empty() || actualFp != expectedFp) {
+            // Content was removed but the audit still finds survivors: the page is
+            // half-redacted, so no save may serialize it until a commit resolves it.
+            if (epdfOk) {
+                markRedactionIncomplete(pw, appliedRects);
+            } else {
+                markRedactionIncomplete(pw, matches);
+            }
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
@@ -449,7 +516,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
 #endif
-        if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
+        if (matchCount) *matchCount = logicalMatchCount(matches);
 
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
@@ -531,6 +598,20 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             }
             appliedRects.push_back(rect);
         }
+        // Once one box is applied, tp indexes objects that redaction freed, so the
+        // fission fallback cannot finish the page. The post-redaction check cannot
+        // stand in for the unapplied boxes either: it re-matches whole patterns, and
+        // a match split across lines no longer matches once one piece is gone.
+        if (!epdfOk && !appliedRects.empty()) {
+            FPDFText_ClosePage(tp);
+            // The applied boxes already removed content while the surviving half
+            // of the match is still extractable: a full save would ship a
+            // half-redacted document, so keep the redacted-save guards (no
+            // incremental save, sanitize on save) AND fail every save until the
+            // caller resolves the page.
+            markRedactionIncomplete(pw, appliedRects);
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
             tp = nullptr;
@@ -563,7 +644,12 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
             FPDFText_ClosePage(tp);
             tp = nullptr;
-            if (rc != JPDFIUM_OK) return rc;
+            if (rc != JPDFIUM_OK) {
+                // Same contract as jpdfium_redact_pattern: the engine already
+                // mutated the page, so a half-finished redaction is not savable.
+                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+                return rc;
+            }
         }
 
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
@@ -584,6 +670,13 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, touched2);
         if (actualFp != expectedFp) {
             FPDFText_ClosePage(audit);
+            // Survivors after a mutation: fail every save until a commit resolves
+            // this page (same contract as jpdfium_redact_pattern).
+            if (epdfOk) {
+                markRedactionIncomplete(pw, appliedRects);
+            } else {
+                markRedactionIncomplete(pw, matches);
+            }
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 #ifdef JPDFIUM_HAS_PCRE2
@@ -593,6 +686,11 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
             if (!remaining.empty()) {
                 FPDFText_ClosePage(audit);
+                if (epdfOk) {
+                    markRedactionIncomplete(pw, appliedRects);
+                } else {
+                    markRedactionIncomplete(pw, matches);
+                }
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             }
         }
@@ -809,7 +907,11 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 
         FPDFText_ClosePage(tp);
 
-        if (matchCount) *matchCount = static_cast<int32_t>(matches.size());
+        // The documented contract of this entry point is the number of REDACT
+        // annotations created, and a match wrapped across lines or columns creates
+        // one annotation per box, so report the boxes actually created instead of
+        // the logical match count.
+        if (matchCount) *matchCount = createdCount;
 
         if (createdCount > 0 && pw->core) {
             // Saving with uncommitted marks would ship intact text under red marks.
@@ -932,6 +1034,13 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             if (pw->core) {
                 pw->core->contentRedacted = true;
+                // This page's rectangles were applied and verified, so an earlier
+                // half-finished redaction on THIS page is resolved. Pages are tracked
+                // individually, so a commit elsewhere cannot clear a page that still
+                // has surviving content.
+                if (!redactRects.empty()) {
+                    pw->core->incompleteRedactPages.erase(pw->pageIndex);
+                }
                 for (const auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
@@ -972,7 +1081,12 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
         FPDFText_ClosePage(tp);
 
-        if (rc != JPDFIUM_OK) return rc;
+        if (rc != JPDFIUM_OK) {
+            // The commit removed content before auditing: a half-finished commit
+            // leaves this page unsavable until a later commit resolves it.
+            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, redactRects);
+            return rc;
+        }
 
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
@@ -988,6 +1102,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                             ci, (l + r) / 2.0, ar.left, ar.bottom, ar.right, ar.top);
                     fflush(stderr);
                     FPDFText_ClosePage(audit);
+                    markRedactionIncomplete(pw, redactRects);
                     return JPDFIUM_ERR_REDACT_INCOMPLETE;
                 }
             }
@@ -995,6 +1110,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         FPDFText_ClosePage(audit);
 
         if (!auditNoSurvivorsInRegion(pw->page, redactRects, paintedCovers)) {
+            markRedactionIncomplete(pw, redactRects);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 
@@ -1008,6 +1124,11 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             FPDFPage_RemoveAnnot(pw->page, redactIndices[i]);
         }
         if (pw->core) {
+            // The fission fallback completed this page's redaction: resolve its
+            // earlier half-finished state. Other pages keep their marker.
+            if (!redactIndices.empty()) {
+                pw->core->incompleteRedactPages.erase(pw->pageIndex);
+            }
             pw->core->unappliedRedactMarksCount =
                 std::max(0, pw->core->unappliedRedactMarksCount -
                                 static_cast<int32_t>(redactIndices.size()));
@@ -1028,6 +1149,10 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) noexcept {
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    // A redaction that stopped half-way is not savable at all (see
+    // DocCore::hasIncompleteRedaction). Checked first so the caller sees the
+    // actionable error instead of the broader redacted-save refusal.
+    if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
     if (w->core->contentRedacted) return JPDFIUM_ERR_REDACTED_SAVE;
     if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
 

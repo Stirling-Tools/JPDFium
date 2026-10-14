@@ -820,7 +820,9 @@ public final class PdfPage implements AutoCloseable {
      *                       {@code false} is refused - see
      *                       {@link #redactRegion(Rect, int, boolean)}
      * @param caseSensitive if true, match case-sensitively
-     * @return the total number of matches found and redacted on this page
+     * @return the total number of matches found and redacted on this page; a
+     *         match wrapped across lines or columns counts once, even though it
+     *         is removed box by box
      */
     public int redactWordsEx(String[] words, int argbColor, float padding,
                               boolean wholeWord, boolean useRegex, boolean removeContent,
@@ -891,7 +893,9 @@ public final class PdfPage implements AutoCloseable {
      * @param wholeWord     if true, only match whole words
      * @param useRegex      if true, treat each word as a regex pattern
      * @param caseSensitive if true, match case-sensitively
-     * @return the number of REDACT annotations created
+     * @return the number of REDACT annotations created; a match wrapped across
+     *         lines or columns creates one annotation per box, so it counts once
+     *         per box
      */
     public int markRedactWords(String[] words, int argbColor, float padding,
                                 boolean wholeWord, boolean useRegex,

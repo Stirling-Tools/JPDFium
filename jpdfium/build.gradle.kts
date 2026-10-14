@@ -508,6 +508,7 @@ tasks.register<Test>("nativeSmokeTest") {
         // so they are skipped by the stub-based :test task (assumeTrue) and
         // run here, where the freshly built bridge is on the classpath.
         includeTestsMatching("*FlattenApiTest")
+        includeTestsMatching("*PdfEncryptionCopyTest")
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     // CI has no access to the HTML report; a load failure must name the
