@@ -999,6 +999,11 @@ public final class PdfDocument implements AutoCloseable {
                 }
             }
             case FULL -> {
+                // Validate before the try: the Java guard in JpdfiumLib throws
+                // for a non-positive dpi before any native work, and the finally
+                // below would otherwise mark pages stale for an untouched
+                // document.
+                if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
                 try {
                     JpdfiumLib.docFlattenToImages(handle, dpi);
                 } finally {

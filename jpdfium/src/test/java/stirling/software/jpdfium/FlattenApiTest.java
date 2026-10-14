@@ -228,6 +228,18 @@ class FlattenApiTest {
     }
 
     @Test
+    void docFlattenRejectsNonPositiveDpiWithoutInvalidatingOpenPages() {
+        try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
+            int epochBefore = doc.structureEpoch();
+            assertThrows(IllegalArgumentException.class, () -> doc.flatten(FlattenMode.FULL, 0));
+            assertThrows(IllegalArgumentException.class, () -> doc.flatten(FlattenMode.FULL, -1));
+            // The dpi guard runs before any native work, so nothing was replaced
+            // and the structural epoch must not have moved.
+            assertEquals(epochBefore, doc.structureEpoch());
+        }
+    }
+
+    @Test
     void pageOpsFlattenMethods() {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF)) {
             assertDoesNotThrow(() -> PageOps.flatten(doc, 0));
