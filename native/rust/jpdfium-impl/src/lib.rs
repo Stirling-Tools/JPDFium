@@ -13,7 +13,9 @@
 // All functions use libc::malloc for output allocation so the Java side can
 // free them with jpdfium_rust_free regardless of Rust's internal allocator.
 
+use std::ffi::CStr;
 use std::io::{Cursor, Read};
+use std::os::raw::c_char;
 use std::slice;
 
 use fast_image_resize as fir;
@@ -21,6 +23,14 @@ use fir::images::Image as FirImage;
 use flate2::read::ZlibDecoder;
 use lopdf::Document;
 use zopfli::{Format, Options, compress as zopfli_compress};
+
+mod gradients;
+
+#[cfg(test)]
+mod gradients_tests;
+
+#[cfg(test)]
+mod bench_tests;
 
 // Return codes matching jpdfium.h / jpdfium_rust.h
 const JPDFIUM_OK: i32 = 0;
@@ -336,6 +346,77 @@ fn resize_pixels_impl(
 /// `src` must be readable for `src_stride * (height - 1) + width * bpp` bytes,
 /// where `bpp` is the per-format bytes-per-pixel; `dst` must be writable for
 /// `width * height` u32s.
+/// CMYK (32bpp) samples to opaque ARGB for one row, sixteen pixels per vector
+/// step where NEON is available. Reads are unaligned because rows are strided.
+unsafe fn cmyk_row_to_argb(row: *const u8, d: &mut [u32]) {
+    let n = d.len();
+    let mut x = 0usize;
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let out = d.as_mut_ptr() as *mut u8;
+        let alpha = vdupq_n_u8(0xFF);
+        let full = vdupq_n_u8(255);
+        while x + 16 <= n {
+            // vld4q_u8 de-interleaves the CMYK quads into four byte planes.
+            let quad = unsafe { vld4q_u8(row.add(x * 4)) };
+            let k = quad.3;
+            let (c, m, y) = unsafe {
+                (
+                    vsubq_u8(full, vqaddq_u8(quad.0, k)),
+                    vsubq_u8(full, vqaddq_u8(quad.1, k)),
+                    vsubq_u8(full, vqaddq_u8(quad.2, k)),
+                )
+            };
+            // ARGB bytes in memory are y, m, c, alpha on little-endian hosts.
+            unsafe { vst4q_u8(out.add(x * 4), uint8x16x4_t(y, m, c, alpha)) };
+            x += 16;
+        }
+    }
+    while x < n {
+        let px = unsafe { u32::from_le(std::ptr::read_unaligned(row.add(x * 4) as *const u32)) };
+        let k = px >> 24;
+        let c = 255 - ((px & 0xFF) + k).min(255);
+        let m = 255 - (((px >> 8) & 0xFF) + k).min(255);
+        let y = 255 - (((px >> 16) & 0xFF) + k).min(255);
+        d[x] = 0xFF00_0000 | (c << 16) | (m << 8) | y;
+        x += 1;
+    }
+}
+
+/// RGB (24bpp, or BGR when `bgr`) samples to opaque ARGB for one row, sixteen
+/// pixels per vector step where NEON is available. Reads are unaligned.
+unsafe fn rgb_row_to_argb(row: *const u8, d: &mut [u32], bgr: bool) {
+    let n = d.len();
+    let mut x = 0usize;
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let out = d.as_mut_ptr() as *mut u8;
+        let alpha = vdupq_n_u8(0xFF);
+        while x + 16 <= n {
+            // vld3q_u8 de-interleaves the RGB triples into three byte planes.
+            let rgb = unsafe { vld3q_u8(row.add(x * 3)) };
+            let (r, g, b) = if bgr { (rgb.2, rgb.1, rgb.0) } else { (rgb.0, rgb.1, rgb.2) };
+            // ARGB bytes in memory are b, g, r, alpha on little-endian hosts.
+            unsafe { vst4q_u8(out.add(x * 4), uint8x16x4_t(b, g, r, alpha)) };
+            x += 16;
+        }
+    }
+    while x < n {
+        let o = x * 3;
+        let (r, g, b) = unsafe {
+            if bgr {
+                (*row.add(o + 2), *row.add(o + 1), *row.add(o))
+            } else {
+                (*row.add(o), *row.add(o + 1), *row.add(o + 2))
+            }
+        };
+        d[x] = 0xFF00_0000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+        x += 1;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
     src: *const u8,
@@ -385,42 +466,23 @@ pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
         }
         2 => {
             for y in 0..h {
-                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let row = src.add(y * stride);
                 let d = slice::from_raw_parts_mut(dst.add(y * w), w);
-                for (x, di) in d.iter_mut().enumerate() {
-                    let o = x * 3;
-                    *di = 0xFF00_0000
-                        | ((s[o] as u32) << 16)
-                        | ((s[o + 1] as u32) << 8)
-                        | (s[o + 2] as u32);
-                }
+                unsafe { rgb_row_to_argb(row, d, false) };
             }
         }
         3 => {
             for y in 0..h {
-                let s = slice::from_raw_parts(src.add(y * stride), w * 4);
+                let row = src.add(y * stride);
                 let d = slice::from_raw_parts_mut(dst.add(y * w), w);
-                for (x, di) in d.iter_mut().enumerate() {
-                    let o = x * 4;
-                    let k = s[o + 3] as u32;
-                    let c = 255 - (s[o] as u32 + k).min(255);
-                    let m = 255 - (s[o + 1] as u32 + k).min(255);
-                    let yy = 255 - (s[o + 2] as u32 + k).min(255);
-                    *di = 0xFF00_0000 | (c << 16) | (m << 8) | yy;
-                }
+                unsafe { cmyk_row_to_argb(row, d) };
             }
         }
         4 => {
             for y in 0..h {
-                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let row = src.add(y * stride);
                 let d = slice::from_raw_parts_mut(dst.add(y * w), w);
-                for (x, di) in d.iter_mut().enumerate() {
-                    let o = x * 3;
-                    *di = 0xFF00_0000
-                        | ((s[o + 2] as u32) << 16)
-                        | ((s[o + 1] as u32) << 8)
-                        | (s[o] as u32);
-                }
+                unsafe { rgb_row_to_argb(row, d, true) };
             }
         }
         5 => {
@@ -613,6 +675,184 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
     if !out_h.is_null() {
         *out_h = target_h as i32;
     }
+    JPDFIUM_OK
+}
+
+/// Render an SVG document to a standalone PDF (krilla + krilla-svg), parsed with
+/// the same hardened options as the raster path. Free with jpdfium_rust_free.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_svg_to_pdf(
+    svg: *const u8,
+    svg_len: usize,
+    width: i32,
+    height: i32,
+    embed_text: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if svg.is_null() || svg_len == 0 {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let data = slice::from_raw_parts(svg, svg_len);
+
+    // Untrusted SVG: allow only inline data: images, and share the read-only
+    // system font database with the rasterizer (one fontdb generation now).
+    let mut options = usvg::Options::default();
+    options.fontdb = system_fontdb();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    let tree = match usvg::Tree::from_data(data, &options) {
+        Ok(tree) => tree,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+
+    let size = tree.size();
+    let (natural_w, natural_h) = (size.width(), size.height());
+    if !(natural_w.is_finite() && natural_h.is_finite()) || natural_w <= 0.0 || natural_h <= 0.0 {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let scale = if width > 0 && height > 0 {
+        (width as f32 / natural_w).min(height as f32 / natural_h)
+    } else {
+        1.0
+    };
+    let page_w = natural_w * scale;
+    let page_h = natural_h * scale;
+    // Untrusted input sets the page size: cap it so a crafted SVG cannot ask
+    // for a preposterous MediaBox.
+    const MAX_POINTS: f32 = 16384.0;
+    if !(page_w.is_finite() && page_h.is_finite())
+        || page_w <= 0.0
+        || page_h <= 0.0
+        || page_w > MAX_POINTS
+        || page_h > MAX_POINTS
+    {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    let pdf = match svg_to_pdf_krilla(&tree, page_w, page_h, embed_text != 0) {
+        Some(bytes) => bytes,
+        None => return JPDFIUM_ERR_GENERIC,
+    };
+    let ptr = malloc_copy(&pdf);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = pdf.len() as i64;
+    JPDFIUM_OK
+}
+
+/// Draw a parsed SVG onto a fresh krilla page and serialize it to PDF bytes.
+fn svg_to_pdf_krilla(
+    tree: &usvg::Tree,
+    page_w: f32,
+    page_h: f32,
+    embed_text: bool,
+) -> Option<Vec<u8>> {
+    use krilla_svg::SurfaceExt;
+
+    let mut document = krilla::Document::new();
+    let page_settings = krilla::page::PageSettings::from_wh(page_w, page_h)?;
+    let mut page = document.start_page_with(page_settings);
+    let mut surface = page.surface();
+    let target = krilla::geom::Size::from_wh(page_w, page_h)?;
+    let svg_settings = krilla_svg::SvgSettings {
+        embed_text,
+        ..Default::default()
+    };
+    surface.draw_svg(tree, target, svg_settings)?;
+    surface.finish();
+    page.finish();
+    document.finish().ok()
+}
+
+/// Extract a page's shading patterns as gradient definitions for the PDF -> SVG
+/// exporter. Free with jpdfium_rust_free.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_page_gradients(
+    input: *const u8,
+    input_len: usize,
+    page_index: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if input.is_null() || input_len == 0 || page_index < 0 {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let data = slice::from_raw_parts(input, input_len);
+    let payload = match gradients::page_gradients(data, page_index) {
+        Some(payload) => payload,
+        // No shadings on this page is a normal, expected outcome.
+        None => return JPDFIUM_OK,
+    };
+    let ptr = malloc_copy(&payload);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = payload.len() as i64;
+    JPDFIUM_OK
+}
+
+/// Extract the shadings of several pages from a PDF file on disk, parsing the
+/// document once. `pages` is a zero-based index array; null or a count of zero
+/// selects every page. The payload carries one `#PAGE <index>` section per page
+/// that has shadings, and is freed with jpdfium_rust_free.
+///
+/// # Safety
+/// `path` must be a valid NUL-terminated string. `pages` must point to
+/// `page_count` i32 values, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_page_gradients_file(
+    path: *const c_char,
+    pages: *const i32,
+    page_count: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if path.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let Ok(path) = CStr::from_ptr(path).to_str() else {
+        return JPDFIUM_ERR_INVALID;
+    };
+    let selection = if pages.is_null() || page_count <= 0 {
+        None
+    } else {
+        Some(slice::from_raw_parts(pages, page_count as usize))
+    };
+    let Ok(file) = std::fs::File::open(path) else {
+        return JPDFIUM_ERR_GENERIC;
+    };
+    // A document without shadings is a normal, expected outcome.
+    let payload = match gradients::page_gradients_reader(std::io::BufReader::new(file), selection) {
+        Some(payload) => payload,
+        None => return JPDFIUM_OK,
+    };
+    let ptr = malloc_copy(&payload);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = payload.len() as i64;
     JPDFIUM_OK
 }
 

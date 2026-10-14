@@ -584,6 +584,14 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
                                                        const int32_t* pageIndices,
                                                        int32_t pageCount, const char* out_path);
 
+// QPDF In-Process Page Stamping (overlay/underlay primitive)
+// Draws the contents of one page of src onto a page of dest through the affine
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_stamp_page(const uint8_t* dest, int64_t destLen,
+                                               const uint8_t* src, int64_t srcLen,
+                                               int32_t destPageIndex, int32_t srcPageIndex,
+                                               double a, double b, double c, double d, double e,
+                                               double f, uint8_t** output, int64_t* outputLen);
+
 // QPDF In-Process Encryption & Decryption
 #define JPDFIUM_PERM_PRINT_LOW 0x0004
 #define JPDFIUM_PERM_MODIFY 0x0008

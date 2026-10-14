@@ -18,5 +18,9 @@ fast_image_resize = "6.1"
 # Replaces librsvg in the vips stack: no cairo/gdk-pixbuf/X11, no GPL.
 resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 usvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+# krilla-svg 0.8.1 still uses usvg 0.47. Keep the raster path on 0.48 and
+# compile a separately-named 0.47 tree only for the vector writer.
+usvg_v47 = { package = "usvg", version = "0.47", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
-
+krilla = "0.8.2"
+krilla-svg = "0.8.1"

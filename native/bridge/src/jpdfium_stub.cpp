@@ -1343,6 +1343,20 @@ int32_t jpdfium_rust_svg_to_rgba(const uint8_t*, int64_t, int32_t width, int32_t
     return *out_ptr ? 0 : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t jpdfium_rust_svg_to_pdf(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_page_gradients(const uint8_t*, int64_t, int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_page_gradients_file(const char*, const int32_t*, int32_t, uint8_t** out_ptr,
+                                    int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
 void jpdfium_rust_free(uint8_t* p) {
     std::free(p);
 }
@@ -1538,6 +1552,16 @@ int32_t jpdfium_qpdf_extract_pages(const uint8_t* in, int64_t in_len,
         *out_len = static_cast<int64_t>(pdf.size());
         return 0;
     }
+    return -1;
+}
+
+// Stamping needs real object-graph surgery (form XObject + resource
+// dictionary editing), which the mock cannot fake, so it reports unsupported.
+int32_t jpdfium_qpdf_stamp_page(const uint8_t*, int64_t, const uint8_t*, int64_t, int32_t, int32_t,
+                                double, double, double, double, double, double, uint8_t** out_ptr,
+                                int64_t* out_len) {
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
     return -1;
 }
 
