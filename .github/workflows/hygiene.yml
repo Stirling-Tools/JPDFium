@@ -74,6 +74,8 @@ jobs:
           globs: 'README.md,CONTRIBUTING.md,docs/**/*.md'
 
   shellcheck:
+    # The name is kept stable so branch protection rules keep matching; the job
+    # now checks every tracked script, not only `.github/scripts` and `native/`.
     name: Shellcheck (scripts + native/*.sh)
     runs-on: ubuntu-latest
     steps:
@@ -82,4 +84,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Shellcheck all shell scripts (warnings are failures)
         run: |
-          shellcheck --severity=warning .github/scripts/*.sh native/*.sh
+          # Every tracked script, so a new directory such as native/ci/ cannot
+          # escape the check by not being listed here.
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
+
+  natives-jar-check:
+    name: Native jar checker regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - name: Run the native jar checker regression tests
+        run: bash .github/scripts/check-natives-jars-self-test.sh

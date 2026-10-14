@@ -17,8 +17,11 @@ set -euo pipefail
 # Platforms that must ship libraries, plus the bridge each one must contain.
 # NativeLoader checks for the bridge first and throws NativeNotFoundException
 # when it is absent, so a jar without it cannot serve that platform at all.
-# A jar must also carry the platform its file name names, so a jar built for one
-# platform cannot pass on another platform's libraries.
+# It looks the bridge up under the exact name nativeFilename() derives from the
+# running host, so the platform's own name is required: a jar that carries
+# libjpdfium.so under natives/darwin-*/ passes a loose pattern and still fails
+# to load. A jar must also carry the platform its file name names, so a jar
+# built for one platform cannot pass on another platform's libraries.
 # The platform directories a natives jar can carry, longest first so that
 # vips-<platform> matches before the core <platform> it is built on. The file
 # name is parsed against this list rather than by stripping a trailing segment,
@@ -26,8 +29,21 @@ set -euo pipefail
 KNOWN_PLATFORMS="linux-musl-x64 linux-musl-arm64 vips-linux-x64 vips-linux-arm64
 vips-darwin-x64 vips-darwin-arm64 vips-windows-x64 vips-windows-arm64
 linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64"
-BRIDGE='^(lib)?jpdfium\.(so|dylib|dll)(\.[0-9]+)*$'
-LIBRARY='\.(so|dylib|dll)(\.[0-9]+)*$'
+# The awk below matches a native library name (.so, .dylib or .dll, optionally
+# versioned) with a regex literal, because passing the pattern through `-v`
+# would turn `\.` into a wildcard and count a name like libfooXso as a library.
+
+# The bridge filename NativeLoader looks up for a platform, mirroring
+# NativeLoader.nativeFilename(). A platform outside these families (the musl
+# modules) has no bridge of its own.
+bridge_for() {
+  case "$1" in
+    darwin-*) printf '%s\n' 'libjpdfium.dylib' ;;
+    windows-*) printf '%s\n' 'jpdfium.dll' ;;
+    linux-*) printf '%s\n' 'libjpdfium.so' ;;
+    *) printf '\n' ;;
+  esac
+}
 
 if [ "$#" -eq 0 ]; then
   echo "ERROR: pass one or more native jars or directories" >&2
@@ -48,17 +64,19 @@ list_entries() {
 
 # Prints "<payload> <manifest size> <checksum size> <bridge present>" for one
 # platform directory, where payload counts non-empty native libraries and the
-# bridge counts only when it is non-empty too.
+# bridge counts only when the platform's exact bridge filename is present and
+# non-empty too.
 summarise() {
-  local entries="$1" platform="$2" dir="natives/${2}/"
-  printf '%s\n' "$entries" | awk -v dir="$dir" -v bridge="$BRIDGE" -v lib="$LIBRARY" '
+  local entries="$1" platform="$2" dir="natives/${2}/" bridge_name
+  bridge_name="$(bridge_for "$platform")"
+  printf '%s\n' "$entries" | awk -v dir="$dir" -v bridge="$bridge_name" '
     index($2, dir) == 1 {
       rest = substr($2, length(dir) + 1)
       if (rest == "") next
       if (rest == "native-libs.txt")    { manifest = $1; next }
       if (rest == "native-libs.sha256") { hashes = $1; next }
-      if ($1 > 0 && rest ~ lib) payload++
-      if ($1 > 0 && rest ~ bridge) found = 1
+      if ($1 > 0 && rest ~ /\.(so|dylib|dll)(\.[0-9]+)*$/) payload++
+      if ($1 > 0 && rest == bridge) found = 1
     }
     END { printf "%d %d %d %d\n", payload, manifest, hashes, found }
   '

@@ -95,6 +95,9 @@ fi
 
 # Native jars are kept so their payload can be checked before the smoke test.
 WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'jpdfium-verify')
+# The staged artifacts under $WORK_DIR are large and are only needed while the
+# script runs, so remove them however it exits.
+trap 'rm -rf "$WORK_DIR"' EXIT
 NATIVE_JARS=()
 
 MISSING=0
