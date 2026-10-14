@@ -378,6 +378,231 @@ if [ -f "${CONTENTGEN}" ]; then
     fi
 fi
 
+# JPDFium extension: expose DeviceCMYK fill/stroke accessors on page objects.
+# The stock RGB setters always force DeviceRGB; the content generator already emits "k"/"K".
+EDITHEADER="public/fpdf_edit.h"
+EDITPAGE="fpdfsdk/fpdf_editpage.cpp"
+if [ -f "${EDITHEADER}" ] && [ -f "${EDITPAGE}" ] && \
+   { ! grep -q 'FPDFPageObj_SetFillColorCMYK' "${EDITHEADER}" || \
+     ! grep -q 'FPDFPageObj_SetFillColorCMYK' "${EDITPAGE}"; }; then
+    echo "  Adding DeviceCMYK page-object color accessors..."
+    if ! python3 - "${EDITHEADER}" "${EDITPAGE}" <<'PY_EOF'
+import sys
+
+header_path, page_path = sys.argv[1], sys.argv[2]
+
+header_anchor = """FPDFPageObj_GetFillColor(FPDF_PAGEOBJECT page_object,
+                         unsigned int* R,
+                         unsigned int* G,
+                         unsigned int* B,
+                         unsigned int* A);"""
+
+header_add = header_anchor + """
+
+// JPDFium extension: set the fill CMYK color of a page object (components 0 - 255).
+// Returns TRUE on success.
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_SetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                             unsigned int C,
+                             unsigned int M,
+                             unsigned int Y,
+                             unsigned int K,
+                             unsigned int A);
+
+// JPDFium extension: read the fill CMYK color of a page object (components 0 - 255).
+// Returns FALSE unless the fill color is currently a DeviceCMYK color.
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_GetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                             unsigned int* C,
+                             unsigned int* M,
+                             unsigned int* Y,
+                             unsigned int* K,
+                             unsigned int* A);
+
+// JPDFium extension: set the stroke CMYK color of a page object (components 0 - 255).
+// Returns TRUE on success.
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_SetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                               unsigned int C,
+                               unsigned int M,
+                               unsigned int Y,
+                               unsigned int K,
+                               unsigned int A);
+
+// JPDFium extension: read the stroke CMYK color of a page object (components 0 - 255).
+// Returns TRUE only when the stroke color is currently DeviceCMYK.
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_GetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                               unsigned int* C,
+                               unsigned int* M,
+                               unsigned int* Y,
+                               unsigned int* K,
+                               unsigned int* A);"""
+
+page_anchor = """  FX_COLORREF stroke_color = pPageObj->color_state().GetStrokeColorRef();
+  *R = FXSYS_GetRValue(stroke_color);
+  *G = FXSYS_GetGValue(stroke_color);
+  *B = FXSYS_GetBValue(stroke_color);
+  *A = FXSYS_GetUnsignedAlpha(pPageObj->general_state().GetStrokeAlpha());
+  return true;
+}"""
+
+page_add = page_anchor + """
+
+// JPDFium extension: DeviceCMYK fill/stroke accessors for the public API.
+// The content generator already serializes such states as "k"/"K".
+namespace {
+
+unsigned int JpdfiumUnitTo255(float value) {
+  const float scaled = value * 255.0f + 0.5f;
+  if (scaled <= 0.0f) {
+    return 0;
+  }
+  if (scaled >= 255.0f) {
+    return 255;
+  }
+  return static_cast<unsigned int>(scaled);
+}
+
+bool JpdfiumGetCmyk(const CPDF_ColorState& color_state,
+                    const CPDF_Color* color,
+                    unsigned int* C,
+                    unsigned int* M,
+                    unsigned int* Y,
+                    unsigned int* K,
+                    unsigned int* A,
+                    float alpha) {
+  if (!C || !M || !Y || !K || !A) {
+    return false;
+  }
+  if (!color_state.HasRef() || !color || !color->IsColorSpaceCMYK()) {
+    return false;
+  }
+  const pdfium::span<const float> comps = color->GetRawNonPatternComps();
+  if (comps.size() != 4u) {
+    return false;
+  }
+  *C = JpdfiumUnitTo255(comps[0]);
+  *M = JpdfiumUnitTo255(comps[1]);
+  *Y = JpdfiumUnitTo255(comps[2]);
+  *K = JpdfiumUnitTo255(comps[3]);
+  *A = FXSYS_GetUnsignedAlpha(alpha);
+  return true;
+}
+
+}  // namespace
+
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_SetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                             unsigned int C,
+                             unsigned int M,
+                             unsigned int Y,
+                             unsigned int K,
+                             unsigned int A) {
+  auto* pPageObj = CPDFPageObjectFromFPDFPageObject(page_object);
+  if (!pPageObj) {
+    return false;
+  }
+  std::vector<float> cmyk = {C / 255.f, M / 255.f, Y / 255.f, K / 255.f};
+  pPageObj->mutable_general_state().SetFillAlpha(A / 255.f);
+  pPageObj->mutable_color_state().SetFillColor(
+      CPDF_ColorSpace::GetStockCS(CPDF_ColorSpace::Family::kDeviceCMYK),
+      std::move(cmyk));
+  pPageObj->SetDirty(true);
+  return true;
+}
+
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_GetFillColorCMYK(FPDF_PAGEOBJECT page_object,
+                             unsigned int* C,
+                             unsigned int* M,
+                             unsigned int* Y,
+                             unsigned int* K,
+                             unsigned int* A) {
+  auto* pPageObj = CPDFPageObjectFromFPDFPageObject(page_object);
+  if (!pPageObj) {
+    return false;
+  }
+  const CPDF_ColorState& cs = pPageObj->color_state();
+  return JpdfiumGetCmyk(cs, cs.GetFillColor(), C, M, Y, K, A,
+                        pPageObj->general_state().GetFillAlpha());
+}
+
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_SetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                               unsigned int C,
+                               unsigned int M,
+                               unsigned int Y,
+                               unsigned int K,
+                               unsigned int A) {
+  auto* pPageObj = CPDFPageObjectFromFPDFPageObject(page_object);
+  if (!pPageObj) {
+    return false;
+  }
+  std::vector<float> cmyk = {C / 255.f, M / 255.f, Y / 255.f, K / 255.f};
+  pPageObj->mutable_general_state().SetStrokeAlpha(A / 255.f);
+  pPageObj->mutable_color_state().SetStrokeColor(
+      CPDF_ColorSpace::GetStockCS(CPDF_ColorSpace::Family::kDeviceCMYK),
+      std::move(cmyk));
+  pPageObj->SetDirty(true);
+  return true;
+}
+
+FPDF_EXPORT FPDF_BOOL FPDF_CALLCONV
+FPDFPageObj_GetStrokeColorCMYK(FPDF_PAGEOBJECT page_object,
+                               unsigned int* C,
+                               unsigned int* M,
+                               unsigned int* Y,
+                               unsigned int* K,
+                               unsigned int* A) {
+  auto* pPageObj = CPDFPageObjectFromFPDFPageObject(page_object);
+  if (!pPageObj) {
+    return false;
+  }
+  const CPDF_ColorState& cs = pPageObj->color_state();
+  return JpdfiumGetCmyk(cs, cs.GetStrokeColor(), C, M, Y, K, A,
+                        pPageObj->general_state().GetStrokeAlpha());
+}"""
+
+status = 0
+for path, anchor, replacement, label in (
+    (header_path, header_anchor, header_add, "public/fpdf_edit.h"),
+    (page_path, page_anchor, page_add, "fpdfsdk/fpdf_editpage.cpp"),
+):
+    with open(path) as f:
+        src = f.read()
+    if "FPDFPageObj_SetFillColorCMYK" in src:
+        print(f"  {label} already carries the CMYK accessors.")
+        continue
+    if anchor not in src:
+        print(f"  ERROR: CMYK anchor not found in {label}", file=sys.stderr)
+        status = 1
+        continue
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, replacement, 1))
+    print(f"  Added DeviceCMYK accessors to {label}.")
+sys.exit(status)
+PY_EOF
+    then
+        :
+    else
+        echo "  ERROR: CMYK patch failed to apply cleanly." >&2
+        exit 1
+    fi
+    # A partial application (one file patched, the other not) must never pass,
+    # because the header symbol is the idempotence gate for later runs.
+    CMYK_MISSING=""
+    for symbol in FPDFPageObj_SetFillColorCMYK FPDFPageObj_GetFillColorCMYK \
+                  FPDFPageObj_SetStrokeColorCMYK FPDFPageObj_GetStrokeColorCMYK; do
+        grep -q "${symbol}" "${EDITHEADER}" || CMYK_MISSING="${CMYK_MISSING} ${symbol}(header)"
+        grep -q "${symbol}" "${EDITPAGE}" || CMYK_MISSING="${CMYK_MISSING} ${symbol}(impl)"
+    done
+    if [ -n "${CMYK_MISSING}" ]; then
+        echo "  ERROR: CMYK patch incomplete; missing:${CMYK_MISSING}" >&2
+        exit 1
+    fi
+fi
+
 # EmbedPDF annot font subsetting mixes two span pointer types in a ternary.
 # clang rejects it when pdf_use_partition_alloc=true. Use if/else so each
 # branch converts to the declared span type on its own.

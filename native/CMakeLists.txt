@@ -194,6 +194,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_redact.cpp bridge/src/jpdfium_redact_audit.cpp bridge/src/jpdfium_redact_fission.cpp bridge/src/jpdfium_redact_fonts.cpp bridge/src/jpdfium_redact_image.cpp bridge/src/jpdfium_redact_pattern.cpp bridge/src/jpdfium_redact_text.cpp
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_image.cpp
+        bridge/src/jpdfium_color.cpp
         bridge/src/jpdfium_repair.cpp
         bridge/src/jpdfium_qpdf.cpp
         bridge/src/jpdfium_qpdf_sanitize.cpp
@@ -587,6 +588,52 @@ if(JPDFIUM_USE_PDFIUM)
         # The bridge sources gate Skia paths on #ifdef JPDFIUM_HAS_SKIA.
         target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_SKIA=1)
     endif()
+
+    # DeviceCMYK support is probed from the PDFium header, not with
+    # check_symbol_exists: that macro links a test executable, and the PDFium
+    # library is not linked at configure time. The prebuilt tarball ships the
+    # header and the library together, so a declaration in fpdf_edit.h means
+    # the symbol is available. jpdfium_color.cpp gates those paths on the
+    # definitions below and reports the outcome through
+    # jpdfium_color_capabilities().
+    set(JPDFIUM_FPDF_EDIT_HEADER "${PDFIUM_INCLUDE_DIR}/fpdf_edit.h")
+    if(EXISTS "${JPDFIUM_FPDF_EDIT_HEADER}")
+        file(READ "${JPDFIUM_FPDF_EDIT_HEADER}" JPDFIUM_FPDF_EDIT_CONTENT)
+
+        foreach(cmyk_symbol
+                FPDFPageObj_SetFillColorCMYK
+                FPDFPageObj_GetFillColorCMYK
+                FPDFPageObj_SetStrokeColorCMYK
+                FPDFPageObj_GetStrokeColorCMYK)
+            string(FIND "${JPDFIUM_FPDF_EDIT_CONTENT}" "${cmyk_symbol}" JPDFIUM_CMYK_VECTOR_POS)
+            if(JPDFIUM_CMYK_VECTOR_POS LESS 0)
+                set(JPDFIUM_CMYK_VECTOR_MISSING "${JPDFIUM_CMYK_VECTOR_MISSING} ${cmyk_symbol}")
+            endif()
+        endforeach()
+
+        if(NOT JPDFIUM_CMYK_VECTOR_MISSING)
+            message(STATUS "CMYK check: all four CMYK page-object accessors found (vector CMYK enabled)")
+            target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAVE_CMYK_API=1)
+        else()
+            message(STATUS "CMYK check: missing${JPDFIUM_CMYK_VECTOR_MISSING} (vector CMYK unavailable)")
+        endif()
+        unset(JPDFIUM_CMYK_VECTOR_MISSING)
+        unset(JPDFIUM_CMYK_VECTOR_POS)
+
+        # EPDFImageObj_SetJpeg (EmbedPDF fork extension) embeds a raw JPEG
+        # buffer as a page-object image; it is the only public route to a
+        # 4-component DeviceCMYK image XObject.
+        string(FIND "${JPDFIUM_FPDF_EDIT_CONTENT}" "EPDFImageObj_SetJpeg" JPDFIUM_CMYK_IMAGE_POS)
+        if(JPDFIUM_CMYK_IMAGE_POS GREATER -1)
+            message(STATUS "CMYK check: EPDFImageObj_SetJpeg found (CMYK image conversion enabled)")
+            target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAVE_EPDF_JPEG=1)
+        else()
+            message(STATUS "CMYK check: EPDFImageObj_SetJpeg not found (CMYK image conversion unavailable)")
+        endif()
+
+        unset(JPDFIUM_FPDF_EDIT_CONTENT)
+    endif()
+    unset(JPDFIUM_FPDF_EDIT_HEADER)
 endif()
 
 if(JPDFIUM_BUILD_TESTS)

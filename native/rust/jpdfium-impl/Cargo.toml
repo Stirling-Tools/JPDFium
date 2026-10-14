@@ -19,3 +19,7 @@ fast_image_resize = "6.1"
 resvg = "0.48"
 usvg = "0.48"
 tiny-skia = "0.12"
+# CMYK JPEG encoder for DeviceCMYK image conversion. `ColorType::Cmyk` writes
+# an Adobe APP14 (transform=0) JPEG with the samples inverted, which is exactly
+# the layout PDFium decodes back with /Decode [1 0 1 0 1 0 1 0].
+jpeg-encoder = "0.7"

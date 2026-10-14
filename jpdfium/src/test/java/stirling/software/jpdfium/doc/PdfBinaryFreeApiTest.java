@@ -16,12 +16,14 @@ import stirling.software.jpdfium.PdfImageIO;
 import stirling.software.jpdfium.doc.PdfColorConverter.ColorConvertOptions;
 import stirling.software.jpdfium.doc.PdfColorConverter.ColorSpace;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.ColorBindings;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
@@ -69,10 +71,16 @@ class PdfBinaryFreeApiTest {
     void colorConverterCapabilityProbes() {
         assertTrue(PdfColorConverter.supportsColorSpace(ColorSpace.GRAYSCALE));
         assertTrue(PdfColorConverter.supportsColorSpace(ColorSpace.RGB));
-        assertFalse(PdfColorConverter.supportsColorSpace(ColorSpace.CMYK),
-                "CMYK is declared but not implemented natively");
-        assertEquals(Set.of(ColorSpace.GRAYSCALE, ColorSpace.RGB),
-                PdfColorConverter.supportedColorSpaces());
+        // CMYK needs the PDFium CMYK setters added by the JPDFium colour patch:
+        // it is available exactly when the native library exposes them.
+        assertEquals(ColorBindings.vectorCmykAvailable(),
+                PdfColorConverter.supportsColorSpace(ColorSpace.CMYK),
+                "CMYK support must track the native capability probe");
+
+        Set<ColorSpace> expected = ColorBindings.vectorCmykAvailable()
+                ? Set.of(ColorSpace.GRAYSCALE, ColorSpace.RGB, ColorSpace.CMYK)
+                : Set.of(ColorSpace.GRAYSCALE, ColorSpace.RGB);
+        assertEquals(expected, PdfColorConverter.supportedColorSpaces());
     }
 
     @Test
@@ -86,6 +94,9 @@ class PdfBinaryFreeApiTest {
 
     @Test
     void cmykTargetIsRejected() throws Exception {
+        // Without the PDFium CMYK setters the CMYK target must fail loudly.
+        assumeFalse(ColorBindings.vectorCmykAvailable(),
+                "native CMYK setters present; rejection path not applicable");
         Path src = resource("/pdfs/general/minimal.pdf");
         try (PdfDocument doc = PdfDocument.open(src)) {
             ColorConvertOptions opts = ColorConvertOptions.builder()

@@ -46,3 +46,4 @@ Java deps (not bundled, resolved from Maven Central):
 Rust helper (static-linked into libjpdfium):
 - lopdf - MIT
 - zopfli / oxipng / flate2 / fast_image_resize / usvg / resvg - Apache-2.0 / MIT / MPL-2.0
+- jpeg-encoder - MIT / Apache-2.0

@@ -165,6 +165,76 @@ Whether an existing signature remains valid across a save is not determined by J
 
 `SaveOptions` exposes `maxOutputBytes` and `verifyReopen`. There are no flags for encryption, PDF version, linearization, or signature handling.
 
+## Color conversion
+
+`PdfColorConverter` rewrites page-object fill and stroke colors in place.
+
+```java
+PdfColorConverter.toGrayscale(doc);   // luminance preserving
+PdfColorConverter.toRgb(doc);         // rewrite everything as DeviceRGB
+```
+
+Grayscale and DeviceRGB always work because PDFium exposes RGB setters directly.
+DeviceCMYK and image conversion depend on how the native library was built, so probe
+first. Each probe returns `false` when the loaded library lacks the required support,
+and the corresponding conversion raises `JPDFiumException` rather than silently
+producing the wrong colorspace:
+
+| Probe | Meaning |
+|---|---|
+| `PdfColorConverter.supportsColorSpace(ColorSpace.CMYK)` | PDFium exposes the CMYK object setters |
+| `PdfColorConverter.supportsImageConversion()` | the CMYK JPEG encoder is compiled in |
+| `PdfOutputIntent.isSupported()` | QPDF is available for catalog editing |
+
+```java
+PdfColorConverter.ColorConvertOptions opts = PdfColorConverter.ColorConvertOptions.builder()
+        .targetColorSpace(PdfColorConverter.ColorSpace.CMYK)
+        .iccProfile(cmykProfileBytes)   // optional; null = naive black generation
+        .jpegQuality(90)
+        .strictImages(true)
+        .build();
+int converted = PdfColorConverter.convert(doc, opts);
+```
+
+Text and path colors become DeviceCMYK `k`/`K` operators only when the PDFium build
+carries the JPDFium color patch (`FPDFPageObj_SetFillColorCMYK`). Without it, convert
+images only:
+
+```java
+int images = PdfColorConverter.convertImagesToCmyk(doc, 90);   // -1 when unavailable
+```
+
+Image XObjects are decoded, converted to CMYK and re-encoded as 4-component JPEGs.
+Images whose rendered alpha is not fully opaque are skipped, because the public
+PDFium API cannot preserve the mask when the image stream is replaced.
+
+For print-accurate CMYK, attach an ICC output intent and pass the same profile to the
+converter. The profile is applied to vector colors only; images always use the
+profile-free naive black generation (`c=255-r, m=255-g, y=255-b; k=min(c,m,y)`), which
+produces correct ink levels but is not color-managed.
+
+```java
+byte[] icc = Files.readAllBytes(Path.of("CoatedFOGRA39.icc"));
+doc = PdfOutputIntent.apply(doc, icc, PdfOutputIntent.Spec.pdfx("FOGRA39", "Coated FOGRA39"));
+```
+
+`PdfOutputIntent.apply` returns a new document; the original is left open.
+
+`PdfRecolor` rewrites the colors of existing vector objects, which raster
+contrast/brightness adjustment (see `PdfColorAdjuster`) cannot do:
+
+```java
+PdfRecolor.invert(doc);                // dark mode; near-white fills are preserved
+PdfRecolor.tint(doc, 0, 0, 128, 50);   // toward navy, 50% strength
+PdfRecolor.highContrast(doc, 1.5);
+PdfRecolor.binarize(doc, 128);
+```
+
+Only DeviceRGB/DeviceGray fills and strokes are touched. DeviceCMYK objects are skipped,
+and ICC/Separation/pattern colors are read back as DeviceRGB and rewritten there rather
+than preserved, so avoid recoloring documents that rely on those spaces. Content inside
+form XObjects is not recursed into.
+
 ## What is not supported
 
 | Capability | Status |

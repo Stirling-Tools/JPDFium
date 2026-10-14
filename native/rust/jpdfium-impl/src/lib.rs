@@ -491,6 +491,91 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
 }
 
 
+/// Encode 4-component DeviceCMYK sample data as a CMYK JPEG byte stream.
+///
+/// `cmyk` must point to `cmyk_len` bytes holding `width * height * 4` samples
+/// in standard DeviceCMYK order, one byte per channel, where 0 means no ink.
+/// The encoder writes an Adobe APP14 marker with transform=0 and stores the
+/// samples inverted (255 - value), matching the `/Decode [1 0 1 0 1 0 1 0]`
+/// entry PDFium attaches when it re-embeds a 4-component JPEG - so the values
+/// round-trip through PDFium's image pipeline back to the intended ink levels.
+///
+/// Returns 0 and fills out_ptr/out_len on success. The output is allocated
+/// with libc::malloc and must be freed with jpdfium_rust_free.
+///
+/// # Safety
+/// `cmyk` must point to `cmyk_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_cmyk_jpeg(
+    cmyk: *const u8,
+    cmyk_len: i64,
+    width: i32,
+    height: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+
+    // Contain a panic so it cannot unwind across the C ABI boundary.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_cmyk_jpeg(cmyk, cmyk_len, width, height, quality, out_ptr, out_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body, separated so the exported wrapper can contain panics.
+///
+/// # Safety
+/// `cmyk` must point to `cmyk_len` readable bytes; the out pointers must be valid.
+unsafe fn encode_cmyk_jpeg(
+    cmyk: *const u8,
+    cmyk_len: i64,
+    width: i32,
+    height: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if cmyk.is_null() || width <= 0 || height <= 0 || width > 65535 || height > 65535 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let needed = width as usize * height as usize * 4;
+    if cmyk_len < 0 || needed > cmyk_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let data = slice::from_raw_parts(cmyk, needed);
+    let quality = quality.clamp(1, 100) as u8;
+
+    let mut buffer: Vec<u8> = Vec::new();
+    let encoder = jpeg_encoder::Encoder::new(&mut buffer, quality);
+    if encoder
+        .encode(data, width as u16, height as u16, jpeg_encoder::ColorType::Cmyk)
+        .is_err()
+    {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    if buffer.is_empty() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    let ptr = malloc_copy(&buffer);
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = buffer.len() as i64;
+    JPDFIUM_OK
+}
+
+
 /// Whether this library was built with the Rust-powered features (always 1
 /// here; the C++ stub bridge answers 0 so callers can probe capability).
 #[no_mangle]
