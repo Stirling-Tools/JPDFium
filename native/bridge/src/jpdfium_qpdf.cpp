@@ -651,6 +651,63 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char* in_path, const char
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, const char* out_path,
+                                                         const char* source_path,
+                                                         const char* password) {
+    if (!in_path || !*in_path || !out_path || !*out_path || !source_path || !*source_path ||
+        !password) {
+        return -1;
+    }
+    try {
+        // Open the encrypted source with whichever password the caller knows.
+        // The source document is only read for its encryption dictionary, so it
+        // never has to be written back out.
+        auto source = QPDF::create();
+        source->processFile(source_path, password);
+        // A plaintext source carries no protection to copy. Refusing here keeps
+        // a caller from publishing an unprotected file and believing it is
+        // protected.
+        if (!source->isEncrypted()) return -1;
+
+        auto dest = QPDF::create();
+        dest->processFile(in_path);
+        // The working input must already be unencrypted: copying protection onto
+        // an encrypted input would silently replace its existing protection.
+        if (dest->isEncrypted()) return -1;
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter w{*dest};
+            w.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            // Verbatim copy of the source's O/U keys, permissions and revision:
+            // the second password is retained without ever being known here, and
+            // no fresh key is generated (callers wanting a new key use
+            // jpdfium_qpdf_encrypt_file instead).
+            w.copyEncryptionParameters(*source);
+            w.write();
+            return 0;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "jpdfium qpdf copy encryption file: %s\n", e.what());
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
+        } catch (...) {
+            std::fprintf(stderr, "jpdfium qpdf copy encryption file: unknown error\n");
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
+        }
+    } catch (const std::exception& e) {
+        // Wrong password, unreadable source or a malformed input all land here.
+        std::fprintf(stderr, "jpdfium qpdf copy encryption file: %s\n", e.what());
+        return -1;
+    } catch (...) {
+        std::fprintf(stderr, "jpdfium qpdf copy encryption file: unknown error\n");
+        return -1;
+    }
+}
+
 }  // extern "C"
 
 #else  // !JPDFIUM_HAS_QPDF
@@ -725,6 +782,11 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char*, const char*, const
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char*, const char*, const char*) {
+    return -1;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char*, const char*, const char*,
+                                                         const char*) {
     return -1;
 }
 

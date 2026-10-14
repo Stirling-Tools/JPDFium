@@ -17,7 +17,7 @@ class PdfEncryptionCopyUnavailableTest {
 
     @Test
     void missingNativeSupportDoesNotCreateOutput() {
-        assumeTrue(NativeRuntime.isStub(), "Requires the bundle without QPDFJob");
+        assumeTrue(NativeRuntime.isStub(), "Requires the bundle without qpdf support");
         assertFalse(PdfSecurity.isCopyEncryptionSupported());
         Path output = directory.resolve("output.pdf");
         assertThrows(JPDFiumException.class, () -> PdfSecurity.copyEncryption(

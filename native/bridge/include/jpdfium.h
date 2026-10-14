@@ -605,6 +605,18 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_encrypt_file(const char* in_path, const char
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt_file(const char* in_path, const char* out_path,
                                                  const char* password);
 
+// Copy an encrypted source PDF's protection onto an unencrypted input PDF by
+// reusing the source's encryption dictionary verbatim (both O/U keys, the
+// permission flags and the security revision), so a second password that the
+// caller does not know is still retained. Either source password is sufficient;
+// an empty password is accepted when the source permits it. The input must be
+// unencrypted and the source encrypted, otherwise this returns nonzero without
+// publishing protection. Writes straight to out_path; on failure a partial
+// out_path may exist and should be removed by the caller.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, const char* out_path,
+                                                         const char* source_path,
+                                                         const char* password);
+
 // Brotli Codec (PDF 2.0+ /BrotliDecode streams)
 //
 // Decompress /BrotliDecode streams and optionally transcode to /FlateDecode

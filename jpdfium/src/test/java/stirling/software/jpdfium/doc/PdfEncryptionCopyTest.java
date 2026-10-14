@@ -37,7 +37,9 @@ class PdfEncryptionCopyTest {
     @BeforeEach
     void requireRealBundle() {
         assumeTrue(NativeRuntime.isFull(), "Encryption correctness requires real natives");
-        assertTrue(PdfSecurity.isCopyEncryptionSupported(), "Full bundles must expose the QPDFJob API");
+        assertTrue(
+                PdfSecurity.isCopyEncryptionSupported(),
+                "Full bundles must expose the native encryption-copy API");
     }
 
     private Path pdf(String name, boolean encrypted, int bits, boolean aes, String user, String owner, int pages)

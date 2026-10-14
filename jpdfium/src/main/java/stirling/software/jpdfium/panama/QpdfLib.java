@@ -182,6 +182,13 @@ public final class QpdfLib {
             "jpdfium_qpdf_decrypt_file",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
+    // Copies the source's encryption dictionary verbatim onto an unencrypted
+    // input: in_path, out_path, source_path, password.
+    private static final MethodHandle COPY_ENCRYPTION_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_copy_encryption_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
     public static boolean isMergeFilesSupported() {
         return MERGE_FILES_HANDLE != null;
     }
@@ -202,15 +209,16 @@ public final class QpdfLib {
         return DECRYPT_FILE_HANDLE != null;
     }
 
-    /** True when the bundled library exposes the QPDFJob API needed to copy encryption. */
+    /** True when the bundled bridge exposes the native encryption-copy entry point. */
     public static boolean isCopyEncryptionSupported() {
-        return QpdfEncryptionCopy.isSupported();
+        return COPY_ENCRYPTION_FILE_HANDLE != null;
     }
 
     /**
      * Copy the source's encryption to an unencrypted input using either original password.
-     * Inputs and output must be distinct files. Returns false only when the native API is absent;
-     * other failures throw and leave the destination unchanged. No document bytes enter Java heap.
+     * Inputs and output must be distinct files. Returns false only when the native entry point is
+     * absent; other failures throw and leave the destination unchanged. No document bytes enter
+     * Java heap.
      */
     public static boolean copyEncryptionToFile(Path input, Path output, Path source, String password) {
         if (input == null || output == null || source == null || password == null) {
@@ -219,7 +227,7 @@ public final class QpdfLib {
         if (password.indexOf('\0') >= 0) {
             throw new IllegalArgumentException("password must not contain NUL");
         }
-        if (!isCopyEncryptionSupported()) return false;
+        if (COPY_ENCRYPTION_FILE_HANDLE == null) return false;
         Semaphore held;
         try {
             held = acquireSlot();
@@ -227,9 +235,18 @@ public final class QpdfLib {
             Thread.currentThread().interrupt();
             throw new JPDFiumException("qpdf encryption copy interrupted while waiting for a job slot", e);
         }
-        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+        try (QpdfCall call = new QpdfCall();
+                OutputTransaction tx = OutputTransaction.begin(output)) {
             rejectAlias(List.of(input, source), output);
-            QpdfEncryptionCopy.copy(input, source, password, tx.staging());
+            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+            MemorySegment sourceSeg = call.cString(source.toAbsolutePath().toString());
+            MemorySegment outSeg = call.cString(tx.staging().toAbsolutePath().toString());
+            MemorySegment passwordSeg = call.cString(password);
+            int rc = (int) COPY_ENCRYPTION_FILE_HANDLE.invokeExact(
+                    inSeg, outSeg, sourceSeg, passwordSeg);
+            if (rc != 0) {
+                throw new JPDFiumException("PDF encryption copy failed");
+            }
             if (Thread.currentThread().isInterrupted()) {
                 throw new IOException("qpdf encryption copy interrupted before publication");
             }
@@ -237,6 +254,11 @@ public final class QpdfLib {
             return true;
         } catch (IOException e) {
             throw new JPDFiumException("qpdf encryption copy failed", e);
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf encryption copy failed", t);
         } finally {
             releaseSlot(held);
         }
