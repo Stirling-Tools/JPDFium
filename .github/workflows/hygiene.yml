@@ -93,5 +93,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          # These jobs only read the tree, so the checkout must not leave the
+          # workflow token in the Git configuration.
+          persist-credentials: false
       - name: Run the native jar checker regression tests
         run: bash .github/scripts/check-natives-jars-self-test.sh
+
+  version-bump-check:
+    name: Version bump script regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the version bump script regression tests
+        run: bash .github/scripts/bump-release-version-self-test.sh
