@@ -1,17 +1,14 @@
 /**
- * PDF transformation operations: flatten, convert to image, render pages.
+ * Page transformation: flattening, rasterising, and geometry.
  *
- * <p>Planned features:
- * <ul>
- *   <li>Page flatten (annotations -> content stream)</li>
- *   <li>Convert pages to image-based PDF pages</li>
- *   <li>Render pages to BufferedImage/PNG</li>
- *   <li>Split documents (future)</li>
- *   <li>Merge documents (future)</li>
- *   <li>Rotate pages (future)</li>
- *   <li>Crop pages (future)</li>
- * </ul>
+ * <p>{@link stirling.software.jpdfium.transform.PageOps} flattens annotations
+ * into page content and converts pages to images. {@link
+ * stirling.software.jpdfium.transform.PdfPageGeometry} crops, rotates,
+ * resizes, and rewrites page boxes, and {@link
+ * stirling.software.jpdfium.transform.PdfPageBoxes} reads or sets each of the
+ * five PDF page boxes individually.
  *
  * @see stirling.software.jpdfium.transform.PageOps
+ * @see stirling.software.jpdfium.transform.PdfPageGeometry
  */
 package stirling.software.jpdfium.transform;
