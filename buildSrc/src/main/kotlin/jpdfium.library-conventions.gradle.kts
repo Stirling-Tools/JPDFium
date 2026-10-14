@@ -143,8 +143,8 @@ publishing {
             from(components["java"])
 
             pom {
-                name.set(project.name)
-                description.set("Java 25 FFM bindings for PDFium with PII redaction")
+                name.set("JPDFium")
+                description.set("PDF rendering, editing, and redaction for Java, powered by PDFium")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
                 licenses {
