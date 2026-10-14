@@ -4,6 +4,9 @@ on:
   pull_request: {}
   push:
     branches: [main]
+  # The post-release version bump dispatches this workflow on its branch, because
+  # a branch pushed and a pull request opened with GITHUB_TOKEN schedule no run.
+  workflow_dispatch: {}
 
 permissions:
   contents: read
