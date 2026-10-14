@@ -1113,10 +1113,10 @@ public final class JpdfiumLib {
             // A fresh confined-arena allocation is zero-filled on every call, which for a
             // 300 dpi page is tens of MB of needless writes, so a pooled target is reused where
             // one is available; large pages and pool exhaustion fall back to a one-shot arena.
-            MemorySegment pooled = byteLen <= RENDER_TARGET_MAX_BYTES ? borrowRenderTarget(byteLen) : null;
+            RenderTargetPool.Target pooled = byteLen <= RENDER_TARGET_MAX_BYTES ? borrowRenderTarget(byteLen) : null;
             boolean own = pooled == null;
             Arena arena = own ? Arena.ofConfined() : null;
-            MemorySegment nativeTarget = own ? arena.allocate(byteLen) : pooled.asSlice(0, byteLen);
+            MemorySegment nativeTarget = own ? arena.allocate(byteLen) : pooled.segment().asSlice(0, byteLen);
             try {
                 if (!transparent) {
                     // Match jpdfium_render_page_flags, which fills the bitmap opaque white
@@ -1147,68 +1147,122 @@ public final class JpdfiumLib {
     private static final int RENDER_TARGET_POOL_MAX = 4;
 
     /**
-     * Total native bytes the pool may retain for the life of the process. This is a deliberate
-     * bound, not an incidental one: the pool keeps its targets forever (the shared arena is never
-     * closed), so without it {@link #RENDER_TARGET_POOL_MAX} slots of
-     * {@link #RENDER_TARGET_MAX_BYTES} each could pin up to 256 MiB with nothing reporting it.
-     * Once the budget is spent, every later render falls back to a one-shot confined arena.
+     * Total native bytes the pool may retain. A deliberate bound, not an incidental one: an idle
+     * target keeps its arena alive for reuse, so without it {@link #RENDER_TARGET_POOL_MAX} slots
+     * of {@link #RENDER_TARGET_MAX_BYTES} each could pin up to 256 MiB with nothing reporting it.
      */
     private static final long RENDER_TARGET_RETAINED_MAX_BYTES = 128L * 1024 * 1024;
 
+    /** Snapshot of the render-target pool, for validating reuse behaviour in production. */
+    public record RenderTargetPoolStats(
+            long retainedBytes, int pooled, long hits, long misses, long fallbacks) {}
+
     /**
-     * Reusable render targets, borrowed and returned around each render. Held in a shared,
-     * process-lifetime arena so any thread may use one and the memory outlives the caller's
-     * thread. Initialised lazily so nothing is allocated until the first render.
+     * Reusable render targets, borrowed and returned around each render. Each target owns its own
+     * shared arena, so an idle target can be retired and replaced instead of pinning its slot.
      */
     private static final class RenderTargetPool {
-        static final Arena ARENA = Arena.ofShared();
-        static final ArrayDeque<MemorySegment> FREE = new ArrayDeque<>();
+        /** One pooled target and the arena that owns it; kept together so it can be retired. */
+        record Target(Arena arena, MemorySegment segment) {}
+
+        static final ArrayDeque<Target> FREE = new ArrayDeque<>();
         static final AtomicInteger ALLOCATED = new AtomicInteger();
         static final AtomicLong RETAINED_BYTES = new AtomicLong();
+        static final AtomicLong HITS = new AtomicLong();
+        static final AtomicLong MISSES = new AtomicLong();
+        static final AtomicLong FALLBACKS = new AtomicLong();
+
+        static Target smallestIdle() {
+            Target smallest = null;
+            for (Target target : FREE) {
+                if (smallest == null || target.segment().byteSize() < smallest.segment().byteSize()) {
+                    smallest = target;
+                }
+            }
+            return smallest;
+        }
+
+        static void retire(Target target) {
+            FREE.remove(target);
+            RETAINED_BYTES.addAndGet(-target.segment().byteSize());
+            ALLOCATED.decrementAndGet();
+            target.arena().close();
+        }
     }
 
     /**
      * Borrows a pooled render target of at least {@code byteLen} bytes, or {@code null} when the
      * page is too large to pool or the pool is exhausted. Reuses the smallest target that fits, so
-     * a small request never pins the largest slot. Every non-null result must be handed back to
-     * {@link #releaseRenderTarget(MemorySegment)}.
+     * a small request never pins the largest slot; when every slot holds a smaller target the
+     * smallest idle one is retired, so monotonic growth (thumbnail then full page) cannot saturate
+     * the pool with undersized buffers. Every non-null result must be handed back to
+     * {@link #releaseRenderTarget(RenderTargetPool.Target)}.
      */
-    private static MemorySegment borrowRenderTarget(long byteLen) {
+    private static RenderTargetPool.Target borrowRenderTarget(long byteLen) {
         synchronized (RenderTargetPool.FREE) {
-            MemorySegment best = null;
-            for (MemorySegment target : RenderTargetPool.FREE) {
-                if (target.byteSize() >= byteLen
-                        && (best == null || target.byteSize() < best.byteSize())) {
+            RenderTargetPool.Target best = null;
+            for (RenderTargetPool.Target target : RenderTargetPool.FREE) {
+                if (target.segment().byteSize() >= byteLen
+                        && (best == null || target.segment().byteSize() < best.segment().byteSize())) {
                     best = target;
                 }
             }
             if (best != null) {
-                for (var it = RenderTargetPool.FREE.iterator(); it.hasNext(); ) {
-                    if (it.next() == best) {
-                        it.remove();
-                        break;
-                    }
-                }
+                RenderTargetPool.FREE.remove(best);
+                RenderTargetPool.HITS.incrementAndGet();
                 return best;
             }
-            if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX
+            // Retire a strictly smaller idle target so its slot can be reused; a bigger one would
+            // have matched above, and retiring an equal-sized slot would only thrash.
+            boolean freed = false;
+            if (RenderTargetPool.ALLOCATED.get() >= RENDER_TARGET_POOL_MAX) {
+                RenderTargetPool.Target smallest = RenderTargetPool.smallestIdle();
+                if (smallest != null && smallest.segment().byteSize() < byteLen) {
+                    RenderTargetPool.retire(smallest);
+                    freed = true;
+                }
+            }
+            if ((freed || RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX)
                     && RenderTargetPool.RETAINED_BYTES.get() + byteLen
                             <= RENDER_TARGET_RETAINED_MAX_BYTES) {
                 // Allocate before counting: a failed allocation must not consume the
                 // pool budget, or repeated failures would starve later renders.
-                MemorySegment target = RenderTargetPool.ARENA.allocate(byteLen);
+                Arena arena = Arena.ofShared();
+                MemorySegment target = arena.allocate(byteLen);
                 RenderTargetPool.ALLOCATED.incrementAndGet();
                 RenderTargetPool.RETAINED_BYTES.addAndGet(byteLen);
-                return target;
+                RenderTargetPool.MISSES.incrementAndGet();
+                return new RenderTargetPool.Target(arena, target);
             }
+            RenderTargetPool.FALLBACKS.incrementAndGet();
         }
         return null;
     }
 
-    private static void releaseRenderTarget(MemorySegment target) {
+    private static void releaseRenderTarget(RenderTargetPool.Target target) {
         synchronized (RenderTargetPool.FREE) {
             RenderTargetPool.FREE.addLast(target);
         }
+    }
+
+    /** Current render-target pool counters: retained bytes and hit/miss/fallback totals. */
+    public static RenderTargetPoolStats renderTargetPoolStats() {
+        synchronized (RenderTargetPool.FREE) {
+            return new RenderTargetPoolStats(
+                    RenderTargetPool.RETAINED_BYTES.get(),
+                    RenderTargetPool.FREE.size(),
+                    RenderTargetPool.HITS.get(),
+                    RenderTargetPool.MISSES.get(),
+                    RenderTargetPool.FALLBACKS.get());
+        }
+    }
+
+    /** Package-private seam: one borrow/release cycle, so the pool can be tested with no render. */
+    static boolean borrowReleaseRenderTargetForTest(long byteLen) {
+        RenderTargetPool.Target target = borrowRenderTarget(byteLen);
+        if (target == null) return false;
+        releaseRenderTarget(target);
+        return true;
     }
 
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,

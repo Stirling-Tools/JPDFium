@@ -97,9 +97,16 @@ double round6(double value) noexcept {
     return std::strtod(buf, nullptr);
 }
 
-// Python int(round(x)): half to even.
+// Python int(round(x)): half to even. Computed from floor and the fraction so the result
+// does not depend on the thread's current floating-point rounding mode, which std::nearbyint
+// follows and other native components may change.
 int32_t round_half_even(double value) noexcept {
-    return static_cast<int32_t>(std::nearbyint(value));
+    const double base = std::floor(value);
+    const int64_t whole = static_cast<int64_t>(base);
+    const double frac = value - base;
+    if (frac > 0.5) return static_cast<int32_t>(whole + 1);
+    if (frac < 0.5) return static_cast<int32_t>(whole);
+    return static_cast<int32_t>((whole & 1) == 0 ? whole : whole + 1);
 }
 
 // The rendered page before trimming: 8-bit gray or packed RGB.

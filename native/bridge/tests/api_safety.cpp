@@ -605,6 +605,39 @@ void test_shutdown(const std::string& path) {
     CHECK_STATUS(jpdf_bitmap_close(bmp), JPDF_OK, "bitmap close after stop");
 }
 
+// The FreeType FT_Library is process-global and not safe for concurrent use. font_classify and
+// font_covers_text are unguarded (no PDFium domain lock), so they share ft_mutex; hammer both from
+// many threads and require clean refusals rather than corruption or a crash.
+void test_font_concurrency() {
+    const std::vector<uint8_t> garbage(4096, 0x41);
+    const int32_t codepoints[2] = {0x41, 0x42};
+    std::atomic<int> unexpected{0};
+    std::atomic<bool> go{false};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&, t] {
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            for (int i = 0; i < 200; ++i) {
+                if ((t + i) % 2 == 0) {
+                    char* json = nullptr;
+                    const int32_t rc =
+                        jpdfium_font_classify(garbage.data(), (int64_t)garbage.size(), &json);
+                    if (json) jpdfium_free_string(json);
+                    if (rc == JPDFIUM_OK) ++unexpected;
+                } else {
+                    uint8_t covered[2] = {9, 9};
+                    const int32_t rc = jpdfium_font_covers_text(
+                        garbage.data(), (int64_t)garbage.size(), codepoints, 2, covered);
+                    if (rc == JPDFIUM_OK) ++unexpected;
+                }
+            }
+        });
+    }
+    go.store(true, std::memory_order_release);
+    for (std::thread& th : threads) th.join();
+    CHECK(unexpected.load() == 0, "concurrent FreeType calls refuse garbage cleanly");
+}
+
 }  // namespace
 
 // --- raster + rectify suite (merged from api_raster.cpp) ---
@@ -1127,6 +1160,46 @@ void test_rectify() {
     jpdf_bitmap_close(src);
 }
 
+// JPDF_BORDER_WHITE promises white outside samples, transparent for RGBA. A quad reaching past the
+// source must give (255,255,255,0) there and leave the in-bounds pixels untouched.
+void test_rectify_border() {
+    const std::string letter = (scratch() / "letter.pdf").string();
+    const jpdf_handle src = render_bitmap(letter, 72, JPDF_PIXEL_RGBA8);
+    const std::vector<uint8_t> source = pixels(src);
+    // Output x maps to source x-100, so the first column samples x=-100, outside the 612 px page.
+    const double quad[8] = {-100, 100, 100, 100, 100, 300, -100, 300};
+    jpdf_rectify_options o{};
+    o.struct_size = sizeof(o);
+    o.border = JPDF_BORDER_WHITE;
+    jpdf_rectify_result r{};
+    r.struct_size = sizeof(r);
+    for (int32_t interp : {JPDF_INTERP_NEAREST, JPDF_INTERP_BILINEAR, JPDF_INTERP_BICUBIC}) {
+        o.interpolation = interp;
+        jpdf_handle out = 0;
+        CHECK_STATUS(jpdf_bitmap_rectify(src, quad, &o, &out, &r), JPDF_OK, "border rectify");
+        CHECK(r.width == 200 && r.height == 200, "quad size");
+        const std::vector<uint8_t> px = pixels(out);
+        CHECK(px.size() == 200u * 200u * 4, "rectified output keeps RGBA8");
+        bool transparent_white = true;
+        for (int y = 0; y < 200; ++y) {
+            const size_t i = static_cast<size_t>(y) * 200 * 4;
+            transparent_white = transparent_white && px[i] == 255 && px[i + 1] == 255 &&
+                                px[i + 2] == 255 && px[i + 3] == 0;
+        }
+        CHECK(transparent_white, "outside samples are transparent white for RGBA8");
+        bool inside_intact = true;
+        for (int y = 0; y < 200; ++y) {
+            const size_t i = (static_cast<size_t>(y) * 200 + 199) * 4;
+            const size_t s = (static_cast<size_t>(100 + y) * 612 + 99) * 4;
+            inside_intact = inside_intact && px[i] == source[s] && px[i + 1] == source[s + 1] &&
+                            px[i + 2] == source[s + 2] && px[i + 3] == source[s + 3];
+        }
+        CHECK(inside_intact, "in-bounds samples are unchanged");
+        jpdf_bitmap_close(out);
+    }
+    jpdf_bitmap_close(src);
+}
+
 }  // namespace
 
 int run_raster_suite() {
@@ -1141,6 +1214,7 @@ int run_raster_suite() {
     test_rejections();
     test_pixel_kernels();
     test_rectify();
+    test_rectify_border();
     g_failures += image_suite::run_image_suite();
     std::error_code ec;
     fs::remove_all(scratch(), ec);
@@ -1159,6 +1233,7 @@ int main() {
     test_render_and_ownership(path);
     test_output_transaction(path);
     test_concurrent_renders(path);
+    test_font_concurrency();
     test_close_races(path);
     g_failures += raster_suite::run_raster_suite();
     test_shutdown(path);

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -375,9 +376,13 @@ void jpdfium_flashtext_free(int64_t handle) noexcept {
 
 #include "jpdfium_internal.h"
 
+// FreeType's FT_Library is not safe for concurrent use. These entry points are unguarded, so
+// they never meet on the PDFium domain lock; ft_mutex serialises every touch of the shared
+// library, including the lazy FT_Init_FreeType, so two callers cannot race on it.
+static std::mutex ft_mutex;
 static FT_Library ft_lib = nullptr;
 
-static void ensure_freetype_init() {
+static void ensure_freetype_init() {  // caller holds ft_mutex
     if (!ft_lib) FT_Init_FreeType(&ft_lib);
 }
 
@@ -434,6 +439,7 @@ int32_t jpdfium_font_get_data(int64_t page, int32_t font_index, uint8_t** data, 
 int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
     try {
         if (!data || len <= 0 || !json) return JPDFIUM_ERR_INVALID;
+        std::lock_guard<std::mutex> ft_lock(ft_mutex);
         ensure_freetype_init();
 
         FT_Face face;
@@ -499,6 +505,7 @@ int32_t jpdfium_font_covers_text(const uint8_t* data, int64_t len, const int32_t
     try {
         if (!data || len <= 0 || !codepoints || count <= 0 || !out_covered)
             return JPDFIUM_ERR_INVALID;
+        std::lock_guard<std::mutex> ft_lock(ft_mutex);
         ensure_freetype_init();
 
         FT_Face face;

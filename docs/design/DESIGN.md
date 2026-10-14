@@ -738,10 +738,11 @@ multilingual qualification, are in PyJPDFium's parity suite ([TEXT_LAYER.md](#in
   It needs a fetched profile in `JPDFIUM_OCR_PROFILE` and is skipped without one.
 - `api_safety` also decodes hand-built PNGs of every colour type.
 
-ONNX Runtime is not instrumented. Under LeakSanitizer one allocation of its own is suppressed, and
-under TSan races between its own worker threads are suppressed (`native/ocr/tests/*.supp`).
-Nothing in JPDFium's code is suppressed. Parity with the official PaddleOCR pipeline is in
-PyJPDFium ([OCR.md](#ocr-module)).
+ONNX Runtime is not instrumented. The suppressions (`native/ocr/tests/*.supp`) are module-wide
+patterns on `libonnxruntime.so`, not per-allocation or per-race rules: no JPDFium source file is
+named, but a report whose stack crosses into that module, including one the bridge triggers, can
+match them. Sanitizer runs therefore under-report rather than prove those paths clean. Parity with
+the official PaddleOCR pipeline is in PyJPDFium ([OCR.md](#ocr-module)).
 
 ## Java suite against real natives
 

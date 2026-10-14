@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "jpdfium.h"
+#include "jpdfium_api.h"
 
 namespace {
 
@@ -229,6 +230,21 @@ void runBoundaryChecks() {
 
     // Null handles must be rejected.
     CHECK(jpdfium_doc_page_count(0, nullptr) != JPDFIUM_OK, "doc_page_count null args");
+
+    // Capabilities must reflect the build: the stub links only the runtime and guard surface, so it
+    // must not advertise the safe-API operations that only the real core implements.
+    int32_t level = -1;
+    CHECK(jpdf_capability("runtime.lifecycle", &level) == JPDF_OK && level == JPDF_CAP_IMPLEMENTED,
+          "runtime.lifecycle capability");
+    CHECK(jpdf_capability("legacy.guards", &level) == JPDF_OK && level == JPDF_CAP_IMPLEMENTED,
+          "legacy.guards capability");
+    const int32_t real_level = isRealBridge() ? JPDF_CAP_IMPLEMENTED : JPDF_CAP_ABSENT;
+    CHECK(jpdf_capability("pdf.render", &level) == JPDF_OK && level == real_level,
+          "pdf.render capability matches the build");
+    CHECK(jpdf_capability("text_layer.write", &level) == JPDF_OK && level == real_level,
+          "text_layer.write capability matches the build");
+    CHECK(jpdf_capability("no.such.operation", &level) == JPDF_OK && level == JPDF_CAP_ABSENT,
+          "unknown capability reports absent");
 }
 
 }  // namespace

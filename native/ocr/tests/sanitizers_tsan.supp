@@ -1,2 +1,3 @@
 # ONNX Runtime's worker threads synchronize in uninstrumented code TSan cannot see.
+# Module-wide, so it also matches any race report whose stack crosses libonnxruntime.so.
 race:libonnxruntime.so

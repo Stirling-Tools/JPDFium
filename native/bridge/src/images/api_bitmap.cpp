@@ -118,7 +118,13 @@ struct Sampler {
     int channels;
     bool replicate;
 
-    // Returns false for a white border sample outside the source.
+    // JPDF_BORDER_WHITE samples are white, and transparent for RGBA8 (alpha 0), as the
+    // public contract states, so an out-of-source RGBA crop does not turn opaque.
+    uint8_t border_value(int c) const noexcept {
+        return (channels == 4 && c == 3) ? uint8_t{0} : uint8_t{255};
+    }
+
+    // Returns false for a sample outside the source.
     bool at(int x, int y, int c, double* value) const noexcept {
         if (x < 0 || y < 0 || x >= src.width || y >= src.height) {
             if (!replicate) return false;
@@ -132,7 +138,7 @@ struct Sampler {
     }
 
     double get(int x, int y, int c) const noexcept {
-        double v = 255;
+        double v = border_value(c);
         at(x, y, c, &v);
         return v;
     }
@@ -247,7 +253,7 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
             double y = (h[3] * u + h[4] * v + h[5]) / w;
             uint8_t* px = row + static_cast<ptrdiff_t>(u) * channels;
             if (!std::isfinite(x) || !std::isfinite(y)) {
-                std::fill(px, px + channels, uint8_t{255});
+                for (int c = 0; c < channels; ++c) px[c] = s.border_value(c);
                 continue;
             }
             // Every sample more than 4 px outside the source is a border sample, so clamping

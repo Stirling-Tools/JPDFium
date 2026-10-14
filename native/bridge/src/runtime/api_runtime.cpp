@@ -19,6 +19,14 @@ struct Capability {
 };
 
 // Qualified is reserved for operations that passed their parity gate; none have yet.
+// The stub links only the runtime and the guard surface, so it must not advertise the
+// safe-API operations whose implementation files are compiled into the real core alone.
+#ifdef JPDFIUM_STUB_GUARDS
+constexpr Capability kCapabilities[] = {
+    {"runtime.lifecycle", JPDF_CAP_IMPLEMENTED},
+    {"legacy.guards", JPDF_CAP_IMPLEMENTED},
+};
+#else
 constexpr Capability kCapabilities[] = {
     {"runtime.lifecycle", JPDF_CAP_IMPLEMENTED},  {"pdf.open", JPDF_CAP_IMPLEMENTED},
     {"pdf.render", JPDF_CAP_IMPLEMENTED},         {"image.png_write", JPDF_CAP_IMPLEMENTED},
@@ -28,6 +36,7 @@ constexpr Capability kCapabilities[] = {
     {"image.load", JPDF_CAP_IMPLEMENTED},         {"text_layer.bidi", JPDF_CAP_IMPLEMENTED},
     {"text_layer.quad", JPDF_CAP_IMPLEMENTED},
 };
+#endif
 
 }  // namespace
 
