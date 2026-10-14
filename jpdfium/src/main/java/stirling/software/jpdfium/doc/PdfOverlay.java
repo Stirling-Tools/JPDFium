@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.PageImportBindings;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -88,5 +89,31 @@ public final class PdfOverlay {
      */
     public static boolean isSupported() {
         return true;
+    }
+
+    /**
+     * True when native vector page stamping is available (the qpdf-backed natives are loaded).
+     * <p>Unlike {@link #isSupported()}, stamping is a qpdf feature, so the stub natives report it as
+     */
+    public static boolean isStampingSupported() {
+        return QpdfLib.isStampSupported();
+    }
+
+    /**
+     * Stamp one page of {@code source} onto a page of {@code destination} through the affine
+     * matrix {@code [a b c d e f]} (PDF {@code cm} order).
+     */
+    public static byte[] stampPage(byte[] destPdf, byte[] srcPdf, int destPageIndex,
+            int srcPageIndex, double a, double b, double c, double d, double e, double f) {
+        return QpdfLib.stampPage(destPdf, srcPdf, destPageIndex, srcPageIndex, a, b, c, d, e, f);
+    }
+
+    /**
+     * Convenience form of {@link #stampPage} that places the source page at {@code (x, y)} scaled
+     * uniformly by {@code scale}, i.e. the matrix {@code [scale 0 0 scale x y]}.
+     */
+    public static byte[] stampPageAt(byte[] destPdf, byte[] srcPdf, int destPageIndex,
+            int srcPageIndex, double x, double y, double scale) {
+        return QpdfLib.stampPageAt(destPdf, srcPdf, destPageIndex, srcPageIndex, x, y, scale);
     }
 }

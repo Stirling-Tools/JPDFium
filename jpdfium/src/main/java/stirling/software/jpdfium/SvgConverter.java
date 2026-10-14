@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import java.awt.image.BufferedImage;
+import stirling.software.jpdfium.doc.PdfOverlay;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.RenderResult;
@@ -10,19 +11,8 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * SVG conversion backed by the Rust {@code resvg} rasterizer.
- *
- * <p>SVG is rasterized in-process (no cairo/gdk-pixbuf/X11 stack, no external
- * process), then encoded with {@link PdfImageConverter} (ImageIO) or, when the
- * optional {@code jpdfium-vips} module is present, with libvips through
- * {@code VipsImageConverter.svgToBytes}. The same rasterizer feeds
- * {@link #toPdf} so an SVG can become a one-page PDF.
- *
- * <pre>{@code
- * RenderResult rgba = SvgConverter.toRgba(svgBytes, 1024, 1024);
- * byte[] png = SvgConverter.toImage(svgBytes, 1024, 1024, ImageFormat.PNG);
- * try (PdfDocument doc = SvgConverter.toPdf(svgBytes, 0, 0, ImageToPdfOptions.defaults())) { ... }
- * }</pre>
+ * SVG conversion backed by the Rust {@code resvg} rasterizer and the Rust
+ * {@code krilla} + {@code krilla-svg} vector writer.
  */
 public final class SvgConverter {
 
@@ -74,24 +64,106 @@ public final class SvgConverter {
         return toImage(svg, width, height, ImageFormat.fromExtension(formatName));
     }
 
-    /** Rasterize at natural size and embed as a new one-page PDF document with default options. */
+    /**
+     * Whether this native build converts SVG to a vector PDF. False for the
+     * stub bridge, which has no SVG support at all.
+     */
+    public static boolean isVectorPdfAvailable() {
+        return JpdfiumLib.isSvgToPdfAvailable();
+    }
+
+    /**
+     * Convert an SVG to a one-page PDF that keeps its content vector.
+     * <p>Nothing is rasterized, so the page stays sharp at any zoom and its text
+     */
     public static PdfDocument toPdf(byte[] svg) {
-        return toPdf(svg, 0, 0, ImageToPdfOptions.builder().build());
+        return toVectorPdf(svg, 0, 0, true);
+    }
+
+    /** Convert an SVG to a one-page vector PDF at its natural size. */
+    public static PdfDocument toVectorPdf(byte[] svg) {
+        return toVectorPdf(svg, 0, 0, true);
+    }
+
+    /**
+     * Convert an SVG to a one-page vector PDF scaled to fit the given box,
+     * preserving the aspect ratio. Pass 0 for either dimension to use the
+     */
+    public static PdfDocument toVectorPdf(byte[] svg, int width, int height) {
+        return toVectorPdf(svg, width, height, true);
+    }
+
+    /**
+     * Convert an SVG to a one-page vector PDF scaled to fit the given box.
+     * @param svg       SVG bytes
+     */
+    public static PdfDocument toVectorPdf(byte[] svg, int width, int height, boolean embedText) {
+        return PdfDocument.open(JpdfiumLib.svgToPdfBytes(svg, width, height, embedText));
+    }
+
+    /** Rasterize at natural size and embed as a new one-page PDF document. */
+    public static PdfDocument toRasterPdf(byte[] svg) {
+        return toRasterPdf(svg, 0, 0, ImageToPdfOptions.builder().build());
     }
 
     /** Rasterize at natural size and embed as a new one-page PDF document with options. */
-    public static PdfDocument toPdf(byte[] svg, ImageToPdfOptions options) {
-        return toPdf(svg, 0, 0, options);
+    public static PdfDocument toRasterPdf(byte[] svg, ImageToPdfOptions options) {
+        return toRasterPdf(svg, 0, 0, options);
     }
 
-    /** Rasterize and embed as a new one-page PDF document. */
-    public static PdfDocument toPdf(byte[] svg, int width, int height, ImageToPdfOptions options) {
+    /**
+     * Rasterize and embed as a new one-page PDF document.
+     * <p>The raster page follows {@link ImageToPdfOptions} (page size, margin,
+     */
+    public static PdfDocument toRasterPdf(byte[] svg, int width, int height, ImageToPdfOptions options) {
         RenderResult result = toRgba(svg, width, height);
         byte[] frame = new byte[8 + result.rgba().length];
         writeLeInt32(frame, 0, result.width());
         writeLeInt32(frame, 4, result.height());
         System.arraycopy(result.rgba(), 0, frame, 8, result.rgba().length);
         return PdfImageConverter.embedRgbaImages(List.of(frame), options);
+    }
+
+    /**
+     * Rasterize and embed as a new one-page PDF document.
+     * @deprecated {@link ImageToPdfOptions} only describe raster embedding. Use
+     */
+    @Deprecated
+    public static PdfDocument toPdf(byte[] svg, ImageToPdfOptions options) {
+        return toRasterPdf(svg, 0, 0, options);
+    }
+
+    /**
+     * Rasterize and embed as a new one-page PDF document.
+     * @deprecated {@link ImageToPdfOptions} only describe raster embedding. Use
+     */
+    @Deprecated
+    public static PdfDocument toPdf(byte[] svg, int width, int height, ImageToPdfOptions options) {
+        return toRasterPdf(svg, width, height, options);
+    }
+
+    /**
+     * True when SVG overlay stamping is available (the qpdf-backed natives are loaded).
+     * <p>Overlay stamping needs native object-graph surgery, so the stub natives report it as
+     */
+    public static boolean isOverlaySupported() {
+        return PdfOverlay.isStampingSupported();
+    }
+
+    /**
+     * Stamp an SVG onto a page of an existing PDF as vector content.
+     * <p>This is the Batik-free replacement for rendering an SVG through a graphics bridge and
+     */
+    public static byte[] overlayOnPdf(byte[] pdfBytes, byte[] svg, int pageIndex, float x, float y,
+            float scale) {
+        if (pdfBytes == null || pdfBytes.length == 0 || svg == null || svg.length == 0) {
+            return null;
+        }
+        byte[] vectorPage = JpdfiumLib.svgToPdfBytes(svg, 0, 0, true);
+        if (vectorPage == null) {
+            return null;
+        }
+        return PdfOverlay.stampPageAt(pdfBytes, vectorPage, pageIndex, 0, x, y, scale);
     }
 
     private static void writeLeInt32(byte[] target, int offset, int value) {
