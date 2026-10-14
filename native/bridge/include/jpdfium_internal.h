@@ -12,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -73,6 +74,13 @@ struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
+    // Pages on which a redaction mutated content and then stopped
+    // (JPDFIUM_ERR_REDACT_INCOMPLETE): the applied boxes already removed content
+    // while the rest of the match is still extractable, so every save path
+    // refuses while this set is not empty. Only a later successful redaction
+    // commit that really applies rectangles on the SAME page removes that page's
+    // entry, so a commit on another page can never clear the failure.
+    std::set<int32_t> incompleteRedactPages{};
     int32_t unappliedRedactMarksCount = 0;
     // Structural generation: bumped whenever native state is freed and
     // replaced (document reload, page raster replacement). Pages capture it
@@ -111,6 +119,13 @@ struct DocCore {
 
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
+    }
+
+    // True while any page still has a redaction that stopped half-way and was
+    // not resolved by a later successful commit on that same page - see
+    // incompleteRedactPages.
+    bool hasIncompleteRedaction() const {
+        return !incompleteRedactPages.empty();
     }
 
     void addRedactLiteral(const char* s) {

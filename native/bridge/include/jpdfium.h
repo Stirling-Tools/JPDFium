@@ -207,12 +207,24 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
+// Content redaction. These entry points mutate the page content stream, so a
+// failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
+// original content in place: while such an incomplete redaction is pending, every
+// save (jpdfium_doc_save, jpdfium_doc_save_bytes, jpdfium_doc_save_incremental)
+// is refused with JPDFIUM_ERR_REDACT_INCOMPLETE, before any other save-state
+// error. The state is tracked per page: only a later jpdfium_redact_commit that
+// actually applies redactions on the SAME page resolves it (a commit on another
+// page does not). Reload the document to discard the state deliberately.
 JPDFIUM_EXPORT int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
                                               int32_t remove_content) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_words(int64_t page, const char** words, int32_t wordCount,
                                             uint32_t argb, float padding, int32_t wholeWord,
                                             int32_t useRegex,
                                             int32_t remove_content) JPDFIUM_NOEXCEPT;
+// Same as jpdfium_redact_words, with a case-sensitivity switch and an out-param.
+// *matchCount receives the number of logical matches found and redacted: a match
+// wrapped across lines or columns counts once, even though it is boxed - and
+// removed - per line.
 JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCount,
                                                uint32_t argb, float padding, int32_t wholeWord,
                                                int32_t useRegex, int32_t remove_content,
@@ -236,7 +248,8 @@ JPDFIUM_EXPORT int32_t jpdfium_annot_create_redact(int64_t page, float x, float 
 // Mark phase: find all word matches and create REDACT annotations for each.
 // Equivalent to jpdfium_redact_words_ex but ONLY creates annotations,
 // without modifying the content stream.  Returns the number of annotations
-// created in *matchCount.
+// created in *matchCount: a match wrapped across lines or columns creates one
+// annotation per box, so it counts once per box, not once per match.
 JPDFIUM_EXPORT int32_t jpdfium_redact_mark_words(int64_t page, const char** words,
                                                  int32_t wordCount, float padding,
                                                  int32_t wholeWord, int32_t useRegex,
