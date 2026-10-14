@@ -167,7 +167,8 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y --allow-downgrade cmake ninja python3
+          # Preinstalled cmake/ninja/python3 used; Chocolatey is a retried fallback.
+          bash native/ci/windows-build-deps.sh cmake ninja python3
 
       - name: Configure Windows depot_tools environment
         if: startsWith(matrix.platform, 'windows-')

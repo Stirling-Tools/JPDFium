@@ -228,7 +228,8 @@ jobs:
       - name: Install build deps (Windows)
         if: startsWith(matrix.platform, 'windows-')
         run: |
-          choco install -y --allow-downgrade cmake ninja
+          # Preinstalled cmake/ninja used; Chocolatey is a retried fallback.
+          bash native/ci/windows-build-deps.sh cmake ninja
           if command -v pkg-config >/dev/null 2>&1; then
             echo "pkg-config already on PATH"
           elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then

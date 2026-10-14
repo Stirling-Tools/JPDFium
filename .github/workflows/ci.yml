@@ -61,7 +61,8 @@ jobs:
       - name: Install build deps (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install -y --allow-downgrade cmake ninja
+          # Preinstalled cmake/ninja used; Chocolatey is a retried fallback.
+          bash native/ci/windows-build-deps.sh cmake ninja
 
       - name: Install jextract (Linux)
         if: runner.os == 'Linux'
@@ -361,8 +362,9 @@ jobs:
         uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-v2-${{ github.base_ref || 'main' }}
-          restore-keys: jmh-baseline-v2-
+          # Unique save key per run; restore-keys resolves the newest baseline.
+          key: jmh-baseline-v3-${{ github.base_ref || 'main' }}-${{ github.run_id }}
+          restore-keys: jmh-baseline-v3-${{ github.base_ref || 'main' }}-
 
       - name: Compare results against baseline (warn if regressed >15%)
         run: |
@@ -395,7 +397,8 @@ jobs:
         uses: actions/cache/save@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
         with:
           path: jpdfium/build/results/jmh/baseline.json
-          key: jmh-baseline-v2-main
+          # Run-scoped key, so a fixed key can no longer freeze the baseline.
+          key: jmh-baseline-v3-${{ github.base_ref || 'main' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload benchmark results
         if: always()
