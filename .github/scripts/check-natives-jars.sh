@@ -19,7 +19,13 @@ set -euo pipefail
 # when it is absent, so a jar without it cannot serve that platform at all.
 # A jar must also carry the platform its file name names, so a jar built for one
 # platform cannot pass on another platform's libraries.
-REQUIRED_PLATFORMS='^(linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64|windows-arm64)$'
+# The platform directories a natives jar can carry, longest first so that
+# vips-<platform> matches before the core <platform> it is built on. The file
+# name is parsed against this list rather than by stripping a trailing segment,
+# which would eat a hyphenated version such as 1.2.1-SNAPSHOT or 1.2.1-rc.1.
+KNOWN_PLATFORMS="linux-musl-x64 linux-musl-arm64 vips-linux-x64 vips-linux-arm64
+vips-darwin-x64 vips-darwin-arm64 vips-windows-x64 vips-windows-arm64
+linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64"
 BRIDGE='^(lib)?jpdfium\.(so|dylib|dll)(\.[0-9]+)*$'
 LIBRARY='\.(so|dylib|dll)(\.[0-9]+)*$'
 
@@ -81,31 +87,42 @@ WARNINGS=0
 
 for jar in "${JARS[@]}"; do
   name="$(basename "$jar")"
-  # Everything after the module prefix minus a trailing -<version>.jar, used
-  # when a jar carries no natives/ directory to name the platform it wanted.
-  fallback="${name#jpdfium-natives-}"
-  fallback="${fallback%-*.jar}"
-  fallback="${fallback#vips-}"
-  # The platform the file name names, which must be the directory it carries.
-  declared="${name#jpdfium-natives-}"
-  declared="${declared%-*.jar}"
+
+  # The platform the file name declares, which the jar must actually carry.
+  declared=""
+  for candidate in $KNOWN_PLATFORMS; do
+    case "$name" in
+      "jpdfium-natives-$candidate-"*.jar)
+        declared="$candidate"
+        break
+        ;;
+    esac
+  done
+  if [ -z "$declared" ]; then
+    echo "  [FAIL] $name does not name a supported platform"
+    FAILURES=$((FAILURES + 1))
+    continue
+  fi
 
   entries="$(list_entries "$jar")"
   platforms="$(printf '%s\n' "$entries" |
     sed -n 's#^[0-9]*[[:space:]]\{1,\}natives/\([^/]*\)/.*#\1#p' | sort -u)"
 
   if [ -z "$platforms" ]; then
-    if printf '%s' "$fallback" | grep -Eq "$REQUIRED_PLATFORMS"; then
-      echo "  [FAIL] $name carries no natives/ payload"
-      FAILURES=$((FAILURES + 1))
-    else
+    # Nothing under natives/, so the module published without libraries. The
+    # musl prebuild is experimental and may legitimately be missing; every
+    # other platform is a packaging failure.
+    if printf '%s' "$declared" | grep -Eq '^linux-musl-'; then
       echo "  [WARN] $name carries no native libraries (experimental platform)"
       WARNINGS=$((WARNINGS + 1))
+    else
+      echo "  [FAIL] $name carries no natives/ payload"
+      FAILURES=$((FAILURES + 1))
     fi
     continue
   fi
 
-  if [ -n "$declared" ] && ! printf '%s\n' "$platforms" | grep -qxF "$declared"; then
+  if ! printf '%s\n' "$platforms" | grep -qxF "$declared"; then
     echo "  [FAIL] $name names $declared but ships no natives/$declared/"
     FAILURES=$((FAILURES + 1))
     continue
@@ -122,7 +139,11 @@ for jar in "${JARS[@]}"; do
 
     if [ "$payload" -gt 0 ] && [ "$manifest" -gt 0 ] && [ "$hashes" -gt 0 ] &&
       { [ "$wants_bridge" -eq 0 ] || [ "$bridge" = "1" ]; }; then
-      echo "  [ok]   $name ships $payload libraries for $platform"
+      if [ "$payload" -eq 1 ]; then
+        echo "  [ok]   $name ships 1 library for $platform"
+      else
+        echo "  [ok]   $name ships $payload libraries for $platform"
+      fi
       continue
     fi
 
