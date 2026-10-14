@@ -80,7 +80,23 @@ The musl modules are experimental. They are packaged only when the Alpine PDFium
 
 ## Spring Boot
 
-`com.stirling:jpdfium-spring` holds the JPDFium property types for Spring Boot applications. The module ships no auto-configuration yet, so bind `JPDFiumProperties` yourself with `@ConfigurationProperties(prefix = "jpdfium")`. Declare the native module for your platform as a runtime dependency in the usual way.
+`com.stirling:jpdfium-spring` holds the JPDFium property types for Spring Boot applications. The module ships no auto-configuration, so `JPDFiumProperties` carries no annotations and an application has to register it:
+
+```java
+@Configuration(proxyBeanMethods = false)
+class JpdfiumConfiguration {
+
+    @Bean
+    @ConfigurationProperties(prefix = "jpdfium")
+    JPDFiumProperties jpdfiumProperties() {
+        return new JPDFiumProperties();
+    }
+}
+```
+
+Declare the native module for your platform as a runtime dependency in the usual way.
+
+Binding the properties does not configure JPDFium. Application code has to apply the values when it loads the native libraries, renders, or builds redaction options.
 
 ## Optional image formats
 

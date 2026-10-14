@@ -14,8 +14,8 @@ publishing {
     publications {
         getByName<MavenPublication>("mavenJava") {
             pom {
-                name.set("JPDFium Spring Boot Starter")
-                description.set("Spring Boot auto-configuration for JPDFium")
+                name.set("JPDFium Spring configuration properties")
+                description.set("Configuration property types for integrating JPDFium with Spring Boot")
             }
         }
     }

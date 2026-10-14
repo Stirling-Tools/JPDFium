@@ -4,9 +4,13 @@ package stirling.software.jpdfium.spring;
  * Property holder for the settings a Spring Boot application exposes under the
  * {@code jpdfium} prefix.
  *
- * <p>The class carries no annotations and is not bound by the container. Add
- * {@code @ConfigurationProperties(prefix = "jpdfium")} in your application to
- * have these values injected.
+ * <p>The class carries no annotations and is not bound by the container. Register
+ * it yourself as a bean carrying
+ * {@code @ConfigurationProperties(prefix = "jpdfium")}; the Spring Boot section of
+ * {@code docs/installation.md} shows the application-side configuration class.
+ *
+ * <p>Binding these values does not configure JPDFium. Application code applies them
+ * when it loads the native libraries, renders, or builds redaction options.
  *
  * <p><b>Example application.yml</b></p>
  * <pre>{@code
