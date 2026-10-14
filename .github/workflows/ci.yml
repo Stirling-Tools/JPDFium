@@ -515,3 +515,29 @@ jobs:
 
       - name: Run GraalVM Native Image Smoke Test
         run: ./gradlew :jpdfium-natives:jpdfium-natives-linux-x64:processResources :jpdfium:graalvmNativeSmokeTest -Pjpdfium.testNatives=linux-x64 --no-daemon --stacktrace
+
+  # -------------------------------------------------------------------------
+  # Job 9: README quick start example (published artifacts)
+  # -------------------------------------------------------------------------
+  readme-example:
+    name: README Quick Start Example (Linux x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+
+      - name: Run the README example against the published artifacts
+        run: ./gradlew -p examples/render-first-page run --args="sample.pdf page-1.png" --no-daemon
+
+      - name: Verify the rendered page
+        run: |
+          test -s examples/render-first-page/page-1.png
+          test "$(file --brief --mime-type examples/render-first-page/page-1.png)" = "image/png"
