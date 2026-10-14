@@ -1,0 +1,139 @@
+name: Post-release version bump
+
+# A release starts with a v*.*.* tag push, which is the same event that
+# publishes to Maven Central. Publishing with the default GITHUB_TOKEN does not
+# trigger further workflow runs, so a `release: published` trigger would not
+# fire reliably; the tag push does.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Released version to document (for example 1.2.1).'
+        required: true
+      base:
+        description: 'Branch to open the pull request against. Defaults to the repository default branch.'
+        required: false
+        default: ''
+
+# No permission is needed workflow-wide; the single job asks for what it pushes.
+permissions: {}
+
+concurrency:
+  group: version-bump-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Open a documentation pull request
+    runs-on: ubuntu-latest
+    # The only job here: it needs to push the bump branch and open the pull
+    # request for it, so it is granted contents and pull-requests write access.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Resolve the released version
+        id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BASE: ${{ inputs.base }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${REF#v}"
+          fi
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not resolve the released version" >&2
+            exit 1
+          fi
+          {
+            echo "version=$VERSION"
+            echo "base=${INPUT_BASE:-$DEFAULT_BRANCH}"
+            echo "branch=chore/version-$VERSION"
+          } >> "$GITHUB_OUTPUT"
+          echo "Documenting $VERSION against ${INPUT_BASE:-$DEFAULT_BRANCH}"
+
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          ref: ${{ steps.v.outputs.base }}
+          # The push below supplies its own token, so the checkout does not need
+          # to keep credentials in the Git configuration.
+          persist-credentials: false
+
+      - name: Look for an existing pull request
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "An open pull request for $BRANCH already exists; nothing to do."
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update the version references
+        id: bump
+        if: steps.existing.outputs.found != 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          bash .github/scripts/bump-release-version.sh --version "$VERSION"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      - name: Open the pull request
+        if: steps.existing.outputs.found != 'true' && steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+          BASE: ${{ steps.v.outputs.base }}
+          BRANCH: ${{ steps.v.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add -A
+          git commit -m "chore: update version references to $VERSION"
+          REMOTE_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # A previous run can have pushed this branch before failing to open the
+          # pull request, leaving no open pull request behind. Only such a branch
+          # may be replaced: if it carries a commit this workflow did not author,
+          # stop instead of discarding someone else's work.
+          if git ls-remote --exit-code --heads "$REMOTE_URL" "$BRANCH" >/dev/null 2>&1; then
+            git fetch --quiet "$REMOTE_URL" "$BRANCH"
+            FOREIGN="$(git log --format='%ae' HEAD..FETCH_HEAD |
+              grep -v -F '41898282+github-actions[bot]@users.noreply.github.com' || true)"
+            if [ -n "$FOREIGN" ]; then
+              echo "ERROR: $BRANCH exists on the remote with commits this workflow did not author." >&2
+              echo "Delete it by hand, or re-run once it is gone:" >&2
+              git log --oneline HEAD..FETCH_HEAD >&2
+              exit 1
+            fi
+            git push "$REMOTE_URL" --delete "$BRANCH"
+          fi
+          git push "$REMOTE_URL" "$BRANCH"
+          {
+            echo "JPDFium $VERSION is released, so the documented version references now point at it,"
+            echo "and \`gradle.properties\` moves to the next patch snapshot."
+            echo
+            echo "Generated by the post-release version bump workflow."
+            echo
+            echo "Merge once $VERSION is live on Maven Central."
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh pr create \
+            --base "$BASE" \
+            --head "$BRANCH" \
+            --title "chore: update version references to $VERSION" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
