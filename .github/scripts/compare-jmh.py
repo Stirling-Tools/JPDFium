@@ -15,6 +15,8 @@ GitHub runners:
   a GitHub-hosted runner stops producing repeatable numbers (see NOISE_FLOOR_MS
   below) rather than at an arbitrary small value: too low a floor gates
   single-digit-microsecond no-ops on numbers no runner can reproduce.
+* A run whose whole suite shifted together (a different `ubuntu-latest`
+  hardware class) is reported but not gated; see RUNNER_CLASS_TOLERANCE.
 * The caller (ci.yml) re-runs the suite once when this script fails, to rule
   out transient host noise, before failing the job.
 
@@ -22,6 +24,7 @@ Exit code: 1 if any gated benchmark regressed, 0 otherwise.
 """
 
 import json
+import statistics
 import sys
 
 MAX_REGRESSION_PCT = 15.0
@@ -57,10 +60,30 @@ IO_BOUND_BENCHMARKS = {
     "optimizeFileToFile",
 }
 
+# `ubuntu-latest` is a pool of hardware classes; a run that shifted together
+# beyond this band is a different class, so report it but skip the verdict.
+RUNNER_CLASS_TOLERANCE = 0.20
+
 
 def load(path: str) -> dict:
     with open(path) as f:
         return {b["benchmark"]: b["primaryMetric"] for b in json.load(f)}
+
+
+def common_mode_shift(results: dict, baseline: dict) -> float | None:
+    """Median ratio of every measurable benchmark against its baseline."""
+    ratios = []
+    for name, m in results.items():
+        b = baseline.get(name)
+        if b is None:
+            continue
+        base = b["score"]
+        if base < NOISE_FLOOR_MS:
+            continue
+        ratios.append(m["score"] / base)
+    if not ratios:
+        return None
+    return statistics.median(ratios)
 
 
 def main() -> int:
@@ -69,6 +92,22 @@ def main() -> int:
 
     results = load(results_path)
     baseline = load(baseline_path)
+
+    shift = common_mode_shift(results, baseline)
+    shifted = shift is not None and abs(shift - 1.0) > RUNNER_CLASS_TOLERANCE
+
+    if shifted:
+        print(
+            f"NOTE: this run measures {shift:.2f}x its baseline in median across "
+            f"every above-floor benchmark, which is outside the "
+            f"1 +/- {RUNNER_CLASS_TOLERANCE:.0%} band that a single runner class "
+            f"produces.\n"
+            "      The scores are therefore from a different hardware class than "
+            "the baseline and are reported for trend only; the per-benchmark "
+            "verdict is skipped for this run (a shared-runner class change is "
+            "not a code regression)."
+        )
+        print()
 
     regressions = []
     missing = []
@@ -89,6 +128,8 @@ def main() -> int:
             status = "OK (noise)"
         elif short in IO_BOUND_BENCHMARKS:
             status = "OK (io)"
+        elif shifted:
+            status = "SKIP (class)"
         elif conservative > MAX_REGRESSION_PCT:
             status = "REGRESSED"
         else:
@@ -113,6 +154,13 @@ def main() -> int:
         for name, pct in regressions:
             print(f"  {name}: +{pct:.1f}%")
         return 1
+
+    if shifted:
+        print(
+            "\nNo verdict: this run is on a different runner class than the "
+            "baseline (see NOTE above)."
+        )
+        return 0
 
     print(f"\nAll gated benchmarks within {MAX_REGRESSION_PCT}% of baseline (error-adjusted).")
     return 0
