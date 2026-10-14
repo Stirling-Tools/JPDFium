@@ -55,17 +55,45 @@ public enum AnnotationType {
     /** FDF /Subtype name (mixed case), or {@code null} if not supported. */
     public String fdfName() { return fdfName; }
 
-    public static AnnotationType fromCode(int code) {
-        for (AnnotationType t : values()) {
-            if (t.code == code) return t;
+    /**
+     * Cached {@link #values()} clone. Every member lookup used to call {@code values()}, which
+     * clones the constant array on each call; the annotation walk hits this once per annotation,
+     * so the clone showed up as per-annotation garbage.
+     */
+    private static final AnnotationType[] VALUES = values();
+
+    /** Code-indexed lookup built once; {@code codes} are dense and non-negative (UNKNOWN is 0). */
+    private static final AnnotationType[] BY_CODE;
+
+    static {
+        int max = 0;
+        for (AnnotationType t : VALUES) {
+            if (t.code > max) {
+                max = t.code;
+            }
         }
-        return UNKNOWN;
+        AnnotationType[] byCode = new AnnotationType[max + 1];
+        // First declaration wins, matching the linear scan this replaces.
+        for (AnnotationType t : VALUES) {
+            if (byCode[t.code] == null) {
+                byCode[t.code] = t;
+            }
+        }
+        BY_CODE = byCode;
+    }
+
+    public static AnnotationType fromCode(int code) {
+        if (code < 0 || code >= BY_CODE.length) {
+            return UNKNOWN;
+        }
+        AnnotationType t = BY_CODE[code];
+        return t != null ? t : UNKNOWN;
     }
 
     public static AnnotationType fromXfdfTag(String tag) {
         if (tag == null) return null;
         String lower = tag.toLowerCase(Locale.ROOT);
-        for (AnnotationType t : values()) {
+        for (AnnotationType t : VALUES) {
             if (lower.equals(t.xfdfTag)) return t;
         }
         return null;
@@ -73,7 +101,7 @@ public enum AnnotationType {
 
     public static AnnotationType fromFdfName(String name) {
         if (name == null) return null;
-        for (AnnotationType t : values()) {
+        for (AnnotationType t : VALUES) {
             if (name.equals(t.fdfName)) return t;
         }
         return null;
