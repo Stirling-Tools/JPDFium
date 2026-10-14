@@ -594,6 +594,17 @@ struct RasterTarget {
     int h_px = 0;
 };
 
+// A raster frame kept for reuse between `jpdfium_page_to_image` calls must not
+// stay mapped for the lifetime of a long-lived document. Ordinary page geometry
+// is worth keeping (A4 at 150 dpi is ~8.7 MiB, and that is the size the
+// per-page flatten path re-renders); past this budget the frame is released as
+// soon as the page has been rendered, so retention stays bounded instead of
+// approaching the kMaxRenderPixels ceiling (1 GiB at 4 bytes per pixel).
+constexpr size_t kRetainRasterFrameBytes = 32u * 1024u * 1024u;
+
+// Bytes per pixel of the alpha-less frames this file allocates.
+constexpr size_t kRasterFrameBytesPerPixel = 4u;
+
 // Page geometry in points -> validated pixel size for `dpi`.
 bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
     const double w_pt = FPDF_GetPageWidth(page);
@@ -641,12 +652,10 @@ int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page,
             FPDF_RenderPageBitmapWithMatrix(bmp, page.get(), &matrix, &clip,
                                             FPDF_ANNOT | FPDF_PRINTING);
         } else {
-            FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0,
-                                  FPDF_ANNOT | FPDF_PRINTING);
+            FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
         }
 #else
-        FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0,
-                              FPDF_ANNOT | FPDF_PRINTING);
+        FPDF_RenderPageBitmap(bmp, page.get(), 0, 0, w_px, h_px, 0, FPDF_ANNOT | FPDF_PRINTING);
 #endif
 
         page.reset();  // done with the source page before restructuring the document
@@ -718,8 +727,8 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         // One raster frame per open document: a fresh page-size bitmap per call
         // costs a new mapping and its first-touch faults on every page.
         DocCore& core = *dw->core;
-        if (core.rasterFrame && (core.rasterFrameWidth != target.w_px ||
-                                 core.rasterFrameHeight != target.h_px)) {
+        if (core.rasterFrame &&
+            (core.rasterFrameWidth != target.w_px || core.rasterFrameHeight != target.h_px)) {
             FPDFBitmap_Destroy(core.rasterFrame);
             core.rasterFrame = nullptr;
         }
@@ -729,7 +738,18 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
             core.rasterFrameHeight = target.h_px;
         }
         if (!core.rasterFrame) return JPDFIUM_ERR_NATIVE;
-        return rasterize_page_into(dw, pageIndex, page, core.rasterFrame, target);
+        const int32_t rc = rasterize_page_into(dw, pageIndex, page, core.rasterFrame, target);
+        if (static_cast<size_t>(target.w_px) * static_cast<size_t>(target.h_px) *
+                kRasterFrameBytesPerPixel >
+            kRetainRasterFrameBytes) {
+            // Reuse only pays off for ordinary page sizes, so release an
+            // oversized frame rather than hoarding it until the document closes.
+            FPDFBitmap_Destroy(core.rasterFrame);
+            core.rasterFrame = nullptr;
+            core.rasterFrameWidth = 0;
+            core.rasterFrameHeight = 0;
+        }
+        return rc;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
