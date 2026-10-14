@@ -6,6 +6,7 @@ import stirling.software.jpdfium.doc.AnnotationType;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.transform.PageOps;
 
 import java.io.IOException;
@@ -22,6 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class FlattenApiTest {
 
@@ -32,6 +34,9 @@ class FlattenApiTest {
 
     @Test
     void annotationsBatchMatchesPerPage(@TempDir Path dir) throws IOException {
+        // The stub bridge reports every document as empty and makes flatten a
+        // no-op, so the batched/per-page comparison below would be vacuous.
+        assumeTrue(NativeRuntime.isFull(), "annotation flattening needs the real PDFium natives");
         Path fixture = annotatedFixture(dir);
         assertBatchedFlattening(
                 flattenAll(
@@ -47,6 +52,9 @@ class FlattenApiTest {
 
     @Test
     void fullBatchMatchesPerPage(@TempDir Path dir) throws IOException {
+        // Neither the per-page nor the batched pass does anything on the stub,
+        // so equality of the two renderings proves nothing there.
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
         Path fixture = annotatedFixture(dir);
         assertBatchedFlattening(
                 flattenAll(
@@ -168,6 +176,9 @@ class FlattenApiTest {
 
     @Test
     void pageFlattenFullRasterize(@TempDir Path tempDir) throws Exception {
+        // The stub bridge does not rasterize, and its placeholder save is not
+        // the behaviour under test here.
+        assumeTrue(NativeRuntime.isFull(), "full rasterize flattening needs the real PDFium natives");
         Path out = tempDir.resolve("full-flatten.pdf");
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF);
              PdfPage page = doc.page(0)) {

@@ -502,7 +502,13 @@ tasks.register<Test>("nativeSmokeTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.smoke", "true")
-    filter { includeTestsMatching("*NativeSmokeTest") }
+    filter {
+        includeTestsMatching("*NativeSmokeTest")
+        // The flatten API assertions are only meaningful against real PDFium,
+        // so they are skipped by the stub-based :test task (assumeTrue) and
+        // run here, where the freshly built bridge is on the classpath.
+        includeTestsMatching("*FlattenApiTest")
+    }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     // CI has no access to the HTML report; a load failure must name the
     // missing library in the console.
