@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.panama;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.ResourceLock;
 
@@ -13,6 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @ResourceLock("JpdfiumLib.renderTargetPool")
 class RenderTargetPoolTest {
+
+    // The pool is static, so without this the ramp below could start from another test's leftovers
+    // and never reach the state it is meant to exercise.
+    @BeforeEach
+    void emptyThePool() {
+        JpdfiumLib.resetRenderTargetPoolForTest();
+    }
 
     @Test
     void undersizedTargetsAreRetiredSoLargePagesStillReuseThePool() {

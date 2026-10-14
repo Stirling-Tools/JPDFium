@@ -1193,6 +1193,26 @@ public final class JpdfiumLib {
             ALLOCATED.decrementAndGet();
             target.arena().close();
         }
+
+        static long idleBytes() {
+            long total = 0;
+            for (Target target : FREE) total += target.segment().byteSize();
+            return total;
+        }
+
+        /**
+         * Test-only: closes every idle target and zeroes the counters. Callers must hold the lock
+         * and must not have a borrowed target outstanding, or ALLOCATED would no longer match.
+         */
+        static void reset() {
+            for (Target target : FREE) target.arena().close();
+            FREE.clear();
+            ALLOCATED.set(0);
+            RETAINED_BYTES.set(0);
+            HITS.set(0);
+            MISSES.set(0);
+            FALLBACKS.set(0);
+        }
     }
 
     /**
@@ -1217,15 +1237,23 @@ public final class JpdfiumLib {
                 RenderTargetPool.HITS.incrementAndGet();
                 return best;
             }
-            // Make room for a fresh target by retiring undersized idle ones until both a slot and
-            // the byte budget allow it. A target that fits would have matched above, so every idle
-            // one here is smaller than the request, and a borrowed target is never retired.
-            while (RenderTargetPool.ALLOCATED.get() >= RENDER_TARGET_POOL_MAX
-                    || RenderTargetPool.RETAINED_BYTES.get() + byteLen
-                            > RENDER_TARGET_RETAINED_MAX_BYTES) {
-                RenderTargetPool.Target victim = RenderTargetPool.smallestIdle();
-                if (victim == null) break;  // only borrowed targets are left
-                RenderTargetPool.retire(victim);
+            // Retiring every idle target only pays off if the request then fits; otherwise it would
+            // evict for nothing. Idle targets all fit-checked above, so they are all smaller than
+            // the request, and a borrowed target is never retired.
+            final int idle = RenderTargetPool.FREE.size();
+            final boolean fitsAfterRetiringAll =
+                    RenderTargetPool.ALLOCATED.get() - idle < RENDER_TARGET_POOL_MAX
+                            && RenderTargetPool.RETAINED_BYTES.get() - RenderTargetPool.idleBytes()
+                                            + byteLen
+                                    <= RENDER_TARGET_RETAINED_MAX_BYTES;
+            if (fitsAfterRetiringAll) {
+                while (RenderTargetPool.ALLOCATED.get() >= RENDER_TARGET_POOL_MAX
+                        || RenderTargetPool.RETAINED_BYTES.get() + byteLen
+                                > RENDER_TARGET_RETAINED_MAX_BYTES) {
+                    RenderTargetPool.Target victim = RenderTargetPool.smallestIdle();
+                    if (victim == null) break;  // only borrowed targets are left
+                    RenderTargetPool.retire(victim);
+                }
             }
             if (RenderTargetPool.ALLOCATED.get() < RENDER_TARGET_POOL_MAX
                     && RenderTargetPool.RETAINED_BYTES.get() + byteLen
@@ -1237,7 +1265,11 @@ public final class JpdfiumLib {
                 try {
                     target = new RenderTargetPool.Target(arena, arena.allocate(byteLen));
                 } catch (RuntimeException | Error e) {
-                    arena.close();
+                    try {
+                        arena.close();
+                    } catch (RuntimeException | Error closeFailure) {
+                        e.addSuppressed(closeFailure);
+                    }
                     throw e;
                 }
                 RenderTargetPool.ALLOCATED.incrementAndGet();
@@ -1275,6 +1307,13 @@ public final class JpdfiumLib {
         if (target == null) return false;
         releaseRenderTarget(target);
         return true;
+    }
+
+    /** Package-private seam: empties the pool so a test starts from a known state, not leftovers. */
+    static void resetRenderTargetPoolForTest() {
+        synchronized (RenderTargetPool.FREE) {
+            RenderTargetPool.reset();
+        }
     }
 
     public static int renderPageProgressiveStart(MemorySegment rawPage, MemorySegment targetBitmap,

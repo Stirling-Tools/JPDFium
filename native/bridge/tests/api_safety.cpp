@@ -6,6 +6,7 @@
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -643,14 +644,22 @@ void test_font_concurrency() {
 // the garbage-byte test above cannot. The repo ships no font fixture, so this uses a system font
 // and skips loudly when none is present. Concurrent results must match a serial baseline.
 std::vector<uint8_t> load_system_font() {
+    // JPDFIUM_FONT_FIXTURE points the test at a font the build ships; otherwise the first standard
+    // path that exists wins.
+    const char* override_path = std::getenv("JPDFIUM_FONT_FIXTURE");
     const char* candidates[] = {
+        override_path,
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Supplemental/Verdana.ttf",
+        "/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeui.ttf",
     };
     for (const char* path : candidates) {
+        if (path == nullptr) continue;
         std::ifstream in(path, std::ios::binary);
         if (!in) continue;
         std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)),
@@ -663,6 +672,12 @@ std::vector<uint8_t> load_system_font() {
 void test_font_concurrency_with_font() {
     const std::vector<uint8_t> font = load_system_font();
     if (font.empty()) {
+        // Passing green without exercising anything is worse than failing: where a font is
+        // expected (CI), refuse to skip, so the concurrency path really runs.
+        if (std::getenv("CI") != nullptr) {
+            CHECK(false, "no font fixture found; set JPDFIUM_FONT_FIXTURE for this test");
+            return;
+        }
         std::printf("SKIP font concurrency: no system font fixture found\n");
         return;
     }

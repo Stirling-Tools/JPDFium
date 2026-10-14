@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "cv_compat.h"
+#include "ocr_round.h"
 #include "paddle.h"
 
 namespace {
@@ -229,6 +231,23 @@ void test_ctc() {
     check(empty.text.empty() && empty.score == 0.0, "all blank decodes to nothing with score 0");
 }
 
+// py_round backs the detector's 32-px resize; it must give Python's half-to-even result under
+// every floating-point rounding mode, and must not disturb the caller's mode.
+void test_py_round() {
+    const int saved = std::fegetround();
+    const double ties[] = {0.5, 1.5, 2.5, 3.5, 4.5, -0.5, -1.5, -2.5};
+    const double want[] = {0.0, 2.0, 2.0, 4.0, 4.0, 0.0, -2.0, -2.0};
+    const int modes[] = {FE_TONEAREST, FE_UPWARD, FE_DOWNWARD, FE_TOWARDZERO};
+    for (int mode : modes) {
+        if (std::fesetround(mode) != 0) continue;
+        for (int i = 0; i < 8; ++i) {
+            check(jpdf::ocr::py_round(ties[i]) == want[i], "py_round ties under every mode");
+        }
+        check(std::fegetround() == mode, "py_round leaves the rounding mode alone");
+    }
+    std::fesetround(saved);
+}
+
 void test_plan_and_order() {
     // Boxes of assorted aspect ratios: the tall ones are turned a quarter turn by crop_box, two
     // share an aspect ratio (a stable tie), and one is degenerate (dropped). This exercises both
@@ -297,6 +316,7 @@ int main() {
     test_recognizer_input();
     test_ctc();
     test_plan_and_order();
+    test_py_round();
     std::printf("=== failures: %d ===\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }
