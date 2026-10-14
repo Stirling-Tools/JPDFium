@@ -18,7 +18,7 @@ linux-x64      64000000
 linux-arm64    64000000
 linux-musl-x64 64000000
 linux-musl-arm64 64000000
-darwin-x64     66000000  # TODO: drop icu-i18n link to bring back under 64 MB
+darwin-x64     66000000  # largest core bundle; tighten after a measured build
 darwin-arm64   64000000
 windows-x64    64000000  # plus an explicit trimmed-icudt*.dll presence gate in check-bundle-size.sh
 windows-arm64  64000000  # ditto
