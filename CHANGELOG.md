@@ -2,8 +2,14 @@
 
 All notable changes to JPDFium are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+This project does not follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Within the 1.x line a minor release may remove or change public API, and patch
+releases keep the public API of the minor release they follow, so the removal
+below ships in 1.3.0. Every incompatible change is listed here under "Removed"
+or "Changed", and [compatibility.md](docs/compatibility.md) states the policy in
+full.
 
 This file covers library releases on Maven Central (the `v*.*.*` tags).
 Infrastructure tags such as `pdfium-*` and `vips-*` are prebuild inputs for the
@@ -23,16 +29,35 @@ publishing workflows, not library releases, so they are not listed here.
   still reads them.
 - Build and CI: POM names and descriptions that describe the project rather than
   its build, a checksum-pinned Gradle distribution, a committed Rust
-  `Cargo.lock` built with `--locked`, and a version bump that moves
-  `gradle.properties` to the next patch snapshot instead of replacing a branch it
-  did not write.
+  `Cargo.lock` built with `--locked`, Javadoc validation with
+  `-Xdoclint:all,-missing` and warnings as errors, regression tests for the
+  natives jar checker and the version bump script, and a version bump that
+  reconciles every documented version reference on every run, never moves the
+  development version backwards, and updates its own branch in place instead of
+  deleting it.
 
 ### Removed
 
 - `stirling.software.jpdfium.text.edit` and its `TextEditor` placeholder, which
   had no members and could not be instantiated, and which nothing in the API, the
-  tests, or the documentation referred to. The removal is an accepted API break,
-  recorded in `.github/workflows/compatibility.yml`.
+  tests, or the documentation referred to. The package and the class were public
+  in 1.2.0, so this is a deliberate source and binary break: code that imports the
+  package or refers to `TextEditor.class` no longer compiles or links. The break
+  is recorded in `.github/workflows/compatibility.yml`, which excludes the class
+  from the japicmp gate by name, and no other public type or member of 1.2.0 was
+  removed.
+
+- `stirling.software.jpdfium.panama.NativeGuard`, a deprecated facade whose
+  documented contract could no longer hold because it could not admit the
+  execution domain it advertised. Nothing in the repository called it; code that
+  used it compiles against `PdfiumRuntime` instead.
+- `stirling.software.jpdfium.doc.PdfAConverter`, a Ghostscript-backed helper that
+  was removed together with the Ghostscript dependency. PDF/A conformance handling
+  now runs through the in-process compression pipeline (`PdfCompressor`).
+
+Both were public in 1.2.0, so they are deliberate source and binary breaks like
+the one above, and `.github/workflows/compatibility.yml` excludes each class by
+name from the japicmp gate.
 
 ## [1.2.0] - 2026-10-11
 
