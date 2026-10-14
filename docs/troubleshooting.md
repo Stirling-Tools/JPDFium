@@ -9,7 +9,7 @@ The exception message names the platform it looked for, which identifies the mod
 - The native module is not declared as a runtime dependency.
 - The module was declared but stripped during packaging, for example by a shade or assembly step that filtered native artifacts.
 - Architecture mismatch: an `x64` module on an `arm64` JVM, or the reverse.
-- musl versus glibc. Alpine and other musl-based images need the `linux-musl` modules, not the glibc ones.
+- musl versus glibc. Alpine and other musl-based images need the `linux-musl` modules, not the glibc ones. Those modules are experimental, and a release can publish them without libraries; build the natives from source or use a glibc base image in that case.
 
 The module names are listed in [installation.md](installation.md). The build host does not affect this: a Linux build that declares the Windows module runs on Windows.
 

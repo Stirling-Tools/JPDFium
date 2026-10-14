@@ -16,7 +16,7 @@ JPDFium is built and tested against Java 25. Earlier releases are not supported.
 | Platform | Architectures | Notes |
 |---|---|---|
 | Linux (glibc) | x64, arm64 | Tested on Ubuntu. |
-| Linux musl | x64, arm64 | For Alpine and similar. Requires the `linux-musl` artifacts. |
+| Linux musl | x64, arm64 | For Alpine and similar. Requires the `linux-musl` artifacts, which are experimental. |
 | macOS | x64, arm64 | Tested on macOS 14 and macOS 15. |
 | Windows | x64, arm64 | Tested on Windows Server 2022 and Windows 11 arm64. |
 
