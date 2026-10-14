@@ -670,6 +670,43 @@ if target in src:
 PY_EOF
 fi
 
+# musl's dynamic loader cannot resolve PartitionAlloc's MTE ifuncs across shared
+# objects, so the linux-musl-arm64 component smoke test dies with
+#   dlopen failed: Error relocating libbase_allocator_..._allocator_core.so:
+#   _ZN15partition_alloc8internal21RemaskPointerInternalEPv: symbol not found
+# (RemaskPointerInternal/TagMemoryRange*Internal are __attribute__((ifunc)) under
+# #if PA_BUILDFLAG(HAS_MEMORY_TAGGING); the same-page static row is fine because
+# the symbol then lives in the same object). has_memory_tagging is computed in
+# partition_alloc.gni for every arm64+clang Linux target, and the resolver would
+# return the NoOp variants on musl anyway (our aarch64_support.h gate already
+# forces IsBtiEnabled/IsMteEnabled to false), so turn the feature off for musl
+# and keep the ifunc symbols out of the build entirely.
+PA_GNI="base/allocator/partition_allocator/partition_alloc.gni"
+if [ "${JPDFIUM_LIBC:-}" = "musl" ] && [ -f "${PA_GNI}" ] && \
+    ! grep -q 'JPDFIUM musl: memory tagging off' "${PA_GNI}"; then
+    echo "  Disabling PartitionAlloc memory tagging for musl..."
+    python3 - "${PA_GNI}" <<'PY_EOF'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+target = """has_memory_tagging = current_cpu == "arm64" && is_clang && !is_asan &&
+                     !is_hwasan && (is_linux || is_android)"""
+replacement = """# JPDFIUM musl: memory tagging off. The ifunc-based MTE helpers
+# (RemaskPointerInternal and friends) cannot be resolved by musl's loader in a
+# component build, and the resolvers would pick the NoOp variants on musl anyway.
+has_memory_tagging = false  # JPDFIUM musl: memory tagging off"""
+if target in src:
+    with open(path, 'w') as f:
+        f.write(src.replace(target, replacement, 1))
+    print("  Disabled HAS_MEMORY_TAGGING in partition_alloc.gni.")
+elif 'JPDFIUM musl: memory tagging off' in src:
+    print("  HAS_MEMORY_TAGGING already disabled in partition_alloc.gni.")
+else:
+    raise SystemExit("ERROR: has_memory_tagging block not found in " + path)
+PY_EOF
+fi
+
 # Chromium's build/ dep hard-pins the Windows SDK it was tested with
 # (SDK_VERSION = '10.0.28000.0' in build/toolchain/win/setup_toolchain.py) and
 # passes it to vcvarsall.bat. The GitHub windows runners do not have that SDK
