@@ -899,7 +899,6 @@ int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
 }
 
 int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
-    // Stub build: no page objects exist, so every page is trivially flattened.
     return JPDFIUM_OK;
 }
 

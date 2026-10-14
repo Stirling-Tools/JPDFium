@@ -23,22 +23,17 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.EnumSet;
 import java.util.concurrent.TimeUnit;
 
 /**
- * End-to-end benchmarks for the three flatten paths on a file-backed document:
+ * End-to-end benchmarks for the three flatten paths on a file-backed document: native
+ * {@code FPDFPage_Flatten} per page, rasterizing FULL, and the per-annotation Java walk.
  *
- * <ul>
- *   <li>{@link FlattenMode#ANNOTATIONS} - native {@code FPDFPage_Flatten} per page.</li>
- *   <li>{@link FlattenMode#FULL} - render page to a bitmap and embed it.</li>
- *   <li>{@code PdfSelectiveFlatten} - per-annotation Java walk.</li>
- * </ul>
- *
- * <p>The workload is a generated 100-page document carrying 8 annots per page
- * (800 total), each with a generated appearance so the flatteners have real work.
- * The fixture is built once per trial into the build directory and every
- * benchmark re-opens it from disk, so the measured path is the file-backed one.
+ * <p>The workload is a generated 100-page document carrying 8 annotations per page, each with a
+ * generated appearance, rebuilt into the build directory before every trial and re-opened from disk
+ * by each benchmark.
  *
  * <pre>{@code
  * ./gradlew :jpdfium:jmh -Pjmh.include=FlattenPathsBenchmark \
@@ -74,11 +69,11 @@ public class FlattenPathsBenchmark {
         Path outDir = module.resolve(Path.of("build", "bench-fixtures"));
         Files.createDirectories(outDir);
         fixture = outDir.resolve("flatten-" + PAGES + "p-" + ANNOTS_PER_PAGE + "a.pdf");
-        if (Files.exists(fixture) && Files.size(fixture) > 0) {
-            measureGeometry();
-            return;
-        }
-        generate(base, fixture);
+        // Rebuild the fixture for every trial and publish it atomically, so a stale or
+        // half-written file from an earlier run is never measured.
+        Path staged = outDir.resolve(fixture.getFileName() + ".staged");
+        generate(base, staged);
+        Files.move(staged, fixture, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         measureGeometry();
     }
 
@@ -133,11 +128,7 @@ public class FlattenPathsBenchmark {
         }
     }
 
-    /**
-     * Control: open and close every page without flattening. Isolates the
-     * Java admission plus FFI round-trip floor from the native flatten work
-     * (annotationsFlatten minus this is the native cost).
-     */
+    /** Control: opens and closes every page without flattening, to isolate the Java and FFI floor. */
     @Benchmark
     public void pageOpenCloseOnly() {
         try (PdfDocument doc = PdfDocument.open(fixture)) {
@@ -158,7 +149,7 @@ public class FlattenPathsBenchmark {
         }
     }
 
-    /** ANNOTATIONS via the per-page Java loop, as the batched pass replaced it. */
+    /** ANNOTATIONS via the per-page Java loop. */
     @Benchmark
     public void annotationsFlattenPerPage() {
         try (PdfDocument doc = PdfDocument.open(fixture)) {

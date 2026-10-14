@@ -221,20 +221,14 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words,
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
 
-// Document-wide flatten in one call: the whole pass runs inside the native
-// library, so a caller flattens N pages with a single cross-boundary call and
-// no per-page handle churn. Both keep the file-backed document handle; neither
-// materializes the document in the Java heap.
+// Document-wide flatten over a file-backed document handle.
 //
-// jpdfium_doc_flatten_annotations: bake annotations/form fields into page
-// content on every page (FPDFPage_Flatten). Returns JPDFIUM_OK when every page
-// flattened or had nothing to do.
+// jpdfium_doc_flatten_annotations: bakes annotations/form fields into page content on every page
+// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do.
 //
-// jpdfium_doc_flatten_to_images: rasterize every page at `dpi` and replace its
-// content with the resulting image. One render bitmap is reused for the whole
-// pass (re-created only when the page size changes), so a multi-page document
-// allocates a single frame instead of one per page. On failure the first
-// failing page reports the error; earlier pages stay flattened.
+// jpdfium_doc_flatten_to_images: rasterizes every page at `dpi` and replaces its content with the
+// resulting image, reusing one render bitmap per page size. On failure the first failing page
+// reports the error; earlier pages stay flattened.
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
 

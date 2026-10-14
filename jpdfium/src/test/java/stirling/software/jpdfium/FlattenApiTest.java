@@ -2,14 +2,22 @@ package stirling.software.jpdfium;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import stirling.software.jpdfium.doc.AnnotationType;
+import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.transform.PageOps;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,58 +25,108 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FlattenApiTest {
 
     private static final Path MINIMAL_PDF = Path.of("src/test/resources/pdfs/general/minimal.pdf");
-    private static final Path ANNOTATED_PDF =
-            Path.of("src/test/resources/pdfs/general/pdfjs_annotation-highlight.pdf");
+    private static final Path TWO_PAGE_PDF =
+            Path.of("src/test/resources/pdfs/general/pdfjs_ZapfDingbats.pdf");
+    private static final int FULL_DPI = 100;
 
-    /**
-     * The single native document pass must produce exactly the document the old
-     * per-page Java loop produced: same page content, same rendering.
-     */
     @Test
-    void annotationsBatchMatchesPerPage() {
-        assertArrayEquals(
-                renderFlattened(ANNOTATED_PDF, false, null),
-                renderFlattened(ANNOTATED_PDF, true, null),
-                "batched ANNOTATIONS flatten must render identically to the per-page loop");
+    void annotationsBatchMatchesPerPage(@TempDir Path dir) throws IOException {
+        Path fixture = annotatedFixture(dir);
+        assertBatchedFlattening(
+                flattenAll(
+                        fixture,
+                        doc -> {
+                            for (int i = 0; i < doc.pageCount(); i++) {
+                                doc.flattenPage(i, FlattenMode.ANNOTATIONS);
+                            }
+                        }),
+                flattenAll(fixture, doc -> doc.flatten(FlattenMode.ANNOTATIONS)),
+                "batched ANNOTATIONS flatten");
     }
 
-    /** Same equivalence contract for the rasterizing FULL pass. */
     @Test
-    void fullBatchMatchesPerPage() {
-        assertArrayEquals(
-                renderFlattened(ANNOTATED_PDF, false, 100),
-                renderFlattened(ANNOTATED_PDF, true, 100),
-                "batched FULL flatten must render identically to the per-page loop");
+    void fullBatchMatchesPerPage(@TempDir Path dir) throws IOException {
+        Path fixture = annotatedFixture(dir);
+        assertBatchedFlattening(
+                flattenAll(
+                        fixture,
+                        doc -> {
+                            for (int i = 0; i < doc.pageCount(); i++) {
+                                doc.flattenPage(i, FlattenMode.FULL, FULL_DPI);
+                            }
+                        }),
+                flattenAll(fixture, doc -> doc.flatten(FlattenMode.FULL, FULL_DPI)),
+                "batched FULL flatten");
     }
 
     /**
-     * Flattens every page either through the batched document pass or through the
-     * per-page loop and returns the rendered bytes of page 0.
-     *
-     * @param dpi null selects ANNOTATIONS, otherwise FULL at that resolution
+     * Returns a two-page fixture whose last page carries a confirmed highlight, so a document-wide
+     * pass that skips that page cannot pass the assertions below.
      */
-    private static byte[] renderFlattened(Path src, boolean batch, Integer dpi) {
+    private static Path annotatedFixture(Path dir) throws IOException {
+        Path fixture = dir.resolve("annotated.pdf");
+        try (PdfDocument doc = PdfDocument.open(TWO_PAGE_PDF)) {
+            try (PdfPage page = doc.page(doc.pageCount() - 1)) {
+                PdfAnnotationBuilder.on(page.rawHandle())
+                        .type(AnnotationType.HIGHLIGHT)
+                        .rect(40, 700, 120, 40)
+                        .color(255, 200, 0)
+                        .contents("flatten-fixture")
+                        .generateAppearance()
+                        .build();
+            }
+            doc.save(fixture);
+        }
+        return fixture;
+    }
+
+    /** Flattens the whole document and records every page's annotation count around the pass. */
+    private static Flattened flattenAll(Path src, Consumer<PdfDocument> flatten) {
         try (PdfDocument doc = PdfDocument.open(src)) {
-            if (dpi == null) {
-                if (batch) {
-                    doc.flatten(FlattenMode.ANNOTATIONS);
-                } else {
-                    for (int i = 0; i < doc.pageCount(); i++) {
-                        doc.flattenPage(i, FlattenMode.ANNOTATIONS);
-                    }
-                }
-            } else if (batch) {
-                doc.flatten(FlattenMode.FULL, dpi);
-            } else {
-                for (int i = 0; i < doc.pageCount(); i++) {
-                    doc.flattenPage(i, FlattenMode.FULL, dpi);
+            int[] before = annotationCounts(doc);
+            flatten.accept(doc);
+            int[] after = annotationCounts(doc);
+            List<byte[]> pages = new ArrayList<>(after.length);
+            for (int i = 0; i < after.length; i++) {
+                try (PdfPage page = doc.page(i)) {
+                    pages.add(page.renderAt(FULL_DPI).rgba());
                 }
             }
-            try (PdfPage page = doc.page(0)) {
-                return page.renderAt(150).rgba();
-            }
+            return new Flattened(pages, before, after);
         }
     }
+
+    private static int[] annotationCounts(PdfDocument doc) {
+        int[] counts = new int[doc.pageCount()];
+        for (int i = 0; i < counts.length; i++) {
+            try (PdfPage page = doc.page(i)) {
+                counts[i] = PdfAnnotations.count(page.rawHandleForRead());
+            }
+        }
+        return counts;
+    }
+
+    /**
+     * Asserts that the batched pass consumed the same annotations as the per-page loop on every
+     * page and left every page rendering identically.
+     */
+    private static void assertBatchedFlattening(Flattened perPage, Flattened batched, String label) {
+        assertArrayEquals(perPage.before(), batched.before(), label + ": fixture annotations");
+        assertTrue(
+                batched.before()[batched.before().length - 1] > 0,
+                label + ": the last page must carry an annotation to flatten");
+        assertArrayEquals(perPage.after(), batched.after(), label + ": annotations left behind");
+        assertEquals(batched.before().length, batched.pages().size(), label + ": pages rendered");
+        for (int i = 0; i < batched.pages().size(); i++) {
+            assertEquals(0, batched.after()[i], label + ": page " + i + " must keep no annotations");
+            assertArrayEquals(
+                    perPage.pages().get(i),
+                    batched.pages().get(i),
+                    label + ": page " + i + " must render identically");
+        }
+    }
+
+    private record Flattened(List<byte[]> pages, int[] before, int[] after) {}
 
     @Test
     void pageFlattenDefault() {

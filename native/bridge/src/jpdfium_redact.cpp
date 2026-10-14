@@ -379,8 +379,6 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
         DocWrapper* dw = decodeDoc(docHandle);
         if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
         const int count = FPDF_GetPageCount(dw->core->doc);
-        // One native pass instead of three cross-boundary calls per page: the
-        // document handle stays file-backed and no Java page objects are made.
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
             if (!page) return JPDFIUM_ERR_NOT_FOUND;

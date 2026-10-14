@@ -56,13 +56,12 @@ public enum AnnotationType {
     public String fdfName() { return fdfName; }
 
     /**
-     * Cached {@link #values()} clone. Every member lookup used to call {@code values()}, which
-     * clones the constant array on each call; the annotation walk hits this once per annotation,
-     * so the clone showed up as per-annotation garbage.
+     * Cached {@link #values()}: the implicit call clones the constant array, and the lookups below
+     * run once per annotation.
      */
     private static final AnnotationType[] VALUES = values();
 
-    /** Code-indexed lookup built once; {@code codes} are dense and non-negative (UNKNOWN is 0). */
+    /** Code-indexed lookup built once from {@link #VALUES}. */
     private static final AnnotationType[] BY_CODE;
 
     static {
@@ -73,7 +72,7 @@ public enum AnnotationType {
             }
         }
         AnnotationType[] byCode = new AnnotationType[max + 1];
-        // First declaration wins, matching the linear scan this replaces.
+        // First entry with a given code wins.
         for (AnnotationType t : VALUES) {
             if (byCode[t.code] == null) {
                 byCode[t.code] = t;

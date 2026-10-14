@@ -594,8 +594,7 @@ struct RasterTarget {
     int h_px = 0;
 };
 
-// Page geometry -> validated pixel size for `dpi` (the same rules the
-// single-page entry point has always applied).
+// Page geometry in points -> validated pixel size for `dpi`.
 bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
     const double w_pt = FPDF_GetPageWidth(page);
     const double h_pt = FPDF_GetPageHeight(page);
@@ -622,11 +621,9 @@ bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
     return true;
 }
 
-// Renders `page` (geometry in `target`) into `bmp` and replaces the page at
-// `pageIndex` with an image of that bitmap. `bmp` is caller-owned so a
-// document-wide pass can reuse one allocation across pages of equal size; it is
-// filled white here because a page does not paint its own background and a
-// reused bitmap may still hold the previous page's pixels. `page` is closed
+// Renders `page` (geometry in `target`) into the caller-owned `bmp` and replaces the page at
+// `pageIndex` with an image of that bitmap. `bmp` is filled white first: a page does not paint its
+// own background, and a reused bitmap may still hold the previous page's pixels. `page` is closed
 // before the page tree is restructured.
 int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page, UniqueBitmap& bmp,
                             const RasterTarget& target) {
@@ -735,10 +732,7 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
         if (dpi <= 0) return JPDFIUM_ERR_INVALID;
 
         const int count = FPDF_GetPageCount(dw->core->doc);
-        // One render bitmap for the whole pass: pages of equal size reuse the
-        // allocation instead of mapping a fresh frame per page, so a 100-page
-        // document allocates one frame rather than 100. It is re-created only
-        // when the page size changes, so mixed-size documents still work.
+        // One render bitmap per page size for the whole pass.
         UniqueBitmap bmp;
         int bmp_w = 0;
         int bmp_h = 0;
@@ -748,6 +742,9 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
             RasterTarget target;
             if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
             if (!bmp || bmp_w != target.w_px || bmp_h != target.h_px) {
+                // Drop the old frame before allocating its replacement: a mixed-size
+                // document must not hold two page-size bitmaps at once.
+                bmp.reset();
                 bmp.reset(FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/));
                 if (!bmp) return JPDFIUM_ERR_NATIVE;
                 bmp_w = target.w_px;

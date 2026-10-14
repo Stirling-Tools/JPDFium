@@ -977,12 +977,11 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <ul>
      *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
-     *       the content stream. Text remains selectable. One native pass over the
-     *       document ({@code jpdfium_doc_flatten_annotations}).</li>
+     *       the content stream. Text remains selectable. Runs {@code
+     *       jpdfium_doc_flatten_annotations}.</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
-     *       replacing all content with an image. Nothing is selectable. One native
-     *       pass over the document ({@code jpdfium_doc_flatten_to_images}) that
-     *       reuses a single render bitmap for every page of the same size.</li>
+     *       replacing all content with an image. Nothing is selectable. Runs {@code
+     *       jpdfium_doc_flatten_to_images}.</li>
      * </ul>
      *
      * @param mode what to flatten (see {@link FlattenMode})
@@ -992,16 +991,20 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         switch (mode) {
             case ANNOTATIONS -> {
-                // One native pass: no per-page handle, admission or lambda, and
-                // the document handle stays file-backed throughout.
-                JpdfiumLib.docFlattenAnnotations(handle);
-                markContentModified();
+                try {
+                    JpdfiumLib.docFlattenAnnotations(handle);
+                } finally {
+                    // A failed pass can still have baked the pages before it.
+                    markContentModified();
+                }
             }
             case FULL -> {
-                // One native pass with a single reused render bitmap; the page
-                // tree churn and the frame allocation both stay native.
-                JpdfiumLib.docFlattenToImages(handle, dpi);
-                invalidateOpenPages();
+                try {
+                    JpdfiumLib.docFlattenToImages(handle, dpi);
+                } finally {
+                    // A failed pass can still have replaced the pages before it.
+                    invalidateOpenPages();
+                }
             }
         }
     }
