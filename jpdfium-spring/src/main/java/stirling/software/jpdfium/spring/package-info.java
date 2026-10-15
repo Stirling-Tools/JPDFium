@@ -1,13 +1,9 @@
 /**
- * Spring Boot auto-configuration for JPDFium.
+ * JPDFium configuration properties for Spring Boot applications.
  *
- * <p>Planned features:
- * <ul>
- *   <li>Auto-configure native library loading</li>
- *   <li>Provide injectable PDF service beans</li>
- *   <li>Configurable defaults via application properties</li>
- *   <li>Health indicator for native library status</li>
- * </ul>
+ * <p>The types here are plain property holders. Binding them to the container is
+ * left to the application: the module ships no auto-configuration yet, so the
+ * values are read by your code rather than injected by Spring.
  *
  * @see stirling.software.jpdfium.spring.JPDFiumProperties
  */

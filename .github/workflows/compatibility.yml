@@ -86,7 +86,13 @@ jobs:
           # exact. The compression members and PdfEncryption.isQpdfAvailable()
           # that the overhaul had dropped were restored for binary compatibility,
           # so they are no longer excluded — every remaining type and member must
-          # stay compatible.
+          # stay compatible. TextEditor was an empty placeholder (private
+          # constructor, no methods) that was removed together with its package.
+          # Nothing in the API, the tests, or the javadoc referenced it and it
+          # could not be instantiated, so dropping it is an accepted, deliberate
+          # break rather than one the gate should catch; it is recorded under
+          # "Removed" in CHANGELOG.md so consumers can see it. Remove entries
+          # from this list as soon as the baseline no longer contains the class.
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
@@ -94,6 +100,7 @@ jobs:
             --ignore-missing-classes \
             --exclude "stirling.software.jpdfium.panama.NativeGuard" \
             --exclude "stirling.software.jpdfium.doc.PdfAConverter" \
+            --exclude "stirling.software.jpdfium.text.edit.TextEditor" \
             --error-on-binary-incompatibility \
             --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1

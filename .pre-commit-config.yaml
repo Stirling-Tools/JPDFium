@@ -1,6 +1,8 @@
 repos:
+  # Pinned to the v5.0.0 commit rather than the tag, matching the action pin
+  # policy enforced by .github/scripts/lint-action-pins.sh.
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b # v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer

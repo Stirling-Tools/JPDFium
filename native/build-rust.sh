@@ -73,7 +73,7 @@ run_cargo_build() {
     local tries=3 delay=15
     local i
     for i in $(seq 1 "$tries"); do
-        if cargo build --release "$@"; then
+        if cargo build --release --locked "$@"; then
             return 0
         fi
         if [ "$i" -lt "$tries" ]; then

@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a new capability or an improvement to JPDFium.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        JPDFium deliberately does not do some things. Check the
+        [Not supported](https://github.com/Stirling-Tools/JPDFium/blob/main/README.md#not-supported)
+        section of the README before opening a request.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do that JPDFium makes difficult or impossible today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: The API or behavior you would like. A sketch of the call you expect helps.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, or other designs you weighed.
+    validations:
+      required: false

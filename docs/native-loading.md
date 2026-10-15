@@ -4,7 +4,7 @@ The `jpdfium` artifact is pure Java. At runtime it needs the prebuilt PDFium bin
 
 Packaging depends on your deployment model; see [deployment.md](deployment.md). This page covers what the loader does once a native module is present.
 
-> A native module must match the operating system and architecture your application runs on. Dependency selection is explicit, so the build host does not matter. A platform missing from the declared set fails at load time with `NativeNotFoundException`.
+> A native module must match the operating system and architecture your application runs on. Dependency selection is explicit. A platform missing from the declared set fails at load time with `NativeNotFoundException`.
 
 ## Downloading at runtime
 

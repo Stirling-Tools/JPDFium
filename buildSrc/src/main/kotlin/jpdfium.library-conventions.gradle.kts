@@ -83,7 +83,17 @@ configure<SpotlessExtension> {
 
 tasks.withType<Javadoc> {
     (options as StandardJavadocDocletOptions).apply {
-        addStringOption("Xdoclint:none", "-quiet")
+        // Real validation for the public documentation: doclint checks links, HTML
+        // and references, and `-missing` only silences the "no comment" group so
+        // accessors are not required to carry boilerplate. The flags are booleans:
+        // a string option would append its value to the option list as a separate
+        // token after `-Xdoclint`, which is not what doclint expects. Gradle keeps
+        // the progress chatter out of the log without an explicit `-quiet`.
+        // Warnings are errors, matching the compiler settings below. The generated
+        // `panama` bindings are part of the source set and currently pass, so they
+        // are not validated separately.
+        addBooleanOption("Xdoclint:all,-missing", true)
+        addBooleanOption("Werror", true)
         encoding = "UTF-8"
         charSet = "UTF-8"
     }
@@ -143,8 +153,8 @@ publishing {
             from(components["java"])
 
             pom {
-                name.set(project.name)
-                description.set("Java 25 FFM bindings for PDFium with PII redaction")
+                name.set("JPDFium")
+                description.set("PDF rendering, editing, and redaction for Java, powered by PDFium")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
                 licenses {
