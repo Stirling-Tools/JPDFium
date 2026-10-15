@@ -299,7 +299,10 @@ jobs:
           elif [ -f "C:/Strawberry/c/bin/pkg-config.exe" ]; then
             echo "C:/Strawberry/c/bin" >> "$GITHUB_PATH"
           else
-            choco install -y pkgconf || choco install -y pkgconfiglite || true
+            # Best effort on purpose: vcpkg installs pkgconf into the triplet
+            # tree and this step adds it to PATH below, so a throttled
+            # Chocolatey feed must not fail the job. The helper still retries.
+            bash native/ci/windows-build-deps.sh --optional pkgconf
           fi
           echo "VCPKG_BINARY_SOURCES=files,${{ runner.temp }}/vcpkg-binary-cache,readwrite" >> "$GITHUB_ENV"
           # vcpkg installs into a triplet-scoped tree. Pick the triplet that
@@ -845,7 +848,7 @@ jobs:
           # compileJava fails with `cannot find symbol JpdfiumH`.
           JEXTRACT_URL="https://download.java.net/java/early_access/jextract/25/2/openjdk-25-jextract+2-4_linux-x64_bin.tar.gz"
           mkdir -p "$HOME/jextract-install"
-          curl -fsSL --max-time 120 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --max-time 120 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
