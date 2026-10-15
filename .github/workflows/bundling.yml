@@ -28,7 +28,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake patchelf binutils
       - run: bash native/build-stub.sh
       - run: ./gradlew publishToMavenLocal -Pjpdfium.version=0.0.0-bundle-check --no-daemon
@@ -85,7 +85,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Install build deps (Linux)
         run: |
           sudo apt-get update

@@ -37,14 +37,14 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Validate Gradle Wrapper checksum
-        uses: gradle/actions/wrapper-validation@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+        uses: gradle/actions/wrapper-validation@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
@@ -171,7 +171,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -201,7 +201,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install system libvips and codec dependencies
         run: |
@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vips-system-integration-reports
           path: jpdfium-vips/build/reports/tests/test/
@@ -245,7 +245,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -278,7 +278,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: robustness-test-reports
           path: jpdfium/build/reports/tests/test/
@@ -297,7 +297,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -318,7 +318,7 @@ jobs:
 
       - name: Upload test reports on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: concurrency-test-reports
           path: jpdfium/build/reports/tests/test/
@@ -337,7 +337,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -402,7 +402,7 @@ jobs:
 
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jmh-results-${{ github.run_id }}
           path: jpdfium/build/results/jmh/results.json
@@ -421,7 +421,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -451,7 +451,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -500,7 +500,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
