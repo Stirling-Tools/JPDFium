@@ -84,6 +84,32 @@ public final class PdfSecurity {
         return QpdfLib.isEncryptSupported() && QpdfLib.isDecryptSupported();
     }
 
+    /** True when the bundled native library can copy existing password protection. */
+    public static boolean isCopyEncryptionSupported() {
+        return QpdfLib.isCopyEncryptionSupported();
+    }
+
+    /**
+     * Apply an encrypted source's protection to a processed, unencrypted PDF.
+     * Either source password is sufficient; both passwords, permissions and encryption settings
+     * are retained without needing to know the other password. An empty password is accepted when
+     * the source permits it. No password or PDF is sent to an external executable.
+     *
+     * <p>The output must differ from both inputs, including filesystem aliases. Failure leaves
+     * an existing destination unchanged and removes temporary output. This copies protection,
+     * not signatures or source content, and does not enforce modification permissions on behalf
+     * of the application. Reusing protection does not generate a fresh encryption key.
+     *
+     * @throws IllegalArgumentException for null arguments or a password containing NUL
+     * @throws JPDFiumException if the native API is unavailable, authentication fails, the source
+     *         is unencrypted, the input is encrypted, or the output cannot be safely published
+     */
+    public static void copyEncryption(Path input, Path output, Path source, String password) {
+        if (!QpdfLib.copyEncryptionToFile(input, output, source, password)) {
+            throw new JPDFiumException("PDF encryption copy is unavailable in this native bundle");
+        }
+    }
+
     /**
      * Encrypt a PDF file using AES-256 (PDF 2.0 / R6).
      *

@@ -2,8 +2,14 @@ package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandle;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -52,6 +58,80 @@ public final class QpdfLib {
 
     public static boolean isDecryptSupported() {
         return JpdfiumH.jpdfium_qpdf_decrypt$address() != null;
+    }
+
+    // Copies the source's encryption dictionary verbatim onto an unencrypted
+    // input: in_path, out_path, source_path, password.
+    private static final MethodHandle COPY_ENCRYPTION_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_qpdf_copy_encryption_file",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
+
+    /** True when the bundled bridge exposes the native encryption-copy entry point. */
+    public static boolean isCopyEncryptionSupported() {
+        return COPY_ENCRYPTION_FILE_HANDLE != null;
+    }
+
+    /**
+     * Copy the source's encryption to an unencrypted input using either original password.
+     * Inputs and output must be distinct files. Returns false only when the native entry point is
+     * absent; other failures throw and leave the destination unchanged. No document bytes enter
+     * Java heap.
+     */
+    public static boolean copyEncryptionToFile(Path input, Path output, Path source, String password) {
+        if (input == null || output == null || source == null || password == null) {
+            throw new IllegalArgumentException("input, output, source and password must not be null");
+        }
+        if (password.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("password must not contain NUL");
+        }
+        if (COPY_ENCRYPTION_FILE_HANDLE == null) return false;
+        Path target = output.toAbsolutePath();
+        Path staging = null;
+        try (Arena arena = Arena.ofConfined()) {
+            rejectAlias(input, target);
+            rejectAlias(source, target);
+            Path dir = target.getParent() != null ? target.getParent() : Path.of(".").toAbsolutePath();
+            staging = Files.createTempFile(dir, ".jpdfium-save-", ".tmp");
+            // The native side opens with O_CREAT|O_NOFOLLOW, so hand it a fresh path.
+            Files.delete(staging);
+            MemorySegment inSeg = arena.allocateFrom(input.toAbsolutePath().toString());
+            MemorySegment sourceSeg = arena.allocateFrom(source.toAbsolutePath().toString());
+            MemorySegment outSeg = arena.allocateFrom(staging.toString());
+            MemorySegment passwordSeg = arena.allocateFrom(password);
+            int rc = (int) COPY_ENCRYPTION_FILE_HANDLE.invokeExact(inSeg, outSeg, sourceSeg, passwordSeg);
+            if (rc != 0) {
+                throw new JPDFiumException("PDF encryption copy failed");
+            }
+            if (Thread.currentThread().isInterrupted()) {
+                throw new IOException("qpdf encryption copy interrupted before publication");
+            }
+            Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            staging = null;
+            return true;
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf encryption copy failed", e);
+        } catch (JPDFiumException | IllegalArgumentException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf encryption copy failed", t);
+        } finally {
+            if (staging != null) {
+                try {
+                    Files.deleteIfExists(staging);
+                } catch (IOException ignored) {
+                    // Best effort; the destination was never replaced.
+                }
+            }
+        }
+    }
+
+    private static void rejectAlias(Path input, Path output) throws IOException {
+        boolean same = input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
+                || (Files.exists(input) && Files.exists(output) && Files.isSameFile(input, output));
+        if (same) {
+            throw new IllegalArgumentException("output must differ from every input: " + output);
+        }
     }
 
     /**
