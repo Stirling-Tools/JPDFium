@@ -110,7 +110,7 @@ public final class QpdfLib {
             return true;
         } catch (IOException e) {
             throw new JPDFiumException("qpdf encryption copy failed", e);
-        } catch (JPDFiumException | IllegalArgumentException e) {
+        } catch (JPDFiumException e) {
             throw e;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
@@ -130,7 +130,7 @@ public final class QpdfLib {
         boolean same = input.toAbsolutePath().normalize().equals(output.toAbsolutePath().normalize())
                 || (Files.exists(input) && Files.exists(output) && Files.isSameFile(input, output));
         if (same) {
-            throw new IllegalArgumentException("output must differ from every input: " + output);
+            throw new JPDFiumException("output must differ from every input: " + output);
         }
     }
 
