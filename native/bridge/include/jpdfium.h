@@ -707,6 +707,53 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
                                                   float page_height, float margin, int32_t position,
                                                   int32_t image_format, int32_t insert_at_index);
 
+// DeviceCMYK Colour Conversion
+//
+// Vector CMYK needs the JPDFium PDFium patch, images a CMYK JPEG encoder, and
+// output intents are injected with qpdf. Pixel math is plain GCR, not ICC.
+
+// Capability bits reported by jpdfium_color_capabilities.
+#define JPDFIUM_COLOR_CAP_CMYK_VECTOR (0x01)    // PDFium CMYK setters available
+#define JPDFIUM_COLOR_CAP_CMYK_IMAGE (0x02)     // Rust CMYK JPEG encoder available
+#define JPDFIUM_COLOR_CAP_OUTPUT_INTENT (0x04)  // qpdf OutputIntents injection available
+
+// Flags for jpdfium_color_page_images_to_cmyk.
+#define JPDFIUM_COLOR_IMAGE_NO_GCR (0x01)  // keep pure CMY (do not extract K)
+#define JPDFIUM_COLOR_IMAGE_STRICT (0x02)  // fail on the first unconvertible image
+
+// Probe which CMYK conversion paths this build supports.
+JPDFIUM_EXPORT uint32_t jpdfium_color_capabilities(void) JPDFIUM_NOEXCEPT;
+
+// Encode raw 8-bit samples to a DeviceCMYK JPEG (components: 1 = gray, 3 = RGB);
+// returns JPEG bytes in *out_ptr, freed with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_color_samples_to_cmyk_jpeg(const uint8_t* samples,
+                                                          int64_t samples_len, int32_t width,
+                                                          int32_t height, int32_t components,
+                                                          int32_t quality, int32_t flags,
+                                                          uint8_t** out_ptr, int64_t* out_len);
+
+// Re-encode every eligible image XObject on one page to DeviceCMYK JPEG and
+// return the count in *out_converted; ineligible images are skipped.
+JPDFIUM_EXPORT int32_t jpdfium_color_page_images_to_cmyk(int64_t doc_handle, int32_t page_index,
+                                                         int32_t quality, int32_t flags,
+                                                         int64_t* out_converted);
+
+// Inject (or replace) the document /OutputIntents entry (subtype defaults to
+// GTS_PDFX); returns PDF bytes in *output, freed with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_color_output_intent_bytes(const uint8_t* input, int64_t input_len,
+                                                         const uint8_t* icc, int64_t icc_len,
+                                                         const char* subtype,
+                                                         const char* condition_identifier,
+                                                         const char* info, uint8_t** output,
+                                                         int64_t* output_len);
+
+// File-to-file variant of jpdfium_color_output_intent_bytes.
+JPDFIUM_EXPORT int32_t jpdfium_color_output_intent_file(const char* in_path, const char* out_path,
+                                                        const uint8_t* icc, int64_t icc_len,
+                                                        const char* subtype,
+                                                        const char* condition_identifier,
+                                                        const char* info);
+
 // N-Up Layout
 //
 // Tile multiple source pages onto a single output page using FPDF_ImportNPagesToOne.
