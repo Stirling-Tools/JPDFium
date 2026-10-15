@@ -65,7 +65,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Build stub
         run: bash native/build-stub.sh
       - name: Run JMH and store baseline artifact
@@ -73,7 +73,7 @@ jobs:
           ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=4 -Pjmh.iterations=5 --no-daemon
           mkdir -p /tmp/bench-history
           cp jpdfium/build/results/jmh/results.json "/tmp/bench-history/jmh-$(date -u +%Y-%m-%d).json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-history-${{ github.run_id }}
           path: /tmp/bench-history/

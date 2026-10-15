@@ -25,7 +25,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Gradle dependency updates report
         run: |
           ./gradlew dependencyUpdates --no-daemon || true
@@ -60,7 +60,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Verify lockfiles (if enabled)
         run: |
           if grep -q "dependencyLocking" buildSrc/src/main/kotlin/*.gradle.kts gradle/libs.versions.toml 2>/dev/null; then
