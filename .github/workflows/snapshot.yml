@@ -49,16 +49,8 @@ jobs:
           TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
           [ -n "$TAG" ] || { echo "::error::native/pdfium.version is empty - run the Prebuild PDFium workflow first"; exit 1; }
           echo "Pinned PDFium prebuild: $TAG"
-          # PDFium prebuilds live in the UPSTREAM repo (this fork may not carry
-          # the pdfium-* release); fall back exactly like fetch-prebuilt-pdfium.sh.
-          ASSETS=""
-          for repo in "$GITHUB_REPOSITORY" "Stirling-Tools/JPDFium"; do
-            ASSETS=$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null || true)
-            [ -n "$ASSETS" ] && { echo "assets from $repo"; break; }
-          done
-          [ -n "$ASSETS" ] || {
-            echo "::error::release $TAG not found in $GITHUB_REPOSITORY or Stirling-Tools/JPDFium - run Prebuild PDFium / merge its pin PR"; exit 1;
-          }
+          # Only check upstream repository for prebuild release assets
+          ASSETS=$(gh release view "$TAG" --repo "Stirling-Tools/JPDFium" --json assets --jq '.assets[].name' 2>/dev/null || true)
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo "$ASSETS" | grep -qx "pdfium-linux-x64-${{ inputs.build_mode }}.tar.gz" || {
               echo "::error::missing prebuild asset pdfium-linux-x64-${{ inputs.build_mode }}.tar.gz in release $TAG"; exit 1;
@@ -72,8 +64,8 @@ jobs:
                 }
               done
             done
-            # musl is experimental (Prebuild PDFium treats linux-musl-* as
-            # warn-only) - missing assets skip the musl legs, never fail.
+            # musl and freebsd are experimental (Prebuild PDFium treats linux-musl-*
+            # and freebsd-x64 as warn-only until published) - missing assets skip those legs, never fail.
             for p in linux-musl-x64 linux-musl-arm64; do
               if echo "$ASSETS" | grep -qx "pdfium-$p.tar.gz"; then
                 echo "musl prebuild $p: present"
@@ -81,6 +73,11 @@ jobs:
                 echo "::warning::musl prebuild pdfium-$p.tar.gz missing - linux-musl-* natives will be skipped this run"
               fi
             done
+            if echo "$ASSETS" | grep -qx "pdfium-freebsd-x64.tar.gz"; then
+              echo "freebsd prebuild freebsd-x64: present"
+            else
+              echo "::warning::freebsd prebuild pdfium-freebsd-x64.tar.gz missing - freebsd-x64 natives will be skipped this run"
+            fi
           fi
           echo "Preflight OK"
 
@@ -90,7 +87,7 @@ jobs:
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
@@ -169,7 +166,7 @@ jobs:
           java-version: '25'
 
       - name: Install build deps (Linux)
-        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
+        if: (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'freebsd-')) && matrix.libc != 'musl'
         # ports.ubuntu.com (the arm64 mirror) has multi-hour network outages
         # ~weekly (seen May 2026 - Connection failed [IP: 91.189.91.10x] across
         # 30+ min). Switch to the Azure mirror which is network-adjacent to GH
@@ -193,13 +190,18 @@ jobs:
               libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev icu-devtools \
               libqpdf-dev libpugixml-dev libunibreak-dev \
               mingw-w64 binutils-mingw-w64 \
-              lld \
+              lld zstd \
               patchelf && exit 0
             echo "apt install attempt $attempt failed; retrying in 30s..." >&2
             sleep 30
           done
           echo "apt install failed after 3 attempts" >&2
           exit 1
+
+      - name: Setup FreeBSD Sysroot (freebsd-x64)
+        if: startsWith(matrix.platform, 'freebsd-')
+        run: |
+          bash native/ci/setup-freebsd-sysroot.sh native/freebsd-sysroot 14.4-RELEASE amd64
 
       - name: Install build deps (macOS, native arm64)
         if: matrix.platform == 'darwin-arm64'
@@ -335,24 +337,40 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_LIBC: ${{ matrix.libc }}
           # Default to component (fast PR iteration). Manual workflow_dispatch
           # can override to "static" to sanity-check the release.yml path.
           # build_mode=skia selects the Skia *renderer*, not a different
           # asset: every prebuild carries both backends now.
           JPDFIUM_BUILD_MODE: ${{ inputs.build_mode == 'skia' && 'component' || inputs.build_mode || 'component' }}
         run: |
-          # A missing musl prebuild is an expected state until Prebuild PDFium
-          # is green. Record it as an output so the musl steps skip cleanly
-          # instead of failing the step (continue-on-error still annotates).
-          if [ "${{ matrix.libc }}" = "musl" ]; then
-            if ! bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}; then
-              echo "musl_missing=true" >> "$GITHUB_OUTPUT"
-              echo "musl prebuild missing for ${{ matrix.platform }}; skipping musl natives"
+          # A missing musl or freebsd prebuild is an expected state until Prebuild PDFium
+          # is green. Check whether the release asset actually exists first; if absent,
+          # record it as an output so those steps skip cleanly. If the asset exists,
+          # fetch-prebuilt-pdfium.sh must succeed or fail the build (e.g. network/tar error).
+          if [ "$TARGET_LIBC" = "musl" ] || [ "$TARGET_PLATFORM" = "freebsd-x64" ]; then
+            TAG="$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)"
+            SUFFIX=""
+            case "$JPDFIUM_BUILD_MODE" in
+              component) SUFFIX="" ;;
+              static)    SUFFIX="-static" ;;
+              v8)        SUFFIX="-v8" ;;
+              xfa)       SUFFIX="-xfa" ;;
+            esac
+            ASSET="pdfium-${TARGET_PLATFORM}${SUFFIX}.tar.gz"
+            if ! gh release view "$TAG" --repo Stirling-Tools/JPDFium --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+              if [ "$TARGET_LIBC" = "musl" ]; then
+                echo "musl_missing=true" >> "$GITHUB_OUTPUT"
+                echo "musl prebuild missing for $TARGET_PLATFORM; skipping musl natives"
+              else
+                echo "freebsd_missing=true" >> "$GITHUB_OUTPUT"
+                echo "freebsd prebuild missing for $TARGET_PLATFORM; skipping freebsd natives"
+              fi
               exit 0
             fi
-          else
-            bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
           fi
+          bash native/fetch-prebuilt-pdfium.sh "$TARGET_PLATFORM"
 
       # musl legs run the ENTIRE native build + smoke inside an Alpine container
       # via docker run from the host (GitHub cannot host JS actions in Alpine
@@ -376,6 +394,12 @@ jobs:
           echo "::warning::linux-musl-* natives skipped: pdfium-linux-musl-*.tar.gz is not in the pinned PDFium prebuild release yet."
           echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
           echo "The glibc/darwin/windows legs are unaffected."
+
+      - name: Skip freebsd natives (missing freebsd PDFium prebuild)
+        if: matrix.platform == 'freebsd-x64' && steps.fetch.outputs.freebsd_missing == 'true'
+        run: |
+          echo "::warning::freebsd-x64 natives skipped: pdfium-freebsd-x64.tar.gz is not in the pinned PDFium prebuild release yet."
+          echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the freebsd natives build resumes."
 
       - name: Build qpdf with native crypto (Linux + macOS)
         if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
@@ -408,7 +432,10 @@ jobs:
             native/rust/target
           key: cargo-${{ runner.os }}-${{ matrix.platform }}-${{ hashFiles('native/rust/Cargo.lock') }}
 
-      - if: matrix.libc != 'musl'
+      - if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          FREEBSD_SYSROOT: ${{ github.workspace }}/native/freebsd-sysroot
         run: bash native/build-real.sh
 
       - name: Build minimal ICU data (Linux)
@@ -460,7 +487,7 @@ jobs:
           fi
 
       - name: Stage binaries (bridge + PDFium siblings)
-        if: matrix.libc != 'musl'
+        if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
         run: |
           mkdir -p native/dist/${{ matrix.platform }}
           find native/build-real -maxdepth 3 -type f \( \
@@ -493,8 +520,9 @@ jobs:
           path: native/dist/
 
       - name: Bundle runtime deps + strip
-        if: matrix.libc != 'musl'
+        if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
         env:
+          FREEBSD_SYSROOT: ${{ github.workspace }}/native/freebsd-sysroot
           # PRs and cert-less (fork/dev) builds have no signing cert; unsigned
           # is fine because the smoke loads the freshly-built dylib on the same
           # runner. The upstream publish has the cert, so signing is enforced.
@@ -524,7 +552,7 @@ jobs:
         # musl: jextract only ships glibc builds, so the musl smoke uses the
         # committed bindings (generateBindings is skipped when jextract is
         # absent).
-        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && matrix.libc != 'musl' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && !startsWith(matrix.platform, 'freebsd-') && matrix.libc != 'musl' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         shell: bash
         run: |
           case "$RUNNER_OS" in
@@ -538,12 +566,14 @@ jobs:
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
       - name: Functional smoke test (load native + open a PDF)
-        if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
-        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+        if: matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && !startsWith(matrix.platform, 'freebsd-') && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        env:
+          TEST_PLATFORM: ${{ matrix.platform }}
+        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives="$TEST_PLATFORM" --no-daemon --stacktrace
         timeout-minutes: 60
 
       - name: Verify native smoke actually ran
-        if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && !startsWith(matrix.platform, 'freebsd-') && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
       # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /
@@ -584,9 +614,9 @@ jobs:
           retention-days: 7
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        # musl: only upload when the in-container build actually staged natives
-        # (skipped legs - missing musl PDFium prebuild - have an empty dist dir).
-        if: always() && (matrix.libc != 'musl' || steps.musl.outcome == 'success')
+        # musl & freebsd: only upload when the build actually staged natives
+        # (skipped legs - missing PDFium prebuild - have an empty dist dir).
+        if: always() && ((matrix.libc != 'musl' && (matrix.platform != 'freebsd-x64' || steps.fetch.outputs.freebsd_missing != 'true')) || steps.musl.outcome == 'success')
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -854,4 +884,5 @@ jobs:
             :jpdfium-natives:jpdfium-natives-darwin-arm64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-windows-x64:publishAllPublicationsToCentralPortalRepository \
             :jpdfium-natives:jpdfium-natives-windows-arm64:publishAllPublicationsToCentralPortalRepository \
+            :jpdfium-natives:jpdfium-natives-freebsd-x64:publishAllPublicationsToCentralPortalRepository \
             --no-daemon --stacktrace

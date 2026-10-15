@@ -62,6 +62,79 @@ bundle_linux() {
     bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
 }
 
+bundle_freebsd() {
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
+    [ -f "$bridge" ] || { echo "no libjpdfium.so found to bundle"; return 0; }
+
+    local sysroot="${FREEBSD_SYSROOT:-native/freebsd-sysroot}"
+    local sys_lib="$sysroot/usr/lib"
+    local skip_regex='^(libc|libm|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|librt|libutil)\.so'
+
+    declare -A visited=()
+    local queue=("$bridge")
+    visited["$(basename "$bridge")"]=1
+
+    # Also enqueue any libraries already staged in DIST_DIR (e.g. libpdfium.so)
+    for staged in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+        [ -e "$staged" ] || continue
+        [ -L "$staged" ] && continue
+        local b
+        b="$(basename "$staged")"
+        if [ -z "${visited["$b"]:-}" ]; then
+            visited["$b"]=1
+            queue+=("$staged")
+        fi
+    done
+
+    while [ "${#queue[@]}" -gt 0 ]; do
+        local target="${queue[0]}"
+        queue=("${queue[@]:1}")
+
+        while IFS= read -r dep; do
+            [ -z "$dep" ] && continue
+            if echo "$dep" | grep -qE "$skip_regex"; then continue; fi
+
+            local dest="$DIST_DIR/$dep"
+            if [ ! -e "$dest" ]; then
+                local found=""
+                for dir in "$sys_lib" "$sysroot/lib" "$DIST_DIR"; do
+                    if [ -e "$dir/$dep" ]; then
+                        found="$dir/$dep"
+                        break
+                    fi
+                done
+                if [ -n "$found" ] && [ "$found" != "$dest" ]; then
+                    cp -v "$found" "$dest"
+                fi
+            fi
+
+            if [ -e "$dest" ] && [ -z "${visited["$dep"]:-}" ]; then
+                visited["$dep"]=1
+                queue+=("$dest")
+            fi
+        done < <(readelf -d "$target" 2>/dev/null | awk '/NEEDED/{gsub(/\[|\]/,"",$5); print $5}' || true)
+    done
+
+    if command -v patchelf >/dev/null 2>&1; then
+        for f in "$DIST_DIR"/lib*.so*; do
+            [ -e "$f" ] || continue
+            [ -L "$f" ] && continue
+            patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+                echo "Clearing executable stack on $f" >&2
+                patchelf --clear-execstack "$f" || {
+                    echo "ERROR: $f requires an executable stack and patchelf could not clear it" >&2
+                    exit 1
+                }
+            fi
+        done
+    fi
+
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
+}
+
+
 bundle_macos() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib found to bundle"; return 0; }
@@ -376,7 +449,7 @@ assert_bundle_arch() {
                 esac
             done
             ;;
-        linux-*|vips-linux-*)
+        linux-*|vips-linux-*|freebsd-*|openbsd-*)
             for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
                 [ -e "$f" ] || continue
                 machine=$(readelf -h "$f" 2>/dev/null | awk -F: '/Machine:/{print $2}' | xargs)
@@ -461,6 +534,23 @@ case "$PLATFORM" in
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
                 strip --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
+        ;;
+    freebsd-*|vips-freebsd-*)
+        bundle_freebsd
+        assert_bundle_arch
+        find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
+        STRIP_BIN="strip"
+        if command -v llvm-strip >/dev/null 2>&1; then
+            STRIP_BIN="llvm-strip"
+        fi
+        if command -v "$STRIP_BIN" >/dev/null 2>&1; then
+            "$STRIP_BIN" --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -L "$f" ] && continue
+                [ -e "$f" ] || continue
+                "$STRIP_BIN" --strip-unneeded "$f" 2>/dev/null || true
             done
         fi
         ;;

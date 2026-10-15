@@ -80,4 +80,29 @@ if [ "$TOTAL" -gt "$WARN_AT" ]; then
     echo "WARNING: $PLATFORM bundle is past 75% of budget ($(mb "$WARN_AT") MB)" >&2
 fi
 
+# Diagnostic binary size and section breakdown report
+echo "--- Native Library Size & Section Breakdown ($PLATFORM) ---"
+printf "%-40s %12s %12s\n" "Binary / Library" "Uncompressed" "Gzip (JAR)"
+printf "%-40s %12s %12s\n" "----------------------------------------" "------------" "------------"
+for f in "$DIST_DIR"/*.so "$DIST_DIR"/*.so.* "$DIST_DIR"/*.dylib "$DIST_DIR"/*.dll; do
+    [ -f "$f" ] || continue
+    [ -L "$f" ] && continue
+    name="$(basename "$f")"
+    raw_bytes=$(wc -c < "$f" | tr -d ' ')
+    gzip_bytes=$(gzip -c "$f" 2>/dev/null | wc -c | tr -d ' ' || echo "N/A")
+    printf "%-40s %10s B %10s B\n" "$name" "$raw_bytes" "$gzip_bytes"
+done
+echo "--------------------------------------------------------"
+for lib in "$DIST_DIR"/libjpdfium.* "$DIST_DIR"/jpdfium.dll; do
+    [ -f "$lib" ] || continue
+    echo "Sections for $(basename "$lib"):"
+    if command -v llvm-size >/dev/null 2>&1; then
+        llvm-size --format=sysv "$lib" 2>/dev/null || llvm-size "$lib" 2>/dev/null || true
+    elif command -v size >/dev/null 2>&1; then
+        size "$lib" 2>/dev/null || true
+    fi
+done
+echo "--------------------------------------------------------"
+
 echo "OK: $PLATFORM bundle is within size budget"
+

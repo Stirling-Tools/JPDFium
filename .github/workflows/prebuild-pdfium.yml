@@ -28,6 +28,11 @@ on:
         type: boolean
         required: false
         default: false
+      build-experimental:
+        description: 'Build experimental V8 and XFA variants (hours long, off by default)'
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: '0 3 * * 1'
   # Auto-run on the test branch so pushes there self-bootstrap.
@@ -145,6 +150,9 @@ jobs:
           # are hours long and add tens of MB). Warn-only below.
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: v8 }
           - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: xfa }
+          # Experimental FreeBSD x64 cross-compile
+          - { platform: freebsd-x64,  runner: ubuntu-latest,     target_cpu: x64,   target_os: freebsd, mode: component }
+          - { platform: freebsd-x64,  runner: ubuntu-latest,     target_cpu: x64,   target_os: freebsd, mode: static }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -153,10 +161,15 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Install build deps (Linux)
-        if: startsWith(matrix.platform, 'linux-') && matrix.libc != 'musl'
+        if: ((startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'freebsd-')) && matrix.libc != 'musl') && (matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true)
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3 git xz-utils nasm zstd
+
+      - name: Setup FreeBSD Sysroot
+        if: startsWith(matrix.platform, 'freebsd-')
+        run: |
+          bash native/ci/setup-freebsd-sysroot.sh native/freebsd-sysroot 14.4-RELEASE amd64
 
       - name: Install build deps (macOS)
         if: startsWith(matrix.platform, 'darwin-')
@@ -196,10 +209,12 @@ jobs:
           fi
 
       - name: Build PDFium at pinned SHA
-        if: matrix.libc != 'musl'
+        if: matrix.libc != 'musl' && (matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true)
         env:
           PINNED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           TARGET_CPU: ${{ matrix.target_cpu }}
+          TARGET_OS: ${{ matrix.target_os }}
+          FREEBSD_SYSROOT: ${{ github.workspace }}/native/freebsd-sysroot
           JPDFIUM_BUILD_MODE: ${{ matrix.mode }}
           JPDFIUM_LIBC: ${{ matrix.libc }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -209,6 +224,8 @@ jobs:
           # moves while the matrix is running.
           export EMBEDPDF_PIN_SHA="$PINNED_SHA"
           export TARGET_CPU="$TARGET_CPU"
+          export TARGET_OS="${TARGET_OS:-}"
+          export FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-}"
           export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
 
@@ -233,6 +250,7 @@ jobs:
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} pdfium-smoke
 
       - name: Package artifacts
+        if: matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true
         # component mode keeps the historical tarball name
         # (`pdfium-<platform>.tar.gz`) for backward compatibility with the
         # existing fetch-prebuilt-pdfium.sh / pdfium.version pin path.
@@ -253,6 +271,7 @@ jobs:
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
+        if: matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true
         id: upload-1
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         continue-on-error: true
@@ -266,7 +285,7 @@ jobs:
           retention-days: 3
 
       - name: Retry upload artifact on failure
-        if: steps.upload-1.outcome == 'failure'
+        if: (matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true) && steps.upload-1.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pdfium-${{ matrix.platform }}-${{ matrix.mode }}
@@ -314,11 +333,11 @@ jobs:
             test -f ".prebuild/pdfium-$p.tar.gz"        || { echo "MISSING: $p (component)"; exit 1; }
             test -f ".prebuild/pdfium-$p-static.tar.gz" || { echo "MISSING: $p (static)";    exit 1; }
           done
-          # musl is experimental - warn but don't block the release if the Alpine
-          # PDFium build is not green yet. Once it is, promote these to hard fails.
-          for p in linux-musl-x64 linux-musl-arm64; do
-            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) - musl build not green yet";
-            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) - musl build not green yet";
+          # musl and freebsd-x64 are experimental - warn but don't block the release if
+          # those PDFium builds are not green yet. Once they are, promote to hard fails.
+          for p in linux-musl-x64 linux-musl-arm64 freebsd-x64; do
+            test -f ".prebuild/pdfium-$p.tar.gz"        || echo "WARNING: missing $p (component) - experimental build not green yet";
+            test -f ".prebuild/pdfium-$p-static.tar.gz" || echo "WARNING: missing $p (static) - experimental build not green yet";
           done
           # V8/XFA variants are experimental: warn, never block.
           test -f ".prebuild/pdfium-linux-x64-v8.tar.gz"  || echo "WARNING: missing linux-x64 (v8) - experimental";
@@ -354,6 +373,7 @@ jobs:
           | darwin-arm64  | pdfium-darwin-arm64.tar.gz       | pdfium-darwin-arm64-static.tar.gz        |
           | windows-x64   | pdfium-windows-x64.tar.gz        | pdfium-windows-x64-static.tar.gz         |
           | windows-arm64 | pdfium-windows-arm64.tar.gz      | pdfium-windows-arm64-static.tar.gz       |
+          | freebsd-x64   | pdfium-freebsd-x64.tar.gz        | pdfium-freebsd-x64-static.tar.gz         |
 
           Component tarballs hold libpdfium.{so,dylib,dll} + sibling component
           shared libs (abseil, partition_alloc, etc.); easier to iterate against
@@ -361,9 +381,8 @@ jobs:
           PDFium + every bundled dep - picked up by release.yml so the final
           natives jars dead-strip aggressively across PDFium internals.
 
-          The \`linux-musl-*\` tarballs are built inside an Alpine container and are
-          musl-linked (for Alpine / musl runtimes); they are experimental until
-          the Prebuild PDFium workflow goes green on them.
+          The \`linux-musl-*\` and \`freebsd-*\` tarballs are experimental
+          until the corresponding build targets and tests are fully qualified in CI.
 
           Each tarball contains \`include/\` + \`lib/\` ready to extract into \`native/pdfium/\`.
           EOF
