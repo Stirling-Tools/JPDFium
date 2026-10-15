@@ -59,7 +59,7 @@ jobs:
       - name: Cross-build minimal Windows icudt78.dll + bare trimmed .dat
         run: bash native/build-minimal-icu-windows.sh
       - name: Upload trimmed Windows icudt78.dll
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-icu-trimmed
           path: |
@@ -68,7 +68,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/icudt*l.dat
@@ -361,7 +361,7 @@ jobs:
 
       - name: Download bare trimmed ICU .dat (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         with:
           name: icu-data-trimmed
           path: native/dist/icu-data/
@@ -410,7 +410,7 @@ jobs:
       # the bundler's size gate runs, or the windows bundle fails its budget.
       - name: Override icudt78.dll with trimmed copy (Windows only)
         if: startsWith(matrix.platform, 'windows-')
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         continue-on-error: true        # missing artifact -> stay with vcpkg's full 33 MB icudt78.dll
         with:
           name: windows-icu-trimmed
@@ -496,7 +496,7 @@ jobs:
 
       - name: Upload hs_err logs (smoke crash diagnostics)
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: hs_err-${{ matrix.platform }}-${{ github.run_id }}
           path: |
@@ -506,7 +506,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         # musl: only upload when the in-container build actually staged natives
         # (skipped legs - missing musl PDFium prebuild - have an empty dist dir).
         if: always() && (matrix.libc != 'musl' || steps.musl.outcome == 'success')
@@ -558,10 +558,10 @@ jobs:
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Download staged natives for ${{ matrix.platform }}
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -586,7 +586,7 @@ jobs:
             echo "WARN: CLI binary missing for ${{ matrix.platform }}: $SRC"
           fi
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: cli-${{ matrix.platform }}
@@ -625,10 +625,10 @@ jobs:
         with:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Download core natives for ${{ matrix.platform }}
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         with:
           name: natives-${{ matrix.platform }}
           path: native/dist/${{ matrix.platform }}/
@@ -797,7 +797,7 @@ jobs:
           arch -x86_64 ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=darwin-x64 -Pjpdfium.testVipsNatives=vips-darwin-x64 --no-daemon --stacktrace
         timeout-minutes: 60
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: natives-vips-${{ matrix.platform }}
           path: native/dist/vips-${{ matrix.platform }}/
@@ -818,7 +818,7 @@ jobs:
           java-version: '25'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+        uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java
@@ -835,13 +835,13 @@ jobs:
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
       - name: Download all native artifacts
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         with:
           path: .artifacts
           pattern: natives-*
 
       - name: Download all CLI binaries
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317 # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
         continue-on-error: true  # CLI legs can fail independently; natives still publish
         with:
           path: .artifacts

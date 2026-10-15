@@ -28,7 +28,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -50,7 +50,7 @@ jobs:
 
       - name: Upload reports on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nightly-soak-reports-${{ github.run_id }}
           path: jpdfium/build/reports/tests/test/
@@ -69,7 +69,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -102,7 +102,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -144,7 +144,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Install jextract
         run: |
@@ -176,7 +176,7 @@ jobs:
           key: jmh-baseline-v2-main
 
       - name: Upload baseline artifact (long-term retention)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: jmh-baseline-${{ github.run_id }}
           path: jpdfium/build/results/jmh/baseline.json
