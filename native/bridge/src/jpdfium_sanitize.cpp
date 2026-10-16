@@ -340,7 +340,10 @@ void removeActionKeys(QPDFObjectHandle obj) {
     }
 }
 
-void walkOutlines(const QPDFObjectHandle& outline, const std::vector<std::string>& lits,
+// qpdf's QPDFObjectHandle accessors (getKey, isStream, ...) are non-const on the pinned Linux
+// build, so the handle is passed by value; clang-tidy on macOS only sees the const overloads.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
+void walkOutlines(QPDFObjectHandle outline, const std::vector<std::string>& lits,
                   SanitizeStats& st) {
     if (!outline.isDictionary()) return;
     QPDFObjectHandle item = outline.getKey("/First");
@@ -352,7 +355,8 @@ void walkOutlines(const QPDFObjectHandle& outline, const std::vector<std::string
     }
 }
 
-void walkFormFields(const QPDFObjectHandle& field, const std::vector<std::string>& lits,
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
+void walkFormFields(QPDFObjectHandle field, const std::vector<std::string>& lits,
                     SanitizeStats& st) {
     if (!field.isDictionary()) return;
     blankStringValue(field, "/V", lits, st.fieldsBlanked);
@@ -413,13 +417,15 @@ void scrubXmpXml(std::string& xml, const std::vector<std::string>& lits) {
 // different scopes (page vs. nested forms), and a name collision only
 // widens the used set - the safe direction (keeping a mapping that is
 // still used costs nothing; dropping one that survives breaks extraction).
-void scanResourceScope(const QPDFObjectHandle& res, ContentScan& globalScan,
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
+void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                        std::set<std::string>& visitedObjs, int depth) {
     if (depth > 12 || !res.isDictionary()) return;
     // Form XObjects in this scope.
     if (res.hasKey("/XObject") && res.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = res.getKey("/XObject");
-        for (const auto& [name, xo] : xos.ditems()) {
+        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
+        for (auto [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visitedObjs.count(id)) continue;
@@ -431,7 +437,8 @@ void scanResourceScope(const QPDFObjectHandle& res, ContentScan& globalScan,
                 // resources when present, else the enclosing scope's.
                 QPDFObjectHandle formRes =
                     xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
-                auto scanBuf = [&](const QPDFObjectHandle& s) {
+                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
+                auto scanBuf = [&](QPDFObjectHandle s) {
                     auto b = streamData(s);
                     if (b)
                         scanContentStream(std::string(reinterpret_cast<const char*>(b->getBuffer()),
@@ -463,12 +470,14 @@ void scanResourceScope(const QPDFObjectHandle& res, ContentScan& globalScan,
 // Form child text objects promoted/fissioned to page level reference fonts
 // that were originally in the Form XObject's private /Resources. Ensure the
 // page-level /Resources /Font dictionary contains all reachable form fonts.
-void propagateFormFontsToPage(QPDFObjectHandle pageRes, const QPDFObjectHandle& scopeRes,
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
+void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRes,
                               std::set<std::string>& visited, int depth) {
     if (depth > 12 || !scopeRes.isDictionary()) return;
     if (scopeRes.hasKey("/XObject") && scopeRes.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = scopeRes.getKey("/XObject");
-        for (const auto& [name, xo] : xos.ditems()) {
+        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
+        for (auto [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visited.count(id)) continue;
@@ -482,7 +491,8 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, const QPDFObjectHandle& 
                     }
                     QPDFObjectHandle pageFonts = pageRes.getKey("/Font");
                     if (pageFonts.isDictionary()) {
-                        for (const auto& [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
+                        // NOLINTNEXTLINE(performance-for-range-copy) - keep the element mutable.
+                        for (auto [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
                             if (!pageFonts.hasKey(fontName)) {
                                 pageFonts.replaceKey(fontName, fontDict);
                             }
@@ -632,7 +642,8 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             // Content scan: page streams + form XObject streams.
             if (page.hasKey("/Contents")) {
                 QPDFObjectHandle contents = page.getKey("/Contents");
-                auto scanOne = [&](const QPDFObjectHandle& s) {
+                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
+                auto scanOne = [&](QPDFObjectHandle s) {
                     auto buf = streamData(s);
                     if (buf)
                         scanContentStream(
