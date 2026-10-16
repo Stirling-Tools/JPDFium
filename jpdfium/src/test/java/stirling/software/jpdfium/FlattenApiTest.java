@@ -423,6 +423,7 @@ class FlattenApiTest {
         }
         Path out = dir.resolve("painted-then-blank-flat.pdf");
         PageContentSummary generated;
+        int generatedDark;
         try (PdfDocument doc = PdfDocument.open(fixture)) {
             try {
                 doc.flatten(FlattenMode.FULL, FULL_DPI);
@@ -431,10 +432,11 @@ class FlattenApiTest {
                         + " perPageDark=" + perPageDark + " " + e);
                 return;
             }
-            // Structural check before the save: it tells a content-generation
-            // failure apart from content lost while the flattened file is written.
+            // Structural and ink checks before the save: they tell a raster or
+            // generation failure apart from ink lost while the flattened file is written.
             try (PdfPage inMemory = doc.page(0)) {
                 generated = PdfPageObjects.summarize(inMemory.rawHandleForRead());
+                generatedDark = darkPixels(inMemory.renderAt(FULL_DPI));
             }
             doc.save(out);
         }
@@ -448,7 +450,7 @@ class FlattenApiTest {
                         "the painted page must stay dark after the raster pass: painted=" + painted
                                 + " perPageDark=" + perPageDark + " batchDark=" + batchDark
                                 + " total=" + (raster.rgba().length / 4) + " generated=" + generated
-                                + " " + content);
+                                + " generatedDark=" + generatedDark + " " + content);
                 assertEquals(
                         1,
                         content.imageObjectCount(),

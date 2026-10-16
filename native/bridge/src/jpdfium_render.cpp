@@ -689,6 +689,15 @@ int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page,
         // needed afterwards and is released with bmp.
         if (!FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp)) return JPDFIUM_ERR_NATIVE;
 
+        // A bitmap without pixels yields an image object the content generator
+        // silently skips, so refuse the page rather than commit it blank.
+        unsigned int img_w = 0;
+        unsigned int img_h = 0;
+        if (!FPDFImageObj_GetImagePixelSize(imgObj.get(), &img_w, &img_h) || img_w == 0 ||
+            img_h == 0) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+
         FS_MATRIX matrix = {static_cast<float>(w_pt), 0, 0, static_cast<float>(h_pt), 0, 0};
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
