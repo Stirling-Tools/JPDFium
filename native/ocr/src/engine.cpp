@@ -43,11 +43,10 @@ jpdf_status Engine::recognize(const Image& image, OcrResult* out, std::string* d
         // both before crops are materialized so the pipeline never holds the whole detector
         // activation alongside the recognizer batches.
         const DetectorInput input = prepare_detector_input(image, profile_.det);
-        std::vector<float> pred;
-        std::vector<int64_t> shape;
-        st = detector_->run(input.tensor.data(), {1, 3, input.height, input.width}, &pred, &shape,
-                            detail);
+        Tensor pred;
+        st = detector_->run(input.tensor.data(), {1, 3, input.height, input.width}, &pred, detail);
         if (st != JPDF_OK) return st;
+        const std::vector<int64_t>& shape = pred.shape();
         if (shape.size() != 4 || shape[0] != 1 || shape[1] != 1 || shape[2] != input.height ||
             shape[3] != input.width) {
             *detail = "detector output does not match its input size";
@@ -101,8 +100,8 @@ jpdf_status Engine::recognize_crops(const Image& image, const std::vector<CropPl
     const std::vector<size_t> order = crop_order(plans);
     const RecognizerParams& rp = profile_.rec;
     const size_t batch = static_cast<size_t>(rp.batch_size);
-    std::vector<float> tensor, probs;
-    std::vector<int64_t> shape;
+    std::vector<float> tensor;
+    Tensor probs;
     std::vector<Image> crops;
     for (size_t start = 0; start < order.size(); start += batch) {
         const size_t n = std::min(batch, order.size() - start);
@@ -116,13 +115,17 @@ jpdf_status Engine::recognize_crops(const Image& image, const std::vector<CropPl
             width = std::max(width, recognizer_width(crops[i], rp));
         }
         const size_t per_image = static_cast<size_t>(3) * rp.height * width;
-        tensor.assign(per_image * n, 0.f);
+        // recognizer_input pads each image to batch_width itself; the buffer only
+        // has to exist and be contiguous. resize grows at most once per new
+        // high-water width instead of zero-filling the whole batch every time.
+        tensor.resize(per_image * n);
         for (size_t i = 0; i < n; ++i) {
             recognizer_input(crops[i], rp, width, tensor.data() + per_image * i);
         }
         jpdf_status st = recognizer_->run(
-            tensor.data(), {static_cast<int64_t>(n), 3, rp.height, width}, &probs, &shape, detail);
+            tensor.data(), {static_cast<int64_t>(n), 3, rp.height, width}, &probs, detail);
         if (st != JPDF_OK) return st;
+        const std::vector<int64_t>& shape = probs.shape();
         if (shape.size() != 3 || shape[0] != static_cast<int64_t>(n) ||
             shape[2] != static_cast<int64_t>(profile_.characters.size())) {
             *detail = "recognizer output does not match the profile's dictionary";
@@ -142,8 +145,7 @@ jpdf_status Engine::recognize_crops(const Image& image, const std::vector<CropPl
 
 }  // namespace jpdf::ocr
 
-// --- ort_session.cpp (merged) ---
-// ort_session.cpp - ONNX Runtime C API calls. One environment per process, created lazily.
+// ONNX Runtime C API calls. One environment per process, created lazily.
 
 #include <onnxruntime_c_api.h>
 
@@ -184,7 +186,36 @@ bool failed(const OrtApi* api, OrtStatus* status, std::string* detail) {
     return true;
 }
 
+// Owns a string the runtime allocator handed out until AllocatorFree runs, so a throwing
+// std::string assignment cannot leak it.
+class OwnedName {
+   public:
+    OwnedName(const OrtApi* api, OrtAllocator* allocator, char* name) noexcept
+        : api_(api), allocator_(allocator), name_(name) {}
+    ~OwnedName() {
+        if (name_ && allocator_) {
+            if (OrtStatus* freed = api_->AllocatorFree(allocator_, name_))
+                api_->ReleaseStatus(freed);
+        }
+    }
+    OwnedName(const OwnedName&) = delete;
+    OwnedName& operator=(const OwnedName&) = delete;
+
+    const char* get() const noexcept {
+        return name_;
+    }
+
+   private:
+    const OrtApi* api_;
+    OrtAllocator* allocator_;
+    char* name_;
+};
+
 }  // namespace
+
+void OrtValueDeleter::operator()(OrtValue* value) const noexcept {
+    if (value) runtime_api()->ReleaseValue(value);
+}
 
 const char* ort_version() noexcept {
     const OrtApiBase* base = OrtGetApiBase();
@@ -236,17 +267,18 @@ jpdf_status Session::create(const std::vector<uint8_t>& model, int intra_op_thre
         *detail = "model must have one input and at least one output";
         return JPDF_E_FORMAT;
     }
-    char* name = nullptr;
-    if (failed(api, api->SessionGetInputName(session->session_, 0, allocator, &name), detail)) {
+    char* raw = nullptr;
+    if (failed(api, api->SessionGetInputName(session->session_, 0, allocator, &raw), detail)) {
         return JPDF_E_INTERNAL;
     }
-    session->input_name_ = name;
-    if (OrtStatus* freed = api->AllocatorFree(allocator, name)) api->ReleaseStatus(freed);
-    if (failed(api, api->SessionGetOutputName(session->session_, 0, allocator, &name), detail)) {
+    const OwnedName input_name(api, allocator, raw);
+    session->input_name_ = input_name.get();
+    raw = nullptr;
+    if (failed(api, api->SessionGetOutputName(session->session_, 0, allocator, &raw), detail)) {
         return JPDF_E_INTERNAL;
     }
-    session->output_name_ = name;
-    if (OrtStatus* freed = api->AllocatorFree(allocator, name)) api->ReleaseStatus(freed);
+    const OwnedName output_name(api, allocator, raw);
+    session->output_name_ = output_name.get();
     *out = std::move(session);
     return JPDF_OK;
 }
@@ -256,8 +288,7 @@ Session::~Session() {
     if (session_) api_->ReleaseSession(session_);
 }
 
-jpdf_status Session::run(const float* input, const std::array<int64_t, 4>& shape,
-                         std::vector<float>* output, std::vector<int64_t>* output_shape,
+jpdf_status Session::run(const float* input, const std::array<int64_t, 4>& shape, Tensor* output,
                          std::string* detail) const {
     size_t count = 1;
     for (int64_t d : shape) count *= static_cast<size_t>(d);
@@ -275,31 +306,32 @@ jpdf_status Session::run(const float* input, const std::array<int64_t, 4>& shape
     OrtStatus* run_status = api_->Run(session_, nullptr, &in_name, &in, 1, &out_name, 1, &result);
     api_->ReleaseValue(in);
     if (failed(api_, run_status, detail)) return JPDF_E_INTERNAL;
-    std::unique_ptr<OrtValue, void (*)(OrtValue*)> owned(
-        result, [](OrtValue* v) { runtime_api()->ReleaseValue(v); });
+    Tensor tensor;
+    tensor.value_.reset(result);
     OrtTensorTypeAndShapeInfo* info = nullptr;
     if (failed(api_, api_->GetTensorTypeAndShape(result, &info), detail)) return JPDF_E_INTERNAL;
+    std::unique_ptr<OrtTensorTypeAndShapeInfo, void (*)(OrtTensorTypeAndShapeInfo*)> owned_info(
+        info,
+        [](OrtTensorTypeAndShapeInfo* i) { runtime_api()->ReleaseTensorTypeAndShapeInfo(i); });
     size_t dims = 0;
     ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
     OrtStatus* st = api_->GetDimensionsCount(info, &dims);
     if (!st) {
-        output_shape->assign(dims, 0);
-        st = api_->GetDimensions(info, output_shape->data(), dims);
+        tensor.shape_.assign(dims, 0);
+        st = api_->GetDimensions(info, tensor.shape_.data(), dims);
     }
     if (!st) st = api_->GetTensorElementType(info, &type);
-    api_->ReleaseTensorTypeAndShapeInfo(info);
     if (failed(api_, st, detail)) return JPDF_E_INTERNAL;
     if (type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
         *detail = "model output is not float";
         return JPDF_E_FORMAT;
     }
-    size_t elements = 1;
-    for (int64_t d : *output_shape) elements *= static_cast<size_t>(d < 0 ? 0 : d);
     float* data = nullptr;
     if (failed(api_, api_->GetTensorMutableData(result, reinterpret_cast<void**>(&data)), detail)) {
         return JPDF_E_INTERNAL;
     }
-    output->assign(data, data + elements);
+    tensor.data_ = data;
+    *output = std::move(tensor);
     return JPDF_OK;
 }
 

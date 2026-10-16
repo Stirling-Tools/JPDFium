@@ -10,15 +10,45 @@
 #include "jpdfium_api.h"
 #include "paddle.h"
 
-// ort_session.h merged in: one ONNX Runtime session over the C API, CPU execution provider only.
 struct OrtApi;
 struct OrtSession;
 struct OrtMemoryInfo;
+struct OrtValue;
 
 namespace jpdf::ocr {
 
 // The loaded runtime's version, or nullptr when it lacks the API this module was built for.
 const char* ort_version() noexcept;
+
+// Releases an ONNX Runtime value through the runtime the session was created from.
+struct OrtValueDeleter {
+    void operator()(OrtValue* value) const noexcept;
+};
+
+// A session's float output. Holding it keeps the runtime's buffer alive, so a caller decodes in
+// place instead of copying an activation that can be far larger than the input image.
+class Tensor {
+   public:
+    Tensor() = default;
+    Tensor(Tensor&&) noexcept = default;
+    Tensor& operator=(Tensor&&) noexcept = default;
+    Tensor(const Tensor&) = delete;
+    Tensor& operator=(const Tensor&) = delete;
+
+    const float* data() const noexcept {
+        return data_;
+    }
+    // Row-major dimensions exactly as the model reported them.
+    const std::vector<int64_t>& shape() const noexcept {
+        return shape_;
+    }
+
+   private:
+    friend class Session;
+    const float* data_ = nullptr;
+    std::vector<int64_t> shape_;
+    std::unique_ptr<OrtValue, OrtValueDeleter> value_;
+};
 
 class Session {
    public:
@@ -29,9 +59,9 @@ class Session {
     Session(const Session&) = delete;
     Session& operator=(const Session&) = delete;
 
-    // Runs the model's single float input to its first float output. Thread-safe.
-    jpdf_status run(const float* input, const std::array<int64_t, 4>& shape,
-                    std::vector<float>* output, std::vector<int64_t>* output_shape,
+    // Runs the model's single float input to its first float output. Thread-safe. The returned
+    // tensor owns the runtime's buffer, which stays valid until the tensor is destroyed.
+    jpdf_status run(const float* input, const std::array<int64_t, 4>& shape, Tensor* output,
                     std::string* detail) const;
 
    private:
