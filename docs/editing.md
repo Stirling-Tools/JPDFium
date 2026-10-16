@@ -29,6 +29,8 @@ Two modes are available on `PdfDocument`:
 
 Rasterization invalidates pages you opened beforehand; reopen them afterwards. See [concurrency.md](concurrency.md).
 
+A whole-document `FULL` pass holds the process-wide PDFium domain for the whole document, so every other operation waits for it to finish; use `flattenPage(index, FlattenMode.FULL, dpi)` for interactive work. Repeated `FULL` passes over one document also keep growing the process footprint (roughly 0.5 GB per pass for 100 A4 pages at 150 DPI), so flatten a document once.
+
 `PdfSelectiveFlatten` flattens by annotation type rather than all at once. Note that it removes the targeted annotations and regenerates page content without baking their appearance streams, so the removed elements no longer appear. Use it when you intend to drop them, not to preserve their look.
 
 ## Redaction

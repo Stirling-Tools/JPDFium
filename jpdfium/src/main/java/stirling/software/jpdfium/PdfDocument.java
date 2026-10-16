@@ -1041,6 +1041,10 @@ public final class PdfDocument implements AutoCloseable {
      *       jpdfium_doc_flatten_to_images}.</li>
      * </ul>
      *
+     * <p>A whole-document pass holds the process-wide PDFium domain for its whole
+     * duration, so other operations wait for it to finish; use
+     * {@link #flattenPage(int, int)} for interactive work.
+     *
      * @param mode what to flatten (see {@link FlattenMode})
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
