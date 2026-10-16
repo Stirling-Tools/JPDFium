@@ -433,18 +433,26 @@ std::vector<size_t> crop_order(const std::vector<CropPlan>& plans) {
     return order;
 }
 
-int recognizer_width(const Image& crop, const RecognizerParams& params) {
+namespace {
+// Padding width the recognizer asks for. The aspect-ratio product is clamped in
+// double before narrowing, so a document with an extreme width/height ratio
+// cannot turn `height * max_wh_ratio` into an out-of-range int.
+int requested_width(const Image& crop, const RecognizerParams& params) {
     const double max_wh_ratio = std::max(static_cast<double>(params.min_width) / params.height,
                                          crop.width * 1.0 / crop.height);
-    return std::min(static_cast<int>(params.height * max_wh_ratio), params.max_width);
+    const double width = params.height * max_wh_ratio;
+    return static_cast<int>(std::min(width, static_cast<double>(params.max_width)));
+}
+}  // namespace
+
+int recognizer_width(const Image& crop, const RecognizerParams& params) {
+    return requested_width(crop, params);
 }
 
 void recognizer_input(const Image& crop, const RecognizerParams& params, int batch_width,
                       float* out) {
     const int img_h = params.height;
-    const double max_wh_ratio = std::max(static_cast<double>(params.min_width) / params.height,
-                                         crop.width * 1.0 / crop.height);
-    int img_w = static_cast<int>(img_h * max_wh_ratio);
+    const int img_w = requested_width(crop, params);
     int resized_w;
     if (img_w > params.max_width) {
         resized_w = params.max_width;

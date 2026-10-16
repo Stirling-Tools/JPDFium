@@ -92,6 +92,16 @@ jpdf_status read_bitmap(jpdf_handle bitmap, uint64_t max_pixels, Image* out, dou
     mapped.view.struct_size = sizeof(mapped.view);
     if ((st = jpdf_bitmap_map(bitmap, &mapped.view)) != JPDF_OK) return st;
     const jpdf_bitmap_view& v = mapped.view;
+    // The pixel budget above was checked against the metadata, so the mapped view has to describe
+    // the same bitmap, with a stride that covers a whole row, before its pixels are read.
+    if (v.width != info.width || v.height != info.height || v.width < 0 || v.height < 0) {
+        return fail(JPDF_E_FORMAT, "bitmap view does not match its metadata");
+    }
+    const int64_t bytes_per_pixel =
+        v.pixel_format == JPDF_PIXEL_GRAY8 ? 1 : (v.pixel_format == JPDF_PIXEL_RGBA8 ? 4 : 3);
+    if (static_cast<int64_t>(v.stride) < static_cast<int64_t>(v.width) * bytes_per_pixel) {
+        return fail(JPDF_E_FORMAT, "bitmap view stride is too small");
+    }
     out->width = v.width;
     out->height = v.height;
     out->pixels.resize(static_cast<size_t>(v.width) * v.height * 3);
