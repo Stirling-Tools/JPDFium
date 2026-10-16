@@ -62,9 +62,9 @@ public enum AnnotationType {
     private static final AnnotationType[] VALUES = values();
 
     /** Code-indexed lookup built once from {@link #VALUES}. */
-    private static final AnnotationType[] BY_CODE;
+    private static final AnnotationType[] BY_CODE = buildByCode();
 
-    static {
+    private static AnnotationType[] buildByCode() {
         int max = 0;
         for (AnnotationType t : VALUES) {
             if (t.code > max) {
@@ -78,7 +78,7 @@ public enum AnnotationType {
                 byCode[t.code] = t;
             }
         }
-        BY_CODE = byCode;
+        return byCode;
     }
 
     public static AnnotationType fromCode(int code) {

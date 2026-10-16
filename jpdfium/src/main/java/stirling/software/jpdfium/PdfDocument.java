@@ -14,6 +14,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -989,8 +990,11 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void flatten(FlattenMode mode, int dpi) {
         ensureOpen();
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
         switch (mode) {
             case ANNOTATIONS -> {
+                // Flatten rewrites page content in place and keeps every open page
+                // valid, so a partial pass only needs the content flag.
                 try {
                     JpdfiumLib.docFlattenAnnotations(handle);
                 } finally {
@@ -1004,11 +1008,22 @@ public final class PdfDocument implements AutoCloseable {
                 // below would otherwise mark pages stale for an untouched
                 // document.
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                // A pass that replaced at least one page leaves the document
+                // different from the bytes it was opened with, even when a later
+                // page failed: the native side reports that partial mutation as
+                // CONTENT_MUTATED.
+                boolean replacedPages = false;
                 try {
                     JpdfiumLib.docFlattenToImages(handle, dpi);
+                    replacedPages = true;
+                } catch (JPDFiumException e) {
+                    replacedPages = e.isContentMutated();
+                    throw e;
                 } finally {
-                    // A failed pass can still have replaced the pages before it.
-                    invalidateOpenPages();
+                    if (replacedPages) {
+                        invalidateOpenPages();
+                        markContentModified();
+                    }
                 }
             }
         }

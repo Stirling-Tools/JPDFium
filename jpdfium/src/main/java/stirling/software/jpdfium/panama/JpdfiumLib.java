@@ -61,6 +61,8 @@ public final class JpdfiumLib {
     public static final int ERR_UNCOMMITTED_MARKS  =  -6;
     public static final int ERR_REDACT_INCOMPLETE  =  -7;
     public static final int ERR_REDACT_UNVERIFIABLE =  -8;
+    /** The native call modified content and then failed; the document no longer matches disk. */
+    public static final int ERR_CONTENT_MUTATED    = -10;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
@@ -340,6 +342,8 @@ public final class JpdfiumLib {
                     "Redaction incomplete: the post-redaction audit found content it could not remove - " + ctx);
             case ERR_REDACT_UNVERIFIABLE -> new RedactUnverifiableException(
                     "Redaction could not run or could not be verified; no silent fallback was applied - " + ctx);
+            case ERR_CONTENT_MUTATED   -> new JPDFiumException(
+                    "Content was modified before the operation failed - " + ctx, ERR_CONTENT_MUTATED);
             default                    -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
