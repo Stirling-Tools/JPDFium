@@ -9,10 +9,12 @@ import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.doc.AnnotationType;
 import stirling.software.jpdfium.doc.FormField;
 import stirling.software.jpdfium.doc.FormFieldType;
+import stirling.software.jpdfium.doc.PageContentSummary;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfFormFiller;
 import stirling.software.jpdfium.doc.PdfFormReader;
+import stirling.software.jpdfium.doc.PdfPageObjects;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.RenderResult;
@@ -398,6 +400,13 @@ class FlattenApiTest {
             }
             pdf.addPage(new PDPage(new PDRectangle(200, 300)));
         });
+        double painted;
+        try (PdfDocument source = PdfDocument.open(fixture)) {
+            try (PdfPage sourcePage = source.page(0)) {
+                painted = darkRatio(sourcePage.renderAt(FULL_DPI));
+            }
+        }
+        assertTrue(painted > 0.5, "the fixture must paint page 0 solid black: painted=" + painted);
         Path out = dir.resolve("painted-then-blank-flat.pdf");
         try (PdfDocument doc = PdfDocument.open(fixture)) {
             doc.flatten(FlattenMode.FULL, FULL_DPI);
@@ -405,15 +414,27 @@ class FlattenApiTest {
         }
         try (PdfDocument doc = PdfDocument.open(out)) {
             try (PdfPage first = doc.page(0)) {
+                PageContentSummary content = PdfPageObjects.summarize(first.rawHandleForRead());
+                assertEquals(
+                        1,
+                        content.imageObjectCount(),
+                        "a full raster pass replaces page 0 with one image: " + content);
+                RenderResult raster = first.renderAt(FULL_DPI);
+                double flattened = darkRatio(raster);
                 assertTrue(
-                        darkRatio(first.renderAt(FULL_DPI)) > 0.5,
-                        "the painted page must stay dark, so the pass really rasterized content");
+                        flattened > 0.5,
+                        "the painted page must stay dark after the raster pass: painted=" + painted
+                                + " flattened=" + flattened + " dark=" + darkPixels(raster)
+                                + " total=" + (raster.rgba().length / 4));
             }
             try (PdfPage blankPage = doc.page(1)) {
+                RenderResult blank = blankPage.renderAt(FULL_DPI);
+                int blankDark = darkPixels(blank);
                 assertEquals(
                         0,
-                        darkPixels(blankPage.renderAt(FULL_DPI)),
-                        "the blank page must not inherit the previous page's pixels");
+                        blankDark,
+                        "the blank page must not inherit the previous page's pixels: dark="
+                                + blankDark + " total=" + (blank.rgba().length / 4));
             }
         }
     }
