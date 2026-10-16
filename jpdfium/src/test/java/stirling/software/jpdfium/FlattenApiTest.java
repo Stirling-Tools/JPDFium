@@ -1,14 +1,25 @@
 package stirling.software.jpdfium;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.doc.AnnotationType;
+import stirling.software.jpdfium.doc.FormField;
+import stirling.software.jpdfium.doc.FormFieldType;
 import stirling.software.jpdfium.doc.PdfAnnotationBuilder;
 import stirling.software.jpdfium.doc.PdfAnnotations;
+import stirling.software.jpdfium.doc.PdfFormFiller;
+import stirling.software.jpdfium.doc.PdfFormReader;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.transform.PageOps;
 
+import java.awt.Color;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -158,6 +170,40 @@ class FlattenApiTest {
 
     private record Flattened(List<byte[]> pages, int[] before, int[] after) {}
 
+    /** Locates a bundled fixture on the test classpath. */
+    private static Path resource(String name) throws Exception {
+        var url = FlattenApiTest.class.getResource("/pdfs/general/" + name);
+        assertNotNull(url, name + " test resource missing");
+        return Path.of(url.toURI());
+    }
+
+    /** Builds a fixture with PDFBox, independent of the code under test. */
+    private static Path writePdfBoxFixture(Path target, Consumer<PDDocument> build) throws IOException {
+        try (PDDocument pdf = new PDDocument()) {
+            build.accept(pdf);
+            pdf.save(target.toFile());
+        }
+        return target;
+    }
+
+    /** Counts pixels that are clearly not the white background, catching cross-page bleed. */
+    private static int darkPixels(RenderResult page) {
+        byte[] px = page.rgba();
+        int dark = 0;
+        for (int i = 0; i + 3 < px.length; i += 4) {
+            if ((px[i] & 0xFF) < 200 && (px[i + 1] & 0xFF) < 200 && (px[i + 2] & 0xFF) < 200) {
+                dark++;
+            }
+        }
+        return dark;
+    }
+
+    private static double darkRatio(RenderResult page) {
+        byte[] px = page.rgba();
+        int total = px.length / 4;
+        return total == 0 ? 0 : (double) darkPixels(page) / total;
+    }
+
     @Test
     void pageFlattenDefault() {
         try (PdfDocument doc = PdfDocument.open(MINIMAL_PDF);
@@ -236,6 +282,195 @@ class FlattenApiTest {
             // The dpi guard runs before any native work, so nothing was replaced
             // and the structural epoch must not have moved.
             assertEquals(epochBefore, doc.structureEpoch());
+            assertFalse(doc.isContentModified(), "a rejected dpi must not mark the document edited");
+        }
+    }
+
+    @Test
+    void annotationsBatchKeepsOpenPagesUsable(@TempDir Path dir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "annotation flattening needs the real PDFium natives");
+        Path fixture = annotatedFixture(dir);
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            List<PdfPage> open = new ArrayList<>();
+            for (int i = 0; i < doc.pageCount(); i++) {
+                open.add(doc.page(i));
+            }
+            int epochBefore = doc.structureEpoch();
+            doc.flatten(FlattenMode.ANNOTATIONS);
+            // The pass rewrites content in place and frees no native page, so the
+            // structural epoch must not move and every open page must stay usable.
+            assertEquals(
+                    epochBefore,
+                    doc.structureEpoch(),
+                    "an in-place annotation flatten must not move the structural epoch");
+            assertTrue(doc.isContentModified(), "a batch annotation flatten is a content edit");
+            for (int i = 0; i < open.size(); i++) {
+                PdfPage page = open.get(i);
+                assertFalse(page.isStale(), "page " + i + " must survive the pass");
+                assertEquals(
+                        0,
+                        PdfAnnotations.count(page.rawHandleForRead()),
+                        "a flattened page keeps no annotations");
+                assertTrue(page.renderAt(FULL_DPI).rgba().length > 0, "an open page must still render");
+                assertDoesNotThrow(page::close);
+            }
+        }
+    }
+
+    @Test
+    void fullBatchInvalidatesOpenPagesAndFlagsContent(@TempDir Path dir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = annotatedFixture(dir);
+        Path out = dir.resolve("full-batch.pdf");
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            List<PdfPage> open = new ArrayList<>();
+            for (int i = 0; i < doc.pageCount(); i++) {
+                open.add(doc.page(i));
+            }
+            int epochBefore = doc.structureEpoch();
+            assertFalse(doc.isContentModified(), "the fixture is unmodified before the pass");
+            doc.flatten(FlattenMode.FULL, FULL_DPI);
+            assertTrue(doc.structureEpoch() > epochBefore, "replacing every page is structural");
+            assertTrue(doc.isContentModified(), "a full flatten replaced the document content");
+            for (int i = 0; i < open.size(); i++) {
+                PdfPage page = open.get(i);
+                assertTrue(page.isStale(), "page " + i + " must be stale after a raster pass");
+                assertThrows(IllegalStateException.class, page::size);
+                assertDoesNotThrow(page::close);
+            }
+            doc.save(out);
+        }
+        try (PdfDocument reopened = PdfDocument.open(out)) {
+            assertEquals(2, reopened.pageCount(), "a full flatten must preserve the page count");
+        }
+    }
+
+    @Test
+    void fullBatchPreservesMixedPageGeometry(@TempDir Path dir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = writePdfBoxFixture(dir.resolve("mixed-geometry.pdf"), pdf -> {
+            pdf.addPage(new PDPage(new PDRectangle(612, 792)));
+            pdf.addPage(new PDPage(new PDRectangle(842, 1191)));
+            PDPage rotated = new PDPage(new PDRectangle(200.5f, 300.25f));
+            rotated.setRotation(90);
+            pdf.addPage(rotated);
+            pdf.addPage(new PDPage(new PDRectangle(1, 1)));
+        });
+        Path out = dir.resolve("mixed-geometry-flat.pdf");
+        int pages;
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            pages = doc.pageCount();
+            assertEquals(4, pages, "the fixture must keep its four pages");
+            doc.flatten(FlattenMode.FULL, FULL_DPI);
+            doc.save(out);
+        }
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            assertEquals(pages, doc.pageCount(), "a geometry mix must not change the page count");
+            for (int i = 0; i < doc.pageCount(); i++) {
+                try (PdfPage page = doc.page(i)) {
+                    assertTrue(
+                            page.size().width() > 0 && page.size().height() > 0,
+                            "page " + i + " must keep a positive size");
+                    assertEquals(
+                            0,
+                            PdfAnnotations.count(page.rawHandleForRead()),
+                            "page " + i + " must keep no annotations");
+                    assertTrue(page.renderAt(FULL_DPI).rgba().length > 0, "page " + i + " must render");
+                }
+            }
+        }
+    }
+
+    @Test
+    void fullBatchReusesScratchWithoutBleedingPixels(@TempDir Path dir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = writePdfBoxFixture(dir.resolve("painted-then-blank.pdf"), pdf -> {
+            PDPage painted = new PDPage(new PDRectangle(200, 300));
+            pdf.addPage(painted);
+            try (PDPageContentStream content = new PDPageContentStream(pdf, painted)) {
+                content.setNonStrokingColor(Color.BLACK);
+                content.addRect(0, 0, 200, 300);
+                content.fill();
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+            pdf.addPage(new PDPage(new PDRectangle(200, 300)));
+        });
+        Path out = dir.resolve("painted-then-blank-flat.pdf");
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            doc.flatten(FlattenMode.FULL, FULL_DPI);
+            doc.save(out);
+        }
+        try (PdfDocument doc = PdfDocument.open(out)) {
+            try (PdfPage first = doc.page(0)) {
+                assertTrue(
+                        darkRatio(first.renderAt(FULL_DPI)) > 0.5,
+                        "the painted page must stay dark, so the pass really rasterized content");
+            }
+            try (PdfPage blankPage = doc.page(1)) {
+                assertEquals(
+                        0,
+                        darkPixels(blankPage.renderAt(FULL_DPI)),
+                        "the blank page must not inherit the previous page's pixels");
+            }
+        }
+    }
+
+    @Test
+    void annotationsBatchBakesPopulatedFormWidget() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "annotation flattening needs the real PDFium natives");
+        try (PdfDocument doc = PdfDocument.open(resource("all_form_fields.pdf"))) {
+            String textField;
+            try (PdfPage page = doc.page(0)) {
+                textField = PdfFormReader.readPage(doc.rawHandle(), page.rawHandle(), 0).stream()
+                        .filter(f -> f.type() == FormFieldType.TEXT && !f.name().isEmpty())
+                        .map(FormField::name)
+                        .findFirst()
+                        .orElse(null);
+            }
+            assertNotNull(textField, "the fixture must carry a text field");
+            assertTrue(
+                    PdfFormFiller.fill(doc).text(textField, "batch-flatten").apply()
+                            .filledFields()
+                            .contains(textField),
+                    "the text field must accept a value");
+
+            doc.flatten(FlattenMode.ANNOTATIONS);
+            assertTrue(doc.isContentModified(), "a batch annotation flatten is a content edit");
+
+            byte[] out = doc.saveBytes();
+            try (PdfDocument reopened = PdfDocument.open(out);
+                 PdfPage page = reopened.page(0)) {
+                List<FormField> after =
+                        PdfFormReader.readPage(reopened.rawHandle(), page.rawHandle(), 0);
+                assertTrue(
+                        after.stream().noneMatch(f -> f.name().equals(textField)),
+                        "the batched pass must bake the populated widget, leaving no field: "
+                                + after.stream().map(FormField::name).toList());
+            }
+        }
+    }
+
+    @Test
+    void fullBatchReportsPartialMutationWhenALaterPageFails(@TempDir Path dir) throws IOException {
+        assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
+        Path fixture = writePdfBoxFixture(dir.resolve("oversized-last-page.pdf"), pdf -> {
+            pdf.addPage(new PDPage(new PDRectangle(300, 300)));
+            // Page 1 exceeds the raster budget, so it fails after page 0 was replaced.
+            pdf.addPage(new PDPage(new PDRectangle(500000, 500000)));
+        });
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            int epochBefore = doc.structureEpoch();
+            JPDFiumException failure = assertThrows(
+                    JPDFiumException.class, () -> doc.flatten(FlattenMode.FULL, 72));
+            assertTrue(
+                    failure.isContentMutated(),
+                    "a failure after an earlier page was replaced must report the partial mutation: "
+                            + failure.getMessage());
+            assertTrue(
+                    doc.structureEpoch() > epochBefore,
+                    "the replaced first page must invalidate the open pages");
+            assertTrue(doc.isContentModified(), "the first page really was replaced");
         }
     }
 
