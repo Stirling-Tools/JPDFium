@@ -927,7 +927,7 @@ jpdf_status build_text_layer_pdf(const TextLayer& layer, std::string* out) {
     return pdf.finish(out);
 }
 
-// Glyphless TrueType program, folded in from glyphless_font.cpp.
+// Glyphless TrueType program.
 
 namespace {
 

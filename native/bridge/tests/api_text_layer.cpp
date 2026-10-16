@@ -53,7 +53,6 @@ static int g_failures = 0;
         }                                                                                   \
     } while (0)
 
-// --- guard shim suite (merged from api_guards.cpp) ---
 // jpdf_guard_* shims: legacy and raw PDFium calls admitted by the native domain.
 // Split into a pre-init probe and the main body so the "refused before init"
 // assertion still runs before the host initialises the runtime; the main body
@@ -609,9 +608,11 @@ void test_right_to_left() {
     CHECK(renders_blank(o.page), "mirrored runs draw nothing");
 
     // Forcing the direction changes only placement: the same words, read back the same.
+    // Line 0 is Hebrew (naturally RTL) and line 2 is Latin (naturally LTR), so both
+    // overrides are the opposite of what the text would infer on its own.
     std::vector<jpdf_text_line> forced = lines;
-    forced[0].flags = JPDF_TEXT_LINE_RTL;
-    forced[2].flags = JPDF_TEXT_LINE_LTR;
+    forced[0].flags = JPDF_TEXT_LINE_LTR;
+    forced[2].flags = JPDF_TEXT_LINE_RTL;
     CHECK_STATUS(write(forced, words, out), JPDF_OK, "explicit directions");
     Opened again;
     CHECK(open(out, &again) && squash(page_text(again.page)) == want, "explicit directions agree");

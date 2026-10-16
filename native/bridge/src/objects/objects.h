@@ -57,19 +57,29 @@ inline jpdf_status pdfium_open_failure() noexcept {
     }
 }
 
-// Closes a document unless released; only destroyed while admitted.
+// Closes a document unless released; only destroyed while admitted. Non-copyable, because two
+// owners of the same handle would close it twice.
 struct LoadedDocument {
-    FPDF_DOCUMENT doc;
+    explicit LoadedDocument(FPDF_DOCUMENT document) noexcept : doc(document) {}
     ~LoadedDocument() {
         if (doc) FPDF_CloseDocument(doc);
     }
+    LoadedDocument(const LoadedDocument&) = delete;
+    LoadedDocument& operator=(const LoadedDocument&) = delete;
+
+    FPDF_DOCUMENT doc;
 };
 
+// Closes a page unless released; only destroyed while admitted. Non-copyable, as above.
 struct LoadedPage {
-    FPDF_PAGE page;
+    explicit LoadedPage(FPDF_PAGE loaded) noexcept : page(loaded) {}
     ~LoadedPage() {
         if (page) FPDF_ClosePage(page);
     }
+    LoadedPage(const LoadedPage&) = delete;
+    LoadedPage& operator=(const LoadedPage&) = delete;
+
+    FPDF_PAGE page;
 };
 
 }  // namespace jpdf

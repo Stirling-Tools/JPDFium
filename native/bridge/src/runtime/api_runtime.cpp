@@ -217,7 +217,6 @@ jpdf_status jpdf_runtime_resume(void) noexcept {
 
 }  // extern "C"
 
-// --- api_status.cpp (merged) ---
 // api_status.cpp - thread-local error detail and struct-size validation.
 
 #include <cstring>
@@ -285,7 +284,6 @@ jpdf_status check_output_struct(uint32_t caller_size, uint32_t min_size,
 
 }  // namespace jpdf
 
-// --- api_module.cpp (merged) ---
 // api_module.cpp - jpdf_module_*: optional modules' objects in the core's handle table.
 
 #include <memory>

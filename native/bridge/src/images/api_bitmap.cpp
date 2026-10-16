@@ -27,7 +27,7 @@ jpdf_status resolve_bitmap(jpdf_handle bitmap, std::shared_ptr<jpdf::BitmapObjec
     jpdf_status st = jpdf::objects().resolve_as(bitmap, jpdf::ObjectType::Bitmap, out);
     return st == JPDF_OK ? st : jpdf::fail(st, "bitmap handle rejected");
 }
-// PNG file decoding, folded in from api_image.cpp.
+// PNG file decoding.
 
 constexpr uintmax_t kMaxFileBytes = uintmax_t{1} << 30;
 
@@ -71,7 +71,7 @@ double dpi_from_ppm(uint32_t ppm) noexcept {
 
 }  // namespace
 
-// Quad rectification for OCR crops, folded in from rectify.h/rectify.cpp.
+// Quad rectification for OCR crops.
 namespace jpdf {
 
 using Quad = std::array<double, 8>;
@@ -498,6 +498,11 @@ jpdf_status jpdf_image_load_file(const char* path_utf8, const jpdf_image_load_op
         if (rc == -2) return jpdf::fail(JPDF_E_NO_MEMORY, "cannot allocate decoded pixels");
         if (rc == -1) return jpdf::fail(JPDF_E_FORMAT, "not a PNG this library can decode");
         if (rc != 0 || !target.pixels) return jpdf::fail(JPDF_E_INTERNAL, "PNG decoder failed");
+        // The decoder contract is 1 (gray) or 3 (RGB) channels; anything else
+        // would make stride/pixel_format disagree with the pixel buffer.
+        if (image.channels != 1 && image.channels != 3) {
+            return jpdf::fail(JPDF_E_FORMAT, "decoded image is neither gray nor RGB");
+        }
         if (image.width > INT32_MAX / image.channels || image.height > INT32_MAX) {
             return jpdf::fail(JPDF_E_LIMIT, "image dimensions exceed the bitmap range");
         }

@@ -48,7 +48,6 @@ static int g_failures = 0;
         }                                                                                   \
     } while (0)
 
-// --- object table suite (merged from api_object_table.cpp) ---
 // The generation-checked handle table, tested without PDFium. Kept in its own
 // namespace so its counter and helpers cannot collide with the host file's.
 namespace object_table_suite {
@@ -732,15 +731,13 @@ void test_font_concurrency_with_font() {
 
 }  // namespace
 
-// --- raster + rectify suite (merged from api_raster.cpp) ---
 // jpdf_rasterize_page_file and jpdf_bitmap_rectify against real PDFium, plus the
-// image-load cases that arrived with api_image.cpp. Kept in its own namespace so its
+// image-load cases for jpdf_image_load_file. Kept in its own namespace so its
 // counter and helpers cannot collide with the host file's.
 namespace raster_suite {
 
 static int g_failures = 0;
 
-// --- image load suite (merged from api_image.cpp) ---
 // jpdf_image_load_file on hand-built PNGs of every colour type. Kept in its own
 // namespace so its counter and helpers cannot collide with the host file's.
 namespace image_suite {
@@ -1160,10 +1157,10 @@ std::vector<uint8_t> pixels(jpdf_handle bmp) {
 }
 
 void test_pixel_kernels() {
-    // The render path allocates RGBA, narrows in place, and (as of this change) shrinks the
+    // The render path allocates RGBA, narrows in place, and shrinks the
     // allocation. Verify the shipped kernels against the scalar reference formulas by comparing a
-    // narrowed render with the same render's RGBA pixels: byte-for-byte, no compiler autovectorizer
-    // help, and a width that is not a multiple of the vector length exercises the tail.
+    // narrowed render with the same render's RGBA pixels: byte-for-byte, with no reliance on
+    // compiler autovectorization.
     const std::string letter = (scratch() / "letter.pdf").string();
     const jpdf_handle rgba_bmp = render_bitmap(letter, 72, JPDF_PIXEL_RGBA8);
     const jpdf_handle rgb_bmp = render_bitmap(letter, 72, JPDF_PIXEL_RGB8);
@@ -1174,7 +1171,14 @@ void test_pixel_kernels() {
     CHECK_STATUS(jpdf_bitmap_get_info(rgba_bmp, &info), JPDF_OK, "rgba bitmap info");
     const size_t count = static_cast<size_t>(info.width) * static_cast<size_t>(info.height);
     CHECK(info.width > 0 && info.byte_size == count * 4, "rgba info reports the full allocation");
-    CHECK(info.width % 16 != 0, "render width exercises the vector tail");
+    // The kernels process 16/32/64-byte blocks, so the tail is exercised by the
+    // narrowed ROW BYTE LENGTH, not the pixel width: the RGBA row pads to a
+    // vector multiple at this fixture's width, the RGB and gray rows do not.
+    const size_t rgb_row = static_cast<size_t>(info.width) * 3;
+    const size_t gray_row = static_cast<size_t>(info.width);
+    CHECK(rgb_row % 16 != 0 && gray_row % 16 != 0, "rgb/gray rows exercise the 16-byte tail");
+    CHECK(rgb_row % 32 != 0 && gray_row % 32 != 0, "rgb/gray rows exercise the 32-byte tail");
+    CHECK(rgb_row % 64 != 0 && gray_row % 64 != 0, "rgb/gray rows exercise the 64-byte tail");
 
     const std::vector<uint8_t> rgba = pixels(rgba_bmp);
     const std::vector<uint8_t> rgb = pixels(rgb_bmp);

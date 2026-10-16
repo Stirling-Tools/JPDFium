@@ -60,8 +60,12 @@ long process_id() noexcept {
 int open_exclusive(const fs::path& path) noexcept {
 #if defined(_WIN32)
     int fd = -1;
-    if (::_wsopen_s(&fd, path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT,
-                    _SH_DENYRW, _S_IREAD | _S_IWRITE) != 0) {
+    const errno_t rc =
+        ::_wsopen_s(&fd, path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT,
+                    _SH_DENYRW, _S_IREAD | _S_IWRITE);
+    if (rc != 0) {
+        // _wsopen_s reports through its return value and does not set errno.
+        errno = rc;
         return -1;
     }
     return fd;
@@ -142,7 +146,7 @@ jpdf_status OutputTransaction::begin(const char* destination_utf8, bool durable,
         }
 
         static std::atomic<unsigned> counter{0};
-        std::unique_ptr<OutputTransaction> tx(new OutputTransaction());
+        auto tx = std::unique_ptr<OutputTransaction>(new OutputTransaction());
         tx->destination_ = destination;
         tx->parent_ = parent;
         tx->durable_ = durable;
@@ -273,7 +277,6 @@ OutputTransaction::~OutputTransaction() {
 
 }  // namespace jpdf
 
-// --- image_writer.cpp (merged) ---
 // image_writer.cpp - PNG and document output through an OutputTransaction.
 
 namespace jpdf {

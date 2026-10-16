@@ -669,15 +669,12 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
             const size_t need = mw->size + static_cast<size_t>(size);
             if (need < mw->size) return 0;  // size_t wraparound
             if (need > mw->cap) {
-                size_t ncap = mw->cap ? mw->cap : 65536;
-                while (ncap < need) {
-                    const size_t next = ncap * 2;
-                    if (next < ncap) {
-                        ncap = need;
-                        break;
-                    }
-                    ncap = next;
-                }
+                // One realloc per write: PDFium can hand the whole document to a
+                // single WriteBlock, and doubling in a loop would copy the
+                // growing prefix once per step. Geometric across writes, but a
+                // single large write jumps straight to what it needs.
+                size_t ncap = mw->cap ? mw->cap * 2 : 65536;
+                if (ncap < need) ncap = need;  // also recovers a wrapped cap*2
                 uint8_t* nbuf = static_cast<uint8_t*>(std::realloc(mw->buf, ncap));
                 if (!nbuf) return 0;
                 mw->buf = nbuf;

@@ -24,10 +24,14 @@ using jpdf::pdfium_open_failure;
 using jpdf::Purpose;
 
 struct LoadedTextPage {
-    FPDF_TEXTPAGE text;
+    explicit LoadedTextPage(FPDF_TEXTPAGE loaded) noexcept : text(loaded) {}
     ~LoadedTextPage() {
         if (text) FPDFText_ClosePage(text);
     }
+    LoadedTextPage(const LoadedTextPage&) = delete;
+    LoadedTextPage& operator=(const LoadedTextPage&) = delete;
+
+    FPDF_TEXTPAGE text;
 };
 
 void append_utf8(std::string& out, char32_t c) {
@@ -49,16 +53,15 @@ void append_utf8(std::string& out, char32_t c) {
 }
 
 // PDFium returns UTF-16LE; unpaired surrogates become U+FFFD.
-std::string utf16le_to_utf8(const std::vector<uint8_t>& bytes, size_t units) {
+std::string utf16_to_utf8(const unsigned short* units, size_t count) {
     std::string out;
-    out.reserve(units);
+    out.reserve(count);
     size_t i = 0;
-    while (i < units) {
-        char32_t c = static_cast<char32_t>(bytes[2 * i] | (bytes[2 * i + 1] << 8));
+    while (i < count) {
+        char32_t c = static_cast<char32_t>(units[i]);
         size_t next = i + 1;
-        if (c >= 0xD800 && c <= 0xDBFF && next < units) {
-            const char32_t low =
-                static_cast<char32_t>(bytes[2 * next] | (bytes[2 * next + 1] << 8));
+        if (c >= 0xD800 && c <= 0xDBFF && next < count) {
+            const char32_t low = static_cast<char32_t>(units[next]);
             if (low >= 0xDC00 && low <= 0xDFFF) {
                 c = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
                 next = i + 2;
@@ -215,7 +218,9 @@ jpdf_status jpdf_page_get_text(jpdf_handle page, char* buffer, uint64_t capacity
         if (!buffer && capacity != 0) {
             return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "capacity without a buffer");
         }
-        std::vector<uint8_t> utf16;
+        // The scratch holds UTF-16 code units, the type FPDFText_GetText writes, so the buffer is
+        // never reinterpreted. GetText writes count units plus a terminating NUL.
+        std::vector<unsigned short> utf16;
         size_t units = 0;
         {
             jpdf::Admission admission(jpdf::Purpose::Ordinary);
@@ -229,15 +234,13 @@ jpdf_status jpdf_page_get_text(jpdf_handle page, char* buffer, uint64_t capacity
             }
             const int count = FPDFText_CountChars(loaded.text);
             if (count < 0) return jpdf::fail(JPDF_E_FORMAT, "PDFium could not count the page text");
-            // GetText writes count units plus a terminating NUL.
-            utf16.resize(2 * (static_cast<size_t>(count) + 1));
-            const int written = FPDFText_GetText(loaded.text, 0, count,
-                                                 reinterpret_cast<unsigned short*>(utf16.data()));
+            utf16.resize(static_cast<size_t>(count) + 1);
+            const int written = FPDFText_GetText(loaded.text, 0, count, utf16.data());
             units = written > 0
                         ? std::min(static_cast<size_t>(written) - 1, static_cast<size_t>(count))
                         : 0;
         }
-        const std::string text = utf16le_to_utf8(utf16, units);
+        const std::string text = utf16_to_utf8(utf16.data(), units);
         *required = static_cast<uint64_t>(text.size()) + 1;
         if (!buffer) return JPDF_OK;
         if (capacity < *required) {

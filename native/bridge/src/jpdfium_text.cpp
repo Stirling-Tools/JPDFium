@@ -105,6 +105,11 @@ static void append_g(std::string& s, double v) {
     const auto res = std::to_chars(buf, buf + sizeof(buf), v, std::chars_format::general, 6);
     if (res.ec == std::errc()) {
         s.append(buf, static_cast<size_t>(res.ptr - buf));
+    } else {
+        // Unreachable for a bounded double in a 64-byte buffer, but a dropped
+        // field would silently corrupt the record's column alignment; degrade
+        // to 0 like the non-finite case instead.
+        s += '0';
     }
 }
 
