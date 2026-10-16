@@ -1071,7 +1071,8 @@ public final class PdfDocument implements AutoCloseable {
                 boolean replacedPages = false;
                 try {
                     JpdfiumLib.docFlattenToImages(handle, dpi);
-                    replacedPages = true;
+                    // An empty document leaves nothing replaced, so nothing is stale.
+                    replacedPages = pageCount() > 0;
                 } catch (JPDFiumException e) {
                     replacedPages = e.isContentMutated();
                     throw e;
@@ -1388,7 +1389,10 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        // The page is replaced by an image, so the document no longer matches
+        // the bytes it was opened with.
         invalidateOpenPages();
+        markContentModified();
     }
 
     /**

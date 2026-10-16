@@ -1473,8 +1473,8 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Rasterizes every page at {@code dpi} and replaces its content with that image, reusing one
-     * render bitmap across pages of equal size.
+     * Rasterizes every page at {@code dpi} and replaces its content with that image. One render
+     * frame is reused until the page size changes, when it is reallocated.
      */
     public static void docFlattenToImages(long doc, int dpi) {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");

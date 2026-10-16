@@ -513,9 +513,7 @@ tasks.register<Test>("nativeSmokeTest") {
     systemProperty("jpdfium.smoke", "true")
     filter {
         includeTestsMatching("*NativeSmokeTest")
-        // The flatten API assertions are only meaningful against real PDFium,
-        // so they are skipped by the stub-based :test task (assumeTrue) and
-        // run here, where the freshly built bridge is on the classpath.
+        // Flatten assertions need real PDFium: the stub-based :test task skips them.
         includeTestsMatching("*FlattenApiTest")
         includeTestsMatching("*PdfEncryptionCopyTest")
     }

@@ -231,6 +231,8 @@ class FlattenApiTest {
             assertDoesNotThrow(() -> page.flatten(FlattenMode.FULL, 100));
             assertTrue(page.isClosed());
             assertThrows(IllegalStateException.class, page::size);
+            assertTrue(doc.isContentModified(),
+                    "a per-page raster replacement must flag the document as edited");
             doc.save(out);
             try (PdfPage reopened = doc.page(0)) {
                 assertFalse(reopened.isClosed());

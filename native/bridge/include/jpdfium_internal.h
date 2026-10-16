@@ -153,6 +153,7 @@ struct DocCore {
 
     // One scratch render frame per document, borrowed by the per-page and the
     // whole-document flatten paths so they can never hold two frames at once.
+    // The borrow is exclusive because callers serialize on the PDFium domain.
     RasterFrame rasterFrame{};
 
     ~DocCore() {

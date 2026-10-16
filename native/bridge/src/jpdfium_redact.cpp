@@ -442,21 +442,25 @@ int32_t jpdfium_page_flatten(int64_t page) noexcept {
 }
 
 int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+    bool mutated = false;
     try {
         DocWrapper* dw = decodeDoc(docHandle);
         if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
         const int count = FPDF_GetPageCount(dw->core->doc);
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(dw->core->doc, i));
-            if (!page) return JPDFIUM_ERR_NOT_FOUND;
+            if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
             const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
-            if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) return JPDFIUM_ERR_NATIVE;
+            if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
+                return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
+            }
+            if (rc == FLATTEN_SUCCESS) mutated = true;
         }
         // Flatten rewrites content in place and keeps every FPDF_PAGE valid, so
         // the structural generation must not move; Java tracks the edit itself.
         return JPDFIUM_OK;
     } catch (...) {
-        return JPDFIUM_ERR_NATIVE;
+        return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
 }
 
