@@ -532,7 +532,7 @@ public final class PdfSplit {
             } catch (JPDFiumException _) {
                 return false;
             }
-            if (!extracted || !OutputTransaction.isPublishableStaging(staged, 0)) {
+            if (!extracted || !OutputTransaction.isPublishableStaging(staged)) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the

@@ -263,12 +263,23 @@ public final class PdfTextExtractor {
             negative = true;
             i++;
         }
+        if (i >= end) {
+            throw new NumberFormatException("empty integer literal");
+        }
         while (i < end) {
             char c = s.charAt(i);
             i++;
-            if (c >= '0' && c <= '9') {
-                result = result * 10 + (c - '0');
+            if (c < '0' || c > '9') {
+                // The fast key order is integer by contract; a fraction or
+                // exponent here means a foreign layout, so let the generic
+                // parser handle the object instead of silently dropping digits.
+                throw new NumberFormatException("non-integer in integer field");
             }
+            final int digit = c - '0';
+            if (result > (Integer.MAX_VALUE - digit) / 10) {
+                throw new NumberFormatException("integer literal overflows");
+            }
+            result = result * 10 + digit;
         }
         return negative ? -result : result;
     }

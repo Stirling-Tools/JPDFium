@@ -339,8 +339,9 @@ public final class JpdfiumLib {
         if (fast != null) {
             return pageWidth0Fast(fast, page);
         }
-        check(JpdfiumH.jpdfium_page_width(page, SCRATCH.get().float1), "pageWidth");
-        return SCRATCH.get().float1.get(JAVA_FLOAT, 0);
+        Scratch s = SCRATCH.get();
+        check(JpdfiumH.jpdfium_page_width(page, s.float1), "pageWidth");
+        return s.float1.get(JAVA_FLOAT, 0);
     }
 
     /**
@@ -352,9 +353,10 @@ public final class JpdfiumLib {
      */
     private static float pageWidth0Fast(MethodHandle fast, long page) {
         try {
-            int rc = (int) fast.invokeExact(page, SCRATCH.get().float1);
+            Scratch s = SCRATCH.get();
+            int rc = (int) fast.invokeExact(page, s.float1);
             check(rc, "pageWidth");
-            return SCRATCH.get().float1.get(JAVA_FLOAT, 0);
+            return s.float1.get(JAVA_FLOAT, 0);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             if (t instanceof JPDFiumException jpdfiumException) {
@@ -368,9 +370,10 @@ public final class JpdfiumLib {
         MethodHandle fast = FastLinks.PAGE_HEIGHT;
         if (fast != null) {
             try {
-                int rc = (int) fast.invokeExact(page, SCRATCH.get().float2);
+                Scratch s = SCRATCH.get();
+                int rc = (int) fast.invokeExact(page, s.float2);
                 check(rc, "pageHeight");
-                return SCRATCH.get().float2.get(JAVA_FLOAT, 0);
+                return s.float2.get(JAVA_FLOAT, 0);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 if (t instanceof JPDFiumException jpdfiumException) {
@@ -379,8 +382,9 @@ public final class JpdfiumLib {
                 throw new JPDFiumException("pageHeight fast-path invocation failed", t);
             }
         }
-        check(JpdfiumH.jpdfium_page_height(page, SCRATCH.get().float2), "pageHeight");
-        return SCRATCH.get().float2.get(JAVA_FLOAT, 0);
+        Scratch s = SCRATCH.get();
+        check(JpdfiumH.jpdfium_page_height(page, s.float2), "pageHeight");
+        return s.float2.get(JAVA_FLOAT, 0);
     }
 
     private static MemorySegment pageRawHandle0(long page) {
@@ -612,12 +616,13 @@ public final class JpdfiumLib {
 
     public static byte[] docSaveBytes(long doc) {
         return PdfiumRuntime.execute(() -> {
-            check(JpdfiumH.jpdfium_doc_save_bytes(doc, SCRATCH.get().addr, SCRATCH.get().long1), "docSaveBytes");
-            MemorySegment nativePtr = SCRATCH.get().addr.get(ADDRESS, 0);
+            Scratch s = SCRATCH.get();
+            check(JpdfiumH.jpdfium_doc_save_bytes(doc, s.addr, s.long1), "docSaveBytes");
+            MemorySegment nativePtr = s.addr.get(ADDRESS, 0);
             // Acquire the pointer in its own try-finally so the buffer is freed even when
             // checkNativeBuffer throws (e.g. jpdfium.maxSaveResultBytes exceeded).
             try {
-                long byteLen = checkNativeBuffer(nativePtr, SCRATCH.get().long1.get(JAVA_LONG, 0), "docSaveBytes", true);
+                long byteLen = checkNativeBuffer(nativePtr, s.long1.get(JAVA_LONG, 0), "docSaveBytes", true);
                 BridgeAlloc.alloc(BridgeAlloc.Tag.SAVE_OUTPUT, byteLen);
                 try {
                     return byteLen == 0 ? new byte[0] : nativePtr.reinterpret(byteLen).toArray(JAVA_BYTE);
@@ -716,8 +721,9 @@ public final class JpdfiumLib {
 
     public static long pageOpen(long doc, int idx) {
         return PdfiumRuntime.executeLong(() -> {
-            check(JpdfiumH.jpdfium_page_open(doc, idx, SCRATCH.get().long1), "pageOpen: " + idx);
-            long handle = SCRATCH.get().long1.get(JAVA_LONG, 0);
+            Scratch s = SCRATCH.get();
+            check(JpdfiumH.jpdfium_page_open(doc, idx, s.long1), "pageOpen: " + idx);
+            long handle = s.long1.get(JAVA_LONG, 0);
             PdfiumRuntime.pageOpened();
             return handle;
         });

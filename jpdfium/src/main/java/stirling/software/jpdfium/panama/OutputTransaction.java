@@ -224,6 +224,21 @@ public final class OutputTransaction implements AutoCloseable {
     }
 
     /**
+     * Validate a caller-filled staging file against the global save-result limit
+     * ({@code jpdfium.maxSaveResultBytes}), the same default the instance
+     * {@link #publish} path applies through {@link #validateStaged}. The two-arg
+     * overload keeps {@code 0} meaning "unbounded" for callers with their own
+     * budget; this one is what file-backed merge/split outputs must use so a
+     * configured global cap is not silently bypassed.
+     *
+     * @param staging finished staging file
+     * @return true when the staging file is non-empty and within the global bound
+     */
+    public static boolean isPublishableStaging(Path staging) {
+        return isPublishableStaging(staging, JpdfiumLib.maxSaveResultBytes());
+    }
+
+    /**
      * Publish when {@code target} is already symlink-resolved. The instance path
      * resolves the destination once in {@code begin()}; re-walking symlinks here
      * would repeat up to {@link #MAX_SYMLINK_HOPS} stat/readlink calls per publish

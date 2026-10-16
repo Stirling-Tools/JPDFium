@@ -413,7 +413,7 @@ public final class PdfMerge {
                 // contract so the caller can fall back in AUTO mode.
                 return false;
             }
-            if (!merged || !OutputTransaction.isPublishableStaging(staged, 0)) {
+            if (!merged || !OutputTransaction.isPublishableStaging(staged)) {
                 return false;
             }
             // Single durable commit: the native writer filled the staging file

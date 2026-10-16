@@ -8,7 +8,7 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** Mismatched-artifact simulation for the ABI handshake (no native call). */
+/** Mismatched-artifact simulation for the ABI handshake. */
 class AbiHandshakeTest {
 
     private static final int V = JpdfiumLib.EXPECTED_ABI_VERSION;
