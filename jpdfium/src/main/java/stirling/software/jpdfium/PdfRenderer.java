@@ -285,14 +285,27 @@ public final class PdfRenderer {
     }
 
     /**
-     * Combines all pages vertically into a single image and encodes it to bytes.
+     * Combines all pages vertically into a single image and encodes it to bytes
+     * with the default {@link ColorType#RGB}.
+     *
+     * @param dpi    render resolution
+     * @param format target image format
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
      */
     public byte[] renderCombinedToBytes(float dpi, ImageFormat format) throws IOException {
         return renderCombinedToBytes(dpi, format, ColorType.RGB);
     }
 
     /**
-     * Combines all pages vertically into a single image with the given color type and encodes it to bytes.
+     * Combines all pages vertically into a single image with the given color type
+     * and encodes it to bytes.
+     *
+     * @param dpi       render resolution
+     * @param format    target image format
+     * @param colorType output color type
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
      */
     public byte[] renderCombinedToBytes(float dpi, ImageFormat format, ColorType colorType) throws IOException {
         BufferedImage combined = renderCombinedImage(dpi, colorType);
@@ -300,14 +313,26 @@ public final class PdfRenderer {
     }
 
     /**
-     * Combines all pages vertically into a single image and writes it to a file.
+     * Combines all pages vertically into a single image and writes it to a file,
+     * with the default {@link ColorType#RGB}; the format is inferred from the
+     * file extension.
+     *
+     * @param outputPath destination file path
+     * @param dpi        render resolution
+     * @throws IOException if rendering or writing fails
      */
     public void renderCombinedToFile(Path outputPath, float dpi) throws IOException {
         renderCombinedToFile(outputPath, dpi, ColorType.RGB);
     }
 
     /**
-     * Combines all pages vertically into a single image with the given color type and writes it to a file.
+     * Combines all pages vertically into a single image with the given color type
+     * and writes it to a file; the format is inferred from the file extension.
+     *
+     * @param outputPath destination file path
+     * @param dpi        render resolution
+     * @param colorType  output color type
+     * @throws IOException if rendering or writing fails
      */
     public void renderCombinedToFile(Path outputPath, float dpi, ColorType colorType) throws IOException {
         BufferedImage combined = renderCombinedImage(dpi, colorType);
@@ -327,6 +352,11 @@ public final class PdfRenderer {
 
     /**
      * Renders all pages into a multi-page TIFF file with the given color type.
+     *
+     * @param outputPath destination TIFF file path
+     * @param dpi        render resolution
+     * @param colorType  output color type
+     * @throws IOException if writing fails
      */
     public void renderToMultiPageTiff(Path outputPath, float dpi, ColorType colorType) throws IOException {
         List<BufferedImage> images = renderImages(dpi, colorType);
@@ -334,7 +364,12 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders all pages into a multi-page TIFF OutputStream.
+     * Renders all pages into a multi-page TIFF OutputStream with the default
+     * {@link ColorType#RGB}.
+     *
+     * @param output destination stream
+     * @param dpi    render resolution
+     * @throws IOException if writing fails
      */
     public void renderToMultiPageTiff(OutputStream output, float dpi) throws IOException {
         renderToMultiPageTiff(output, dpi, ColorType.RGB);
@@ -342,6 +377,11 @@ public final class PdfRenderer {
 
     /**
      * Renders all pages into a multi-page TIFF OutputStream with the given color type.
+     *
+     * @param output    destination stream
+     * @param dpi       render resolution
+     * @param colorType output color type
+     * @throws IOException if writing fails
      */
     public void renderToMultiPageTiff(OutputStream output, float dpi, ColorType colorType) throws IOException {
         List<BufferedImage> images = renderImages(dpi, colorType);
@@ -349,7 +389,12 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders all pages into multi-page TIFF bytes.
+     * Renders all pages into multi-page TIFF bytes with the default
+     * {@link ColorType#RGB}.
+     *
+     * @param dpi render resolution
+     * @return multi-page TIFF bytes
+     * @throws IOException if encoding fails
      */
     public byte[] renderToMultiPageTiffBytes(float dpi) throws IOException {
         return renderToMultiPageTiffBytes(dpi, ColorType.RGB);
@@ -357,6 +402,11 @@ public final class PdfRenderer {
 
     /**
      * Renders all pages into multi-page TIFF bytes with the given color type.
+     *
+     * @param dpi       render resolution
+     * @param colorType output color type
+     * @return multi-page TIFF bytes
+     * @throws IOException if encoding fails
      */
     public byte[] renderToMultiPageTiffBytes(float dpi, ColorType colorType) throws IOException {
         List<BufferedImage> images = renderImages(dpi, colorType);
@@ -395,7 +445,16 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders a page directly to encoded image bytes with fine-grained encoding control and color type.
+     * Renders a page directly to encoded image bytes with a quality hint and
+     * explicit color type.
+     *
+     * @param pageIndex 0-based page index
+     * @param dpi       render resolution
+     * @param format    target image format
+     * @param quality   encoder quality hint (format-specific; ignored where unsupported)
+     * @param colorType color type (RGB, ARGB, GRAY, BINARY)
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
      */
     public byte[] renderToBytes(int pageIndex, int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
         try (PdfPage page = document.page(pageIndex)) {
@@ -434,14 +493,25 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders a page directly to an image file at default 150 DPI.
+     * Renders a page directly to an image file at default 150 DPI; the format is
+     * inferred from the file extension.
+     *
+     * @param pageIndex  0-based page index
+     * @param outputPath destination file path
+     * @throws IOException if rendering or writing fails
      */
     public void renderToFile(int pageIndex, Path outputPath) throws IOException {
         renderToFile(pageIndex, outputPath, DEFAULT_FILE_DPI);
     }
 
     /**
-     * Renders a page directly to an image file at the specified DPI.
+     * Renders a page directly to an image file at the specified DPI; the format
+     * is inferred from the file extension.
+     *
+     * @param pageIndex  0-based page index
+     * @param outputFile destination file
+     * @param dpi        render resolution
+     * @throws IOException if rendering or writing fails
      */
     public void renderToFile(int pageIndex, File outputFile, int dpi) throws IOException {
         if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
@@ -449,7 +519,12 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders a page directly to an image file at default 150 DPI.
+     * Renders a page directly to an image file at default 150 DPI; the format is
+     * inferred from the file extension.
+     *
+     * @param pageIndex  0-based page index
+     * @param outputFile destination file
+     * @throws IOException if rendering or writing fails
      */
     public void renderToFile(int pageIndex, File outputFile) throws IOException {
         if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
@@ -458,6 +533,12 @@ public final class PdfRenderer {
 
     /**
      * Renders a page directly to an OutputStream.
+     *
+     * @param pageIndex 0-based page index
+     * @param output    destination stream
+     * @param dpi       render resolution
+     * @param format    target image format
+     * @throws IOException if rendering or writing fails
      */
     public void renderToStream(int pageIndex, OutputStream output, int dpi, ImageFormat format) throws IOException {
         try (PdfPage page = document.page(pageIndex)) {
@@ -466,7 +547,13 @@ public final class PdfRenderer {
     }
 
     /**
-     * Renders a page directly to an OutputStream.
+     * Renders a page directly to an OutputStream with a format name.
+     *
+     * @param pageIndex  0-based page index
+     * @param output     destination stream
+     * @param dpi        render resolution
+     * @param formatName image format name (e.g. "PNG", "JPEG", "WEBP")
+     * @throws IOException if rendering or writing fails
      */
     public void renderToStream(int pageIndex, OutputStream output, int dpi, String formatName) throws IOException {
         try (PdfPage page = document.page(pageIndex)) {

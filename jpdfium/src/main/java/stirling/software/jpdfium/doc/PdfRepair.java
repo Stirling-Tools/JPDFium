@@ -23,7 +23,7 @@ import java.nio.file.Path;
  * (OpenJPEG)</li>
  * </ol>
  *
- * <h3>Usage</h3>
+ * <h2>Usage</h2>
  *
  * <pre>{@code
  * RepairResult result = PdfRepair.builder()

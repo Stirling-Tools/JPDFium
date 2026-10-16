@@ -177,6 +177,12 @@ public final class PdfDocument implements AutoCloseable {
         refreshRawHandle();
     }
 
+    /**
+     * Open a document from a file path.
+     *
+     * @param path path to a PDF file; must not be null
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(Path path) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         Path abs = path.toAbsolutePath();
@@ -355,11 +361,25 @@ public final class PdfDocument implements AutoCloseable {
         }
     }
 
+    /**
+     * Open a document from a file.
+     *
+     * @param file PDF file; must not be null
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(File file) {
         if (file == null) throw new IllegalArgumentException("file must not be null");
         return open(file.toPath());
     }
 
+    /**
+     * Open a password-protected document from a file (see {@link #open(Path, String)}
+     * for the shared null/empty password contract).
+     *
+     * @param file     PDF file; must not be null
+     * @param password document password; null is rejected, empty falls back to a plain open
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(File file, String password) {
         if (file == null) throw new IllegalArgumentException("file must not be null");
         return open(file.toPath(), password);
@@ -391,6 +411,15 @@ public final class PdfDocument implements AutoCloseable {
         return open(bytes);
     }
 
+    /**
+     * Open a password-protected document from a byte buffer (see
+     * {@link #open(Path, String)} for the shared null/empty password contract).
+     * A heap buffer is copied once; the position advances to the limit.
+     *
+     * @param buffer   source buffer; must not be null
+     * @param password document password; null is rejected, empty falls back to {@link #open(ByteBuffer)}
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(ByteBuffer buffer, String password) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
@@ -438,10 +467,24 @@ public final class PdfDocument implements AutoCloseable {
         return s == null ? null : s.clone();
     }
 
+    /**
+     * Create a document with one page per image, using default
+     * {@link ImageToPdfOptions} (page sized to the image).
+     *
+     * @param images source images, laid out one page each in list order
+     * @return new in-memory document
+     */
     public static PdfDocument fromImages(List<BufferedImage> images) {
         return PdfImageConverter.imagesToPdfFromImages(images, ImageToPdfOptions.builder().build());
     }
 
+    /**
+     * Create a document with one page per image and explicit page options.
+     *
+     * @param images  source images, laid out one page each in list order
+     * @param options page sizing, margins, and compression policy
+     * @return new in-memory document
+     */
     public static PdfDocument fromImages(List<BufferedImage> images, ImageToPdfOptions options) {
         return PdfImageConverter.imagesToPdfFromImages(images, options);
     }
@@ -702,11 +745,24 @@ public final class PdfDocument implements AutoCloseable {
         return PdfMerge.merge(List.of(documents));
     }
 
+    /**
+     * Number of pages in the document.
+     *
+     * @return page count
+     */
     public int pageCount() {
         ensureOpen();
         return JpdfiumLib.docPageCount(handle);
     }
 
+    /**
+     * Open a page for rendering or editing. The returned handle owns native
+     * state and must be closed by the caller; it is invalidated by structural
+     * document operations (see {@link PdfPage}).
+     *
+     * @param index zero-based page index
+     * @return open page handle
+     */
     public PdfPage page(int index) {
         ensureOpen();
         return PdfPage.open(this, handle, index);
@@ -1048,6 +1104,12 @@ public final class PdfDocument implements AutoCloseable {
         saveTo(destination, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a file with an explicit output policy.
+     *
+     * @param destination target file, overwritten on success
+     * @param options     save policy; null uses {@link SaveOptions#fast()}
+     */
     public void saveTo(Path destination, SaveOptions options) {
         ensureOpen();
         if (destination == null) throw new IllegalArgumentException("destination must not be null");
@@ -1074,10 +1136,24 @@ public final class PdfDocument implements AutoCloseable {
         saveTo(channel, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a channel with the {@link SaveOptions#fast()} policy
+     * (see {@link #saveTo(WritableByteChannel, SaveOptions)}).
+     *
+     * @param channel target output channel
+     * @throws IOException if an I/O error occurs
+     */
     public void saveTo(WritableByteChannel channel) throws IOException {
         saveTo(channel, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a channel with an explicit output policy.
+     *
+     * @param channel target output channel
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @throws IOException if an I/O error occurs
+     */
     public void saveTo(WritableByteChannel channel, SaveOptions options) throws IOException {
         ensureOpen();
         JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
@@ -1094,10 +1170,24 @@ public final class PdfDocument implements AutoCloseable {
         saveTo(out, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a stream with the {@link SaveOptions#fast()} policy
+     * (see {@link #saveTo(OutputStream, SaveOptions)}).
+     *
+     * @param out target output stream
+     * @throws IOException if an I/O error occurs
+     */
     public void saveTo(OutputStream out) throws IOException {
         saveTo(out, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a stream with an explicit output policy.
+     *
+     * @param out     target output stream
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @throws IOException if an I/O error occurs
+     */
     public void saveTo(OutputStream out, SaveOptions options) throws IOException {
         ensureOpen();
         if (out == null) throw new IllegalArgumentException("out must not be null");
@@ -1114,11 +1204,23 @@ public final class PdfDocument implements AutoCloseable {
         return JpdfiumLib.docSaveToTempFile(handle, SaveOptions.fast());
     }
 
+    /**
+     * Save to an owned temporary file with an explicit output policy; the caller
+     * owns deletion (see {@link #saveToTempFile()}).
+     *
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @return path to the temporary file
+     */
     public Path saveToTempFile(SaveOptions options) {
         ensureOpen();
         return JpdfiumLib.docSaveToTempFile(handle, options == null ? SaveOptions.fast() : options);
     }
 
+    /**
+     * Serialise the document to a byte array.
+     *
+     * @return PDF bytes
+     */
     public byte[] saveBytes() {
         ensureOpen();
         return JpdfiumLib.docSaveBytes(handle);
@@ -1554,6 +1656,10 @@ public final class PdfDocument implements AutoCloseable {
         if (closed.get()) throw new IllegalStateException("PdfDocument is already closed");
     }
 
+    /**
+     * Close the document and release native state. Idempotent; a document backed
+     * by an owned temporary spool file deletes it here.
+     */
     @Override
     public void close() {
         // compareAndSet, not check-then-set: a lost race here frees the same

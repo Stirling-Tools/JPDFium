@@ -606,6 +606,15 @@ public final class PdfImageConverter {
         return ImageCodecs.canEncode(format);
     }
 
+    /**
+     * Encode an image to bytes using the active codec.
+     *
+     * @param image   source image
+     * @param format  target format
+     * @param quality encoder quality hint (format-specific; ignored where unsupported)
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
+     */
     public static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
         return ImageCodecs.encode(image, format, quality);
     }

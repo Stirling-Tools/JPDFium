@@ -492,6 +492,8 @@ public final class NativeLoader {
         String os = System.getProperty("os.name").toLowerCase();
         if (os.contains("win")) return "windows-" + Architecture.detect().key();
         if (os.contains("mac")) return "darwin-" + Architecture.detect().key();
+        if (os.contains("freebsd")) return "freebsd-" + Architecture.detect().key();
+        if (os.contains("openbsd")) return "openbsd-" + Architecture.detect().key();
         // Linux natives are libc-specific: musl (Alpine) cannot load glibc
         // binaries, so a musl host must resolve the linux-musl-<arch> artifacts.
         String libc = isMuslLibc() ? "musl-" : "";

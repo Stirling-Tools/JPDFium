@@ -17,7 +17,7 @@ package stirling.software.jpdfium;
  * <p>When both are enabled, each parallel chunk is processed in streaming mode
  * internally - combining throughput with low memory pressure.
  *
- * <h3>Usage</h3>
+ * <h2>Usage</h2>
  * <pre>{@code
  * // Low-memory only
  * ProcessingMode mode = ProcessingMode.streaming();

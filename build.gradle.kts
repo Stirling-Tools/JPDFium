@@ -1,6 +1,6 @@
 allprojects {
     group = "com.stirling"
-    version = findProperty("jpdfium.version")?.toString() ?: "1.0.0-SNAPSHOT"
+    version = findProperty("jpdfium.version")?.toString() ?: "0.0.0-SNAPSHOT"
 
     repositories {
         mavenCentral()
@@ -124,7 +124,6 @@ tasks.register<JavaExec>("runSample") {
         "41" to "S41_VersionConverter",
         "42" to "S42_BoundedText",
         "43" to "S43_StreamOptimizer",
-        "44" to "S44_FlattenRotation",
         "45" to "S45_PageInterleaver",
         "46" to "S46_NamedDestinations",
         "47" to "S47_BlankPageDetector",
@@ -176,10 +175,22 @@ tasks.register<JavaExec>("runSample") {
         "95" to "S95_RedactPipelinePerf"
     )
 
-    val sampleClass = "stirling.software.jpdfium.samples." +
-        (sampleClasses[sampleNum] ?: "S${sampleNum}_Render")
+    // The map is hand-maintained, so an unknown number fails here with the list
+    // of known samples and a drifted name fails with the missing file path,
+    // instead of surfacing later as a ClassNotFoundException.
+    val sampleName = sampleClasses[sampleNum]
+        ?: throw GradleException(
+            "Unknown sample '$sampleNum'. Known numbers are ${sampleClasses.keys.joinToString(", ")}"
+        )
+    val sampleSource = project(":jpdfium")
+        .file("src/test/java/stirling/software/jpdfium/samples/$sampleName.java")
+    if (!sampleSource.isFile) {
+        throw GradleException(
+            "Sample '$sampleName' maps to ${rootProject.relativePath(sampleSource)}, which does not exist"
+        )
+    }
 
-    mainClass.set(sampleClass)
+    mainClass.set("stirling.software.jpdfium.samples.$sampleName")
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
     classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") +
@@ -189,7 +200,7 @@ tasks.register<JavaExec>("runSample") {
     workingDir = rootProject.projectDir
 
     doFirst {
-        println("Running sample: $sampleClass")
+        println("Running sample: $sampleName")
     }
 }
 

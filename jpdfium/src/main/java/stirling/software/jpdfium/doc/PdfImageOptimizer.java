@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
+import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -59,17 +60,30 @@ public final class PdfImageOptimizer {
     private static final boolean NATIVE_UNPACK =
             Symbols.find("jpdfium_rust_unpack_pixels").isPresent();
 
+    // FPDF_FILEACCESS carries `unsigned long` for the length and for the
+    // callback's position and size. That is 8 bytes on Linux and macOS but 4 on
+    // Windows (LLP64), so the layout and a matching callback variant are chosen
+    // from the platform: an upcall stub has to agree with the C prototype or it
+    // reads the arguments off the stack with the wrong width.
+    private static final MemoryLayout C_LONG_LAYOUT =
+            Linker.nativeLinker().canonicalLayouts().get("long");
+    private static final boolean LONG_CARRIER = C_LONG_LAYOUT.byteSize() != 4;
+
     // Resolved once; the JPEG loader binds the handle to each image's file access.
     private static final MethodHandle GET_BLOCK = getBlockHandle();
     private static final FunctionDescriptor GET_BLOCK_DESCRIPTOR =
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG);
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, C_LONG_LAYOUT, ADDRESS, C_LONG_LAYOUT);
 
     private static MethodHandle getBlockHandle() {
         try {
             return MethodHandles.lookup().findVirtual(
-                    JpegFileAccess.class, "getBlock",
-                    MethodType.methodType(int.class, MemorySegment.class, long.class,
-                            MemorySegment.class, long.class));
+                    JpegFileAccess.class,
+                    LONG_CARRIER ? "getBlock" : "getBlockInt",
+                    LONG_CARRIER
+                            ? MethodType.methodType(int.class, MemorySegment.class, long.class,
+                                    MemorySegment.class, long.class)
+                            : MethodType.methodType(int.class, MemorySegment.class, int.class,
+                                    MemorySegment.class, int.class));
         } catch (NoSuchMethodException | IllegalAccessException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -698,8 +712,14 @@ public final class PdfImageOptimizer {
             MemorySegment stub = Linker.nativeLinker().upcallStub(
                     GET_BLOCK.bindTo(access), GET_BLOCK_DESCRIPTOR, arena);
             // FPDF_FILEACCESS: { unsigned long m_FileLen; GetBlock* m_GetBlock; void* m_Param; }
+            // `unsigned long` is 4 bytes on Windows and 8 elsewhere, while the
+            // pointer slots stay at offsets 8 and 16 either way.
             MemorySegment fileAccess = arena.allocate(24);
-            fileAccess.set(JAVA_LONG, 0, (long) jpeg.length);
+            if (LONG_CARRIER) {
+                fileAccess.set(JAVA_LONG, 0, (long) jpeg.length);
+            } else {
+                fileAccess.set(JAVA_INT, 0, jpeg.length);
+            }
             fileAccess.set(ADDRESS, 8, stub);
             fileAccess.set(ADDRESS, 16, MemorySegment.NULL);
             int ok = (int) PageEditBindings.FPDFImageObj_LoadJpegFileInline.invokeExact(
@@ -725,6 +745,12 @@ public final class PdfImageOptimizer {
             MemorySegment.copy(
                     data, (int) position, pBuf.reinterpret(size), JAVA_BYTE, 0, (int) size);
             return 1;
+        }
+
+        /** The 32-bit-{@code long} counterpart PDFium calls on Windows. */
+        int getBlockInt(MemorySegment param, int position, MemorySegment pBuf, int size) {
+            return getBlock(
+                    param, Integer.toUnsignedLong(position), pBuf, Integer.toUnsignedLong(size));
         }
     }
 

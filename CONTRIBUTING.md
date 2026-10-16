@@ -134,10 +134,12 @@ rate/retention, native loops, and only then instruction-level tuning.
 
 - **Modern Java 25**: Use modern language features (records, pattern matching, switch expressions). Avoid Lombok.
 - **Imports**: Never use inline fully-qualified class names. Always add explicit imports at the top of the file.
-- **Comments**: Keep inline comments concise and capped at two lines. Public
+- **Comments**: Keep inline comments concise, normally at most two lines. Public
   ownership, safety, cancellation, and output-semantics contracts may use longer
   Javadoc when the guarantee needs exact wording (what is bounded, when staging
-  publishes, what survives cancellation). Prefer fewer words over more.
+  publishes, what survives cancellation), and native ABI, struct-layout, and
+  portability rationale may take the lines it needs, because shortening it hides
+  the invariant being documented. Prefer fewer words over more.
 - **Cancellation**: logical cancel never releases resources still owned by
   running native work. Arenas, leases, staging files, and permits retire on
   actual task exit (finally), never on `Future.cancel`/`shutdownNow`.
@@ -146,7 +148,11 @@ rate/retention, native loops, and only then instruction-level tuning.
   Replacement is staging + atomic rename; no-clobber is `CREATE_NEW` (O_EXCL)
   streaming, never precheck + move.
 - **Formatting**:
-  - Java: Enforced via Spotless (`./gradlew spotlessApply` and `./gradlew spotlessCheck`).
+  - Java: Spotless keeps import hygiene, trailing whitespace, and the final newline
+    in shape (`./gradlew spotlessApply` rewrites, `spotlessCheck` reports, and CI
+    runs the check). It does not reflow code, so keep the surrounding style by hand.
+    The whole `panama` package is excluded from it. `javac -Werror` and the Javadoc
+    doclint gate cover the rest.
   - C++: Enforced via `.clang-format` and verified via `.clang-tidy`.
 - **Commits**: Use standard, everyday commit messages with only a title and no body
   (e.g. `Add direct stream rasterization`, `Fix empty page boxes`). No `feat:`/`fix:`
@@ -155,7 +161,7 @@ rate/retention, native loops, and only then instruction-level tuning.
 
 ## Documentation Policy
 
-`README.md` and `docs/` are written to this policy. The goal is accurate, concise
+`README.md`, `CHANGELOG.md`, and `docs/` are written to this policy. The goal is accurate, concise
 documentation that helps a reader finish a task. Write to this standard directly;
 it does not depend on any particular authoring method.
 
@@ -174,8 +180,11 @@ Review technical accuracy before style. Prose edits never substitute for verific
   PDFium call, so "safe from multiple threads" does not mean "runs in parallel".
 - Treat redaction, signing, and save behavior as security-relevant. Describe the exact
   operation and what it does not change.
-- Distinguish a published artifact from a tested platform. Publication proves a binary
-  exists, not that it has been executed.
+- Distinguish three separate claims: a published coordinate, a nonempty payload, and
+  an executed platform. Publishing a coordinate proves neither of the others — an
+  experimental module can publish an empty jar (see the musl note in
+  [compatibility.md](docs/compatibility.md)), and no published artifact proves the
+  platform was ever run.
 - Treat destructive operations as requiring explicit verification: full rewrites,
   signature invalidation, metadata removal, and cache mutation.
 
@@ -235,6 +244,7 @@ Review technical accuracy before style. Prose edits never substitute for verific
 - Remove unresolved placeholders.
 - Validate relative links, code fence languages, and banned characters.
 - Confirm the examples match the documented release.
+- Record notable user-facing changes under `## [Unreleased]` in `CHANGELOG.md`.
 
 ## Running Samples and Benchmarks
 

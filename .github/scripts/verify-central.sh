@@ -9,6 +9,7 @@ MODE="${MODE:?MODE must be staging or released}"
 VERSION="${VERSION:?VERSION is required}"
 PLATFORM="${PLATFORM:?PLATFORM is required}"
 GROUP_PATH="com/stirling"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "$MODE" in
   staging)
@@ -92,9 +93,28 @@ if [ "$FOUND" -ne 1 ]; then
   exit 1
 fi
 
+# Native jars are kept so their payload can be checked before the smoke test.
+WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'jpdfium-verify')
+# The staged artifacts under $WORK_DIR are large and are only needed while the
+# script runs, so remove them however it exits.
+trap 'rm -rf "$WORK_DIR"' EXIT
+NATIVE_JARS=()
+
 MISSING=0
 for path in "${EXPECTED[@]}"; do
-  if fetch "$path"; then
+  case "$path" in
+    *.asc|*/jpdfium-natives-*-sources.jar|*/jpdfium-natives-*-javadoc.jar)
+      OUT=/dev/null
+      ;;
+    */jpdfium-natives-*.jar)
+      OUT="$WORK_DIR/$(basename "$path")"
+      NATIVE_JARS+=("$OUT")
+      ;;
+    *)
+      OUT=/dev/null
+      ;;
+  esac
+  if fetch "$path" "$OUT"; then
     echo "  [ok] $path"
   else
     echo "  [MISSING] $path"
@@ -107,8 +127,14 @@ if [ "$MISSING" -ne 0 ]; then
 fi
 echo "All ${#EXPECTED[@]} artifacts present."
 
+# A platform whose native build produced nothing still publishes a jar with the
+# licenses and empty manifests, which would only surface as a load failure for
+# that platform's users, so fail here before running the smoke test.
+if [ "${#NATIVE_JARS[@]}" -gt 0 ]; then
+  bash "$SCRIPT_DIR/check-natives-jars.sh" "${NATIVE_JARS[@]}"
+fi
+
 # Standalone consumer that resolves only from the verified repository.
-WORK_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'jpdfium-verify')
 cd "$WORK_DIR"
 
 cat << 'SETTINGS' > settings.gradle.kts

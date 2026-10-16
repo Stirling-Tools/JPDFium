@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a defect in JPDFium that you can reproduce.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A minimal reproduction gets fixed fastest.
+
+        For security issues, use the private advisory link instead of this form,
+        as described in [SECURITY.md](https://github.com/Stirling-Tools/JPDFium/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: JPDFium version
+      description: The `com.stirling:jpdfium` version you depend on, from your BOM or build file.
+      placeholder: "1.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: jdk
+    attributes:
+      label: JDK
+      description: JPDFium requires Java 25.
+      options:
+        - Temurin 25
+        - Oracle JDK 25
+        - OpenJDK 25
+        - Other, stated below
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform module
+      description: The `jpdfium-natives-*` module on the runtime classpath.
+      options:
+        - jpdfium-natives-linux-x64
+        - jpdfium-natives-linux-arm64
+        - jpdfium-natives-linux-musl-x64
+        - jpdfium-natives-linux-musl-arm64
+        - jpdfium-natives-darwin-x64
+        - jpdfium-natives-darwin-arm64
+        - jpdfium-natives-windows-x64
+        - jpdfium-natives-windows-arm64
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest code or sample PDF that shows the problem.
+        Include how the JVM was started (`--enable-native-access` matters) and
+        any `-Djpdfium.*` properties in use.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Stack trace or error output
+      description: Paste any exception or native error output. Redact document contents if needed.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps, such as a workaround you found.
+    validations:
+      required: false

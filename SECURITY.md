@@ -24,7 +24,10 @@ In scope:
 - CI / build / release pipelines (`.github/`, Gradle wrapper, publishing)
 
 Out of scope:
-- PDFium itself (report to upstream Chromium PDFium issue tracker; integration bugs in JPDFium remain in scope)
+- PDFium engine bugs (report those to the upstream Chromium PDFium issue tracker).
+  A vulnerable or outdated engine inside a JPDFium artifact is still in scope here
+  for triage, tracking, and dependency updates, and so is every bridge, loader,
+  packaging, and integration bug.
 - Third-party system packages invoked by external tooling (qpdf, Ghostscript)
 
 ## Supported Versions
