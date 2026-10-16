@@ -671,20 +671,12 @@ PY_EOF
 fi
 
 # musl's dynamic loader cannot resolve PartitionAlloc's MTE ifuncs across shared
-# objects, so the linux-musl-arm64 component smoke test dies with
-#   dlopen failed: Error relocating libbase_allocator_..._allocator_core.so:
-#   _ZN15partition_alloc8internal21RemaskPointerInternalEPv: symbol not found
-# (RemaskPointerInternal/TagMemoryRange*Internal are __attribute__((ifunc)) under
-# #if PA_BUILDFLAG(HAS_MEMORY_TAGGING); the same-page static row is fine because
-# the symbol then lives in the same object). has_memory_tagging is computed in
-# partition_alloc.gni for every arm64+clang Linux target, and the resolver would
-# return the NoOp variants on musl anyway (our aarch64_support.h gate already
-# forces IsBtiEnabled/IsMteEnabled to false), so turn the feature off for musl
-# and keep the ifunc symbols out of the build entirely.
+# objects, and FreeBSD headers lack Linux-only <sys/prctl.h> / MTE support.
+# Disable has_memory_tagging in partition_alloc.gni for both musl and freebsd.
 PA_GNI="base/allocator/partition_allocator/partition_alloc.gni"
-if [ "${JPDFIUM_LIBC:-}" = "musl" ] && [ -f "${PA_GNI}" ] && \
-    ! grep -q 'JPDFIUM musl: memory tagging off' "${PA_GNI}"; then
-    echo "  Disabling PartitionAlloc memory tagging for musl..."
+if { [ "${JPDFIUM_LIBC:-}" = "musl" ] || [ "${TARGET_OS:-}" = "freebsd" ]; } && [ -f "${PA_GNI}" ] && \
+    ! grep -q 'JPDFIUM: memory tagging off' "${PA_GNI}"; then
+    echo "  Disabling PartitionAlloc memory tagging for musl/FreeBSD..."
     python3 - "${PA_GNI}" <<'PY_EOF'
 import sys
 path = sys.argv[1]
@@ -692,18 +684,144 @@ with open(path) as f:
     src = f.read()
 target = """has_memory_tagging = current_cpu == "arm64" && is_clang && !is_asan &&
                      !is_hwasan && (is_linux || is_android)"""
-replacement = """# JPDFIUM musl: memory tagging off. The ifunc-based MTE helpers
-# (RemaskPointerInternal and friends) cannot be resolved by musl's loader in a
-# component build, and the resolvers would pick the NoOp variants on musl anyway.
-has_memory_tagging = false  # JPDFIUM musl: memory tagging off"""
+replacement = """# JPDFIUM: memory tagging off.
+has_memory_tagging = false  # JPDFIUM: memory tagging off"""
 if target in src:
     with open(path, 'w') as f:
         f.write(src.replace(target, replacement, 1))
     print("  Disabled HAS_MEMORY_TAGGING in partition_alloc.gni.")
-elif 'JPDFIUM musl: memory tagging off' in src:
+elif 'JPDFIUM: memory tagging off' in src or 'JPDFIUM musl: memory tagging off' in src:
     print("  HAS_MEMORY_TAGGING already disabled in partition_alloc.gni.")
 else:
     raise SystemExit("ERROR: has_memory_tagging block not found in " + path)
+PY_EOF
+fi
+
+# FreeBSD patches for Chromium build configuration and system headers
+if [ "${TARGET_OS:-}" = "freebsd" ]; then
+    echo "  Applying FreeBSD patches to build/ and partition_alloc..."
+    python3 - <<'PY_EOF'
+import os, sys, py_compile
+
+def apply_patch(filepath, target, replacement, patch_name):
+    if not os.path.isfile(filepath):
+        raise SystemExit(f"ERROR: Cannot apply patch '{patch_name}': file {filepath} not found")
+    with open(filepath) as f:
+        src = f.read()
+    if replacement.strip() in src:
+        print(f"  Patch '{patch_name}' already applied to {filepath}.")
+        return
+    if target not in src:
+        raise SystemExit(f"ERROR: Target anchor not found in {filepath} for patch '{patch_name}'")
+    with open(filepath, "w") as f:
+        f.write(src.replace(target, replacement, 1))
+    print(f"  Applied patch '{patch_name}' to {filepath}.")
+
+# 1. build/config/BUILDCONFIG.gn: allow current_os == "freebsd"
+bc = "build/config/BUILDCONFIG.gn"
+if not os.path.isfile(bc):
+    raise SystemExit(f"ERROR: {bc} not found")
+with open(bc) as f:
+    bc_src = f.read()
+
+for t, r, name in [
+    ('if (host_os == "linux") {', 'if (host_os == "linux" || host_os == "freebsd") {', "BUILDCONFIG host_os"),
+    ('} else if (target_os == "chromeos" || target_os == "linux") {', '} else if (target_os == "chromeos" || target_os == "linux" || target_os == "freebsd") {', "BUILDCONFIG target_os"),
+    ('is_linux = current_os == "linux"', 'is_linux = current_os == "linux" || current_os == "freebsd"', "BUILDCONFIG is_linux")
+]:
+    if r in bc_src:
+        continue
+    if t not in bc_src:
+        raise SystemExit(f"ERROR: Anchor '{t}' not found in {bc} for {name}")
+    bc_src = bc_src.replace(t, r, 1)
+
+with open(bc, "w") as f:
+    f.write(bc_src)
+print("  Patched build/config/BUILDCONFIG.gn for FreeBSD.")
+
+# 2. build/config/compiler_cpu_abi.gn: clang target triple for FreeBSD
+abi = "build/config/compiler_cpu_abi.gn"
+target_abi = '''cpu_abi_cflags += [ "--target=x86_64-unknown-linux-gnu" ]
+      cpu_abi_ldflags += [ "--target=x86_64-unknown-linux-gnu" ]'''
+repl_abi = '''if (current_os == "freebsd") {
+        cpu_abi_cflags += [ "--target=x86_64-unknown-freebsd" ]
+        cpu_abi_ldflags += [ "--target=x86_64-unknown-freebsd" ]
+      } else {
+        cpu_abi_cflags += [ "--target=x86_64-unknown-linux-gnu" ]
+        cpu_abi_ldflags += [ "--target=x86_64-unknown-linux-gnu" ]
+      }'''
+apply_patch(abi, target_abi, repl_abi, "compiler_cpu_abi target triple")
+
+# 3. base/allocator/partition_allocator/src/partition_alloc/stack/stack.cc: pthread_attr_get_np on FreeBSD
+stack_cc = "base/allocator/partition_allocator/src/partition_alloc/stack/stack.cc"
+if os.path.isfile(stack_cc):
+    with open(stack_cc) as f:
+        stack_src = f.read()
+    if '#if defined(__FreeBSD__)\n#include <pthread_np.h>\n#endif' not in stack_src:
+        if '#include <pthread.h>' not in stack_src:
+            raise SystemExit(f"ERROR: #include <pthread.h> anchor not found in {stack_cc}")
+        stack_src = stack_src.replace('#include <pthread.h>', '#include <pthread.h>\n#if defined(__FreeBSD__)\n#include <pthread_np.h>\n#endif', 1)
+    target_pt = 'int error = pthread_getattr_np(pthread_self(), &attr);'
+    repl_pt = '''#if defined(__FreeBSD__)
+  pthread_attr_init(&attr);
+  int error = pthread_attr_get_np(pthread_self(), &attr);
+#else
+  int error = pthread_getattr_np(pthread_self(), &attr);
+#endif'''
+    if 'pthread_attr_get_np' not in stack_src:
+        if target_pt not in stack_src:
+            raise SystemExit(f"ERROR: pthread_getattr_np anchor not found in {stack_cc}")
+        stack_src = stack_src.replace(target_pt, repl_pt, 1)
+    with open(stack_cc, "w") as f:
+        f.write(stack_src)
+    print("  Patched partition_alloc stack.cc for FreeBSD.")
+
+# 4. core/fxge/linux/fx_linux_impl.cpp: allow FreeBSD
+fx_impl = "core/fxge/linux/fx_linux_impl.cpp"
+target_fx = '#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)'
+repl_fx = '#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS) && !defined(__FreeBSD__)'
+apply_patch(fx_impl, target_fx, repl_fx, "fx_linux_impl allow FreeBSD")
+
+# 5. build/modules/freebsd/BUILD.gn: C++ modules stub
+mod_dir = "build/modules/freebsd"
+os.makedirs(mod_dir, exist_ok=True)
+mod_gn = os.path.join(mod_dir, "BUILD.gn")
+if not os.path.isfile(mod_gn):
+    with open(mod_gn, "w") as f:
+        f.write("# Stub for FreeBSD C++ modules\n")
+    print("  Created build/modules/freebsd/BUILD.gn stub.")
+
+# 6. build/gn_run_binary.py: fallback when target binary cannot run on host during cross-compile
+gn_run = "build/gn_run_binary.py"
+target_run = "ret = subprocess.call(args)"
+repl_run = '''import shutil, errno
+# When cross-compiling, binaries built into the target output directory
+# are built for the target OS (e.g. FreeBSD) and will fail to execute on the Linux host with ENOEXEC / OSError.
+# Try the intended build-generated binary first; if and only if execution fails due to binary format error,
+# fall back to the host tool.
+try:
+    ret = subprocess.call(args)
+except OSError as e:
+    if e.errno in (errno.ENOEXEC, errno.ENOENT):
+        target_name = os.path.basename(sys.argv[1])
+        resolved = shutil.which(target_name)
+        if resolved:
+            print(f"  [gn_run_binary] target binary {path} failed with {e}, falling back to host {resolved}", file=sys.stderr)
+            ret = subprocess.call([resolved] + sys.argv[2:])
+        else:
+            raise
+    else:
+        raise'''
+apply_patch(gn_run, target_run, repl_run, "gn_run_binary execution fallback")
+py_compile.compile(gn_run, doraise=True)
+print("  Validated build/gn_run_binary.py syntax.")
+
+# 7. buildtools/third_party/libc++abi/BUILD.gn: FreeBSD does not use Linux sys_futex in libc++abi
+libcxxabi_gn = "buildtools/third_party/libc++abi/BUILD.gn"
+if os.path.isfile(libcxxabi_gn):
+    target_futex = 'if (is_linux || is_android) {\n    defines += [ "_LIBCXXABI_USE_FUTEX" ]\n  }'
+    repl_futex = 'if ((is_linux && current_os != "freebsd") || is_android) {\n    defines += [ "_LIBCXXABI_USE_FUTEX" ]\n  }'
+    apply_patch(libcxxabi_gn, target_futex, repl_futex, "libc++abi disable futex on FreeBSD")
 PY_EOF
 fi
 
@@ -1029,6 +1147,20 @@ if [ "${JPDFIUM_LIBC:-}" = "musl" ]; then
     echo "  musl/Alpine target: use_custom_libcxx=true, use_clang_modules=false, use_sysroot=false"
 fi
 
+# FreeBSD target configuration
+if [ "${TARGET_OS:-}" = "freebsd" ]; then
+    GN_ARGS="${GN_ARGS/use_sysroot=false/use_sysroot=true}"
+    GN_ARGS="${GN_ARGS/use_custom_libcxx=false/use_custom_libcxx=true}"
+    GN_ARGS="${GN_ARGS} target_os=\"freebsd\" use_glib=false use_clang_modules=false"
+    FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-${SCRIPT_DIR}/freebsd-sysroot}"
+    if [ ! -d "${FREEBSD_SYSROOT}" ]; then
+        echo "ERROR: FreeBSD sysroot not found at ${FREEBSD_SYSROOT}. Run native/ci/setup-freebsd-sysroot.sh first." >&2
+        exit 1
+    fi
+    GN_ARGS="${GN_ARGS} target_sysroot=\"${FREEBSD_SYSROOT}\""
+    echo "  FreeBSD target: target_os=freebsd, target_sysroot=${FREEBSD_SYSROOT}, use_custom_libcxx=true"
+fi
+
 # Windows has no system libc++, so use_custom_libcxx=false produces broken
 # component builds - abseil-cpp.dll fails to link with undefined symbols on
 # std::__Cr::basic_string template instantiations because the libc++ DLL
@@ -1063,7 +1195,7 @@ mkdir -p "${TARGET_DIR}/include" "${TARGET_DIR}/lib"
 #   static mode:    a single static archive (libpdfium.a on POSIX,
 #       pdfium.lib on Windows) containing PDFium + every bundled dep.
 case "$(uname -s)" in
-    Linux*)
+    Linux*|FreeBSD*)
         LIB_EXT="so"
         STATIC_EXT="a"
         MAIN_LIB_COMPONENT="libpdfium.so"

@@ -72,6 +72,10 @@ option(JPDFIUM_BUILD_FUZZERS "Build libFuzzer fuzz targets" OFF)
 # Platform detection
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(JPDFIUM_OS "linux")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(JPDFIUM_OS "freebsd")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    set(JPDFIUM_OS "openbsd")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(JPDFIUM_OS "darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -266,7 +270,7 @@ if(JPDFIUM_USE_PDFIUM)
         if(APPLE)
             target_link_options(jpdfium PRIVATE "-Wl,-dead_strip" "-Wl,-x")
         else()
-            target_link_options(jpdfium PRIVATE "-Wl,--gc-sections")
+            target_link_options(jpdfium PRIVATE "-Wl,--gc-sections" "-Wl,--as-needed")
         endif()
     endif()
     include(CheckIPOSupported)
@@ -297,12 +301,15 @@ if(JPDFIUM_USE_PDFIUM)
             # format correctly. apt-install lld on the runner side.
             target_link_options(jpdfium PRIVATE "-fuse-ld=lld")
             target_link_options(jpdfium PRIVATE
+                "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.map"
+                "-Wl,--icf=safe"
                 "-Wl,--whole-archive" "${PDFIUM_LIB}" "-Wl,--no-whole-archive")
+            set_property(TARGET jpdfium APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.map")
         endif()
         # PDFium static archives reference platform libs that we'd otherwise
         # get transitively via libpdfium.so's NEEDED entries.
         if(UNIX AND NOT APPLE)
-            target_link_libraries(jpdfium PRIVATE pthread dl m)
+            target_link_libraries(jpdfium PRIVATE pthread ${CMAKE_DL_LIBS} m)
         endif()
         if(APPLE)
             target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
@@ -379,8 +386,8 @@ if(JPDFIUM_USE_PDFIUM)
     endif()
     # Rust staticlibs don't carry their own platform system-lib dependencies -
     # the consuming target has to supply them.
-    if(JPDFIUM_OS STREQUAL "linux")
-        target_link_libraries(jpdfium PRIVATE dl pthread m)
+    if(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
+        target_link_libraries(jpdfium PRIVATE ${CMAKE_DL_LIBS} pthread m)
     elseif(APPLE)
         # CoreFoundation: iana-time-zone calls CFRelease / CFCopyTimeZone etc.
         # Security + SystemConfiguration: pulled by common TLS/network crates.
@@ -435,8 +442,14 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
-    # ICU4C - Unicode normalization, BiDi, sentence segmentation
-    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc icu-i18n)
+    # ICU4C - Unicode normalization, BiDi, sentence segmentation. All of those
+    # live in libicuuc: the bridge references u_init, u_setDataDirectory and the
+    # ubidi_* entry points and nothing from libicui18n. Requesting the i18n
+    # library only added a NEEDED entry, which macOS kept (ld64 keeps unused
+    # dylibs) and the bundler then copied - about 2.6 MB per darwin bundle for
+    # no symbols. Linux and Windows already dropped it; with lld and MSVC the
+    # unused library never reaches the load commands.
+    pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
     target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
 
@@ -528,7 +541,7 @@ if(JPDFIUM_USE_PDFIUM)
     # must not demand them at its own link time (--no-undefined / -undefined,error
     # would fail). The sanitizer build is a test/fuzz configuration only; the
     # strict checks stay on for normal release builds.
-    if(JPDFIUM_OS STREQUAL "linux")
+    if(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
         if(NOT JPDFIUM_SANITIZE)
             target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
         endif()
@@ -718,7 +731,7 @@ if(JPDFIUM_BUILD_TESTS)
         if(JPDFIUM_OS STREQUAL "darwin")
             set(_jpdfium_test_env
                 "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
-        elseif(JPDFIUM_OS STREQUAL "linux")
+        elseif(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
             set(_jpdfium_test_env
                 "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
         endif()

@@ -9,7 +9,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 libc = "0.2.189"
-lopdf = "0.45.0"
+lopdf = { version = "0.45.0", default-features = false, features = ["chrono"] }
 oxipng = { version = "10.2", default-features = false, features = ["zopfli"] }
 zopfli = "0.8.3"
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-ng"] }
@@ -18,6 +18,7 @@ png = "0.18"
 fast_image_resize = "6.1"
 # SVG rasterizer (Apache-2.0 OR MIT stack: resvg/usvg/tiny-skia/fontdb).
 # Replaces librsvg in the vips stack: no cairo/gdk-pixbuf/X11, no GPL.
-resvg = "0.48"
-usvg = "0.48"
-tiny-skia = "0.12"
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+usvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+

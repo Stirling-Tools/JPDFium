@@ -1,4 +1,10 @@
-# Documentation
+<p align="center">
+  <img src="images/jpdfium-logo.png" width="72" alt="JPDFium logo">
+</p>
+
+<h1 align="center">JPDFium Documentation</h1>
+
+Guides for installing, deploying, configuring, and using JPDFium.
 
 | Guide | Covers |
 |---|---|
@@ -13,4 +19,17 @@
 | [Compatibility](compatibility.md) | Support matrix, artifact availability, limitations |
 | [Troubleshooting](troubleshooting.md) | Symptoms, causes, and corrective actions |
 
-API reference: [Javadoc on javadoc.io](https://javadoc.io/doc/com.stirling/jpdfium)
+## Resources
+
+- [README](../README.md)
+- [API reference on javadoc.io](https://javadoc.io/doc/com.stirling/jpdfium)
+- [Releases](https://github.com/Stirling-Tools/JPDFium/releases)
+
+## Support
+
+- **Bug reports and questions**: [GitHub Issues](https://github.com/Stirling-Tools/JPDFium/issues)
+- **Security**: report vulnerabilities as described in [SECURITY.md](../SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](../LICENSE).

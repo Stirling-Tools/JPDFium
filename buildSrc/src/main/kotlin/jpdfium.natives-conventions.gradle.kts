@@ -21,11 +21,12 @@ java {
     withJavadocJar()
 }
 
-// Convention: CI builds the per-platform native libraries and drops them into
-//   native/dist/<platform>/
-// where <platform> matches the module suffix (e.g. linux-x64, darwin-arm64).
-// `processResources` then copies them into src/main/resources/natives/<platform>/
-// and writes a native-libs.txt manifest that NativeLoader reads at runtime.
+// Convention: CI builds the per-platform native libraries outside the build
+// tree, under native/dist/<platform>/, where <platform> matches the module
+// suffix (e.g. linux-x64, darwin-arm64). stageNatives copies those binaries
+// plus native/licenses/ into build/staged-natives, which is registered as a
+// resources source directory below and also receives the native-libs.txt
+// manifest that NativeLoader reads at runtime.
 
 val platform: String = project.name.removePrefix("jpdfium-natives-")
 val distDir = rootProject.layout.projectDirectory.dir("native/dist/$platform")
@@ -103,6 +104,15 @@ sourceSets.named("main") {
     resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
 }
 
+// Resource-only jars, so the module name would otherwise be derived from the
+// file name (jpdfium.natives.linux.x64). Declare it explicitly instead.
+tasks.named<Jar>("jar") {
+    manifest {
+        attributes["Automatic-Module-Name"] =
+            "stirling.software.jpdfium.natives." + platform.replace('-', '.')
+    }
+}
+
 tasks.withType<AbstractCopyTask>().configureEach {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
@@ -136,8 +146,8 @@ publishing {
             from(components["java"])
 
             pom {
-                name.set(project.name)
-                description.set("JPDFium native libraries for ${project.name.removePrefix("jpdfium-natives-")}")
+                name.set("JPDFium natives for ${project.name.removePrefix("jpdfium-natives-")}")
+                description.set("Prebuilt JPDFium native libraries for ${project.name.removePrefix("jpdfium-natives-")}")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
                 licenses {

@@ -1,14 +1,12 @@
 /**
- * Font information and management for PDF documents.
+ * Font inspection and repair.
  *
- * <p>Planned features:
- * <ul>
- *   <li>List fonts used in a PDF</li>
- *   <li>Detect missing/non-embedded fonts</li>
- *   <li>Font substitution configuration</li>
- *   <li>Font embedding</li>
- * </ul>
+ * <p>{@link stirling.software.jpdfium.fonts.FontInfo} reports the fonts a
+ * document uses and whether each one is embedded. {@link
+ * stirling.software.jpdfium.fonts.FontNormalizer} repairs fonts whose missing
+ * {@code /ToUnicode} or {@code /W} data causes garbled text extraction and
+ * failed redaction.
  *
- * @see stirling.software.jpdfium.fonts.FontInfo
+ * @see stirling.software.jpdfium.fonts.FontNormalizer
  */
 package stirling.software.jpdfium.fonts;

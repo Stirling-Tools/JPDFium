@@ -89,8 +89,9 @@ native/libjxl/build/
 native/jbig2enc/build/
 
 # Rust build artifacts
+# native/rust/Cargo.lock is committed on purpose: the staticlib is linked into
+# the shipped library, so its dependency versions have to be pinned.
 native/rust/target/
-native/rust/Cargo.lock
 
 # OS and system files
 .DS_Store
@@ -121,4 +122,8 @@ samples-output/
 native/build-asan/
 native/build-asan-stub/
 native/build-cost/
+
+# Generated on demand by docs/branding/jpdfium_logo.py
+docs/images/*-source.zip
 __pycache__/
+*.pyc

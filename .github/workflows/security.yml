@@ -92,7 +92,7 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           persist-credentials: false
-      - uses: ossf/scorecard-action@e8e61e86ea0a152be84d03729c02a7300065c17d # v2.4.4
+      - uses: ossf/scorecard-action@365df9f035d4b5177b9cd57330f8c3dfa6134420 # v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif

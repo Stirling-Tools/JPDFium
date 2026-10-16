@@ -36,10 +36,10 @@ import java.util.Set;
  * without any reload.  Use {@link #saveIncremental()} to write only the
  * changed objects, or {@link #save(Path)} for a full rewrite.
  *
- * <h3>Thread Safety</h3>
+ * <h2>Thread Safety</h2>
  * <p>Like all PDFium operations, a session must be confined to one thread.
  *
- * <h3>Usage Example</h3>
+ * <h2>Usage Example</h2>
  * <pre>{@code
  * try (RedactionSession session = RedactionSession.open(Path.of("input.pdf"))) {
  *     // Mark phase - zero content mutation

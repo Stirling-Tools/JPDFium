@@ -1,6 +1,6 @@
 # Installation
 
-JPDFium publishes to Maven Central under the `com.stirling` group. The current release is **1.1.5**.
+JPDFium publishes to Maven Central under the `com.stirling` group. The current release is **1.2.0**.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ Java 25 is the version JPDFium is built and tested against. Earlier releases are
 | `com.stirling:jpdfium-natives-<platform>` | Prebuilt PDFium binaries for one platform. | runtime |
 | `com.stirling:jpdfium-vips` | Optional libvips image codec for additional formats. | runtime |
 | `com.stirling:jpdfium-natives-vips-<platform>` | Prebuilt libvips binaries for one platform. | runtime |
-| `com.stirling:jpdfium-spring` | Spring Boot auto-configuration. | compile |
+| `com.stirling:jpdfium-spring` | Property holders for Spring Boot applications. No auto-configuration yet. | compile |
 
 ## Gradle (Kotlin DSL)
 
@@ -27,7 +27,7 @@ Windows x64. Substitute the native module for your platform from the table below
 
 ```kotlin
 dependencies {
-    implementation(platform("com.stirling:jpdfium-bom:1.1.5"))
+    implementation(platform("com.stirling:jpdfium-bom:1.2.0"))
     implementation("com.stirling:jpdfium")
     runtimeOnly("com.stirling:jpdfium-natives-windows-x64")
 }
@@ -43,7 +43,7 @@ Windows x64.
         <dependency>
             <groupId>com.stirling</groupId>
             <artifactId>jpdfium-bom</artifactId>
-            <version>1.1.5</version>
+            <version>1.2.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -76,9 +76,27 @@ Every artifact is published for `x64` and `arm64`.
 
 Every coordinate uses the `com.stirling` group. The optional libvips modules insert `vips`, for example `com.stirling:jpdfium-natives-vips-linux-x64`.
 
+The musl modules are experimental. They are packaged only when the Alpine PDFium prebuild is available, so a release can publish them without libraries, and loading then fails with `NativeNotFoundException`. Use a glibc base image, or build the natives yourself as described in the [contributing guide](../CONTRIBUTING.md).
+
 ## Spring Boot
 
-Adding `com.stirling:jpdfium-spring` alongside `com.stirling:jpdfium` registers the auto-configuration. Declare the native module for your platform as a runtime dependency in the usual way.
+`com.stirling:jpdfium-spring` holds the JPDFium property types for Spring Boot applications. The module ships no auto-configuration, so `JPDFiumProperties` carries no annotations and an application has to register it:
+
+```java
+@Configuration(proxyBeanMethods = false)
+class JpdfiumConfiguration {
+
+    @Bean
+    @ConfigurationProperties(prefix = "jpdfium")
+    JPDFiumProperties jpdfiumProperties() {
+        return new JPDFiumProperties();
+    }
+}
+```
+
+Declare the native module for your platform as a runtime dependency in the usual way.
+
+Binding the properties does not configure JPDFium. Application code has to apply the values when it loads the native libraries, renders, or builds redaction options.
 
 ## Optional image formats
 

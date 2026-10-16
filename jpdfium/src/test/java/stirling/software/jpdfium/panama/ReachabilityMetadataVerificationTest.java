@@ -114,6 +114,40 @@ class ReachabilityMetadataVerificationTest {
                 String.join("\n", missing));
     }
 
+    /**
+     * The metadata ships twice, once from this repository's metadata directory and once as a resource
+     * inside the published jar, and nothing synchronises the two copies. A descriptor added to only
+     * one of them silently disables that callback for native-image users, which is why they are
+     * compared here. The descriptor scan above cannot catch it: it drops identifiers it does not
+     * recognise, and {@code C_LONG_LAYOUT} is one of those.
+     */
+    @Test
+    void packagedMetadataMatchesTheMetadataRepositoryCopy() throws Exception {
+        Path repositoryCopy = findMetadataRepositoryCopy();
+        assertTrue(Files.exists(repositoryCopy),
+                "Metadata repository copy not found: " + repositoryCopy.toAbsolutePath());
+
+        try (InputStream is = getClass().getClassLoader().getResourceAsStream(
+                "META-INF/native-image/com.stirling/jpdfium/reachability-metadata.json")) {
+            if (is == null) {
+                throw new IllegalStateException("reachability-metadata.json not found on classpath");
+            }
+            String packaged = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            String repository = Files.readString(repositoryCopy, StandardCharsets.UTF_8);
+            assertTrue(packaged.replaceAll("\\s+", "").equals(repository.replaceAll("\\s+", "")),
+                    "The packaged reachability metadata and " + repositoryCopy
+                            + " have drifted; add the same entries to both copies.");
+        }
+    }
+
+    private Path findMetadataRepositoryCopy() {
+        Path p = Path.of("..", "reachability-metadata", "metadata", "com.stirling", "jpdfium",
+                "1.2.0", "reachability-metadata.json");
+        if (Files.exists(p)) return p;
+        return Path.of("reachability-metadata", "metadata", "com.stirling", "jpdfium", "1.2.0",
+                "reachability-metadata.json");
+    }
+
     private Path findSourceDir() {
         Path p = Path.of("src/main/java");
         if (Files.exists(p)) return p;

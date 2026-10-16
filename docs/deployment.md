@@ -18,7 +18,7 @@ Declare one runtime dependency per target platform. They coexist on the classpat
 
 ```kotlin
 dependencies {
-    implementation(platform("com.stirling:jpdfium-bom:1.1.5"))
+    implementation(platform("com.stirling:jpdfium-bom:1.2.0"))
     implementation("com.stirling:jpdfium")
     runtimeOnly("com.stirling:jpdfium-natives-windows-x64")
     runtimeOnly("com.stirling:jpdfium-natives-windows-arm64")
