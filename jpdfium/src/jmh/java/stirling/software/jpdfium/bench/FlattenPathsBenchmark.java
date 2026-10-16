@@ -11,6 +11,7 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
+import org.openjdk.jmh.infra.Blackhole;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.AnnotationType;
@@ -130,12 +131,12 @@ public class FlattenPathsBenchmark {
 
     /** Control: opens and closes every page without flattening, to isolate the Java and FFI floor. */
     @Benchmark
-    public void pageOpenCloseOnly() {
+    public void pageOpenCloseOnly(Blackhole bh) {
         try (PdfDocument doc = PdfDocument.open(fixture)) {
             int n = doc.pageCount();
             for (int i = 0; i < n; i++) {
                 try (PdfPage page = doc.page(i)) {
-                    // intentionally empty
+                    bh.consume(page);
                 }
             }
         }
@@ -188,10 +189,11 @@ public class FlattenPathsBenchmark {
     }
 
     /**
-     * Render-only floor: the FULL per-page render into one pre-allocated bitmap,
-     * with no page replacement and no per-page bitmap create/fill/copy. The gap
-     * between this and {@link #fullFlatten10PagesPerPage()} is the embedding cost
-     * (bitmap create + white fill + SetBitmap copy + page swap).
+     * Render-only floor: the FULL per-page render into one pre-allocated pixel buffer, with no page
+     * replacement. The buffer is cleared white before each page, matching the clear policy of the
+     * FULL path, but the native render still creates one {@code FPDFBitmap_CreateEx} wrapper per
+     * call while the per-page FULL path reuses its scratch frame, so the gap to {@link
+     * #fullFlatten10PagesPerPage()} is not an isolated embedding cost.
      */
     @Benchmark
     public void renderOnly10Pages() {
@@ -199,6 +201,7 @@ public class FlattenPathsBenchmark {
                 Arena arena = Arena.ofConfined()) {
             MemorySegment buf = arena.allocate((long) renderW * renderH * 4);
             for (int i = 0; i < FULL_PAGES; i++) {
+                buf.fill((byte) 0xFF);
                 try (PdfPage page = doc.page(i)) {
                     page.renderInto(buf, renderW, renderH,
                             RenderFlags.ANNOTATIONS | RenderFlags.PRINTING);
