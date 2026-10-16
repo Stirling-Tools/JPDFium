@@ -33,6 +33,43 @@ static void append_json_number(std::string& out, T v) {
     if (res.ec == std::errc()) out.append(buf, static_cast<std::size_t>(res.ptr - buf));
 }
 
+static void escape_json_string(std::string& out, std::string_view s) {
+    for (char c : s) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\b':
+                out += "\\b";
+                break;
+            case '\f':
+                out += "\\f";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
+        }
+    }
+}
+
 // PCRE2 JIT Pattern Engine
 
 #ifdef JPDFIUM_HAS_PCRE2
@@ -279,9 +316,9 @@ struct FlashTextProcessor {
                 result += ",\"end\":";
                 append_json_number(result, static_cast<std::size_t>(matchEnd));
                 result += ",\"keyword\":\"";
-                result += matchKeyword;
+                escape_json_string(result, matchKeyword);
                 result += "\",\"label\":\"";
-                result += matchLabel;
+                escape_json_string(result, matchLabel);
                 result += "\"}";
                 i = matchEnd;
             } else {
@@ -518,7 +555,7 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
         out += ",\"is_subset\":";
         out += is_subset ? "true" : "false";
         out += ",\"family\":\"";
-        out += face->family_name ? face->family_name : "";
+        if (face->family_name) escape_json_string(out, face->family_name);
         out += "\"}";
 
         FT_Done_Face(face);
@@ -1011,8 +1048,9 @@ int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
         int count = 0;
         std::set<int> processed;  // object IDs of shared resource dicts already stripped
 
-        // NOLINTNEXTLINE(performance-for-range-copy) - copy is intentional; hasKey/getKey are
-        // non-const in libqpdf on Ubuntu 24.04 (qpdf < 11.9 in apt)
+        // The copy is intentional: hasKey/getKey are non-const in libqpdf on Ubuntu 24.04
+        // (qpdf < 11.9 in apt), so a reference would not compile there.
+        // NOLINTNEXTLINE(performance-for-range-copy)
         for (auto page : pdf.getAllPages()) {
             if (!page.hasKey("/Resources")) continue;
             QPDFObjectHandle resources = page.getKey("/Resources");

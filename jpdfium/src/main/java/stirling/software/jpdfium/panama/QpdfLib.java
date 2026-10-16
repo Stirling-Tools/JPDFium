@@ -991,10 +991,6 @@ public final class QpdfLib {
         }
     }
 
-    private static void publish(Path staging, Path output) throws IOException {
-        publish(staging, output, 0);
-    }
-
     private static void publish(Path staging, Path output, boolean durable) throws IOException {
         publish(staging, output, 0, new PublishCommit(), durable);
     }
@@ -1029,11 +1025,6 @@ public final class QpdfLib {
         }
         publishCommitted(staging, output, maxBytes, false, durable);
         if (commit != null) commit.committed();
-    }
-
-    private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber)
-            throws IOException {
-        publishCommitted(staging, output, maxBytes, noClobber, true);
     }
 
     private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber,

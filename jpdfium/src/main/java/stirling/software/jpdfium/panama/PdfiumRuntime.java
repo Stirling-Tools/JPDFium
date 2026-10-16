@@ -2,6 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import java.lang.invoke.MethodHandle;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.DoubleSupplier;
@@ -64,6 +65,16 @@ public final class PdfiumRuntime {
             case NativeDomain.STOPPED -> State.STOPPED;
             default -> State.FAILED;
         };
+    }
+
+    /**
+     * @deprecated Since 0.2.0. Native PDFium entry points are guarded automatically at the C ABI
+     *             boundary; wrapping handles in Java is no longer necessary. This method is
+     *             retained for binary compatibility and returns the target handle directly.
+     */
+    @Deprecated(since = "0.2.0", forRemoval = true)
+    public static MethodHandle guarded(MethodHandle target) {
+        return Objects.requireNonNull(target, "target");
     }
 
     /** Runs a PDFium operation; each native call inside is admitted by the native domain. */

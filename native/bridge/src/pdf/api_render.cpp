@@ -109,8 +109,10 @@ jpdf_status render_pixels(jpdf_handle page, const RenderRequest& req,
             return jpdf::fail(JPDF_E_FORMAT, "page has no usable size");
         }
         if (width == 0) {
-            if ((st = pixel_extent(w_pt, req.dpi_x, &width)) != JPDF_OK) return st;
-            if ((st = pixel_extent(h_pt, req.dpi_y, &height)) != JPDF_OK) return st;
+            st = pixel_extent(w_pt, req.dpi_x, &width);
+            if (st != JPDF_OK) return st;
+            st = pixel_extent(h_pt, req.dpi_y, &height);
+            if (st != JPDF_OK) return st;
             storage->dpi_x = req.dpi_x;
             storage->dpi_y = req.dpi_y;
         } else {
@@ -152,9 +154,15 @@ jpdf_status render_pixels(jpdf_handle page, const RenderRequest& req,
     // the buffer yet (it is published only at *out below), so shrinking here is safe.
     const uint64_t rgba_bytes = static_cast<uint64_t>(width) * 4 * static_cast<uint64_t>(height);
     if (storage->byte_size < rgba_bytes) {
-        uint8_t* original = storage->data.release();
-        void* shrunk = std::realloc(original, static_cast<size_t>(storage->byte_size));
-        storage->data.reset(shrunk ? static_cast<uint8_t*>(shrunk) : original);
+        uint8_t* p = storage->data.get();
+        void* shrunk = std::realloc(p, static_cast<size_t>(storage->byte_size));
+        if (shrunk != nullptr) {
+            // The realloc above already freed the old block, so only the new pointer may be
+            // owned from here on and the released pointer must not be freed again.
+            // NOLINTNEXTLINE(bugprone-unused-return-value)
+            (void)storage->data.release();
+            storage->data.reset(static_cast<uint8_t*>(shrunk));
+        }
     }
     *out = std::move(storage);
     return JPDF_OK;
@@ -172,7 +180,8 @@ jpdf_status jpdf_page_render(jpdf_handle page, const jpdf_render_options* option
         jpdf_status st = parse_render_options(options, &request);
         if (st != JPDF_OK) return st;
         std::shared_ptr<jpdf::PixelStorage> pixels;
-        if ((st = render_pixels(page, request, &pixels)) != JPDF_OK) return st;
+        st = render_pixels(page, request, &pixels);
+        if (st != JPDF_OK) return st;
         auto bitmap = std::make_shared<jpdf::BitmapObject>(std::move(pixels));
         jpdf_handle token = 0;
         st = jpdf::objects().insert(std::move(bitmap), &token);
@@ -191,9 +200,11 @@ jpdf_status jpdf_page_render_to_file(jpdf_handle page, const jpdf_render_options
         jpdf_status st = parse_render_options(render, &request);
         if (st != JPDF_OK) return st;
         jpdf::WriteRequest write_request;
-        if ((st = jpdf::parse_write_options(write, &write_request)) != JPDF_OK) return st;
+        st = jpdf::parse_write_options(write, &write_request);
+        if (st != JPDF_OK) return st;
         std::shared_ptr<jpdf::PixelStorage> pixels;
-        if ((st = render_pixels(page, request, &pixels)) != JPDF_OK) return st;
+        st = render_pixels(page, request, &pixels);
+        if (st != JPDF_OK) return st;
         return jpdf::write_image_file(*pixels, path_utf8, write_request);
     });
 }

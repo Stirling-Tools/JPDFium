@@ -6,11 +6,13 @@ Usage:
   python native/tools/gen_guards.py --pdfium-include native/pdfium/include \
       --pdfium-exports /tmp/pdfium.exports
 
-Exception firewall: a guard shim is `noexcept` and adds no catch boundary of its own. That is safe
-because the entry point it forwards to already isolates exceptions -- every guarded `jpdfium_*`
-export is `noexcept` or wraps its body in `catch (...)`, and raw PDFium C symbols cannot throw
-across this frame -- so no C++ exception can escape `jpdf_guard_*` and terminate the process.
-The single lifetime-aware exception is the accounting added below, which only touches atomics.
+Exception firewall: each shim admits the call through the domain guard, then runs the forwarded
+entry point inside its own `try`/`catch (...)`. The catch records the refusal as
+`JPDF_E_INTERNAL` -- so `jpdf_guard_take_refusal` reports it to the caller -- and returns the same
+refused value the unadmitted path returns. Raw PDFium C symbols cannot throw across this frame,
+so this is defence in depth rather than the only barrier: no C++ exception can escape
+`jpdf_guard_*` and terminate the process, even if the entry point it forwards to is not itself
+`noexcept`. The single lifetime-aware addition is the atomics-only accounting below.
 """
 
 from __future__ import annotations
@@ -166,7 +168,12 @@ def shim(fn: Function, header_comment: str = "") -> str:
         f"{header_comment}JPDF_API {fn.ret} jpdf_guard_{fn.name}({', '.join(decls) or 'void'}) noexcept {{\n"
         f"    jpdf::GuardScope guard(jpdf::Purpose::{purpose});\n"
         f"    if (!guard.admitted()) {refused}\n"
+        f"    try {{\n"
         f"{body}"
+        f"    }} catch (...) {{\n"
+        f"        jpdf::set_guard_refusal(JPDF_E_INTERNAL);\n"
+        f"        {refused}\n"
+        f"    }}\n"
         f"}}\n"
     )
 

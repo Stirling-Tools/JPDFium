@@ -333,24 +333,28 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
 JPDFIUM_EXPORT int32_t jpdfium_embed_jpeg_direct(int64_t doc_handle, const uint8_t* jpeg_data,
                                                  int64_t jpeg_len, float page_width,
                                                  float page_height, float margin, int32_t position,
-                                                 int32_t insert_at_index) {
-    DocWrapper* dw = decodeDoc(doc_handle);
-    if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+                                                 int32_t insert_at_index) JPDFIUM_NOEXCEPT {
+    try {
+        DocWrapper* dw = decodeDoc(doc_handle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
-    if (!jpeg_data || jpeg_len < 0 || !is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
-        return JPDFIUM_ERR_INVALID;
+        if (!jpeg_data || jpeg_len < 0 || !is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
+            return JPDFIUM_ERR_INVALID;
+        }
+
+        // For direct JPEG embedding, we would use FPDFImageObj_LoadJpegFileInline
+        // This requires setting up a FPDF_FILEACCESS structure
+        // Implementation deferred - use decoded bitmap path for now
+        (void)page_width;
+        (void)page_height;
+        (void)margin;
+        (void)position;
+        (void)insert_at_index;
+
+        return JPDFIUM_ERR_NATIVE;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-
-    // For direct JPEG embedding, we would use FPDFImageObj_LoadJpegFileInline
-    // This requires setting up a FPDF_FILEACCESS structure
-    // Implementation deferred - use decoded bitmap path for now
-    (void)page_width;
-    (void)page_height;
-    (void)margin;
-    (void)position;
-    (void)insert_at_index;
-
-    return JPDFIUM_ERR_NATIVE;
 }
 
 }  // extern "C"

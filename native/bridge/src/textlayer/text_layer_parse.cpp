@@ -215,12 +215,17 @@ jpdf_status parse_word(const jpdf_text_word& item, uint32_t size, uint64_t* text
         word->x0 = item.x0;
         word->x1 = item.x1;
     }
-    // Bound the scan to the budget: strlen() would walk arbitrarily far before the
-    // limit check below could reject an oversized string.
-    const void* nul = std::memchr(item.text_utf8, '\0', static_cast<size_t>(kMaxTextBytes) + 1);
+    // Bound the scan to the remaining budget: check budget before reading caller memory,
+    // and scan at most (remaining + 1) bytes so we never scan beyond budget or walk arbitrarily
+    // far.
+    if (*text_bytes >= kMaxTextBytes) {
+        return fail(JPDF_E_LIMIT, "text layer exceeds 16 MiB of text");
+    }
+    const size_t max_scan = static_cast<size_t>(kMaxTextBytes - *text_bytes) + 1;
+    const void* nul = std::memchr(item.text_utf8, '\0', max_scan);
     if (!nul) return fail(JPDF_E_LIMIT, "text layer exceeds 16 MiB of text");
     const auto len = static_cast<uint64_t>(static_cast<const char*>(nul) - item.text_utf8);
-    if (len > kMaxTextBytes || *text_bytes > kMaxTextBytes - len) {
+    if (len > (kMaxTextBytes - *text_bytes)) {
         return fail(JPDF_E_LIMIT, "text layer exceeds 16 MiB of text");
     }
     *text_bytes += len;

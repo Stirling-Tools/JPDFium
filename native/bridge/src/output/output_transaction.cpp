@@ -205,8 +205,11 @@ jpdf_status OutputTransaction::finalize() noexcept {
 #if !defined(_WIN32)
     try {
         mirror_destination_mode(fd_, destination_);
-    } catch (...) {
+    } catch (const std::exception& e) {
         // Best effort: a stricter mode is safer than failing the output.
+        (void)e;
+    } catch (...) {
+        (void)0;
     }
 #endif
     // Sync after the mode change so the durable fsync also covers the fchmod metadata.

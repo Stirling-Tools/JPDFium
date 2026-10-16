@@ -27,6 +27,10 @@ GuardScope::GuardScope(Purpose purpose) noexcept : admission_(purpose) {
     t_refusal = admission_.admitted() ? JPDF_OK : admission_.status();
 }
 
+void set_guard_refusal(jpdf_status status) noexcept {
+    t_refusal = status;
+}
+
 }  // namespace jpdf
 
 extern "C" {

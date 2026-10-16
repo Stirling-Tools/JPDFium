@@ -254,8 +254,39 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             const size_t fnlen = strnlen(fontbuf, sizeof(fontbuf));
             for (size_t k = 0; k < fnlen; ++k) {
                 const char c = fontbuf[k];
-                if (c == '"' || c == '\\') s += '\\';
-                s += c;
+                switch (c) {
+                    case '"':
+                        s += "\\\"";
+                        break;
+                    case '\\':
+                        s += "\\\\";
+                        break;
+                    case '\b':
+                        s += "\\b";
+                        break;
+                    case '\f':
+                        s += "\\f";
+                        break;
+                    case '\n':
+                        s += "\\n";
+                        break;
+                    case '\r':
+                        s += "\\r";
+                        break;
+                    case '\t':
+                        s += "\\t";
+                        break;
+                    default:
+                        if (static_cast<unsigned char>(c) < 0x20) {
+                            char ubuf[8];
+                            std::snprintf(ubuf, sizeof(ubuf), "\\u%04x",
+                                          static_cast<unsigned char>(c));
+                            s += ubuf;
+                        } else {
+                            s += c;
+                        }
+                        break;
+                }
             }
             s += "\",\"size\":";
             append_g(s, size);

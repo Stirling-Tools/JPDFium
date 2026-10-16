@@ -13,7 +13,7 @@ namespace jpdf {
 // and removes the staging file, leaving the destination byte-for-byte untouched.
 class OutputTransaction {
    public:
-    enum class Stage { Created, Writing, Finalized, Validated, Published, Aborted };
+    enum class Stage : std::uint8_t { Created, Writing, Finalized, Validated, Published, Aborted };
 
     // Stages beside the symlink-resolved destination so publication is a same-directory rename.
     static jpdf_status begin(const char* destination_utf8, bool durable, uint64_t max_bytes,

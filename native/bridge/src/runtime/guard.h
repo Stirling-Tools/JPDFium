@@ -25,4 +25,6 @@ class GuardScope : private CallStart {
     Admission admission_;
 };
 
+void set_guard_refusal(jpdf_status status) noexcept;
+
 }  // namespace jpdf

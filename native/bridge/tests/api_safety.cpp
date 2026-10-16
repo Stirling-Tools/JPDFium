@@ -443,6 +443,21 @@ void test_render_and_ownership(const std::string& path) {
     CHECK(written == 85u * 110 * 4, "copy reports required size");
     std::vector<uint8_t> rgba = pixels_of(b2);
     CHECK(rgba[3] == 0, "transparent background has alpha 0");
+
+    const fs::path out_png = scratch_dir() / "test_write.png";
+    CHECK_STATUS(jpdf_bitmap_write_file(0, out_png.string().c_str(), nullptr),
+                 JPDF_E_INVALID_HANDLE, "null bitmap handle rejected");
+    CHECK_STATUS(jpdf_bitmap_write_file(b2, nullptr, nullptr), JPDF_E_INVALID_ARGUMENT,
+                 "null destination path rejected");
+    CHECK_STATUS(jpdf_bitmap_write_file(b2, out_png.string().c_str(), nullptr), JPDF_OK,
+                 "bitmap write to file");
+    CHECK(fs::file_size(out_png) > 0, "written png file is non-empty");
+    jpdf_handle loaded_bmp = 0;
+    CHECK_STATUS(jpdf_image_load_file(out_png.string().c_str(), nullptr, &loaded_bmp), JPDF_OK,
+                 "load written png");
+    CHECK(loaded_bmp != 0, "loaded bitmap handle is non-zero");
+    jpdf_bitmap_close(loaded_bmp);
+    fs::remove(out_png);
     jpdf_bitmap_close(b2);
     jpdf_page_close(page);
     jpdf_doc_close(doc);
