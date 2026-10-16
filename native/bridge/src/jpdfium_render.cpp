@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 #include "jpdfium.h"
@@ -27,7 +28,52 @@
 
 namespace {
 
-constexpr double kMaxRenderPixels = 268435456.0;
+// Integer ceiling for w_px * h_px (1 GiB at 4 bytes per pixel), so the budget
+// is validated on the geometry that is actually allocated rather than on a
+// double product.
+constexpr int64_t kMaxRenderPixelsInt = 268435456;
+
+struct RasterTarget {
+    double w_pt = 0.0;
+    double h_pt = 0.0;
+    int32_t w_px = 0;
+    int32_t h_px = 0;
+};
+
+// Page box in points -> validated integer pixel size, or nullopt when the page,
+// the dpi or the resulting geometry is unusable.
+std::optional<RasterTarget> measure_raster_target(double w_pt, double h_pt, int32_t dpi) {
+    // Reject non-finite geometry explicitly: every comparison against NaN is
+    // false, so a NaN page size or dpi would otherwise reach the
+    // floating-point to integer conversion below, which is undefined.
+    if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0 || dpi <= 0) {
+        return std::nullopt;
+    }
+    // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
+    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
+    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
+    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
+        w_px_d > INT32_MAX || h_px_d > INT32_MAX) {
+        return std::nullopt;
+    }
+    // Clamp positive dimensions to at least one pixel: truncation alone would
+    // reject a page that rounds to one pixel, which PDFBox and the Java bounds
+    // check both accept.
+    const int32_t w_px = std::max(1, static_cast<int32_t>(w_px_d));
+    const int32_t h_px = std::max(1, static_cast<int32_t>(h_px_d));
+    // Validate the geometry that is actually allocated: a sub-pixel side clamps
+    // to one pixel and can push the real frame over the checked double product,
+    // and the row stride must stay representable as the int FPDFBitmap_CreateEx
+    // takes.
+    const int64_t pixels = static_cast<int64_t>(w_px) * static_cast<int64_t>(h_px);
+    if (pixels > kMaxRenderPixelsInt) return std::nullopt;
+    if (static_cast<int64_t>(w_px) * 4 > INT32_MAX) return std::nullopt;
+    return RasterTarget{w_pt, h_pt, w_px, h_px};
+}
+
+std::optional<RasterTarget> measure_raster_target(FPDF_PAGE page, int32_t dpi) {
+    return measure_raster_target(FPDF_GetPageWidth(page), FPDF_GetPageHeight(page), dpi);
+}
 
 inline int renderFlagsForScreen() {
     return FPDF_ANNOT | FPDF_LCD_TEXT;
@@ -293,23 +339,11 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
         dpi = -dpi;
     }
 
-    double w_pt = FPDF_GetPageWidth(pw->page);
-    double h_pt = FPDF_GetPageHeight(pw->page);
-    // NaN-safe: a comparison against NaN is false, so finiteness must be checked
-    // explicitly before the floating-point to integer conversion below.
-    if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0)
-        return JPDFIUM_ERR_INVALID;
-    // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
-    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
-    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
-    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
-        w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels)
-        return JPDFIUM_ERR_INVALID;
-    // Clamp positive dimensions to at least one pixel: truncation alone would
-    // reject a page that rounds to one pixel, which PDFBox and the Java bounds
-    // check both accept.
-    int w_px = std::max(1, static_cast<int>(w_px_d));
-    int h_px = std::max(1, static_cast<int>(h_px_d));
+    const std::optional<RasterTarget> target =
+        measure_raster_target(FPDF_GetPageWidth(pw->page), FPDF_GetPageHeight(pw->page), dpi);
+    if (!target) return JPDFIUM_ERR_INVALID;
+    const int w_px = target->w_px;
+    const int h_px = target->h_px;
 
     const int fmt = bitmapFormatForRenderer();
     uint8_t* out = allocRgbaChecked(w_px, h_px);
@@ -332,8 +366,8 @@ int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t flags, uint
         // renderIntoBuffer does, so callers that pass the bit get the same
         // straight RGBA output on both renderers.
         render_flags &= ~FPDF_REVERSE_BYTE_ORDER;
-        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(w_pt), 0, 0,
-                            static_cast<float>(h_px) / static_cast<float>(h_pt), 0, 0};
+        FS_MATRIX matrix = {static_cast<float>(w_px) / static_cast<float>(target->w_pt), 0, 0,
+                            static_cast<float>(h_px) / static_cast<float>(target->h_pt), 0, 0};
         FS_RECTF clip = {0, 0, static_cast<float>(w_px), static_cast<float>(h_px)};
         FPDF_RenderPageBitmapWithMatrix(bmp, pw->page, &matrix, &clip, render_flags);
         if (transparent) {
@@ -587,50 +621,14 @@ void jpdfium_free_buffer(uint8_t* buffer) noexcept {
 
 namespace {
 
-struct RasterTarget {
-    double w_pt = 0.0;
-    double h_pt = 0.0;
-    int w_px = 0;
-    int h_px = 0;
-};
-
-// A raster frame kept for reuse between `jpdfium_page_to_image` calls must not
-// stay mapped for the lifetime of a long-lived document. Ordinary page geometry
-// is worth keeping (A4 at 150 dpi is ~8.7 MiB, and that is the size the
-// per-page flatten path re-renders); past this budget the frame is released as
-// soon as the page has been rendered, so retention stays bounded instead of
-// approaching the kMaxRenderPixels ceiling (1 GiB at 4 bytes per pixel).
+// A raster frame kept for reuse between renders must not stay mapped for the
+// lifetime of a long-lived document. Ordinary page geometry is worth keeping
+// (A4 at 150 dpi is ~8.7 MiB); past this budget the frame is released as soon as
+// the pass ends, so per-document retention stays bounded instead of approaching
+// the kMaxRenderPixelsInt ceiling (1 GiB at 4 bytes per pixel). This bounds one
+// document, not the process: a trim or process-level budget would be the lever
+// for many open documents.
 constexpr size_t kRetainRasterFrameBytes = 32u * 1024u * 1024u;
-
-// Bytes per pixel of the alpha-less frames this file allocates.
-constexpr size_t kRasterFrameBytesPerPixel = 4u;
-
-// Page geometry in points -> validated pixel size for `dpi`.
-bool measure_raster_target(FPDF_PAGE page, int32_t dpi, RasterTarget* out) {
-    const double w_pt = FPDF_GetPageWidth(page);
-    const double h_pt = FPDF_GetPageHeight(page);
-    // Reject non-finite geometry explicitly: every comparison against NaN is
-    // false, so a NaN page size or dpi would otherwise reach the
-    // floating-point to integer conversion below, which is undefined.
-    if (!std::isfinite(w_pt) || !std::isfinite(h_pt) || w_pt <= 0.0 || h_pt <= 0.0 || dpi <= 0) {
-        return false;
-    }
-    // Truncate (not round) so pixel sizes match PDFBox and pdf.js viewports.
-    const double w_px_d = w_pt * static_cast<double>(dpi) / 72.0;
-    const double h_px_d = h_pt * static_cast<double>(dpi) / 72.0;
-    if (!std::isfinite(w_px_d) || !std::isfinite(h_px_d) || w_px_d <= 0.0 || h_px_d <= 0.0 ||
-        w_px_d > INT32_MAX || h_px_d > INT32_MAX || w_px_d * h_px_d > kMaxRenderPixels) {
-        return false;
-    }
-    // Clamp positive dimensions to at least one pixel: truncation alone would
-    // reject a page that rounds to one pixel, which PDFBox and the Java bounds
-    // check both accept.
-    out->w_pt = w_pt;
-    out->h_pt = h_pt;
-    out->w_px = std::max(1, static_cast<int>(w_px_d));
-    out->h_px = std::max(1, static_cast<int>(h_px_d));
-    return true;
-}
 
 // Renders `page` (geometry in `target`) into the caller-owned `bmp` and replaces the page at
 // `pageIndex` with an image of that bitmap. `bmp` is filled white first: a page does not paint its
@@ -721,34 +719,18 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         UniquePage page(FPDF_LoadPage(dw->core->doc, pageIndex));
         if (!page) return JPDFIUM_ERR_NOT_FOUND;
 
-        RasterTarget target;
-        if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
+        const std::optional<RasterTarget> target = measure_raster_target(page.get(), dpi);
+        if (!target) return JPDFIUM_ERR_INVALID;
 
-        // One raster frame per open document: a fresh page-size bitmap per call
+        // One scratch frame per open document: a fresh page-size bitmap per call
         // costs a new mapping and its first-touch faults on every page.
         DocCore& core = *dw->core;
-        if (core.rasterFrame &&
-            (core.rasterFrameWidth != target.w_px || core.rasterFrameHeight != target.h_px)) {
-            FPDFBitmap_Destroy(core.rasterFrame);
-            core.rasterFrame = nullptr;
-        }
-        if (!core.rasterFrame) {
-            core.rasterFrame = FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/);
-            core.rasterFrameWidth = target.w_px;
-            core.rasterFrameHeight = target.h_px;
-        }
-        if (!core.rasterFrame) return JPDFIUM_ERR_NATIVE;
-        const int32_t rc = rasterize_page_into(dw, pageIndex, page, core.rasterFrame, target);
-        if (static_cast<size_t>(target.w_px) * static_cast<size_t>(target.h_px) *
-                kRasterFrameBytesPerPixel >
-            kRetainRasterFrameBytes) {
-            // Reuse only pays off for ordinary page sizes, so release an
-            // oversized frame rather than hoarding it until the document closes.
-            FPDFBitmap_Destroy(core.rasterFrame);
-            core.rasterFrame = nullptr;
-            core.rasterFrameWidth = 0;
-            core.rasterFrameHeight = 0;
-        }
+        FPDF_BITMAP frame = core.rasterFrame.acquire(target->w_px, target->h_px);
+        if (!frame) return JPDFIUM_ERR_NATIVE;
+        const int32_t rc = rasterize_page_into(dw, pageIndex, page, frame, *target);
+        // Reuse only pays off for ordinary page sizes, so an oversized frame is
+        // released as soon as the page has been rendered.
+        core.rasterFrame.trimTo(kRetainRasterFrameBytes);
         return rc;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
@@ -756,35 +738,41 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
 }
 
 int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
+    // Set once the first page has actually been replaced: a later failure then
+    // reports JPDFIUM_ERR_CONTENT_MUTATED so the caller knows the document is no
+    // longer the one it opened.
+    bool mutated = false;
     try {
         DocWrapper* dw = decodeDoc(docHandle);
         if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
         if (dpi <= 0) return JPDFIUM_ERR_INVALID;
 
-        const int count = FPDF_GetPageCount(dw->core->doc);
-        // One render bitmap per page size for the whole pass.
-        UniqueBitmap bmp;
-        int bmp_w = 0;
-        int bmp_h = 0;
-        for (int i = 0; i < count; ++i) {
-            UniquePage page(FPDF_LoadPage(dw->core->doc, i));
-            if (!page) return JPDFIUM_ERR_NOT_FOUND;
-            RasterTarget target;
-            if (!measure_raster_target(page.get(), dpi, &target)) return JPDFIUM_ERR_INVALID;
-            if (!bmp || bmp_w != target.w_px || bmp_h != target.h_px) {
-                // Drop the old frame before allocating its replacement: a mixed-size
-                // document must not hold two page-size bitmaps at once.
-                bmp.reset();
-                bmp.reset(FPDFBitmap_Create(target.w_px, target.h_px, 0 /*no alpha*/));
-                if (!bmp) return JPDFIUM_ERR_NATIVE;
-                bmp_w = target.w_px;
-                bmp_h = target.h_px;
+        DocCore& core = *dw->core;
+        // Release an oversized scratch frame however this pass exits, so a failed
+        // pass cannot leave a large frame mapped until the document closes.
+        struct TrimOnExit {
+            RasterFrame* frame;
+            ~TrimOnExit() {
+                frame->trimTo(kRetainRasterFrameBytes);
             }
-            const int32_t rc = rasterize_page_into(dw, i, page, bmp.get(), target);
-            if (rc != JPDFIUM_OK) return rc;
+        } trim_on_exit{&core.rasterFrame};
+
+        const int count = FPDF_GetPageCount(core.doc);
+        for (int i = 0; i < count; ++i) {
+            UniquePage page(FPDF_LoadPage(core.doc, i));
+            if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
+            const std::optional<RasterTarget> target = measure_raster_target(page.get(), dpi);
+            if (!target) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_INVALID;
+            // Borrow the document scratch frame: the per-page and batch paths
+            // share one frame, so a pass never holds two page-size bitmaps.
+            FPDF_BITMAP frame = core.rasterFrame.acquire(target->w_px, target->h_px);
+            if (!frame) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
+            const int32_t rc = rasterize_page_into(dw, i, page, frame, *target);
+            if (rc != JPDFIUM_OK) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : rc;
+            mutated = true;
         }
         return JPDFIUM_OK;
     } catch (...) {
-        return JPDFIUM_ERR_NATIVE;
+        return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
 }

@@ -44,6 +44,7 @@ extern "C" {
 #define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
+#define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -236,11 +237,15 @@ JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int
 // Document-wide flatten over a file-backed document handle.
 //
 // jpdfium_doc_flatten_annotations: bakes annotations/form fields into page content on every page
-// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do.
+// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do. Flattening
+// rewrites page content in place: the FPDF_PAGE handles stay valid, so this does not bump the
+// structural generation.
 //
 // jpdfium_doc_flatten_to_images: rasterizes every page at `dpi` and replaces its content with the
-// resulting image, reusing one render bitmap per page size. On failure the first failing page
-// reports the error; earlier pages stay flattened.
+// resulting image, borrowing one scratch frame from the document. It returns
+// JPDFIUM_ERR_CONTENT_MUTATED when a failure happens after an earlier page was already replaced
+// (the document no longer matches the one that was opened); a failure before any page was replaced
+// reports its own code.
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
 

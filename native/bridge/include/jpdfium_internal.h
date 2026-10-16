@@ -45,6 +45,7 @@ struct TransparentStringEqual {
 #define JPDFIUM_ERR_UNCOMMITTED_MARKS (-6)    // save refused: uncommitted REDACT annotations
 #define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
+#define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
 inline int translatePdfiumError() {
@@ -67,6 +68,50 @@ inline int translatePdfiumError() {
 struct RedactZone {
     int32_t pageIndex = -1;
     float left = 0, bottom = 0, right = 0, top = 0;
+};
+
+// Reusable raster frame: the bitmap owns its pixels and the geometry it was
+// allocated for travels with it, so reuse and byte accounting cannot drift.
+class RasterFrame {
+   public:
+    RasterFrame() = default;
+    RasterFrame(const RasterFrame&) = delete;
+    RasterFrame& operator=(const RasterFrame&) = delete;
+    ~RasterFrame() {
+        reset();
+    }
+
+    // Returns a frame of exactly w x h, reallocating only when the size differs.
+    FPDF_BITMAP acquire(int32_t w, int32_t h) {
+        if (bitmap_ && (width_ != w || height_ != h)) reset();
+        if (!bitmap_) {
+            bitmap_ = FPDFBitmap_Create(w, h, 0 /*no alpha*/);
+            width_ = bitmap_ ? w : 0;
+            height_ = bitmap_ ? h : 0;
+        }
+        return bitmap_;
+    }
+
+    // Drops the frame unless it is small enough to keep for the next render.
+    void trimTo(size_t retain_bytes) {
+        if (bitmap_ && pixelBytes() > static_cast<int64_t>(retain_bytes)) reset();
+    }
+
+    [[nodiscard]] int64_t pixelBytes() const {
+        return static_cast<int64_t>(width_) * static_cast<int64_t>(height_) * 4;
+    }
+
+   private:
+    void reset() {
+        if (bitmap_) FPDFBitmap_Destroy(bitmap_);
+        bitmap_ = nullptr;
+        width_ = 0;
+        height_ = 0;
+    }
+
+    FPDF_BITMAP bitmap_ = nullptr;
+    int32_t width_ = 0;
+    int32_t height_ = 0;
 };
 
 // Shared document state.
@@ -106,13 +151,11 @@ struct DocCore {
     void* redactPatternCache = nullptr;
     void (*redactPatternDeleter)(void*) = nullptr;
 
-    // Scratch raster frame for the per-page flatten path, reused by size.
-    FPDF_BITMAP rasterFrame = nullptr;
-    int32_t rasterFrameWidth = 0;
-    int32_t rasterFrameHeight = 0;
+    // One scratch render frame per document, borrowed by the per-page and the
+    // whole-document flatten paths so they can never hold two frames at once.
+    RasterFrame rasterFrame{};
 
     ~DocCore() {
-        if (rasterFrame) FPDFBitmap_Destroy(rasterFrame);
         clearRedactPatternCache();
     }
 

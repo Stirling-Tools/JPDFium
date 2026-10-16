@@ -451,10 +451,9 @@ int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
             if (!page) return JPDFIUM_ERR_NOT_FOUND;
             const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
             if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) return JPDFIUM_ERR_NATIVE;
-            // Bump per page: a later failure must still report the pages that
-            // were already flattened, or open handles would look current.
-            if (rc == FLATTEN_SUCCESS) ++dw->core->generation;
         }
+        // Flatten rewrites content in place and keeps every FPDF_PAGE valid, so
+        // the structural generation must not move; Java tracks the edit itself.
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
