@@ -24,8 +24,8 @@ struct RotatedRect {
     float angle = 0;  // degrees
 };
 
-// cv::resize(INTER_LINEAR) on interleaved 8-bit pixels: OpenCV's fixed-point path, not its
-// exact-2x area shortcut (callers never ask for an exact halving).
+// cv::resize(INTER_LINEAR) on interleaved 8-bit pixels: OpenCV's fixed-point path, including its
+// promotion to INTER_AREA when the reduction is exactly 2x on both axes.
 void resize_linear(const uint8_t* src, int sw, int sh, int sstride, int cn, uint8_t* dst, int dw,
                    int dh);
 

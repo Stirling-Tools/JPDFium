@@ -54,6 +54,26 @@ void resize_linear(const uint8_t* src, int sw, int sh, int sstride, int cn, uint
         }
         return;
     }
+    // OpenCV promotes INTER_LINEAR to INTER_AREA when the reduction is exactly
+    // 2x on both axes, so each destination pixel is the rounded mean of the 2x2
+    // source block; the generic bilinear path below would not reproduce that.
+    if (sw == 2 * dw && sh == 2 * dh) {
+        const int width = dw * cn;
+        for (int dy = 0; dy < dh; ++dy) {
+            const uint8_t* r0 = src + static_cast<size_t>(2 * dy) * sstride;
+            const uint8_t* r1 = r0 + sstride;
+            uint8_t* d = dst + static_cast<size_t>(dy) * width;
+            for (int dx = 0; dx < dw; ++dx) {
+                const size_t s0 = static_cast<size_t>(2 * dx) * cn;
+                const size_t s1 = s0 + cn;
+                for (int k = 0; k < cn; ++k) {
+                    const int sum = r0[s0 + k] + r0[s1 + k] + r1[s0 + k] + r1[s1 + k];
+                    d[static_cast<size_t>(dx) * cn + k] = static_cast<uint8_t>((sum + 2) >> 2);
+                }
+            }
+        }
+        return;
+    }
     const double inv_scale_x = static_cast<double>(dw) / sw;
     const double inv_scale_y = static_cast<double>(dh) / sh;
     const double scale_x = 1. / inv_scale_x;
@@ -90,14 +110,30 @@ void resize_linear(const uint8_t* src, int sw, int sh, int sstride, int cn, uint
         }
     };
 
+    // Consecutive output rows usually share their two source rows, so each
+    // source row is horizontally resized once instead of once per output row.
+    int cached0 = -1;
+    int cached1 = -1;
     for (int dy = 0; dy < dh; ++dy) {
-        float fy = static_cast<float>((dy + 0.5) * scale_y - 0.5);
+        const float fy = static_cast<float>((dy + 0.5) * scale_y - 0.5);
         const int sy = static_cast<int>(std::floor(fy));
-        fy -= static_cast<float>(sy);
-        const int b0 = saturate_short((1.f - fy) * kResizeCoefScale);
-        const int b1 = saturate_short(fy * kResizeCoefScale);
-        hresize(src + static_cast<size_t>(clip_row(sy, sh)) * sstride, row0.data());
-        hresize(src + static_cast<size_t>(clip_row(sy + 1, sh)) * sstride, row1.data());
+        const float frac = fy - static_cast<float>(sy);
+        const int b0 = saturate_short((1.f - frac) * kResizeCoefScale);
+        const int b1 = saturate_short(frac * kResizeCoefScale);
+        const int sa = clip_row(sy, sh);
+        const int sb = clip_row(sy + 1, sh);
+        if (sa == cached1 && sb == cached0) {
+            row0.swap(row1);
+            std::swap(cached0, cached1);
+        }
+        if (sa != cached0) {
+            hresize(src + static_cast<size_t>(sa) * sstride, row0.data());
+            cached0 = sa;
+        }
+        if (sb != cached1) {
+            hresize(src + static_cast<size_t>(sb) * sstride, row1.data());
+            cached1 = sb;
+        }
         uint8_t* d = dst + static_cast<size_t>(dy) * width;
         for (int x = 0; x < width; ++x) {
             d[x] = static_cast<uint8_t>(
@@ -260,7 +296,8 @@ bool warp_perspective_cubic(const uint8_t* src, int sw, int sh, int sstride, int
     const CubicTable& table = cubic_table();
 
     // WarpPerspectiveInvoker evaluates the map relative to 32x32-pixel blocks; mirror its origin.
-    int bh0 = std::min(16, dh);
+    if (dw <= 0 || dh <= 0) return false;
+    const int bh0 = std::min(16, dh);
     const int bw0 = std::min(1024 / bh0, dw);
     const unsigned width1 = static_cast<unsigned>(std::max(sw - 3, 0));
     const unsigned height1 = static_cast<unsigned>(std::max(sh - 3, 0));
@@ -302,7 +339,6 @@ bool warp_perspective_cubic(const uint8_t* src, int sw, int sh, int sstride, int
             }
         }
     }
-    (void)bh0;
     return true;
 }
 
