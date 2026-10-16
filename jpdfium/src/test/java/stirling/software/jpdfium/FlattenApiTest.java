@@ -406,7 +406,20 @@ class FlattenApiTest {
                 painted = darkRatio(sourcePage.renderAt(FULL_DPI));
             }
         }
-        assertTrue(painted > 0.5, "the fixture must paint page 0 solid black: painted=" + painted);
+        // Control: the per-page path predates the batch pass, so its ink tells a
+        // scratch-reuse defect apart from a platform raster difference.
+        Path single = dir.resolve("painted-per-page-flat.pdf");
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            try (PdfPage page = doc.page(0)) {
+                page.flatten(FlattenMode.FULL, FULL_DPI);
+            }
+            doc.save(single);
+        }
+        int perPageDark;
+        try (PdfDocument doc = PdfDocument.open(single);
+                PdfPage page = doc.page(0)) {
+            perPageDark = darkPixels(page.renderAt(FULL_DPI));
+        }
         Path out = dir.resolve("painted-then-blank-flat.pdf");
         try (PdfDocument doc = PdfDocument.open(fixture)) {
             doc.flatten(FlattenMode.FULL, FULL_DPI);
@@ -414,18 +427,18 @@ class FlattenApiTest {
         }
         try (PdfDocument doc = PdfDocument.open(out)) {
             try (PdfPage first = doc.page(0)) {
+                RenderResult raster = first.renderAt(FULL_DPI);
+                int batchDark = darkPixels(raster);
                 PageContentSummary content = PdfPageObjects.summarize(first.rawHandleForRead());
+                assertTrue(
+                        darkRatio(raster) > 0.5,
+                        "the painted page must stay dark after the raster pass: painted=" + painted
+                                + " perPageDark=" + perPageDark + " batchDark=" + batchDark
+                                + " total=" + (raster.rgba().length / 4) + " " + content);
                 assertEquals(
                         1,
                         content.imageObjectCount(),
                         "a full raster pass replaces page 0 with one image: " + content);
-                RenderResult raster = first.renderAt(FULL_DPI);
-                double flattened = darkRatio(raster);
-                assertTrue(
-                        flattened > 0.5,
-                        "the painted page must stay dark after the raster pass: painted=" + painted
-                                + " flattened=" + flattened + " dark=" + darkPixels(raster)
-                                + " total=" + (raster.rgba().length / 4));
             }
             try (PdfPage blankPage = doc.page(1)) {
                 RenderResult blank = blankPage.renderAt(FULL_DPI);
