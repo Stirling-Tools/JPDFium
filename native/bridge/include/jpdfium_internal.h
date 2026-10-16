@@ -48,7 +48,7 @@ struct TransparentStringEqual {
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_NATIVE (-99)
 
-inline int translatePdfiumError() {
+inline int translatePdfiumError() noexcept {
     switch (FPDF_GetLastError()) {
         case FPDF_ERR_SUCCESS:
             return JPDFIUM_OK;
@@ -207,6 +207,10 @@ struct PageWrapper {
     // DocCore generation at open. A mismatch means the document was freed and
     // replaced after this page was created, so page points into dead state.
     int64_t generation = 0;
+
+    // Owning wrapper: a copy would close the same FPDF_PAGE twice.
+    PageWrapper(const PageWrapper&) = delete;
+    PageWrapper& operator=(const PageWrapper&) = delete;
 
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, int32_t idx, std::shared_ptr<DocCore> o)
         : page(p), doc(d), pageIndex(idx), core(std::move(o)) {
@@ -383,7 +387,7 @@ class AuxHandleRegistry {
 // Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
 // selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
 // render paths read this to pick the bitmap format and draw call.
-extern bool g_jpdfiumUseSkia;
+extern std::atomic<bool> g_jpdfiumUseSkia;
 
 // Shared PDFium library init so every entry point that lazily initializes
 // uses the same renderer configuration. Returns JPDFIUM_OK, or

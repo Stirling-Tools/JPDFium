@@ -1665,7 +1665,7 @@ int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint8_t*, int64_t, 
 }
 
 int32_t jpdfium_import_n_pages_to_one(void*, float, float, int32_t, int32_t, uint8_t** output,
-                                      int64_t* outputLen) {
+                                      int64_t* outputLen) JPDFIUM_NOEXCEPT {
     constexpr std::string_view stub = "%PDF-1.4 stub n-up";
     if (!output || !outputLen) return JPDFIUM_ERR_INVALID;
     *outputLen = static_cast<int64_t>(stub.size());

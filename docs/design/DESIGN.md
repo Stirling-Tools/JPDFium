@@ -618,8 +618,10 @@ unwarping and text-line orientation turned off, which is its default ONNX Runtim
 5. **Recognition.** Crops are sorted by aspect ratio and read in batches of six, each batch padded
    to its widest crop, then decoded with CTCLabelDecode over the profile's dictionary.
 
-PaddleOCR's results depend on OpenCV and pyclipper arithmetic. `cv_compat.cpp` ports the OpenCV
-4.10 operations involved, and `paddle.cpp` ports Clipper 6.4.2's polygon offset:
+PaddleOCR's results depend on OpenCV and pyclipper arithmetic. The `cv_*.cpp` files (`cv_resize`
+resize, `cv_warp` warpPerspective, `cv_contours` findContours, `cv_hull` convexHull/minAreaRect and
+`cv_fill` fillPoly) port the OpenCV 4.10 operations involved, and `paddle.cpp` ports Clipper 6.4.2's
+polygon offset:
 
 - `resize` (`INTER_LINEAR` fixed point);
 - `warpPerspective` (`INTER_CUBIC`, `BORDER_REPLICATE`, with its block-relative coordinates);

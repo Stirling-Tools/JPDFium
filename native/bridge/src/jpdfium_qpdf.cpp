@@ -66,17 +66,29 @@ struct QpdfResult {
 // revisit only if a per-instance alternative appears in qpdf.
 // Apply the writer configuration. Shared by the memory and file paths so the
 // two cannot drift apart in which flags they honour.
-void configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode, int32_t streamDataMode,
+bool configureWriter(QPDFWriter& w, int32_t flags, int32_t objectStreamMode, int32_t streamDataMode,
                      int32_t decodeLevel) {
     if (flags & JPDFIUM_QPDF_LINEARIZE) w.setLinearization(true);
     if (flags & JPDFIUM_QPDF_RECOMPRESS_FLATE) w.setRecompressFlate(true);
     if (flags & JPDFIUM_QPDF_COMPRESS_STREAMS) w.setCompressStreams(true);
     if (flags & JPDFIUM_QPDF_PRESERVE_UNREFERENCED) w.setPreserveUnreferencedObjects(true);
     if (flags & JPDFIUM_QPDF_NORMALIZE_CONTENT) w.setContentNormalization(true);
-    if (objectStreamMode >= 0)
+    // Each mode is a qpdf enum with a small valid domain; an out-of-range value would reach
+    // qpdf's own switches unchecked. A negative value means "leave qpdf's default".
+    const auto in_domain = [](int32_t v, int32_t hi) { return v >= 0 && v <= hi; };
+    if (objectStreamMode >= 0) {
+        if (!in_domain(objectStreamMode, 2)) return false;
         w.setObjectStreamMode(static_cast<qpdf_object_stream_e>(objectStreamMode));
-    if (streamDataMode >= 0) w.setStreamDataMode(static_cast<qpdf_stream_data_e>(streamDataMode));
-    if (decodeLevel >= 0) w.setDecodeLevel(static_cast<qpdf_stream_decode_level_e>(decodeLevel));
+    }
+    if (streamDataMode >= 0) {
+        if (!in_domain(streamDataMode, 2)) return false;
+        w.setStreamDataMode(static_cast<qpdf_stream_data_e>(streamDataMode));
+    }
+    if (decodeLevel >= 0) {
+        if (!in_domain(decodeLevel, 3)) return false;
+        w.setDecodeLevel(static_cast<qpdf_stream_decode_level_e>(decodeLevel));
+    }
+    return true;
 }
 
 // Write an already-parsed document straight to a file. QPDFWriter takes
@@ -94,7 +106,9 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path, int32_t
         // source encryption would change the document's protection.
         w.setOutputFile("jpdfium-out", out, true);
         writerOwnsFile = true;
-        configureWriter(w, flags, objectStreamMode, streamDataMode, decodeLevel);
+        if (!configureWriter(w, flags, objectStreamMode, streamDataMode, decodeLevel)) {
+            return -1;  // QPDFWriter owns and closes `out`
+        }
         w.write();
         return 0;
     } catch (const std::exception& e) {
@@ -119,7 +133,9 @@ QpdfResult optimize(std::span<const uint8_t> input, int32_t flags, int32_t objec
 
         QPDFWriter w{*qpdf};
         w.setOutputMemory();
-        configureWriter(w, flags, objectStreamMode, streamDataMode, decodeLevel);
+        if (!configureWriter(w, flags, objectStreamMode, streamDataMode, decodeLevel)) {
+            return {nullptr, "invalid writer mode"};
+        }
         w.write();
         return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {

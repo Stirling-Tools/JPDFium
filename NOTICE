@@ -48,7 +48,8 @@ Optional OCR module (libjpdfium_ocr, built only when ONNX Runtime is fetched):
 - ONNX Runtime 1.30.0 - MIT (shipped beside the module, with its LICENSE and
   ThirdPartyNotices.txt)
 - OpenCV 4.10 - Apache-2.0: resize, warpPerspective, findContours, convexHull,
-  minAreaRect, boxPoints and fillPoly are ported in native/ocr/src/cv_compat.cpp
+  minAreaRect, boxPoints and fillPoly are ported in native/ocr/src/cv_resize.cpp,
+  cv_warp.cpp, cv_contours.cpp, cv_hull.cpp and cv_fill.cpp
   (Apache-2.0 text: native/licenses/QPDF-APACHE-2.0.txt)
 - Clipper 6.4.2 - BSL-1.0: polygon offsetting ported in native/ocr/src/paddle.cpp
   (native/licenses/CLIPPER-BSL-1.0.txt)

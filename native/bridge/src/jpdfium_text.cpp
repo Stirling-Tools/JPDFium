@@ -202,7 +202,6 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
         // decodePage() rejects a stale page (one whose document was freed and
         // replaced) instead of letting the caller dereference freed PDFium state.
         if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-        if (!json) return JPDFIUM_ERR_INVALID;
         // Validate the out-pointer before doing any work: it is dereferenced on
         // the way out, so a null value would be a crash, not an error return.
         if (!json) return JPDFIUM_ERR_INVALID;

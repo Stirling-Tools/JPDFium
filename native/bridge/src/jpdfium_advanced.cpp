@@ -3,7 +3,9 @@
 #include <fpdf_save.h>
 
 #include <cctype>
+#include <charconv>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18,6 +20,18 @@
 
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
+
+// JSON helpers ---------------------------------------------------------------
+
+// Append an integral value without a fixed-size buffer. snprintf into a small
+// stack buffer silently truncated long match or font text and produced malformed
+// JSON; std::to_chars is locale-independent and cannot truncate here.
+template <std::integral T>
+static void append_json_number(std::string& out, T v) {
+    char buf[24];
+    const auto res = std::to_chars(buf, buf + sizeof(buf), v);
+    if (res.ec == std::errc()) out.append(buf, static_cast<std::size_t>(res.ptr - buf));
+}
 
 // PCRE2 JIT Pattern Engine
 
@@ -113,10 +127,13 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
                 }
             }
 
-            char buf[256];
-            snprintf(buf, sizeof(buf), "{\"start\":%zu,\"end\":%zu,\"match\":\"%s\"}",
-                     (size_t)start, (size_t)end, escaped.c_str());
-            json += buf;
+            json += "{\"start\":";
+            append_json_number(json, static_cast<std::size_t>(start));
+            json += ",\"end\":";
+            append_json_number(json, static_cast<std::size_t>(end));
+            json += ",\"match\":\"";
+            json += escaped;
+            json += "\"}";
 
             offset = (end > start) ? end : end + 1;  // advance past zero-length matches
         }
@@ -257,11 +274,15 @@ struct FlashTextProcessor {
             if (found) {
                 if (!first) result += ",";
                 first = false;
-                char buf[512];
-                snprintf(buf, sizeof(buf),
-                         "{\"start\":%zu,\"end\":%zu,\"keyword\":\"%s\",\"label\":\"%s\"}", i,
-                         matchEnd, matchKeyword.c_str(), matchLabel.c_str());
-                result += buf;
+                result += "{\"start\":";
+                append_json_number(result, static_cast<std::size_t>(i));
+                result += ",\"end\":";
+                append_json_number(result, static_cast<std::size_t>(matchEnd));
+                result += ",\"keyword\":\"";
+                result += matchKeyword;
+                result += "\",\"label\":\"";
+                result += matchLabel;
+                result += "\"}";
                 i = matchEnd;
             } else {
                 ++i;
@@ -482,17 +503,26 @@ int32_t jpdfium_font_classify(const uint8_t* data, int64_t len, char** json) {
             }
         }
 
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-                 "{\"type\":\"%s\",\"sfnt\":%s,\"has_cmap\":%s,"
-                 "\"num_glyphs\":%ld,\"units_per_em\":%d,\"has_kerning\":%s,"
-                 "\"is_subset\":%s,\"family\":\"%s\"}",
-                 type_str, sfnt ? "true" : "false", has_cmap ? "true" : "false", face->num_glyphs,
-                 (int)face->units_per_EM, has_kerning ? "true" : "false",
-                 is_subset ? "true" : "false", face->family_name ? face->family_name : "");
+        std::string out = "{\"type\":\"";
+        out += type_str;
+        out += "\",\"sfnt\":";
+        out += sfnt ? "true" : "false";
+        out += ",\"has_cmap\":";
+        out += has_cmap ? "true" : "false";
+        out += ",\"num_glyphs\":";
+        append_json_number(out, static_cast<long>(face->num_glyphs));
+        out += ",\"units_per_em\":";
+        append_json_number(out, static_cast<int>(face->units_per_EM));
+        out += ",\"has_kerning\":";
+        out += has_kerning ? "true" : "false";
+        out += ",\"is_subset\":";
+        out += is_subset ? "true" : "false";
+        out += ",\"family\":\"";
+        out += face->family_name ? face->family_name : "";
+        out += "\"}";
 
         FT_Done_Face(face);
-        *json = strdup(buf);
+        *json = strdup(out.c_str());
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -560,14 +590,21 @@ int32_t jpdfium_text_shape(const uint8_t* font_data, int64_t font_len, const cha
         hb_glyph_position_t* pos = hb_buffer_get_glyph_positions(buf, &count);
 
         std::string out = "[";
-        char entry[128];
         for (unsigned int i = 0; i < count; ++i) {
             if (i) out += ",";
-            snprintf(entry, sizeof(entry),
-                     "{\"g\":%u,\"ax\":%d,\"ay\":%d,\"dx\":%d,\"dy\":%d,\"cluster\":%u}",
-                     infos[i].codepoint, pos[i].x_advance, pos[i].y_advance, pos[i].x_offset,
-                     pos[i].y_offset, infos[i].cluster);
-            out += entry;
+            out += "{\"g\":";
+            append_json_number(out, infos[i].codepoint);
+            out += ",\"ax\":";
+            append_json_number(out, pos[i].x_advance);
+            out += ",\"ay\":";
+            append_json_number(out, pos[i].y_advance);
+            out += ",\"dx\":";
+            append_json_number(out, pos[i].x_offset);
+            out += ",\"dy\":";
+            append_json_number(out, pos[i].y_offset);
+            out += ",\"cluster\":";
+            append_json_number(out, infos[i].cluster);
+            out += "}";
         }
         out += "]";
         hb_buffer_destroy(buf);
@@ -626,12 +663,12 @@ int32_t jpdfium_font_normalize_page(int64_t doc, int32_t page_index, char** json
         jpdfium_font_fix_tounicode(doc, page_index, &tuc_fixed);
         jpdfium_font_repair_widths(doc, page_index, &w_fixed);
 
-        char buf[256];
-        snprintf(buf, sizeof(buf),
-                 "{\"fonts_processed\":0,\"tounicode_fixed\":%d,"
-                 "\"widths_repaired\":%d,\"type1_converted\":0,\"resubset\":0}",
-                 tuc_fixed, w_fixed);
-        *json = strdup(buf);
+        std::string out = "{\"fonts_processed\":0,\"tounicode_fixed\":";
+        append_json_number(out, tuc_fixed);
+        out += ",\"widths_repaired\":";
+        append_json_number(out, w_fixed);
+        out += ",\"type1_converted\":0,\"resubset\":0}";
+        *json = strdup(out.c_str());
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -1134,10 +1171,13 @@ int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
                 }
             }
 
-            char buf[4096];
-            snprintf(buf, sizeof(buf), "{\"start\":%d,\"end\":%d,\"text\":\"%s\"}", start, end,
-                     escaped.c_str());
-            json += buf;
+            json += "{\"start\":";
+            append_json_number(json, start);
+            json += ",\"end\":";
+            append_json_number(json, end);
+            json += ",\"text\":\"";
+            json += escaped;
+            json += "\"}";
 
             start = end;
             end = bi->next();

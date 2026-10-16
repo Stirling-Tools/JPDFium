@@ -77,8 +77,11 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
         img_width = read_le_i32(image_data);
         img_height = read_le_i32(image_data + 4);
         if (img_width <= 0 || img_height <= 0) return JPDFIUM_ERR_INVALID;
-        size_t pixel_bytes = (size_t)img_width * img_height * 4;
-        if (image_len < (size_t)(8 + (int64_t)pixel_bytes)) return JPDFIUM_ERR_INVALID;
+        // Sized unsigned: a large width/height pair would otherwise wrap the 32-bit product
+        // and defeat the length check below.
+        const auto pixel_bytes =
+            static_cast<uint64_t>(img_width) * static_cast<uint64_t>(img_height) * 4u;
+        if (static_cast<uint64_t>(image_len) < pixel_bytes + 8u) return JPDFIUM_ERR_INVALID;
         // Use the pixel data in-place (no copy needed here)
         pixels = const_cast<uint8_t*>(image_data + 8);
         pixels_owned = false;
@@ -116,7 +119,8 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
     void* bmp_buf = FPDFBitmap_GetBuffer(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
 
-    int row_bytes = img_width * channels;
+    const std::size_t row_bytes =
+        static_cast<std::size_t>(img_width) * static_cast<std::size_t>(channels);
     for (int row = 0; row < img_height; ++row) {
         uint8_t* dst = static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride;
         const uint8_t* src = pixels + static_cast<std::ptrdiff_t>(row) * row_bytes;
@@ -333,7 +337,7 @@ JPDFIUM_EXPORT int32_t jpdfium_embed_jpeg_direct(int64_t doc_handle, const uint8
     DocWrapper* dw = decodeDoc(doc_handle);
     if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
 
-    if (!is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
+    if (!jpeg_data || jpeg_len < 0 || !is_jpeg(jpeg_data, static_cast<size_t>(jpeg_len))) {
         return JPDFIUM_ERR_INVALID;
     }
 

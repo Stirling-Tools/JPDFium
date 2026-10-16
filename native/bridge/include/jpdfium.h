@@ -733,7 +733,8 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
 // Caller must free *output with jpdfium_free_buffer.
 JPDFIUM_EXPORT int32_t jpdfium_import_n_pages_to_one(void* srcDoc, float outputWidth,
                                                      float outputHeight, int32_t cols, int32_t rows,
-                                                     uint8_t** output, int64_t* outputLen);
+                                                     uint8_t** output,
+                                                     int64_t* outputLen) JPDFIUM_NOEXCEPT;
 
 // Signatures (read-only inspection via the EmbedPDF signature model).
 

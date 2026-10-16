@@ -137,7 +137,10 @@ file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pd
 # stub serializes exactly like the real build.
 set(JPDFIUM_DOMAIN_SOURCES
     bridge/src/runtime/domain.cpp
+    bridge/src/runtime/guard.cpp
     bridge/src/runtime/api_runtime.cpp
+    bridge/src/runtime/api_status.cpp
+    bridge/src/runtime/api_module.cpp
     bridge/src/legacy/guards_bridge.cpp)
 
 # Stub library (always built for testing).
@@ -241,7 +244,10 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/images/pixels.cpp
         bridge/src/images/api_bitmap.cpp
         bridge/src/output/output_transaction.cpp
-        bridge/src/textlayer/text_layer.cpp)
+        bridge/src/output/image_writer.cpp
+        bridge/src/textlayer/text_layer_font.cpp
+        bridge/src/textlayer/text_layer_parse.cpp
+        bridge/src/textlayer/text_layer_pdf.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
@@ -817,7 +823,11 @@ if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
         ocr/src/profile.cpp
         ocr/src/sha256.cpp
         ocr/src/paddle.cpp
-        ocr/src/cv_compat.cpp)
+        ocr/src/cv_resize.cpp
+        ocr/src/cv_warp.cpp
+        ocr/src/cv_contours.cpp
+        ocr/src/cv_hull.cpp
+        ocr/src/cv_fill.cpp)
     add_library(jpdfium_ocr SHARED ${JPDFIUM_OCR_SOURCES})
     target_include_directories(jpdfium_ocr
         PUBLIC ocr/include bridge/include
@@ -841,7 +851,8 @@ if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
     if(JPDFIUM_BUILD_TESTS)
         # Geometry and pre/post-processing against values recorded from OpenCV and pyclipper.
         add_executable(ocr_geometry ocr/tests/ocr_geometry.cpp ocr/src/paddle.cpp
-            ocr/src/cv_compat.cpp ocr/src/sha256.cpp)
+            ocr/src/cv_resize.cpp ocr/src/cv_warp.cpp ocr/src/cv_contours.cpp
+            ocr/src/cv_hull.cpp ocr/src/cv_fill.cpp ocr/src/sha256.cpp)
         target_include_directories(ocr_geometry PRIVATE ocr/src bridge/include)
         add_test(NAME ocr_geometry COMMAND ocr_geometry)
 
