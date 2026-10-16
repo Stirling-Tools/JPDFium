@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class FlattenApiTest {
@@ -421,8 +422,20 @@ class FlattenApiTest {
             perPageDark = darkPixels(page.renderAt(FULL_DPI));
         }
         Path out = dir.resolve("painted-then-blank-flat.pdf");
+        PageContentSummary generated;
         try (PdfDocument doc = PdfDocument.open(fixture)) {
-            doc.flatten(FlattenMode.FULL, FULL_DPI);
+            try {
+                doc.flatten(FlattenMode.FULL, FULL_DPI);
+            } catch (RuntimeException e) {
+                fail("the batch pass must not stop after mutating pages: painted=" + painted
+                        + " perPageDark=" + perPageDark + " " + e);
+                return;
+            }
+            // Structural check before the save: it tells a content-generation
+            // failure apart from content lost while the flattened file is written.
+            try (PdfPage inMemory = doc.page(0)) {
+                generated = PdfPageObjects.summarize(inMemory.rawHandleForRead());
+            }
             doc.save(out);
         }
         try (PdfDocument doc = PdfDocument.open(out)) {
@@ -434,7 +447,8 @@ class FlattenApiTest {
                         darkRatio(raster) > 0.5,
                         "the painted page must stay dark after the raster pass: painted=" + painted
                                 + " perPageDark=" + perPageDark + " batchDark=" + batchDark
-                                + " total=" + (raster.rgba().length / 4) + " " + content);
+                                + " total=" + (raster.rgba().length / 4) + " generated=" + generated
+                                + " " + content);
                 assertEquals(
                         1,
                         content.imageObjectCount(),

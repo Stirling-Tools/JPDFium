@@ -696,6 +696,10 @@ int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page,
         imgObj.release();  // the page owns it now
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
 
+        // A generated replacement page must carry the image object; PDFium drops
+        // an image it cannot stream, so never commit a content-less page.
+        if (FPDFPage_CountObjects(newPage.get()) < 1) return JPDFIUM_ERR_NATIVE;
+
         // Commit: close the replacement page handle, then delete the ORIGINAL
         // page at pageIndex (the replacement now occupies that slot).
         newPage.reset();
