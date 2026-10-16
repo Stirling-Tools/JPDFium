@@ -703,11 +703,6 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
 
         FPDFPage_InsertObject(newPage.get(), imgObj.get());
         imgObj.release();  // the page owns it now
-        if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
-
-        // A generated replacement page must carry the image object; PDFium drops
-        // an image it cannot stream, so never commit a content-less page.
-        if (FPDFPage_CountObjects(newPage.get()) < 1) return JPDFIUM_ERR_NATIVE;
 
         // Hand the replacement to the caller, which decides when the original page is
         // dropped; the guard must not undo a page the caller now owns.
