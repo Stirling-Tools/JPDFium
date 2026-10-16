@@ -247,6 +247,10 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
     if (!out->data) return fail(JPDF_E_NO_MEMORY, "rectified image allocation failed");
     const Sampler s{source, channels, border == JPDF_BORDER_REPLICATE};
     uint8_t* const base = out->data.get();
+    const uint8_t* const src_base = source.data.get();
+    const int32_t sw = source.width;
+    const int32_t sh = source.height;
+    const int32_t sstride = source.stride;
     for (int32_t v = 0; v < height; ++v) {
         uint8_t* row = base + static_cast<ptrdiff_t>(v) * static_cast<ptrdiff_t>(stride);
         for (int32_t u = 0; u < width; ++u) {
@@ -261,39 +265,75 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
             // Every sample more than 4 px outside the source is a border sample, so clamping
             // keeps the result identical while keeping the int conversions defined for a
             // caller-supplied quad (or a vanishing denominator) far outside the int range.
-            x = std::clamp(x, -4.0, static_cast<double>(source.width) + 4.0);
-            y = std::clamp(y, -4.0, static_cast<double>(source.height) + 4.0);
+            x = std::clamp(x, -4.0, static_cast<double>(sw) + 4.0);
+            y = std::clamp(y, -4.0, static_cast<double>(sh) + 4.0);
             // The sample position and interpolation weights are the same for every colour
-            // channel, so derive them once per pixel instead of once per channel.
-            const int xn = static_cast<int>(std::lround(x));
-            const int yn = static_cast<int>(std::lround(y));
+            // channel, so derive them once per pixel, and branch once on the interpolation
+            // mode instead of once per channel. Samples strictly inside the source also
+            // need no bounds check, which lets the taps read the pixel bytes directly.
             const int x0 = static_cast<int>(std::floor(x));
             const int y0 = static_cast<int>(std::floor(y));
             const double fx = x - x0, fy = y - y0;
-            double wx[4] = {}, wy[4] = {};
-            if (interpolation == JPDF_INTERP_BICUBIC) {
-                cubic_weights(fx, wx);
-                cubic_weights(fy, wy);
+            if (interpolation == JPDF_INTERP_NEAREST) {
+                const int xn = static_cast<int>(std::lround(x));
+                const int yn = static_cast<int>(std::lround(y));
+                if (xn >= 0 && yn >= 0 && xn < sw && yn < sh) {
+                    const uint8_t* const srow = src_base + static_cast<ptrdiff_t>(yn) * sstride +
+                                               static_cast<ptrdiff_t>(xn) * channels;
+                    for (int c = 0; c < channels; ++c) px[c] = srow[c];
+                } else {
+                    for (int c = 0; c < channels; ++c) px[c] = saturate(s.get(xn, yn, c));
+                }
+                continue;
             }
-            for (int c = 0; c < channels; ++c) {
-                if (interpolation == JPDF_INTERP_NEAREST) {
-                    px[c] = saturate(s.get(xn, yn, c));
-                    continue;
+            const double nfx = 1 - fx, nfy = 1 - fy;
+            if (interpolation == JPDF_INTERP_BILINEAR) {
+                if (x0 >= 0 && y0 >= 0 && x0 + 1 < sw && y0 + 1 < sh) {
+                    const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0) * sstride +
+                                             static_cast<ptrdiff_t>(x0) * channels;
+                    const uint8_t* const r1 = r0 + sstride;
+                    for (int c = 0; c < channels; ++c) {
+                        const double top = r0[c] * nfx + r0[c + channels] * fx;
+                        const double bottom = r1[c] * nfx + r1[c + channels] * fx;
+                        px[c] = saturate(top * nfy + bottom * fy);
+                    }
+                } else {
+                    for (int c = 0; c < channels; ++c) {
+                        const double top = s.get(x0, y0, c) * nfx + s.get(x0 + 1, y0, c) * fx;
+                        const double bottom =
+                            s.get(x0, y0 + 1, c) * nfx + s.get(x0 + 1, y0 + 1, c) * fx;
+                        px[c] = saturate(top * nfy + bottom * fy);
+                    }
                 }
-                if (interpolation == JPDF_INTERP_BILINEAR) {
-                    const double top = s.get(x0, y0, c) * (1 - fx) + s.get(x0 + 1, y0, c) * fx;
-                    const double bottom =
-                        s.get(x0, y0 + 1, c) * (1 - fx) + s.get(x0 + 1, y0 + 1, c) * fx;
-                    px[c] = saturate(top * (1 - fy) + bottom * fy);
-                    continue;
+                continue;
+            }
+            double wx[4] = {}, wy[4] = {};
+            cubic_weights(fx, wx);
+            cubic_weights(fy, wy);
+            if (x0 >= 1 && y0 >= 1 && x0 + 2 < sw && y0 + 2 < sh) {
+                const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0 - 1) * sstride +
+                                          static_cast<ptrdiff_t>(x0 - 1) * channels;
+                for (int c = 0; c < channels; ++c) {
+                    double acc = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        const uint8_t* const rj = r0 + static_cast<ptrdiff_t>(j) * sstride;
+                        double line = 0;
+                        for (int i = 0; i < 4; ++i) line += rj[i * channels + c] * wx[i];
+                        acc += line * wy[j];
+                    }
+                    px[c] = saturate(acc);
                 }
-                double acc = 0;
-                for (int j = 0; j < 4; ++j) {
-                    double line = 0;
-                    for (int i = 0; i < 4; ++i) line += s.get(x0 - 1 + i, y0 - 1 + j, c) * wx[i];
-                    acc += line * wy[j];
+            } else {
+                for (int c = 0; c < channels; ++c) {
+                    double acc = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        double line = 0;
+                        for (int i = 0; i < 4; ++i)
+                            line += s.get(x0 - 1 + i, y0 - 1 + j, c) * wx[i];
+                        acc += line * wy[j];
+                    }
+                    px[c] = saturate(acc);
                 }
-                px[c] = saturate(acc);
             }
         }
     }
