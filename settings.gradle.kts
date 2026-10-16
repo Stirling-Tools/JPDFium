@@ -1,7 +1,10 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
+        // Maven Central first: Gradle pins an artifact to the repository that
+        // served its metadata, so a portal-first list has no jar fallback when
+        // the Gradle Plugin Portal is degraded.
         mavenCentral()
+        gradlePluginPortal()
         google()
     }
 }
