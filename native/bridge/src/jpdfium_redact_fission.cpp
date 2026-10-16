@@ -413,8 +413,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 }
                 if (lig) {
                     ligated.replace(li, n, 1, lig);
-                    runIdx.erase(runIdx.begin() + li, runIdx.begin() + li + n);
-                    runIdx.insert(runIdx.begin() + li, ri);
+                    runIdx.erase(runIdx.begin() + static_cast<std::ptrdiff_t>(li),
+                                 runIdx.begin() + static_cast<std::ptrdiff_t>(li + n));
+                    runIdx.insert(runIdx.begin() + static_cast<std::ptrdiff_t>(li), ri);
                 } else {
                     li++;
                 }
@@ -615,7 +616,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     if (computeDeviations(currentRun, devs) && devs.size() >= 2) {
                         double sum = 0;
                         for (double d : devs) sum += d;
-                        double mean = sum / devs.size();
+                        double mean = sum / static_cast<double>(devs.size());
                         // 0.25pt: above matrix-chain noise, below any real TJ
                         // adjustment (TJ numbers are integer /1000 em - at 12pt
                         // even -25 units = 0.3pt).
@@ -1582,9 +1583,12 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     canEdit = false;
                 } else {
                     const ObjRef& ref = allObjs[pit->second];
-                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
-                        canEdit = false;  // freed with the destroyed top form
-                    } else if (!FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
+                    // A top form that is being destroyed frees the object, and a failed
+                    // detach leaves it owned by the form: both mean "do not edit in place".
+                    const bool freedWithTopForm =
+                        ref.topFormObj && objsToDestroy.count(ref.topFormObj) > 0;
+                    if (freedWithTopForm ||
+                        !FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
                         canEdit = false;
                     } else {
                         detachedFromForms.insert(plan.parentForm);

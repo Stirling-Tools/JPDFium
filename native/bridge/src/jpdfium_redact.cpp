@@ -739,35 +739,38 @@ int32_t jpdfium_annot_get_redacts_json(int64_t page, char** json) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page || !json) return JPDFIUM_ERR_INVALID;
 
-    int total = FPDFPage_GetAnnotCount(pw->page);
-    std::ostringstream os;
-    os << '[';
-    bool first = true;
+    try {
+        int total = FPDFPage_GetAnnotCount(pw->page);
+        std::ostringstream os;
+        os << '[';
+        bool first = true;
 
-    for (int i = 0; i < total; ++i) {
-        FPDF_ANNOTATION a = FPDFPage_GetAnnot(pw->page, i);
-        if (!a) continue;
+        for (int i = 0; i < total; ++i) {
+            UniqueAnnot a(FPDFPage_GetAnnot(pw->page, i));
+            if (!a) continue;
 
-        if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
-            FS_RECTF rect;
-            if (FPDFAnnot_GetRect(a, &rect)) {
-                if (!first) os << ',';
-                first = false;
-                os << "{\"idx\":" << i << ",\"x\":" << rect.left << ",\"y\":" << rect.bottom
-                   << ",\"w\":" << (rect.right - rect.left) << ",\"h\":" << (rect.top - rect.bottom)
-                   << '}';
+            if (FPDFAnnot_GetSubtype(a.get()) == FPDF_ANNOT_REDACT) {
+                FS_RECTF rect;
+                if (FPDFAnnot_GetRect(a.get(), &rect)) {
+                    if (!first) os << ',';
+                    first = false;
+                    os << "{\"idx\":" << i << ",\"x\":" << rect.left << ",\"y\":" << rect.bottom
+                       << ",\"w\":" << (rect.right - rect.left)
+                       << ",\"h\":" << (rect.top - rect.bottom) << '}';
+                }
             }
         }
-        FPDFPage_CloseAnnot(a);
-    }
-    os << ']';
+        os << ']';
 
-    std::string s = os.str();
-    char* out = static_cast<char*>(malloc(s.size() + 1));
-    if (!out) return JPDFIUM_ERR_NATIVE;
-    memcpy(out, s.c_str(), s.size() + 1);
-    *json = out;
-    return JPDFIUM_OK;
+        std::string s = os.str();
+        char* out = static_cast<char*>(malloc(s.size() + 1));
+        if (!out) return JPDFIUM_ERR_NATIVE;
+        memcpy(out, s.c_str(), s.size() + 1);
+        *json = out;
+        return JPDFIUM_OK;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 int32_t jpdfium_annot_remove_redact(int64_t page, int32_t annot_index) noexcept {

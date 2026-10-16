@@ -249,7 +249,7 @@ void runBoundaryChecks() {
 
 }  // namespace
 
-int main() {
+int main() try {
     // PDFium contract: FPDF_InitLibrary must run before any other FPDF_*
     // call (the bridge relies on this from the JVM side too).
     CHECK(jpdfium_init() == JPDFIUM_OK, "jpdfium_init");
@@ -269,4 +269,7 @@ int main() {
     }
     std::puts("native_smoke: all checks passed");
     return 0;
+} catch (...) {
+    std::fprintf(stderr, "native_smoke: unhandled exception\n");
+    return 1;
 }

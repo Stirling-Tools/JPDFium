@@ -440,7 +440,7 @@ void test_render_and_ownership(const std::string& path) {
     uint64_t written = 0;
     CHECK_STATUS(jpdf_bitmap_copy_pixels(b2, buf.data(), buf.size(), &written),
                  JPDF_E_BUFFER_TOO_SMALL, "short copy buffer");
-    CHECK(written == 85u * 110 * 4, "copy reports required size");
+    CHECK(written == static_cast<uint64_t>(85) * 110 * 4, "copy reports required size");
     std::vector<uint8_t> rgba = pixels_of(b2);
     CHECK(rgba[3] == 0, "transparent background has alpha 0");
 
@@ -617,7 +617,8 @@ void test_shutdown(const std::string& path) {
     CHECK_STATUS(jpdf_runtime_init(nullptr), JPDF_E_STOPPED, "no silent reinitialization");
     CHECK_STATUS(jpdf_doc_open_file(path.c_str(), nullptr, &other), JPDF_E_STOPPED,
                  "work after stop refused");
-    CHECK(pixels_of(bmp).size() == 85u * 110, "bitmaps survive runtime shutdown");
+    CHECK(pixels_of(bmp).size() == static_cast<size_t>(85) * 110,
+          "bitmaps survive runtime shutdown");
     CHECK_STATUS(jpdf_bitmap_close(bmp), JPDF_OK, "bitmap close after stop");
 }
 
@@ -1251,8 +1252,9 @@ void test_rectify() {
     const std::vector<uint8_t> cropped = pixels(out);
     bool exact = r.width == 100 && r.height == 100;
     for (int y = 0; exact && y < 100; ++y) {
-        exact = std::equal(cropped.begin() + y * 100, cropped.begin() + y * 100 + 100,
-                           source.begin() + (92 + y) * 612 + 72);
+        exact = std::equal(cropped.begin() + static_cast<std::ptrdiff_t>(y) * 100,
+                           cropped.begin() + static_cast<std::ptrdiff_t>(y) * 100 + 100,
+                           source.begin() + static_cast<std::ptrdiff_t>(92 + y) * 612 + 72);
     }
     CHECK(exact, "nearest crop matches the source pixels");
     CHECK(cropped[50 * 100 + 50] == 0, "the black square is inside the crop");
@@ -1309,7 +1311,7 @@ void test_rectify_border() {
         CHECK_STATUS(jpdf_bitmap_rectify(src, quad, &o, &out, &r), JPDF_OK, "border rectify");
         CHECK(r.width == 200 && r.height == 200, "quad size");
         const std::vector<uint8_t> px = pixels(out);
-        CHECK(px.size() == 200u * 200u * 4, "rectified output keeps RGBA8");
+        CHECK(px.size() == static_cast<size_t>(200) * 200 * 4, "rectified output keeps RGBA8");
         bool transparent_white = true;
         for (int y = 0; y < 200; ++y) {
             const size_t i = static_cast<size_t>(y) * 200 * 4;
@@ -1355,7 +1357,7 @@ int run_raster_suite() {
 
 }  // namespace raster_suite
 
-int main() {
+int main() try {
     std::printf("=== jpdf safe API (real PDFium) ===\n");
     const std::string path = write_fixture();
     test_before_init();
@@ -1374,4 +1376,7 @@ int main() {
     fs::remove_all(scratch_dir(), ec);
     std::printf("=== failures: %d ===\n", g_failures);
     return g_failures == 0 ? 0 : 1;
+} catch (...) {
+    std::fprintf(stderr, "=== jpdf safe API: unhandled exception ===\n");
+    return 1;
 }

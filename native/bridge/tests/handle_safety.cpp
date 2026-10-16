@@ -384,7 +384,7 @@ static void test_aux_handles_validated();
 static void test_page_info_coarse(const std::vector<uint8_t>& pdf);
 static void test_abi_probes();
 
-int main() {
+int main() try {
     std::printf("=== jpdfium handle + writer sanitizer harness ===\n");
     // PDFium requires FPDF_InitLibrary before any document call (smoke does the
     // same). Without it FPDF_LoadMemDocument crashes in partition_alloc.
@@ -408,6 +408,9 @@ int main() {
     std::printf("=== failures: %d ===\n", g_failures);
     jpdfium_destroy();
     return g_failures == 0 ? 0 : 1;
+} catch (...) {
+    std::fprintf(stderr, "handle_safety: unhandled exception\n");
+    return 1;
 }
 
 // Cross-type confusion: a live document handle must not validate as a page
