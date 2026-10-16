@@ -1047,13 +1047,6 @@ esac
 
 gn gen "${OUT_DIR}" --args="${GN_ARGS}"
 
-# ---------- Step 5b: object-tree memoization ----------
-# GetObjectsWithMultipleReferences() otherwise walks the object tree once per page.
-echo "[5b/7] Applying multi-ref object cache patch..."
-git -C "${PDFIUM_SRC}" checkout -- core/fpdfapi/parser/cpdf_document.h \
-    core/fpdfapi/parser/object_tree_traversal_util.cpp 2>/dev/null || true
-python3 "${SCRIPT_DIR}/patch-pdfium-objtree-cache.py" "${PDFIUM_SRC}" || exit 1
-
 # ---------- Step 6: Build ----------
 echo "[6/7] Building PDFium (this may take 15-60 minutes)..."
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
