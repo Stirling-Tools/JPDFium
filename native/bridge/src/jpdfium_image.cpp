@@ -295,6 +295,9 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
             return result;
         }
 
+        // Ownership of the wrapper moves to DocHandleRegistry; release() returns the same `raw`
+        // pointer already registered above, so it is deliberately discarded.
+        // NOLINTNEXTLINE(bugprone-unused-return-value)
         (void)dw.release();
         provisional = nullptr;
         *doc_handle = encodeHandle(raw);

@@ -42,10 +42,12 @@ int32_t transaction_sink(void* ctx, const uint8_t* data, size_t len) noexcept {
     return sink->status == JPDF_OK ? 0 : 1;
 }
 
-// Pillow's formula, int(dpi / 0.0254 + 0.5), so pHYs matches the OCRmyPDF reference exactly.
+// Pillow's formula is int(dpi / 0.0254 + 0.5), so pHYs matches the OCRmyPDF reference exactly.
+// std::lround computes that round-half-away-from-zero directly, without the precision loss of
+// forming `dpi / 0.0254 + 0.5` as a double and truncating it.
 uint32_t pixels_per_meter(double dpi) noexcept {
     if (!std::isfinite(dpi) || dpi <= 0 || dpi > 1e6) return 0;
-    return static_cast<uint32_t>(dpi / 0.0254 + 0.5);
+    return static_cast<uint32_t>(std::lround(dpi / 0.0254));
 }
 
 }  // namespace
@@ -95,9 +97,12 @@ jpdf_status write_bytes_file(const uint8_t* data, size_t size, const char* path_
     std::unique_ptr<OutputTransaction> tx;
     jpdf_status st = OutputTransaction::begin(path_utf8, request.durable, request.max_bytes, &tx);
     if (st != JPDF_OK) return st;
-    if ((st = tx->write(data, size)) != JPDF_OK) return st;
-    if ((st = tx->finalize()) != JPDF_OK) return st;
-    if ((st = tx->validate()) != JPDF_OK) return st;
+    st = tx->write(data, size);
+    if (st != JPDF_OK) return st;
+    st = tx->finalize();
+    if (st != JPDF_OK) return st;
+    st = tx->validate();
+    if (st != JPDF_OK) return st;
     return tx->publish();
 }
 
@@ -127,8 +132,10 @@ jpdf_status write_png_file(const PngImage& image, const char* path_utf8,
         if (sink.status != JPDF_OK) return sink.status;
         return fail(JPDF_E_INTERNAL, "PNG encoder failed");
     }
-    if ((st = tx->finalize()) != JPDF_OK) return st;
-    if ((st = tx->validate()) != JPDF_OK) return st;
+    st = tx->finalize();
+    if (st != JPDF_OK) return st;
+    st = tx->validate();
+    if (st != JPDF_OK) return st;
     return tx->publish();
 }
 

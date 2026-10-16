@@ -522,7 +522,7 @@ bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
 // Staging-file stdio buffer. PDFium hands the saver a stream of small blocks and
 // the platform default buffer turns each one into its own write(2), so a larger
 // buffer batches them. Shared by both save branches.
-static constexpr std::size_t kSaveIoBufferBytes = 256u * 1024u;
+static constexpr std::size_t kSaveIoBufferBytes = static_cast<std::size_t>(256) * 1024;
 
 int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                  int64_t* out_bytes) {

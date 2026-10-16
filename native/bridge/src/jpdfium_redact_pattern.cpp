@@ -150,7 +150,8 @@ bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& ou
     pcre2_set_match_limit(mctx, kPcre2MatchLimit);
     pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
     // JIT stack 32KB initial / 512KB max; freed by the Pcre2Pattern destructor.
-    pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
+    pcre2_jit_stack* jst = pcre2_jit_stack_create(static_cast<std::size_t>(32) * 1024,
+                                                  static_cast<std::size_t>(512) * 1024, nullptr);
     if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
     out.code = code;
     out.md = md;

@@ -244,9 +244,10 @@ jpdf::PixelBuffer fit(const Canvas& c, int32_t w, int32_t h, int32_t channels) {
                              ? px[0]
                              : static_cast<uint8_t>((px[0] * 30 + px[1] * 59 + px[2] * 11) / 100);
             } else if (c.bgr) {
-                dst[x * 3] = px[2];
-                dst[x * 3 + 1] = px[1];
-                dst[x * 3 + 2] = px[0];
+                const ptrdiff_t x3 = static_cast<ptrdiff_t>(x) * 3;
+                dst[x3] = px[2];
+                dst[x3 + 1] = px[1];
+                dst[x3 + 2] = px[0];
             } else {
                 std::memcpy(dst + static_cast<ptrdiff_t>(x) * 3, px, 3);
             }
@@ -276,11 +277,13 @@ jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
         jpdf_status st = parse(options, &req);
         if (st != JPDF_OK) return st;
         jpdf::WriteRequest write_request;
-        if ((st = jpdf::parse_write_options(write, &write_request)) != JPDF_OK) return st;
+        st = jpdf::parse_write_options(write, &write_request);
+        if (st != JPDF_OK) return st;
 
         Canvas canvas;
         int32_t ew = 0, eh = 0;
-        if ((st = render(path_utf8, page_index, req, &canvas, &ew, &eh)) != JPDF_OK) return st;
+        st = render(path_utf8, page_index, req, &canvas, &ew, &eh);
+        if (st != JPDF_OK) return st;
 
         // Pixel work and output run after leaving the domain.
         int32_t w = 0, h = 0;
@@ -305,7 +308,8 @@ jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
                 for (int32_t y = 0; y < h; ++y) {
                     uint8_t* row = base + static_cast<ptrdiff_t>(y) * canvas.stride;
                     for (int32_t x = 0; x < w; ++x) {
-                        std::swap(row[x * 3], row[x * 3 + 2]);
+                        const ptrdiff_t x3 = static_cast<ptrdiff_t>(x) * 3;
+                        std::swap(row[x3], row[x3 + 2]);
                     }
                 }
             }
@@ -341,9 +345,8 @@ jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t page_index,
             png.stride = bits_stride;
             png.channels = 0;
         }
-        if ((st = jpdf::write_png_file(png, output_path_utf8, write_request)) != JPDF_OK) {
-            return st;
-        }
+        st = jpdf::write_png_file(png, output_path_utf8, write_request);
+        if (st != JPDF_OK) return st;
         if (out_result) {
             out_result->width = w;
             out_result->height = h;

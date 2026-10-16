@@ -638,7 +638,8 @@ jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* options,
         st = jpdf::parse_text_layer(options, lines, line_count, words, word_count, &layer);
         if (st != JPDF_OK) return st;
         std::string pdf;
-        if ((st = jpdf::build_text_layer_pdf(layer, &pdf)) != JPDF_OK) return st;
+        st = jpdf::build_text_layer_pdf(layer, &pdf);
+        if (st != JPDF_OK) return st;
         return jpdf::write_bytes_file(reinterpret_cast<const uint8_t*>(pdf.data()), pdf.size(),
                                       output_path_utf8, request);
     });

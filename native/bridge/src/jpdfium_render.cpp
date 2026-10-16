@@ -511,6 +511,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
             g_progMap.erase(fpdf_page);
         } catch (...) {
             // Map erase cannot usefully fail here; teardown continues below.
+            (void)0;
         }
         FPDF_PAGE page = static_cast<FPDF_PAGE>(fpdf_page);
         FPDF_RenderPage_Close(page);
@@ -530,6 +531,7 @@ int32_t jpdfium_render_page_progressive_continue(void* fpdf_page,
         g_progMap.erase(fpdf_page);
     } catch (...) {
         // Best-effort erase on the terminal path; Close/Destroy still run.
+        (void)0;
     }
     FPDF_RenderPage_Close(page);
     FPDFBitmap_Destroy(state.bmp);
@@ -588,6 +590,7 @@ void jpdfium_render_forget_progressive(void* fpdf_page) noexcept {
         }
     } catch (...) {
         // Best-effort cleanup in a noexcept closer.
+        (void)0;
     }
 }
 
@@ -683,7 +686,10 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         FPDFPageObj_SetMatrix(imgObj.get(), &matrix);
 
         FPDFPage_InsertObject(newPage.get(), imgObj.get());
-        imgObj.release();  // the page owns it now
+        // The page owns the object from here, so the unique_ptr must relinquish it; the raw
+        // pointer it returns is deliberately discarded.
+        // NOLINTNEXTLINE(bugprone-unused-return-value)
+        imgObj.release();
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
 
         // Commit: close the replacement page handle, then delete the ORIGINAL

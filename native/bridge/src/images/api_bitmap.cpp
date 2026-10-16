@@ -100,7 +100,9 @@ double cross(double ax, double ay, double bx, double by) noexcept {
 }
 
 double edge(const Quad& q, int a, int b) noexcept {
-    return std::hypot(q[a * 2] - q[b * 2], q[a * 2 + 1] - q[b * 2 + 1]);
+    const auto ia = static_cast<std::size_t>(a) * 2;
+    const auto ib = static_cast<std::size_t>(b) * 2;
+    return std::hypot(q[ia] - q[ib], q[ia + 1] - q[ib + 1]);
 }
 
 // OpenCV's interpolateCubic weights for the fractional offset t.
@@ -153,7 +155,7 @@ uint8_t saturate(double v) noexcept {
 jpdf_status normalize_quad(const double* corners, Quad* out) noexcept {
     std::array<std::array<double, 2>, 4> p{};
     double cx = 0, cy = 0;
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < 4u; ++i) {
         p[i] = {corners[i * 2], corners[i * 2 + 1]};
         if (!std::isfinite(p[i][0]) || !std::isfinite(p[i][1])) {
             return fail(JPDF_E_INVALID_ARGUMENT, "quad has a non-finite coordinate");
@@ -183,7 +185,7 @@ jpdf_status normalize_quad(const double* corners, Quad* out) noexcept {
         area += cross(a[0], a[1], b[0], b[1]) / 2;
     }
     if (std::abs(area) < kMinArea) return fail(JPDF_E_INVALID_ARGUMENT, "quad has no area");
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < 4u; ++i) {
         (*out)[i * 2] = p[i][0];
         (*out)[i * 2 + 1] = p[i][1];
     }
@@ -208,7 +210,7 @@ jpdf_status solve_homography(const Quad& quad, int32_t width, int32_t height,
                            0,
                            static_cast<double>(height)};
     double m[8][9] = {};
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < 4u; ++i) {
         const double u = dst[i * 2], v = dst[i * 2 + 1];
         const double x = quad[i * 2], y = quad[i * 2 + 1];
         double* rx = m[i * 2];
@@ -316,7 +318,8 @@ jpdf_status jpdf_bitmap_get_info(jpdf_handle bitmap, jpdf_bitmap_info* out) noex
                                                    "jpdf_bitmap_info");
         if (st != JPDF_OK) return st;
         std::shared_ptr<jpdf::BitmapObject> object;
-        if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
+        st = resolve_bitmap(bitmap, &object);
+        if (st != JPDF_OK) return st;
         const jpdf::PixelStorage& px = *object->pixels;
         out->pixel_format = px.pixel_format;
         out->width = px.width;
@@ -354,7 +357,8 @@ jpdf_status jpdf_bitmap_map(jpdf_handle bitmap, jpdf_bitmap_view* out_view) noex
                                                    "jpdf_bitmap_view");
         if (st != JPDF_OK) return st;
         std::shared_ptr<jpdf::BitmapObject> object;
-        if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
+        st = resolve_bitmap(bitmap, &object);
+        if (st != JPDF_OK) return st;
         auto view = std::make_shared<jpdf::ViewObject>(object->pixels);
         jpdf_handle token = 0;
         st = jpdf::objects().insert(view, &token);
@@ -388,7 +392,8 @@ jpdf_status jpdf_bitmap_write_file(jpdf_handle bitmap, const char* path_utf8,
         if (st != JPDF_OK) return st;
         // The resolved reference is the lease: a concurrent close cannot free these pixels.
         std::shared_ptr<jpdf::BitmapObject> object;
-        if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
+        st = resolve_bitmap(bitmap, &object);
+        if (st != JPDF_OK) return st;
         return jpdf::write_image_file(*object->pixels, path_utf8, request);
     });
 }
@@ -399,10 +404,10 @@ jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
     return jpdf::guarded([&] {
         if (!quad || !out_bitmap) return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "null argument");
         jpdf_status st = JPDF_OK;
-        if (out_result &&
-            (st = jpdf::check_output_struct(out_result->struct_size, sizeof(jpdf_rectify_result),
-                                            "jpdf_rectify_result")) != JPDF_OK) {
-            return st;
+        if (out_result) {
+            st = jpdf::check_output_struct(out_result->struct_size, sizeof(jpdf_rectify_result),
+                                           "jpdf_rectify_result");
+            if (st != JPDF_OK) return st;
         }
         jpdf_rectify_options o{};
         o.struct_size = sizeof(o);
@@ -423,10 +428,12 @@ jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
             return jpdf::fail(JPDF_E_INVALID_ARGUMENT, "width and height must both be set or 0");
         }
         std::shared_ptr<jpdf::BitmapObject> object;
-        if ((st = resolve_bitmap(bitmap, &object)) != JPDF_OK) return st;
+        st = resolve_bitmap(bitmap, &object);
+        if (st != JPDF_OK) return st;
 
         jpdf::Quad ordered{};
-        if ((st = jpdf::normalize_quad(quad, &ordered)) != JPDF_OK) return st;
+        st = jpdf::normalize_quad(quad, &ordered);
+        if (st != JPDF_OK) return st;
         int32_t width = o.width, height = o.height;
         if (width == 0) jpdf::derived_size(ordered, &width, &height);
         const uint64_t budget = o.max_pixels == 0 ? kDefaultMaxPixels : o.max_pixels;
@@ -438,14 +445,12 @@ jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8],
             return jpdf::fail(JPDF_E_LIMIT, "rectified size exceeds the pixel budget");
         }
         jpdf::Homography to_source{};
-        if ((st = jpdf::solve_homography(ordered, width, height, &to_source)) != JPDF_OK) {
-            return st;
-        }
+        st = jpdf::solve_homography(ordered, width, height, &to_source);
+        if (st != JPDF_OK) return st;
         auto pixels = std::make_shared<jpdf::PixelStorage>();
-        if ((st = jpdf::warp(*object->pixels, to_source, width, height, o.interpolation, o.border,
-                             pixels.get())) != JPDF_OK) {
-            return st;
-        }
+        st = jpdf::warp(*object->pixels, to_source, width, height, o.interpolation, o.border,
+                        pixels.get());
+        if (st != JPDF_OK) return st;
         jpdf_handle token = 0;
         st =
             jpdf::objects().insert(std::make_shared<jpdf::BitmapObject>(std::move(pixels)), &token);
