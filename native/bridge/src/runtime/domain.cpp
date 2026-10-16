@@ -212,17 +212,24 @@ Admission::Admission(Purpose purpose) noexcept {
         return;
     }
     Domain& domain = Domain::instance();
-    const auto requested = std::chrono::steady_clock::now();
-    try {
-        lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_);
-    } catch (const std::system_error&) {
-        status_ = fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
-        return;
+    if (domain.mutex_.try_lock()) {
+        // Uncontended, the common case: nothing was waited for, so no wait telemetry needs a
+        // clock read and the acquisition is a plain try_lock rather than a blocking lock.
+        lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_, std::adopt_lock);
+        acquired_at_ = std::chrono::steady_clock::now();
+    } else {
+        const auto requested = std::chrono::steady_clock::now();
+        try {
+            lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_);
+        } catch (const std::system_error&) {
+            status_ = fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
+            return;
+        }
+        // The wait ends exactly where the hold begins, so reuse the acquisition timestamp
+        // instead of taking a redundant second clock read.
+        acquired_at_ = std::chrono::steady_clock::now();
+        domain.wait_ns_.fetch_add(between_ns(requested, acquired_at_), std::memory_order_relaxed);
     }
-    acquired_at_ = std::chrono::steady_clock::now();
-    // The wait ends exactly where the hold begins, so reuse the acquisition timestamp instead of
-    // taking a redundant second clock read for telemetry on every admitted call.
-    domain.wait_ns_.fetch_add(between_ns(requested, acquired_at_), std::memory_order_relaxed);
     status_ = reject_for_state(domain.state(), purpose);
     if (status_ != JPDF_OK) {
         lock_.unlock();
@@ -240,7 +247,6 @@ Admission::~Admission() {
 
 }  // namespace jpdf
 
-// --- guard.cpp (merged) ---
 // guard.cpp - refusal reporting for jpdf_guard_* shims.
 
 namespace jpdf {
