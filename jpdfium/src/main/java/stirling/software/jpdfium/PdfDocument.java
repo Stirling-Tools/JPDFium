@@ -1068,10 +1068,8 @@ public final class PdfDocument implements AutoCloseable {
                 // below would otherwise mark pages stale for an untouched
                 // document.
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
-                // A pass that replaced at least one page leaves the document
-                // different from the bytes it was opened with, even when a later
-                // page failed: the native side reports that partial mutation as
-                // CONTENT_MUTATED.
+                // The native pass rolls back any failure it can still undo and reports
+                // CONTENT_MUTATED only once the replaced pages can no longer be restored.
                 boolean replacedPages = false;
                 try {
                     JpdfiumLib.docFlattenToImages(handle, dpi);

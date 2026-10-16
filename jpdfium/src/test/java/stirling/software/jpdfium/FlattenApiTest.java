@@ -504,25 +504,37 @@ class FlattenApiTest {
     }
 
     @Test
-    void fullBatchReportsPartialMutationWhenALaterPageFails(@TempDir Path dir) throws IOException {
+    void fullBatchRollsBackWhenALaterPageFails(@TempDir Path dir) throws IOException {
         assumeTrue(NativeRuntime.isFull(), "full flattening needs the real PDFium natives");
         Path fixture = writePdfBoxFixture(dir.resolve("oversized-last-page.pdf"), pdf -> {
             pdf.addPage(new PDPage(new PDRectangle(300, 300)));
-            // Page 1 exceeds the raster budget, so it fails after page 0 was replaced.
+            // Page 1 exceeds the raster budget, so the pass fails after page 0 was prepared.
             pdf.addPage(new PDPage(new PDRectangle(500000, 500000)));
         });
         try (PdfDocument doc = PdfDocument.open(fixture)) {
             int epochBefore = doc.structureEpoch();
+            PageContentSummary before = contentSummaryOf(doc, 0);
             JPDFiumException failure = assertThrows(
                     JPDFiumException.class, () -> doc.flatten(FlattenMode.FULL, 72));
-            assertTrue(
+            assertFalse(
                     failure.isContentMutated(),
-                    "a failure after an earlier page was replaced must report the partial mutation: "
+                    "a pass that failed before the originals were dropped must roll back instead"
+                            + " of reporting a mutation: "
                             + failure.getMessage());
-            assertTrue(
-                    doc.structureEpoch() > epochBefore,
-                    "the replaced first page must invalidate the open pages");
-            assertTrue(doc.isContentModified(), "the first page really was replaced");
+            assertEquals(2, doc.pageCount(), "a rolled-back pass must keep every page");
+            assertEquals(before, contentSummaryOf(doc, 0), "a rolled-back pass must restore page 0");
+            assertEquals(
+                    epochBefore,
+                    doc.structureEpoch(),
+                    "a rolled-back pass must not invalidate the open pages");
+            assertFalse(doc.isContentModified(), "a rolled-back pass must not mark content modified");
+        }
+    }
+
+    /** Summarises the objects of one page of an open document. */
+    private static PageContentSummary contentSummaryOf(PdfDocument doc, int index) {
+        try (PdfPage page = doc.page(index)) {
+            return PdfPageObjects.summarize(page.rawHandleForRead());
         }
     }
 
