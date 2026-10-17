@@ -33,6 +33,25 @@ public final class FfmHelper {
      */
     public static final long MAX_NATIVE_STRING_BYTES = 256L * 1024L * 1024L;
 
+    /**
+     * Validate a native-reported byte length before it is narrowed to an {@code int} or used to
+     * index a segment. Corrupt documents can report negative or absurd lengths, which must fail
+     * loudly instead of wrapping into a negative index or reading past the segment.
+     *
+     * @param byteLen the length reported by the native call
+     * @param availableBytes the size of the segment that would be read
+     * @param what the value being decoded, for the error message
+     * @return the length as an {@code int}, guaranteed to fit the segment and the cap
+     */
+    private static int checkedNativeLength(long byteLen, long availableBytes, String what) {
+        if (byteLen < 0 || byteLen > availableBytes || byteLen > MAX_NATIVE_STRING_BYTES) {
+            throw new JPDFiumException(
+                    what + " length out of range: " + byteLen + " (segment " + availableBytes
+                            + " bytes)");
+        }
+        return (int) byteLen;
+    }
+
     private FfmHelper() {}
 
     /**
@@ -173,6 +192,12 @@ public final class FfmHelper {
             this.nativeBuffer = arena.allocate(2048, 8);
         }
 
+        /**
+         * The current native buffer. It is only valid until the next {@link
+         * #ensureNativeBuffer(long)} call, which may replace the segment with a larger one.
+         *
+         * @return the scratch segment used by the decode helpers
+         */
         public MemorySegment buffer() {
             return nativeBuffer;
         }
@@ -185,7 +210,13 @@ public final class FfmHelper {
             if (minBytes <= nativeBuffer.byteSize()) {
                 return nativeBuffer;
             }
-            long newCap = Math.max(minBytes, nativeBuffer.byteSize() * 2);
+            if (minBytes > MAX_NATIVE_STRING_BYTES) {
+                throw new JPDFiumException("native buffer request too large: " + minBytes);
+            }
+            long newCap =
+                    Math.min(
+                            Math.max(minBytes, nativeBuffer.byteSize() * 2),
+                            MAX_NATIVE_STRING_BYTES);
             nativeBuffer = arena.allocate(newCap, 8);
             return nativeBuffer;
         }
@@ -195,8 +226,9 @@ public final class FfmHelper {
         }
 
         public String decodeWideString(MemorySegment seg, long byteLen) {
-            if (byteLen <= 2) return "";
-            int charLen = (int) ((byteLen - 2) / 2);
+            int checked = checkedNativeLength(byteLen, seg.byteSize(), "wide string");
+            if (checked <= 2) return "";
+            int charLen = (checked - 2) / 2;
             if (charBuffer.length < charLen) {
                 charBuffer = new char[Math.max(charLen, charBuffer.length * 2)];
             }
@@ -210,6 +242,7 @@ public final class FfmHelper {
 
         public String decodeWideChars(MemorySegment seg, int charLenWithNull) {
             if (charLenWithNull <= 1) return "";
+            checkedNativeLength((long) charLenWithNull * 2, seg.byteSize(), "wide chars");
             int charLen = charLenWithNull - 1;
             if (charBuffer.length < charLen) {
                 charBuffer = new char[Math.max(charLen, charBuffer.length * 2)];
@@ -223,8 +256,9 @@ public final class FfmHelper {
         }
 
         public String decodeByteString(MemorySegment seg, long byteLen) {
-            if (byteLen <= 1) return "";
-            int len = (int) (byteLen - 1);
+            int checked = checkedNativeLength(byteLen, seg.byteSize(), "byte string");
+            if (checked <= 1) return "";
+            int len = checked - 1;
             if (byteBuffer.length < len) {
                 byteBuffer = new byte[Math.max(len, byteBuffer.length * 2)];
             }
