@@ -287,6 +287,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void autoCropDetectionDoesNotMarkModified() {
+        assumeTrue(NativeRuntime.isFull(), "content-bounds detection requires real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
             PdfAutoCrop.detectContentBoundsText(doc, 0, 0f);
             PdfAutoCrop.detectContentBoundsBitmap(doc, 0, 72, 0.95f, 0f);
@@ -315,6 +316,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void pageGeometryReadsDoNotMarkModified() {
+        assumeTrue(NativeRuntime.isFull(), "page geometry reads require real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
             int currentRotation = PdfPageGeometry.getRotation(doc, 0);
             PdfPageGeometry.getCropBox(doc, 0);
@@ -327,6 +329,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void longImageRenderDoesNotMarkModified() {
+        assumeTrue(NativeRuntime.isFull(), "long-image rendering requires real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
             assertNotNull(PdfLongImage.render(doc), "long-image rendering must produce an image");
             assertFalse(doc.isContentModified(),
