@@ -484,26 +484,22 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         buildNormalizedText(tp, count, idxMap, wtext);
 
         std::vector<TextMatch>& matches = t_redactScratch.matches;
-#ifdef JPDFIUM_HAS_PCRE2
-        std::vector<Pcre2Pattern> compiledPatterns;
-#endif
-        int rejectedPatterns = 0;
-        int compiledCount = 0;
-
         for (int32_t wi = 0; wi < wordCount; ++wi) {
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
 #ifdef JPDFIUM_HAS_PCRE2
+        std::vector<Pcre2Pattern> compiledPatterns;
+        int rejectedPatterns = 0;
+        int compiledCount = 0;
         scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
-#endif
-        if (matchCount) *matchCount = logicalMatchCount(matches);
-
         if (rejectedPatterns > 0 && compiledCount == 0) {
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }
+#endif
+        if (matchCount) *matchCount = logicalMatchCount(matches);
 
         if (matches.empty()) {
             FPDFText_ClosePage(tp);

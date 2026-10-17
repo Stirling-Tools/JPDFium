@@ -110,12 +110,13 @@ public final class PdfSignatures {
         if (needed <= 1) return Optional.empty();
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, largeBuf, needed);
+                written = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return Optional.of(scratch.decodeByteString(largeBuf, needed));
+            return Optional.of(scratch.decodeByteString(largeBuf, written));
         }
         return Optional.of(scratch.decodeByteString(needed));
     }
@@ -133,12 +134,13 @@ public final class PdfSignatures {
         if (needed <= 2) return Optional.empty();
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, largeBuf, needed);
+                written = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return Optional.of(scratch.decodeWideString(largeBuf, needed));
+            return Optional.of(scratch.decodeWideString(largeBuf, written));
         }
         return Optional.of(scratch.decodeWideString(needed));
     }
@@ -156,12 +158,13 @@ public final class PdfSignatures {
         if (needed <= 1) return Optional.empty();
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, largeBuf, needed);
+                written = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return Optional.of(scratch.decodeByteString(largeBuf, needed));
+            return Optional.of(scratch.decodeByteString(largeBuf, written));
         }
         return Optional.of(scratch.decodeByteString(needed));
     }
@@ -180,13 +183,15 @@ public final class PdfSignatures {
         if (needed <= 0) return EMPTY_BYTES;
 
         MemorySegment bufferSegment = scratch.ensureNativeBuffer(needed);
+        long written;
         try {
-            long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment, bufferSegment, needed);
+            written = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment, bufferSegment, needed);
         } catch (Throwable t) {
             throw new JPDFiumException(t);
         }
-        byte[] result = new byte[(int) needed];
-        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, (int) needed);
+        int actualLen = (int) Math.min(needed, written > 0 ? written : needed);
+        byte[] result = new byte[actualLen];
+        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, actualLen);
         return result;
     }
 

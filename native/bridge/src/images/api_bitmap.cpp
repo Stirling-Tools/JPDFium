@@ -279,7 +279,7 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
                 const int yn = static_cast<int>(std::lround(y));
                 if (xn >= 0 && yn >= 0 && xn < sw && yn < sh) {
                     const uint8_t* const srow = src_base + static_cast<ptrdiff_t>(yn) * sstride +
-                                               static_cast<ptrdiff_t>(xn) * channels;
+                                                static_cast<ptrdiff_t>(xn) * channels;
                     for (int c = 0; c < channels; ++c) px[c] = srow[c];
                 } else {
                     for (int c = 0; c < channels; ++c) px[c] = saturate(s.get(xn, yn, c));
@@ -290,7 +290,7 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
             if (interpolation == JPDF_INTERP_BILINEAR) {
                 if (x0 >= 0 && y0 >= 0 && x0 + 1 < sw && y0 + 1 < sh) {
                     const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0) * sstride +
-                                             static_cast<ptrdiff_t>(x0) * channels;
+                                              static_cast<ptrdiff_t>(x0) * channels;
                     const uint8_t* const r1 = r0 + sstride;
                     for (int c = 0; c < channels; ++c) {
                         const double top = r0[c] * nfx + r0[c + channels] * fx;

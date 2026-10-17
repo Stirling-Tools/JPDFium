@@ -764,7 +764,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
         // A plaintext source carries no protection to copy. Refusing here keeps
         // a caller from publishing an unprotected file and believing it is
         // protected.
-        if (!source->isEncrypted()) return -1;
+        if (!source || !source->isEncrypted()) return -1;
 
         auto dest = QPDF::create();
         dest->processFile(in_path);

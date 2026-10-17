@@ -159,8 +159,11 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nu
     // the shared_ptr construction below can both throw, and the caller has no
     // handle to clean up with at that point.
     struct PendingDoc {
-        FPDF_DOCUMENT doc;
-        uint8_t* buf;
+        FPDF_DOCUMENT doc = nullptr;
+        uint8_t* buf = nullptr;
+        PendingDoc(FPDF_DOCUMENT d, uint8_t* b) noexcept : doc(d), buf(b) {}
+        PendingDoc(const PendingDoc&) = delete;
+        PendingDoc& operator=(const PendingDoc&) = delete;
         ~PendingDoc() {
             if (doc) FPDF_CloseDocument(doc);
             if (buf) free(buf);

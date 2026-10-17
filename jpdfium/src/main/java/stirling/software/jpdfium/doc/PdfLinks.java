@@ -158,10 +158,11 @@ public final class PdfLinks {
         if (needed <= 1) return null;
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, largeBuf, needed);
+                written = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, largeBuf, needed);
             } catch (Throwable t) { throw new JPDFiumException(t); }
-            return scratch.decodeByteString(largeBuf, needed);
+            return scratch.decodeByteString(largeBuf, written);
         }
         return scratch.decodeByteString(needed);
     }

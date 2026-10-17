@@ -210,24 +210,36 @@ public final class PdfMerge {
 
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
             try {
-                Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
-                boolean done = false;
-                try {
-                    if (QpdfLib.mergeFiles(paths, tmp, false)) {
-                        PdfDocument owned = PdfDocument.openTemp(tmp);
-                        boolean keep = false;
-                        try {
-                            keep = owned.pageCount() > 0;
-                        } finally {
-                            if (!keep) owned.close();
-                        }
-                        if (keep) {
-                            done = true;
-                            return owned;
-                        }
+                int expectedPages = 0;
+                boolean allOpenable = true;
+                for (Path p : paths) {
+                    try (PdfDocument doc = PdfDocument.open(p)) {
+                        expectedPages += doc.pageCount();
+                    } catch (Exception _) {
+                        allOpenable = false;
+                        break;
                     }
-                } finally {
-                    if (!done) deleteQuietly(tmp);
+                }
+                if (allOpenable && expectedPages > 0) {
+                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                    boolean done = false;
+                    try {
+                        if (QpdfLib.mergeFiles(paths, tmp, false)) {
+                            PdfDocument owned = PdfDocument.openTemp(tmp);
+                            boolean keep = false;
+                            try {
+                                keep = owned.pageCount() == expectedPages;
+                            } finally {
+                                if (!keep) owned.close();
+                            }
+                            if (keep) {
+                                done = true;
+                                return owned;
+                            }
+                        }
+                    } finally {
+                        if (!done) deleteQuietly(tmp);
+                    }
                 }
             } catch (Exception _) {
                 // Fall through to the in-memory paths below

@@ -70,7 +70,11 @@ public final class NativeJsonParser {
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0;
-        return Integer.parseInt(json, idx, end, 10);
+        try {
+            return Integer.parseInt(json, idx, end, 10);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     /** Extract a long field from a single JSON object string. Returns 0 if missing. */

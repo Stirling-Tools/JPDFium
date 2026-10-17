@@ -256,7 +256,8 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             s += ",\"h\":";
             append_g(s, t - b);
             s += ",\"font\":\"";
-            if (fnlen == last_font_len && (fnlen == 0 || std::memcmp(fontbuf, last_font, fnlen) == 0)) {
+            if (fnlen == last_font_len &&
+                (fnlen == 0 || std::memcmp(fontbuf, last_font, fnlen) == 0)) {
                 s += escaped_font;
             } else {
                 escaped_font.clear();

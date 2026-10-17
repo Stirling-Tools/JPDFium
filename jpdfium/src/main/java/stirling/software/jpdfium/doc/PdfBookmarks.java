@@ -206,12 +206,13 @@ public final class PdfBookmarks {
         if (needed <= 2) return "";
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment, largeBuf, needed);
+                written = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return scratch.decodeWideString(largeBuf, needed);
+            return scratch.decodeWideString(largeBuf, written);
         }
         return scratch.decodeWideString(needed);
     }
@@ -229,12 +230,13 @@ public final class PdfBookmarks {
         if (needed <= 1) return null;
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment, largeBuf, needed);
+                written = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return scratch.decodeByteString(largeBuf, needed);
+            return scratch.decodeByteString(largeBuf, written);
         }
         return scratch.decodeByteString(needed);
     }
@@ -252,12 +254,13 @@ public final class PdfBookmarks {
         if (needed <= 1) return null;
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment, largeBuf, needed);
+                written = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return scratch.decodeByteString(largeBuf, needed);
+            return scratch.decodeByteString(largeBuf, written);
         }
         return scratch.decodeByteString(needed);
     }

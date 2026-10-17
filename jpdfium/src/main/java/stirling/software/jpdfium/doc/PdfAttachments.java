@@ -151,12 +151,13 @@ public final class PdfAttachments {
         if (needed <= 2) return "";
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
             try {
-                long _ = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, largeBuf, needed);
+                written = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, largeBuf, needed);
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
-            return scratch.decodeWideString(largeBuf, needed);
+            return scratch.decodeWideString(largeBuf, written);
         }
         return scratch.decodeWideString(needed);
     }

@@ -689,7 +689,7 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         // The page owns the object from here, so the unique_ptr must relinquish it; the raw
         // pointer it returns is deliberately discarded.
         // NOLINTNEXTLINE(bugprone-unused-return-value)
-        imgObj.release();
+        (void)imgObj.release();
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
 
         // Commit: close the replacement page handle, then delete the ORIGINAL
