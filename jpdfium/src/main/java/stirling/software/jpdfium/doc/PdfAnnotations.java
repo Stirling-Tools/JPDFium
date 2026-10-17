@@ -47,6 +47,11 @@ public final class PdfAnnotations {
         } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetAnnotCount failed", t); }
     }
 
+    /** Returns whether the native annotation count query is available. */
+    public static boolean countAvailable() {
+        return AnnotationBindings.FPDFPage_GetAnnotCount != null;
+    }
+
     /**
      * List all annotations on a page.
      *

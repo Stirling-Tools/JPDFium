@@ -2,6 +2,7 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
@@ -66,6 +67,9 @@ import java.util.Set;
  * @see PdfPage#redactWordsEx
  */
 public final class RedactionSession implements AutoCloseable {
+
+    /** Minimum word count before the Java-side keyword prefilter is worth building. */
+    private static final int PREFILTER_MIN_WORDS = 10;
 
     private final PdfDocument document;
     private final boolean ownsDocument;
@@ -169,7 +173,7 @@ public final class RedactionSession implements AutoCloseable {
         int total = 0;
         int pageCount = document.pageCount();
 
-        if (!useRegex && words.length > 0) {
+        if (!useRegex && words.length > PREFILTER_MIN_WORDS) {
             FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
             Set<String> pageMatches = new HashSet<>();
             try (Arena arena = Arena.ofConfined();
@@ -408,7 +412,7 @@ public final class RedactionSession implements AutoCloseable {
             // the page, and so the document does not carry uncommitted marks
             // (the native save guard would refuse to save them).
             page.clearPendingRedactions();
-            if (page.annotationCount() > 0) {
+            if (!PdfAnnotations.countAvailable() || page.annotationCount() > 0) {
                 page.flatten();
             }
         }
