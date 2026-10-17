@@ -353,10 +353,15 @@ public final class PdfAnnotations {
 
             if (needed > cap) {
                 MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+                long written;
                 try {
-                    AnnotationBindings.FPDFAnnot_GetStringValue.invoke(annot, keySeg, largeBuf, needed);
+                    // Two-call contract: decode the bytes actually written on the retry, not the
+                    // probed size (a concurrent edit may make the value shorter).
+                    written = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
+                            annot, keySeg, largeBuf, needed);
                 } catch (Throwable t) { throw new JPDFiumException(t); }
-                String value = scratch.decodeWideString(largeBuf, needed);
+                if (written <= 2) return Optional.empty();
+                String value = scratch.decodeWideString(largeBuf, written);
                 return value.isEmpty() ? Optional.empty() : Optional.of(value);
             }
             String value = scratch.decodeWideString(needed);

@@ -81,7 +81,7 @@ public final class PdfAnnotationExchange {
             if (pages != null && !pages.contains(p)) continue;
 
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -129,7 +129,7 @@ public final class PdfAnnotationExchange {
 
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -451,7 +451,7 @@ public final class PdfAnnotationExchange {
         // Form field values are exported from widget annotations
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);

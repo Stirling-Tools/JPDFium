@@ -185,8 +185,14 @@ public final class PdfAttachments {
             throw new JPDFiumException(t);
         }
         if (success == 0) return EMPTY_BYTES;
-        byte[] result = new byte[(int) len];
-        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, (int) len);
+        // Two-call contract: the second call reports the bytes actually written, which may be
+        // shorter than the probed length; validate it against the buffer before slicing.
+        long actualLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
+        int checked = FfmHelper.checkedNativeLength(actualLen, bufferSegment.byteSize(),
+                "attachment file");
+        if (checked == 0) return EMPTY_BYTES;
+        byte[] result = new byte[checked];
+        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, checked);
         return result;
     }
 }

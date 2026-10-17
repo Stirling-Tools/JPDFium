@@ -37,7 +37,7 @@ public final class PdfPageLabels {
      * @return the page label, or empty if no label is defined
      */
     public static Optional<String> get(PdfDocument doc, int pageIndex) {
-        MemorySegment rawDoc = doc.rawHandle();
+        MemorySegment rawDoc = doc.rawHandleForRead();
         if (rawDoc == null || rawDoc.equals(MemorySegment.NULL) || rawDoc.address() == 0) {
             return Optional.empty();
         }
@@ -54,12 +54,14 @@ public final class PdfPageLabels {
 
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long actual;
             try {
-                long actual = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
+                // Two-call contract: decode the bytes reported by the retry, not the probe.
+                actual = (long) DocBindings.FPDF_GetPageLabel.invokeExact(
                         rawDoc, pageIndex, largeBuf, needed);
-                if (actual <= 2) return Optional.empty();
             } catch (Throwable t) { return Optional.empty(); }
-            String label = scratch.decodeWideString(largeBuf, needed);
+            if (actual <= 2) return Optional.empty();
+            String label = scratch.decodeWideString(largeBuf, actual);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);
         }
 

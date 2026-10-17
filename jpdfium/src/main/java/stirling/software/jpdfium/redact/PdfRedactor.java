@@ -158,7 +158,7 @@ public final class PdfRedactor {
                         long tAcqStart = System.nanoTime();
                         int charCount;
                         try (PdfPage page = doc.page(i)) {
-                            charCount = scratch.extractChars(page.rawHandle());
+                            charCount = scratch.extractChars(page.rawHandleForRead());
                         }
                         pageTextAcqNs[i] = System.nanoTime() - tAcqStart;
                         pageCharCounts[i] = Math.max(0, charCount);
@@ -425,7 +425,7 @@ public final class PdfRedactor {
         if (text == null) {
             int charCount;
             try (PdfPage page = doc.page(pageIndex)) {
-                charCount = scratch.extractChars(page.rawHandle());
+                charCount = scratch.extractChars(page.rawHandleForRead());
             }
             if (charCount < 0) {
                 throw new JPDFiumException("Text extraction failed on page " + pageIndex);

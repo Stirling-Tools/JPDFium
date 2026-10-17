@@ -135,8 +135,6 @@ public final class PdfDuplicateDetector {
         int thumbSize = 8;
         try (PdfPage page = doc.page(pageIndex)) {
             MemorySegment rawPage = page.rawHandleForRead();
-            float w = page.size().width();
-            float h = page.size().height();
 
             // Render at 8x8
             MemorySegment bitmap;
@@ -144,6 +142,7 @@ public final class PdfDuplicateDetector {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(
                         thumbSize, thumbSize, 0);
             } catch (Throwable t) { return 0L; }
+            if (bitmap.equals(MemorySegment.NULL)) return 0L;
 
             try {
                 try { RenderBindings.FPDFBitmap_FillRect.invokeExact(bitmap, 0, 0,

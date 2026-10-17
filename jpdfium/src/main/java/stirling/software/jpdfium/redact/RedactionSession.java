@@ -186,7 +186,7 @@ public final class RedactionSession implements AutoCloseable {
                 }
                 for (int i = 0; i < pageCount; i++) {
                     try (PdfPage page = document.page(i)) {
-                        int charCount = scratch.extractChars(page.rawHandle());
+                        int charCount = scratch.extractChars(page.rawHandleForRead());
                         if (charCount < 0) {
                             int count = page.markRedactWords(words, argbColor, padding,
                                     wholeWord, useRegex, caseSensitive);

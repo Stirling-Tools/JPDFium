@@ -117,7 +117,7 @@ public final class PdfImageOptimizer {
         if (pageCount == 0) return false;
         for (int p = 0; p < pageCount; p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int objCount;
                 try {
                     objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);

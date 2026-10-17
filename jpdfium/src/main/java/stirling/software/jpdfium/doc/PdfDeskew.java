@@ -78,7 +78,7 @@ public final class PdfDeskew {
             int bmpH = (int) (pageHeight * dpi / 72.0f);
             if (bmpW <= 10 || bmpH <= 10) return new DeskewResult(0, 0, false);
 
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment bitmap;
             try {
                 bitmap = (MemorySegment) RenderBindings.FPDFBitmap_Create.invokeExact(bmpW, bmpH, 0);

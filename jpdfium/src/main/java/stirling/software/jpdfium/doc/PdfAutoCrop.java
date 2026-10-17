@@ -59,7 +59,7 @@ public final class PdfAutoCrop {
      */
     public static Rect detectContentBoundsText(PdfDocument doc, int pageIndex, float margin) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
@@ -153,7 +153,7 @@ public final class PdfAutoCrop {
     public static Rect detectContentBoundsBitmap(PdfDocument doc, int pageIndex,
                                                   int dpi, float whiteThreshold, float margin) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
 
             // Get page dimensions in points
             float pageWidth = page.size().width();

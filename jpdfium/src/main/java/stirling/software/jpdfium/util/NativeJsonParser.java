@@ -29,7 +29,7 @@ public final class NativeJsonParser {
         while (pos < json.length()) {
             int objStart = json.indexOf('{', pos);
             if (objStart < 0) break;
-            int objEnd = json.indexOf('}', objStart);
+            int objEnd = findObjectEnd(json, objStart);
             if (objEnd < 0) break;
 
             String obj = json.substring(objStart + 1, objEnd);
@@ -63,10 +63,8 @@ public final class NativeJsonParser {
 
     /** Extract an int field from a single JSON object string. Returns 0 if missing. */
     public static int intField(String json, String key) {
-        String needle = "\"" + key + "\":";
-        int idx = json.indexOf(needle);
+        int idx = indexOfFieldValue(json, key);
         if (idx < 0) return 0;
-        idx += needle.length();
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0;
@@ -77,10 +75,8 @@ public final class NativeJsonParser {
 
     /** Extract a long field from a single JSON object string. Returns 0 if missing. */
     public static long longField(String json, String key) {
-        String needle = "\"" + key + "\":";
-        int idx = json.indexOf(needle);
+        int idx = indexOfFieldValue(json, key);
         if (idx < 0) return 0L;
-        idx += needle.length();
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0L;
@@ -93,9 +89,8 @@ public final class NativeJsonParser {
 
     /** Extract a boolean field from a single JSON object string. Returns false if missing. */
     public static boolean boolField(String json, String key) {
-        String needle = "\"" + key + "\":";
-        int idx = json.indexOf(needle);
-        return idx >= 0 && json.indexOf("true", idx + needle.length()) == idx + needle.length();
+        int idx = indexOfFieldValue(json, key);
+        return idx >= 0 && json.startsWith("true", idx);
     }
 
     /**
@@ -103,12 +98,11 @@ public final class NativeJsonParser {
      * escapes. Returns "" if missing.
      */
     public static String stringField(String json, String key) {
-        String needle = "\"" + key + "\":\"";
-        int idx = json.indexOf(needle);
-        if (idx < 0) return "";
+        int idx = indexOfFieldValue(json, key);
+        if (idx < 0 || idx >= json.length() || json.charAt(idx) != '"') return "";
         StringBuilder out = new StringBuilder();
         boolean escaped = false;
-        for (int i = idx + needle.length(); i < json.length(); i++) {
+        for (int i = idx + 1; i < json.length(); i++) {
             char c = json.charAt(i);
             if (escaped) {
                 switch (c) {
@@ -141,5 +135,79 @@ public final class NativeJsonParser {
             }
         }
         return out.toString();
+    }
+
+    /**
+     * Find the {@code '}'} that closes the object opened at {@code objStart}, skipping braces
+     * inside string literals (including escapes) and counting nested objects. Returns -1 when the
+     * object is unterminated.
+     */
+    private static int findObjectEnd(String json, int objStart) {
+        boolean inString = false;
+        boolean escaped = false;
+        int depth = 0;
+        for (int i = objStart; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+            } else if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}' && --depth == 0) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Index of the first character after the {@code "key":} member's colon, or -1 when the key is
+     * absent. String literals are walked quote/escape-aware, so a string value that merely contains
+     * {@code "key":} text is never mistaken for the member, and whitespace after the colon is
+     * skipped.
+     */
+    private static int indexOfFieldValue(String json, String key) {
+        int from = 0;
+        while (from < json.length()) {
+            int open = json.indexOf('"', from);
+            if (open < 0) return -1;
+            int close = findStringEnd(json, open);
+            if (close < 0) return -1;
+            if (close - open - 1 == key.length()
+                    && json.regionMatches(open + 1, key, 0, key.length())) {
+                int colon = close + 1;
+                while (colon < json.length() && Character.isWhitespace(json.charAt(colon))) colon++;
+                if (colon < json.length() && json.charAt(colon) == ':') {
+                    int value = colon + 1;
+                    while (value < json.length() && Character.isWhitespace(json.charAt(value))) value++;
+                    return value;
+                }
+            }
+            from = close + 1;
+        }
+        return -1;
+    }
+
+    /** Index of the closing quote of the string literal opened at {@code open}, or -1. */
+    private static int findStringEnd(String json, int open) {
+        boolean escaped = false;
+        for (int i = open + 1; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                return i;
+            }
+        }
+        return -1;
     }
 }

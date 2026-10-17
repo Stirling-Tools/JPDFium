@@ -84,17 +84,18 @@ public final class PdfMetadata {
 
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
-            boolean fillOk = PdfiumRuntime.execute(() -> {
+            long written = PdfiumRuntime.executeLong(() -> {
                 try {
-                    long written = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, key, largeBuf, needed);
-                    return written >= 0;
+                    // Two-call contract: decode the bytes reported by the retry, not the probe.
+                    return (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, key,
+                            largeBuf, needed);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    return false;
+                    return -1L;
                 }
             });
-            if (!fillOk) return Optional.empty();
-            String value = scratch.decodeWideString(largeBuf, needed);
+            if (written <= 2) return Optional.empty();
+            String value = scratch.decodeWideString(largeBuf, written);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         }
 
@@ -173,17 +174,18 @@ public final class PdfMetadata {
 
         if (needed > cap) {
             MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
-            boolean fillOk = PdfiumRuntime.execute(() -> {
+            long written = PdfiumRuntime.executeLong(() -> {
                 try {
-                    long written = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, largeBuf, needed);
-                    return written >= 0;
+                    // Two-call contract: decode the bytes reported by the retry, not the probe.
+                    return (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment,
+                            pageIndex, largeBuf, needed);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    return false;
+                    return -1L;
                 }
             });
-            if (!fillOk) return Optional.empty();
-            String label = scratch.decodeWideString(largeBuf, needed);
+            if (written <= 2) return Optional.empty();
+            String label = scratch.decodeWideString(largeBuf, written);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);
         }
 

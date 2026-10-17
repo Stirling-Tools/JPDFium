@@ -150,20 +150,18 @@ public final class PdfImageExtractor {
                     colorSpace = ColorSpaceType.fromCode(cs);
                 }
 
-                // Bounds
-                Rect bounds = getObjBounds(obj);
-
-                // Filter name
-                String filter = getFirstFilter(obj);
-
                 // Raw data
                 try {
                     long rawSize = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(
                             obj, MemorySegment.NULL, 0L);
-                    if (rawSize > 0) {
+                    if (rawSize > 0 && rawSize <= FfmHelper.MAX_NATIVE_STRING_BYTES) {
                         MemorySegment rawBuf = arena.allocate(rawSize);
-                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(obj, rawBuf, rawSize);
-                        rawBytes = rawBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
+                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataRaw.invokeExact(
+                                obj, rawBuf, rawSize);
+                        // Two-call contract: slice the bytes actually written, never the probe.
+                        rawBytes = rawBuf
+                                .asSlice(0, FfmHelper.checkedNativeLength(written, rawSize, "raw image data"))
+                                .toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
@@ -171,18 +169,22 @@ public final class PdfImageExtractor {
                 try {
                     long decSize = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(
                             obj, MemorySegment.NULL, 0L);
-                    if (decSize > 0) {
+                    if (decSize > 0 && decSize <= FfmHelper.MAX_NATIVE_STRING_BYTES) {
                         MemorySegment decBuf = arena.allocate(decSize);
-                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(obj, decBuf, decSize);
-                        decodedBytes = decBuf.asSlice(0, written).toArray(ValueLayout.JAVA_BYTE);
+                        long written = (long) ImageObjBindings.FPDFImageObj_GetImageDataDecoded.invokeExact(
+                                obj, decBuf, decSize);
+                        // Two-call contract: slice the bytes actually written, never the probe.
+                        decodedBytes = decBuf
+                                .asSlice(0, FfmHelper.checkedNativeLength(written, decSize, "decoded image data"))
+                                .toArray(ValueLayout.JAVA_BYTE);
                     }
                 } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
 
-            // Bounds (if not already retrieved)
+            // Bounds
             Rect bounds = getObjBounds(obj);
 
-            // Filter name (if not already retrieved)
+            // Filter name
             String filter = getFirstFilter(obj);
 
             // Skip images with no valid dimensions

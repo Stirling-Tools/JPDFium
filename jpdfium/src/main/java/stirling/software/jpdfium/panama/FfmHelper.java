@@ -43,7 +43,7 @@ public final class FfmHelper {
      * @param what the value being decoded, for the error message
      * @return the length as an {@code int}, guaranteed to fit the segment and the cap
      */
-    private static int checkedNativeLength(long byteLen, long availableBytes, String what) {
+    public static int checkedNativeLength(long byteLen, long availableBytes, String what) {
         if (byteLen < 0 || byteLen > availableBytes || byteLen > MAX_NATIVE_STRING_BYTES) {
             throw new JPDFiumException(
                     what + " length out of range: " + byteLen + " (segment " + availableBytes
@@ -166,6 +166,17 @@ public final class FfmHelper {
         private char[] charBuffer = new char[1024];
         private byte[] byteBuffer = new byte[1024];
 
+        /**
+         * Retention cap for {@link #nativeBuffer}: a buffer above this size is released on the
+         * next {@link #ensureNativeBuffer(long)} call. Outlier pages and oversized streams can
+         * legitimately demand megabytes for a single call, but pinning that high-water mark for
+         * the lifetime of a pooled worker thread wastes RSS. Buffers at or below the cap keep
+         * their capacity, so the steady-state path never re-allocates.
+         */
+        private static final long MAX_RETAINED_NATIVE_BUFFER_BYTES = 1024L * 1024L;
+
+        private static final long INITIAL_NATIVE_BUFFER_BYTES = 2048L;
+
         Scratch() {
             MemorySegment fSeg = arena.allocate(16, 4);
             this.float0 = fSeg.asSlice(0, 4);
@@ -189,12 +200,13 @@ public final class FfmHelper {
 
             this.addr0 = arena.allocate(ValueLayout.ADDRESS);
             this.rect = arena.allocate(16, 4);
-            this.nativeBuffer = arena.allocate(2048, 8);
+            this.nativeBuffer = arena.allocate(INITIAL_NATIVE_BUFFER_BYTES, 8);
         }
 
         /**
          * The current native buffer. It is only valid until the next {@link
-         * #ensureNativeBuffer(long)} call, which may replace the segment with a larger one.
+         * #ensureNativeBuffer(long)} call, which may replace the segment with a different
+         * (larger or smaller) one.
          *
          * @return the scratch segment used by the decode helpers
          */
@@ -207,7 +219,13 @@ public final class FfmHelper {
         }
 
         public MemorySegment ensureNativeBuffer(long minBytes) {
-            if (minBytes <= nativeBuffer.byteSize()) {
+            long currentBytes = nativeBuffer.byteSize();
+            if (minBytes <= currentBytes) {
+                if (currentBytes > MAX_RETAINED_NATIVE_BUFFER_BYTES) {
+                    // The previous call left an outlier-sized buffer behind; release it now
+                    // instead of pinning it on this thread.
+                    nativeBuffer = arena.allocate(Math.max(INITIAL_NATIVE_BUFFER_BYTES, minBytes), 8);
+                }
                 return nativeBuffer;
             }
             if (minBytes > MAX_NATIVE_STRING_BYTES) {
@@ -215,7 +233,7 @@ public final class FfmHelper {
             }
             long newCap =
                     Math.min(
-                            Math.max(minBytes, nativeBuffer.byteSize() * 2),
+                            Math.max(minBytes, currentBytes * 2),
                             MAX_NATIVE_STRING_BYTES);
             nativeBuffer = arena.allocate(newCap, 8);
             return nativeBuffer;

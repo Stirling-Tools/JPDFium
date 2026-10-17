@@ -47,7 +47,7 @@ public final class PdfPageGeometry {
      */
     public static int getRotation(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            int r = PdfPageEditor.getRotation(page.rawHandle());
+            int r = PdfPageEditor.getRotation(page.rawHandleForRead());
             return r * 90;
         }
     }
@@ -366,7 +366,7 @@ public final class PdfPageGeometry {
      */
     public static Rect getCropBox(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            float[] box = PdfPageEditor.getCropBox(page.rawHandle());
+            float[] box = PdfPageEditor.getCropBox(page.rawHandleForRead());
             if (box == null) return null;
             return new Rect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
         }
@@ -414,7 +414,7 @@ public final class PdfPageGeometry {
         try {
             for (int i = 0; i < count; i++) {
                 try (PdfPage page = doc.page(i)) {
-                    int currentRot = PdfPageEditor.getRotation(page.rawHandle());
+                    int currentRot = PdfPageEditor.getRotation(page.rawHandleForRead());
                     if (currentRot != nativeRot) {
                         PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
                         modified = true;
