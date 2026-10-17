@@ -111,7 +111,7 @@ fs::path resolve_symlinks(const fs::path& destination, std::error_code& ec) {
 // the umask default from a probe file would need a 0666 creation, which is a
 // world-writable-file finding, so no probe is used.
 void mirror_destination_mode(int fd, const fs::path& destination) {
-    struct stat st{};
+    struct stat st;
     if (::stat(destination.c_str(), &st) == 0) {
         // A direct write clears setuid/setgid; do not carry them onto new content.
         ::fchmod(fd, st.st_mode & 01777);
