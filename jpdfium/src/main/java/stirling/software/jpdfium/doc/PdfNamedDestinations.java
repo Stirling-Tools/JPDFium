@@ -49,19 +49,24 @@ public final class PdfNamedDestinations {
                 MemorySegment dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
                         rawDoc, i, scratch.buffer(), scratch.long0);
                 long bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
-                if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
-
-                String name;
-                if (bufLen > scratch.bufferSize()) {
+                if (bufLen < 0) {
+                    // Buffer too small (PDFium reports -1): probe the required
+                    // byte length with a NULL buffer, then re-fetch into an
+                    // exactly sized buffer.
+                    scratch.long0.set(ValueLayout.JAVA_LONG, 0, 0);
+                    dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
+                            rawDoc, i, MemorySegment.NULL, scratch.long0);
+                    bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
+                    if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
                     MemorySegment largeBuf = scratch.ensureNativeBuffer(bufLen);
                     scratch.long0.set(ValueLayout.JAVA_LONG, 0, bufLen);
                     dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
                             rawDoc, i, largeBuf, scratch.long0);
-                    if (dest.equals(MemorySegment.NULL)) continue;
-                    name = scratch.decodeWideString(largeBuf, bufLen);
-                } else {
-                    name = scratch.decodeWideString(bufLen);
+                    bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
                 }
+                if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
+
+                String name = scratch.decodeWideString(bufLen);
 
                 int pageIndex;
                 try {

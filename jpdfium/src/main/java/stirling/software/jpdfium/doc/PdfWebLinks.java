@@ -213,18 +213,18 @@ public final class PdfWebLinks {
 
     private static String getUrl(MemorySegment webLinks, int index) {
         Scratch scratch = FfmHelper.scratch();
-        int capChars = (int) (scratch.bufferSize() / 2);
         try {
+            // Probe with a NULL buffer: returns the code units needed including
+            // the terminator. GetURL truncates silently when given a buffer, so
+            // size exactly before fetching.
+            int needed = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
+                    webLinks, index, MemorySegment.NULL, 0);
+            if (needed <= 0) return "";
+            MemorySegment buf = scratch.ensureNativeBuffer((long) needed * 2);
             int written = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
-                    webLinks, index, scratch.buffer(), capChars);
+                    webLinks, index, buf, needed);
             if (written <= 0) return "";
-            if (written > capChars) {
-                MemorySegment largeBuf = scratch.ensureNativeBuffer((long) written * 2);
-                int actual = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
-                        webLinks, index, largeBuf, written);
-                return scratch.decodeWideChars(largeBuf, actual);
-            }
-            return scratch.decodeWideChars(scratch.buffer(), written);
+            return scratch.decodeWideChars(buf, written);
         } catch (Throwable t) {
             return "";
         }

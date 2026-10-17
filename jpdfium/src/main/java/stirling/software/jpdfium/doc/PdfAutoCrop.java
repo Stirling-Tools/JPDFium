@@ -227,10 +227,6 @@ public final class PdfAutoCrop {
                             if (y > maxY) maxY = y;
                         }
                     }
-                    // Early exit when full bounds detected
-                    if (minX == 0 && minY == 0 && maxX == bmpW - 1 && maxY == bmpH - 1) {
-                        break;
-                    }
                 }
 
                 if (maxX < 0) return null; // all white / blank page

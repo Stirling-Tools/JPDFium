@@ -692,7 +692,10 @@ public final class PdfImageOptimizer {
             for (int i = 0; i < filters; i++) {
                 long n = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(
                         imgObj, i, buf, 16L);
-                if (n > 0 && "DCTDecode".equals(buf.getString(0))) return true;
+                // GetImageFilter returns the filter length including the NUL and
+                // leaves the buffer untouched on a partial write: only trust the
+                // buffer when the whole name (and terminator) was copied.
+                if (n >= 10 && n <= 16 && "DCTDecode".equals(buf.getString(0))) return true;
             }
             return false;
         } catch (Throwable t) {

@@ -70,11 +70,9 @@ public final class NativeJsonParser {
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0;
-        try {
-            return Integer.parseInt(json, idx, end, 10);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
+        // Out-of-range values propagate: silently mapping overflow to 0 would
+        // turn a huge offset into a valid-looking one.
+        return Integer.parseInt(json, idx, end, 10);
     }
 
     /** Extract a long field from a single JSON object string. Returns 0 if missing. */

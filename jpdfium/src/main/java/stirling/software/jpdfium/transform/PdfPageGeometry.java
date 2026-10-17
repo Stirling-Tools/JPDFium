@@ -411,17 +411,22 @@ public final class PdfPageGeometry {
         if (count == 0) return;
         int nativeRot = Math.floorMod(degrees / 90, 4);
         boolean modified = false;
-        for (int i = 0; i < count; i++) {
-            try (PdfPage page = doc.page(i)) {
-                int currentRot = PdfPageEditor.getRotation(page.rawHandle());
-                if (currentRot != nativeRot) {
-                    PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
-                    modified = true;
+        try {
+            for (int i = 0; i < count; i++) {
+                try (PdfPage page = doc.page(i)) {
+                    int currentRot = PdfPageEditor.getRotation(page.rawHandle());
+                    if (currentRot != nativeRot) {
+                        PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
+                        modified = true;
+                    }
                 }
             }
-        }
-        if (modified) {
-            doc.markContentModified();
+        } finally {
+            // Earlier pages may already be rotated when a later page throws;
+            // still record the mutation.
+            if (modified) {
+                doc.markContentModified();
+            }
         }
     }
 }

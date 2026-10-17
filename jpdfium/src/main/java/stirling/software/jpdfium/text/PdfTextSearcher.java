@@ -34,11 +34,12 @@ public final class PdfTextSearcher {
      * @return list of matches across all pages
      */
     public static List<SearchMatch> search(PdfDocument doc, String query) {
-        if (doc.pageCount() == 0 || query == null || query.isEmpty()) {
+        int pageCount = doc.pageCount();
+        if (pageCount == 0 || query == null || query.isEmpty()) {
             return List.of();
         }
         List<SearchMatch> results = new ArrayList<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        for (int i = 0; i < pageCount; i++) {
             results.addAll(searchPage(doc, i, query));
         }
         return Collections.unmodifiableList(results);
@@ -53,9 +54,10 @@ public final class PdfTextSearcher {
      * @return list of matches on this page
      */
     public static List<SearchMatch> searchPage(PdfDocument doc, int pageIndex, String query) {
-        if (query == null || query.isEmpty() || pageIndex < 0 || pageIndex >= doc.pageCount()) {
+        if (query == null || query.isEmpty()) {
             return List.of();
         }
+        // Out-of-range pageIndex intentionally propagates from doc.page().
         try (PdfPage page = doc.page(pageIndex)) {
             String json = page.findTextJson(query);
             return parseMatchesJson(json, pageIndex);

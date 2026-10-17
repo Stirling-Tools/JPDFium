@@ -67,9 +67,7 @@ public final class EntityRedactor implements AutoCloseable {
         }
 
         this.coreferenceWindow = b.coreferenceWindow;
-        this.coreferencePronouns = b.coreferencePronouns.stream()
-                .map(p -> p.toLowerCase(Locale.ROOT))
-                .toList();
+        this.coreferencePronouns = List.copyOf(b.coreferencePronouns);
     }
 
     /**
@@ -143,7 +141,7 @@ public final class EntityRedactor implements AutoCloseable {
                 String sentenceText = text.substring(s.start, Math.min(s.end, text.length()));
                 String lowerSentence = sentenceText.toLowerCase(Locale.ROOT);
                 for (String pronoun : coreferencePronouns) {
-                    if (lowerSentence.contains(pronoun)) {
+                    if (lowerSentence.contains(pronoun.toLowerCase(Locale.ROOT))) {
                         allTargets.add(new RedactionTarget(page.pageIndex(), s.start, s.end,
                                 sentenceText, RedactionReason.COREFERENCE_CONTEXT, pronoun));
                         break;

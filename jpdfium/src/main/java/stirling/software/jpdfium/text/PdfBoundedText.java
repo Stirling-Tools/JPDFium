@@ -15,6 +15,9 @@ import java.lang.foreign.MemorySegment;
  */
 public final class PdfBoundedText {
 
+    /** Upper bound for growing the bounded-text buffer, in UTF-16 code units. */
+    private static final int MAX_BOUNDED_TEXT_CHARS = 1 << 20;
+
     private PdfBoundedText() {}
 
     /**
@@ -51,17 +54,20 @@ public final class PdfBoundedText {
         Scratch scratch = FfmHelper.scratch();
         int capChars = (int) (scratch.bufferSize() / 2);
         try {
+            MemorySegment buf = scratch.buffer();
             int written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
-                    textPage, left, top, right, bottom, scratch.buffer(), capChars);
+                    textPage, left, top, right, bottom, buf, capChars);
             if (written <= 0) return "";
-            if (written > capChars) {
-                MemorySegment largeBuf = scratch.ensureNativeBuffer((long) (written + 1) * 2);
-                int actual = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
-                        textPage, left, top, right, bottom, largeBuf, written + 1);
-                if (actual <= 0) return "";
-                return scratch.decodeWideChars(largeBuf, actual);
+            // With a buffer, GetBoundedText truncates to the buffer size, so a
+            // filled buffer means the text may be incomplete: grow and re-query.
+            while (written == capChars && capChars < MAX_BOUNDED_TEXT_CHARS) {
+                capChars = (int) Math.min((long) capChars * 2, MAX_BOUNDED_TEXT_CHARS);
+                buf = scratch.ensureNativeBuffer((long) capChars * 2);
+                written = (int) TextPageBindings.FPDFText_GetBoundedText.invokeExact(
+                        textPage, left, top, right, bottom, buf, capChars);
+                if (written <= 0) return "";
             }
-            return scratch.decodeWideChars(scratch.buffer(), written);
+            return scratch.decodeWideChars(buf, written);
         } catch (Throwable t) { return ""; }
     }
 
@@ -91,7 +97,9 @@ public final class PdfBoundedText {
                         textPage, 0, charCount, buf);
             } catch (Throwable t) { return ""; }
             if (written <= 0) return "";
-            return scratch.decodeWideChars(buf, written + 1);
+            // GetText returns the count including the trailing NUL, which
+            // decodeWideChars already strips.
+            return scratch.decodeWideChars(buf, written);
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
             catch (Throwable t) { NativeRuntime.rethrowFatal(t); }

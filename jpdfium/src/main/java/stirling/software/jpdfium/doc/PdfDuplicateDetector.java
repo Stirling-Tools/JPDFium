@@ -174,7 +174,7 @@ public final class PdfDuplicateDetector {
                         int b = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px));
                         int g = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px + 1));
                         int r = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px + 2));
-                        int lum = (r * 77 + g * 150 + b * 29) >> 8;
+                        int lum = (r * 299 + g * 587 + b * 114 + 500) / 1000;
                         gray[y * thumbSize + x] = (byte) lum;
                         sum += lum;
                     }

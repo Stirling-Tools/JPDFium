@@ -4,6 +4,7 @@ import stirling.software.jpdfium.panama.ActionBindings;
 import stirling.software.jpdfium.panama.BookmarkBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.FfmHelper.Scratch;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -47,7 +48,8 @@ public final class PdfBookmarks {
             MemorySegment first = (MemorySegment) BookmarkBindings.FPDFBookmark_GetFirstChild.invokeExact(
                     rawDocSegment, MemorySegment.NULL);
             return first != null && !first.equals(MemorySegment.NULL);
-        } catch (Throwable _) {
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return false;
         }
     }
