@@ -101,6 +101,10 @@ public final class PdfDocument implements AutoCloseable {
      * (no structural mutation since open). Never deleted by this document.
      */
     private volatile Path sourcePath;
+    /** Size of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceSize = -1L;
+    /** Last-modified time of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceMtime = -1L;
     private volatile byte[] sourceBytes;
 
     PdfDocument(long handle) {
@@ -186,6 +190,7 @@ public final class PdfDocument implements AutoCloseable {
         Path abs = path.toAbsolutePath();
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
         doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
         return doc;
     }
 
@@ -440,15 +445,49 @@ public final class PdfDocument implements AutoCloseable {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         if (password.isEmpty()) return open(path);
-        PdfDocument doc =
-                new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
-        doc.sourcePath = path.toAbsolutePath();
+        Path abs = path.toAbsolutePath();
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenProtected(abs.toString(), password));
+        doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
         return doc;
     }
 
     /** Original open path, or null when not file-backed. Never deleted here. */
     public Path sourcePath() {
         return sourcePath;
+    }
+
+    /**
+     * Records the size and last-modified time of a path-backed source so callers can detect a file
+     * that was rewritten after it was opened.
+     */
+    private void recordSourceStamp(Path path) {
+        try {
+            sourceSize = Files.size(path);
+            sourceMtime = Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            sourceSize = -1L;
+            sourceMtime = -1L;
+        }
+    }
+
+    /**
+     * Returns whether the file-backed source still matches the snapshot taken when this document was
+     * opened. Callers that reuse {@link #sourcePath()} instead of serialising the in-memory document
+     * must check this first: a file rewritten after open would otherwise be read from behind the
+     * document's back.
+     */
+    public boolean sourceFileUnchanged() {
+        Path path = sourcePath;
+        if (path == null) {
+            return false;
+        }
+        try {
+            return Files.size(path) == sourceSize
+                    && Files.getLastModifiedTime(path).toMillis() == sourceMtime;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**

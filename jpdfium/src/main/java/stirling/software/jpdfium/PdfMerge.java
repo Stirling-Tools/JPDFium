@@ -102,7 +102,10 @@ public final class PdfMerge {
                     List<Path> filePaths = new ArrayList<>(documents.size());
                     for (PdfDocument sourceDoc : documents) {
                         Path src = sourceDoc.sourcePath();
-                        if (src != null && !sourceDoc.isContentModified() && Files.isReadable(src)) {
+                        if (src != null
+                                && !sourceDoc.isContentModified()
+                                && sourceDoc.sourceFileUnchanged()
+                                && Files.isReadable(src)) {
                             filePaths.add(src);
                         } else {
                             Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
