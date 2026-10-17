@@ -150,10 +150,11 @@ uint8_t saturate(double v) noexcept {
     // Rounds half away from zero exactly like std::lround, but without the library call
     // (lround may set errno, so the compiler cannot inline it) and without the
     // undefined conversion of a non-finite value.
+    // std::min/std::max keep the clamp branchless (fmin/fmax), which matters on the
+    // interpolation paths where overshoot beyond the 0..255 range is common and
+    // unpredictable.
     const double r = std::round(v);
-    if (!(r > 0.0)) return 0;
-    if (r > 255.0) return 255;
-    return static_cast<uint8_t>(r);
+    return static_cast<uint8_t>(std::min(std::max(r, 0.0), 255.0));
 }
 
 }  // namespace
