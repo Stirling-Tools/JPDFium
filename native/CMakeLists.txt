@@ -283,6 +283,25 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
     endif()
 
+    # Optional TurboJPEG: powers the FULL flatten DCT embed. Without it the
+    # bridge falls back to the raw bitmap embed.
+    find_path(TURBOJPEG_INCLUDE turbojpeg.h HINTS /opt/homebrew/include /usr/local/include)
+    find_library(TURBOJPEG_LIB NAMES turbojpeg libturbojpeg)
+    if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
+        target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
+        target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+    endif()
+
+    # Optional TurboJPEG: the FULL flatten DCT embed uses it when present.
+    find_path(TURBOJPEG_INCLUDE turbojpeg.h HINTS /opt/homebrew/include /usr/local/include)
+    find_library(TURBOJPEG_LIB NAMES turbojpeg libturbojpeg)
+    if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
+        target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
+        target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+    endif()
+
     find_program(CARGO_CMD cargo)
     if(NOT CARGO_CMD)
         message(FATAL_ERROR

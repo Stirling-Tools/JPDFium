@@ -221,4 +221,16 @@ public class FlattenPathsBenchmark {
             }
         }
     }
+
+    // End-to-end file-backed path: rasterize every page, then write the document.
+    @Benchmark
+    public void fullFlattenAllBatchAndSave() throws Exception {
+        Path out = Files.createTempFile("flatten-save-", ".pdf");
+        try (PdfDocument doc = PdfDocument.open(fixture)) {
+            doc.flatten(FlattenMode.FULL, FULL_DPI);
+            doc.save(out);
+        } finally {
+            Files.deleteIfExists(out);
+        }
+    }
 }

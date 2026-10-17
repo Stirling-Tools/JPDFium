@@ -27,6 +27,10 @@
 
 #include <fpdf_progressive.h>
 
+#ifdef JPDFIUM_HAS_TURBOJPEG
+#include <turbojpeg.h>
+#endif
+
 namespace {
 
 // Integer ceiling for w_px * h_px (1 GiB at 4 bytes per pixel), so the budget
@@ -631,6 +635,60 @@ namespace {
 // for many open documents.
 constexpr size_t kRetainRasterFrameBytes = 32u * 1024u * 1024u;
 
+#ifdef JPDFIUM_HAS_TURBOJPEG
+// Optional JPEG quality for the raster embed, latched from the environment.
+int flattenJpegQuality() {
+    static const int quality = []() {
+        const char* value = getenv("JPDFIUM_FLATTEN_JPEG_QUALITY");
+        return value ? atoi(value) : 0;
+    }();
+    return quality;
+}
+
+// FPDF_FILEACCESS reader over an in-memory JPEG buffer.
+int jpegGetBlock(void* param, unsigned long position, unsigned char* buffer, unsigned long size) {
+    const auto* jpeg = static_cast<const std::vector<unsigned char>*>(param);
+    if (position + size > jpeg->size()) {
+        return 0;
+    }
+    memcpy(buffer, jpeg->data() + position, size);
+    return 1;
+}
+
+// Encodes the rendered BGRx frame as a baseline JPEG and embeds it as a
+// DCTDecode stream instead of 6 MiB of raw pixels.
+bool embedJpeg(FPDF_PAGEOBJECT imageObject, FPDF_BITMAP bmp, int quality) {
+    const int width = FPDFBitmap_GetWidth(bmp);
+    const int height = FPDFBitmap_GetHeight(bmp);
+    const int stride = FPDFBitmap_GetStride(bmp);
+    const auto* pixels = static_cast<const unsigned char*>(FPDFBitmap_GetBuffer(bmp));
+    if (width <= 0 || height <= 0 || !pixels) {
+        return false;
+    }
+
+    tjhandle tj = tjInitCompress();
+    if (!tj) {
+        return false;
+    }
+    std::vector<unsigned char> jpeg(static_cast<size_t>(tjBufSize(width, height, TJSAMP_420)));
+    unsigned char* out = jpeg.data();
+    unsigned long outSize = static_cast<unsigned long>(jpeg.size());
+    const int rc = tjCompress2(tj, pixels, width, stride, height, TJPF_BGRX, &out, &outSize,
+                               TJSAMP_420, quality, TJFLAG_FASTDCT);
+    tjDestroy(tj);
+    if (rc != 0 || outSize == 0) {
+        return false;
+    }
+    jpeg.resize(outSize);
+
+    FPDF_FILEACCESS access = {};
+    access.m_FileLen = static_cast<unsigned long>(jpeg.size());
+    access.m_GetBlock = jpegGetBlock;
+    access.m_Param = &jpeg;
+    return FPDFImageObj_LoadJpegFileInline(nullptr, 0, imageObject, &access) != 0;
+}
+#endif  // JPDFIUM_HAS_TURBOJPEG
+
 // Renders `page` (geometry in `target`) into the caller-owned `bmp` and adds an image page of that
 // bitmap at `insertAt`, leaving the original page in place. `bmp` is filled white first: a page
 // does not paint its own background, and a reused bitmap may still hold the previous page's
@@ -687,7 +745,15 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
 
         // SetBitmap copies the pixels into the object, so the bitmap is no longer
         // needed afterwards and is released with bmp.
-        if (!FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp)) return JPDFIUM_ERR_NATIVE;
+        // The DCT path stores one compressed image instead of the raw 6 MiB.
+        bool embedded = false;
+#ifdef JPDFIUM_HAS_TURBOJPEG
+        const int jpegQuality = flattenJpegQuality();
+        embedded = jpegQuality > 0 && embedJpeg(imgObj.get(), bmp, jpegQuality);
+#endif
+        if (!embedded && !FPDFImageObj_SetBitmap(nullptr, 0, imgObj.get(), bmp)) {
+            return JPDFIUM_ERR_NATIVE;
+        }
 
         // A bitmap without pixels yields an image object the content generator
         // silently skips, so refuse the page rather than commit it blank.
