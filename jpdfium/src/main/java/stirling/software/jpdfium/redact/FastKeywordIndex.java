@@ -129,7 +129,9 @@ final class FastKeywordIndex {
     }
 
     private void addKeyword(String word) {
-        String normalized = Normalizer.normalize(word, Normalizer.Form.NFKC);
+        // Same normalization order as findMatches(): NFKC first, then collapse
+        // space runs; folding and collapsing commute (spaces have no case).
+        String normalized = collapseWhitespace(Normalizer.normalize(word, Normalizer.Form.NFKC));
         StringBuilder sb = new StringBuilder(normalized.length());
         int len = normalized.length();
         for (int i = 0; i < len; ) {
@@ -198,10 +200,13 @@ final class FastKeywordIndex {
     // Must stay in sync with isLiteralSpace() in jpdfium_redact_pattern.cpp: the
     // native matcher lets a space in a keyword match any whitespace run (a phrase
     // wrapped onto the next line has a line break there), so the prefilter has to
-    // treat every run as one space or it drops those pages.
+    // treat every run as one space or it drops those pages. The set is exactly
+    // Unicode White_Space, which is what PCRE2 \s matches under PCRE2_UCP.
     private static boolean isKeywordSpace(char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\u00A0'
-                || c == '\u2007' || c == '\u202F' || c == '\u2028' || c == '\u2029';
+        return c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\u000C' || c == '\r'
+                || c == '\u0085' || c == '\u00A0' || c == '\u1680'
+                || (c >= '\u2000' && c <= '\u200A') || c == '\u2028' || c == '\u2029'
+                || c == '\u202F' || c == '\u205F' || c == '\u3000';
     }
 
     private static boolean needsCollapse(char[] text, int len) {
@@ -212,6 +217,27 @@ final class FastKeywordIndex {
             }
         }
         return false;
+    }
+
+    private static boolean needsCollapse(CharSequence text) {
+        int len = text.length();
+        for (int i = 0; i < len; i++) {
+            char c = text.charAt(i);
+            if (isKeywordSpace(c) && (c != ' ' || (i + 1 < len && isKeywordSpace(text.charAt(i + 1))))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Keywords and page text must be normalized in the same order: NFKC first
+    // (compatibility forms and compatibility spaces fold to their canonical
+    // spelling), then every space run collapses to one ASCII space. NFKC maps
+    // the compatibility spaces to ASCII space, so collapsing first would leave
+    // runs (e.g. "John \u2003Doe") that the folded trie key no longer matches.
+    private static String normalize(CharSequence text) {
+        String normalized = Normalizer.normalize(text, Normalizer.Form.NFKC);
+        return needsCollapse(normalized) ? collapseWhitespace(normalized) : normalized;
     }
 
     private static String collapseWhitespace(CharSequence text) {
@@ -236,22 +262,20 @@ final class FastKeywordIndex {
         if (text == null || len == 0 || keywordCount == 0) {
             return;
         }
-        if (needsCollapse(text, len)) {
-            findMatches(collapseWhitespace(new String(text, 0, len)), wholeWord, out);
-            return;
-        }
         if (!caseSensitive && needsConservativeFallback && containsSupplementary(text, len)) {
             out.addAll(allKeywords);
             return;
         }
-        scanCharArray(text, len, wholeWord, out);
+        // Native matches the raw page text, so scan the collapsed raw text as
+        // well: NFKC can compose "cafe\u0301" into "caf\u00E9" and would otherwise
+        // lose the native match for "cafe".
+        if (needsCollapse(text, len)) {
+            scanCharSequence(collapseWhitespace(new String(text, 0, len)), wholeWord, out);
+        } else {
+            scanCharArray(text, len, wholeWord, out);
+        }
         if (containsNonAscii(text, len)) {
-            String normalized = Normalizer.normalize(new String(text, 0, len), Normalizer.Form.NFKC);
-            if (!caseSensitive && containsSupplementary(normalized)) {
-                out.addAll(allKeywords);
-                return;
-            }
-            scanCharSequence(normalized, wholeWord, out);
+            scanNormalized(new String(text, 0, len), wholeWord, out);
         }
     }
 
@@ -259,20 +283,23 @@ final class FastKeywordIndex {
         if (text == null || text.isEmpty() || keywordCount == 0) {
             return;
         }
-        text = collapseWhitespace(text);
         if (!caseSensitive && needsConservativeFallback && containsSupplementary(text)) {
             out.addAll(allKeywords);
             return;
         }
-        scanCharSequence(text, wholeWord, out);
+        scanCharSequence(needsCollapse(text) ? collapseWhitespace(text) : text, wholeWord, out);
         if (containsNonAscii(text)) {
-            String normalized = Normalizer.normalize(text, Normalizer.Form.NFKC);
-            if (!caseSensitive && containsSupplementary(normalized)) {
-                out.addAll(allKeywords);
-                return;
-            }
-            scanCharSequence(normalized, wholeWord, out);
+            scanNormalized(text, wholeWord, out);
         }
+    }
+
+    private void scanNormalized(CharSequence text, boolean wholeWord, Set<String> out) {
+        String normalized = normalize(text);
+        if (!caseSensitive && needsConservativeFallback && containsSupplementary(normalized)) {
+            out.addAll(allKeywords);
+            return;
+        }
+        scanCharSequence(normalized, wholeWord, out);
     }
 
     private void scanCharArray(char[] text, int len, boolean wholeWord, Set<String> out) {

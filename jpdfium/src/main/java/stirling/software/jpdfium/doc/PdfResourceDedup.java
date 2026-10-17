@@ -7,6 +7,7 @@ import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -17,7 +18,6 @@ import java.util.Map;
 
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
-import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Detect and report duplicate embedded resources (images) across pages.
@@ -90,7 +90,7 @@ public final class PdfResourceDedup {
 
         for (int p = 0; p < pageCount; p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
 
                 int objCount;
                 try {
@@ -146,28 +146,45 @@ public final class PdfResourceDedup {
     }
 
     /**
-     * Generate a fingerprint for an image object based on its pixel data hash.
+     * Generate a fingerprint for an image object from its encoded stream bytes,
+     * falling back to decoded pixel bytes. Two images are only reported as
+     * duplicates when their actual image content is identical - pixel
+     * dimensions alone are not enough (many distinct images share dimensions).
      */
     private static String fingerprint(MemorySegment imgObj, int w, int h, Scratch scratch) {
         if (w == 0 && h == 0) {
-            return "unknown-" + System.identityHashCode(imgObj);
+            return "unknown-" + imgObj.address();
         }
         try {
-            int ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(
-                    imgObj, scratch.float0, scratch.float1, scratch.float2, scratch.float3);
-            if (ok == 0) {
-                throw new JPDFiumException("FPDFPageObj_GetBounds failed");
-            }
-
-            // Hash dimensions + display bounds
             MessageDigest md = MessageDigest.getInstance("SHA-256");
             md.update(intBytes(w));
             md.update(intBytes(h));
-            byte[] hash = md.digest(intBytes(w * 31 + h));
-            return HexFormat.of().formatHex(hash).substring(0, 16);
+            if (!hashImageData(ImageObjBindings.FPDFImageObj_GetImageDataRaw, md, imgObj, scratch)
+                    && !hashImageData(
+                            ImageObjBindings.FPDFImageObj_GetImageDataDecoded, md, imgObj, scratch)) {
+                return "unreadable-" + imgObj.address() + "-" + w + "x" + h;
+            }
+            byte[] digest = md.digest();
+            return HexFormat.of().formatHex(digest, 0, 8);
         } catch (Throwable t) {
-            return String.format("dim-%dx%d", w, h);
+            return "unreadable-" + imgObj.address() + "-" + w + "x" + h;
         }
+    }
+
+    private static boolean hashImageData(
+            MethodHandle getData, MessageDigest md, MemorySegment imgObj, Scratch scratch)
+            throws Throwable {
+        long size = (long) getData.invokeExact(imgObj, MemorySegment.NULL, 0L);
+        if (size <= 0) {
+            return false;
+        }
+        MemorySegment buf = scratch.ensureNativeBuffer(size);
+        long written = (long) getData.invokeExact(imgObj, buf, size);
+        if (written <= 0 || written > buf.byteSize()) {
+            return false;
+        }
+        md.update(buf.asSlice(0, written).asByteBuffer());
+        return true;
     }
 
     private static byte[] intBytes(int v) {

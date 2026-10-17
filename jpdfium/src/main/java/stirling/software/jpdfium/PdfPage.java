@@ -1260,6 +1260,7 @@ public final class PdfPage implements AutoCloseable {
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
                 close();
                 JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
+                ownerDoc.markContentModified();
                 ownerDoc.invalidateOpenPages();
             }
         }
@@ -1430,6 +1431,7 @@ public final class PdfPage implements AutoCloseable {
             int ok = (int) redactHandle.invokeExact(rawPageSegment, scratch.rect, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
             if (ok != 0) {
                 PdfPageEditor.generateContent(rawPageSegment);
+                ownerDoc.markContentModified();
                 return true;
             }
             return false;
@@ -1456,7 +1458,9 @@ public final class PdfPage implements AutoCloseable {
      */
     public int applyRedaction(int annotIndex) {
         ensureOpen();
-        return EmbedPdfAnnotations.applyRedactionWithCount(rawPageSegment, annotIndex);
+        int removed = EmbedPdfAnnotations.applyRedactionWithCount(rawPageSegment, annotIndex);
+        ownerDoc.markContentModified();
+        return removed;
     }
 
     /**
@@ -1466,7 +1470,11 @@ public final class PdfPage implements AutoCloseable {
      */
     public boolean applyRedactions() {
         ensureOpen();
-        return EmbedPdfAnnotations.applyAllRedactions(rawPageSegment);
+        boolean applied = EmbedPdfAnnotations.applyAllRedactions(rawPageSegment);
+        if (applied) {
+            ownerDoc.markContentModified();
+        }
+        return applied;
     }
 
     /**

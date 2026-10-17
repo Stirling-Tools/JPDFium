@@ -1404,6 +1404,7 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        markContentModified();
         invalidateOpenPages();
     }
 

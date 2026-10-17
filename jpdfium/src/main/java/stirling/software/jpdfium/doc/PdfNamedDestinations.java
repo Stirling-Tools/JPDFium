@@ -46,8 +46,9 @@ public final class PdfNamedDestinations {
         for (int i = 0; i < destCount; i++) {
             try {
                 scratch.long0.set(ValueLayout.JAVA_LONG, 0, scratch.bufferSize());
+                MemorySegment nameBuf = scratch.buffer();
                 MemorySegment dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
-                        rawDoc, i, scratch.buffer(), scratch.long0);
+                        rawDoc, i, nameBuf, scratch.long0);
                 long bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
                 if (bufLen < 0) {
                     // Buffer too small (PDFium reports -1): probe the required
@@ -58,15 +59,17 @@ public final class PdfNamedDestinations {
                             rawDoc, i, MemorySegment.NULL, scratch.long0);
                     bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
                     if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
-                    MemorySegment largeBuf = scratch.ensureNativeBuffer(bufLen);
+                    nameBuf = scratch.ensureNativeBuffer(bufLen);
                     scratch.long0.set(ValueLayout.JAVA_LONG, 0, bufLen);
                     dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
-                            rawDoc, i, largeBuf, scratch.long0);
+                            rawDoc, i, nameBuf, scratch.long0);
                     bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
                 }
                 if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
 
-                String name = scratch.decodeWideString(bufLen);
+                // Decode from the buffer that was actually written: after
+                // ensureNativeBuffer() the scratch buffer may have moved.
+                String name = scratch.decodeWideString(nameBuf, bufLen);
 
                 int pageIndex;
                 try {
