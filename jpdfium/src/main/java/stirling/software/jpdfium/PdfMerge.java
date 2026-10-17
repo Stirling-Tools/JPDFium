@@ -100,6 +100,7 @@ public final class PdfMerge {
                     // memory since; never merge the file behind its back.
                     // If untouched, reuse the source path directly to avoid re-serialization.
                     List<Path> filePaths = new ArrayList<>(documents.size());
+                    boolean reusedSourceFile = false;
                     for (PdfDocument sourceDoc : documents) {
                         Path src = sourceDoc.sourcePath();
                         if (src != null
@@ -107,6 +108,7 @@ public final class PdfMerge {
                                 && sourceDoc.sourceFileUnchanged()
                                 && Files.isReadable(src)) {
                             filePaths.add(src);
+                            reusedSourceFile = true;
                         } else {
                             Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
                             cleanup.add(materialized);
@@ -116,7 +118,25 @@ public final class PdfMerge {
                     }
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     cleanup.add(tmp);
-                    if (QpdfLib.mergeFiles(filePaths, tmp, false)) {
+                    boolean fileMergeOk = QpdfLib.mergeFiles(filePaths, tmp, false);
+                    if (!fileMergeOk && reusedSourceFile) {
+                        // A reused source path can disappear or change between the readability
+                        // check above and the native merge; serialize every source once and retry.
+                        List<Path> retryPaths = new ArrayList<>(documents.size());
+                        for (PdfDocument sourceDoc : documents) {
+                            Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                            cleanup.add(materialized);
+                            sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
+                            retryPaths.add(materialized);
+                        }
+                        Path retryTmp = options.createTempFile("jpdfium-merge", ".pdf");
+                        cleanup.add(retryTmp);
+                        if (QpdfLib.mergeFiles(retryPaths, retryTmp, false)) {
+                            tmp = retryTmp;
+                            fileMergeOk = true;
+                        }
+                    }
+                    if (fileMergeOk) {
                         Path result = tmp;
                         if (!mergedBookmarks.isEmpty()) {
                             Path tmpBookmarks = options.createTempFile("jpdfium-merge-bm", ".pdf");
