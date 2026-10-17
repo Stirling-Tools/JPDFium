@@ -7,9 +7,9 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
-
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
@@ -81,35 +81,33 @@ public final class PdfAutoCrop {
                 float maxTop = -Float.MAX_VALUE;
                 boolean foundAny = false;
 
-                try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment box = arena.allocate(32);
-                    MemorySegment left = box;
-                    MemorySegment right = box.asSlice(8);
-                    MemorySegment bottom = box.asSlice(16);
-                    MemorySegment top = box.asSlice(24);
+                Scratch scratch = FfmHelper.scratch();
+                MemorySegment left = scratch.double0;
+                MemorySegment right = scratch.double1;
+                MemorySegment bottom = scratch.double2;
+                MemorySegment top = scratch.double3;
 
-                    for (int i = 0; i < charCount; i++) {
-                        int ok;
-                        try {
-                            ok = (int) TextPageBindings.FPDFText_GetCharBox.invokeExact(
-                                    textPage, i, left, right, bottom, top);
-                        } catch (Throwable t) { continue; }
-                        if (ok == 0) continue;
+                for (int i = 0; i < charCount; i++) {
+                    int ok;
+                    try {
+                        ok = (int) TextPageBindings.FPDFText_GetCharBox.invokeExact(
+                                textPage, i, left, right, bottom, top);
+                    } catch (Throwable t) { continue; }
+                    if (ok == 0) continue;
 
-                        float l = (float) box.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float r = (float) box.get(ValueLayout.JAVA_DOUBLE, 8);
-                        float b = (float) box.get(ValueLayout.JAVA_DOUBLE, 16);
-                        float t2 = (float) box.get(ValueLayout.JAVA_DOUBLE, 24);
+                    float l = (float) left.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float r = (float) right.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float b = (float) bottom.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float t2 = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
 
-                        // Skip generated space characters (width ~0, position ~0)
-                        if (l == r && b == t2) continue;
+                    // Skip generated space characters (width ~0, position ~0)
+                    if (l == r && b == t2) continue;
 
-                        if (l < minLeft) minLeft = l;
-                        if (r > maxRight) maxRight = r;
-                        if (b < minBottom) minBottom = b;
-                        if (t2 > maxTop) maxTop = t2;
-                        foundAny = true;
-                    }
+                    if (l < minLeft) minLeft = l;
+                    if (r > maxRight) maxRight = r;
+                    if (b < minBottom) minBottom = b;
+                    if (t2 > maxTop) maxTop = t2;
+                    foundAny = true;
                 }
 
                 if (!foundAny) return null;
@@ -212,6 +210,11 @@ public final class PdfAutoCrop {
                     MemorySegment.copy(buffer, pixelLayout, rowOffset, rowPixels, 0, bmpW);
                     for (int x = 0; x < bmpW; x++) {
                         int pixel = rowPixels[x];
+                        // Fast skip pure white margin pixel
+                        if ((pixel & 0x00FFFFFF) == 0x00FFFFFF) {
+                            continue;
+                        }
+
                         int b = pixel & 0xFF;
                         int g = (pixel >>> 8) & 0xFF;
                         int r = (pixel >>> 16) & 0xFF;
@@ -223,6 +226,10 @@ public final class PdfAutoCrop {
                             if (y < minY) minY = y;
                             if (y > maxY) maxY = y;
                         }
+                    }
+                    // Early exit when full bounds detected
+                    if (minX == 0 && minY == 0 && maxX == bmpW - 1 && maxY == bmpH - 1) {
+                        break;
                     }
                 }
 

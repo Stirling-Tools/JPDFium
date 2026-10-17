@@ -103,16 +103,18 @@ public final class PdfDeskew {
 
                 MemorySegment buffer = bufferPtr.reinterpret((long) stride * bmpH);
 
-                // Binarize: convert to binary array (1 = foreground/dark, 0 = background/white)
-                boolean[][] binary = new boolean[bmpH][bmpW];
+                // Binarize: convert to flat binary array (1 = foreground/dark, 0 = background/white)
+                boolean[] binary = new boolean[bmpH * bmpW];
                 for (int y = 0; y < bmpH; y++) {
+                    int rowOffset = y * bmpW;
+                    long pixRowOffset = (long) y * stride;
                     for (int x = 0; x < bmpW; x++) {
-                        long pixOffset = (long) y * stride + (long) x * 4;
+                        long pixOffset = pixRowOffset + (long) x * 4;
                         int b = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset));
                         int g = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset + 1));
                         int r = Byte.toUnsignedInt(buffer.get(ValueLayout.JAVA_BYTE, pixOffset + 2));
-                        int gray = (r * 299 + g * 587 + b * 114) / 1000;
-                        binary[y][x] = gray < 128; // dark = foreground
+                        int gray = (r * 77 + g * 150 + b * 29) >> 8;
+                        binary[rowOffset + x] = gray < 128; // dark = foreground
                     }
                 }
 
@@ -157,8 +159,10 @@ public final class PdfDeskew {
      */
     public static int deskewAll(PdfDocument doc, float maxAngle,
                                  float accuracy, float minConfidence) {
+        int count = doc.pageCount();
+        if (count == 0) return 0;
         int corrected = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        for (int i = 0; i < count; i++) {
             DeskewResult result = deskew(doc, i, maxAngle, accuracy, minConfidence);
             if (result.applied()) corrected++;
         }
@@ -172,15 +176,18 @@ public final class PdfDeskew {
      * the variance of the horizontal projection (row sums). The angle with
      * maximum variance is the skew angle.
      */
-    private static DeskewResult findSkewAngle(boolean[][] binary, int width, int height,
+    private static DeskewResult findSkewAngle(boolean[] binary, int width, int height,
                                                 float maxAngle, float accuracy) {
+        int[] xShift = new int[width];
+        int[] rowSums = new int[height];
+
         // Coarse sweep
         float bestAngle = 0;
         double bestVariance = -1;
         float sweepDelta = 1.0f;
 
         for (float angle = -maxAngle; angle <= maxAngle; angle += sweepDelta) {
-            double variance = projectionVariance(binary, width, height, angle);
+            double variance = projectionVariance(binary, width, height, angle, xShift, rowSums);
             if (variance > bestVariance) {
                 bestVariance = variance;
                 bestAngle = angle;
@@ -192,8 +199,8 @@ public final class PdfDeskew {
         float high = bestAngle + sweepDelta;
         while (high - low > accuracy) {
             float mid = (low + high) / 2f;
-            double varLow = projectionVariance(binary, width, height, (low + mid) / 2f);
-            double varHigh = projectionVariance(binary, width, height, (mid + high) / 2f);
+            double varLow = projectionVariance(binary, width, height, (low + mid) / 2f, xShift, rowSums);
+            double varHigh = projectionVariance(binary, width, height, (mid + high) / 2f, xShift, rowSums);
             if (varLow > varHigh) {
                 high = mid;
             } else {
@@ -204,8 +211,8 @@ public final class PdfDeskew {
         bestAngle = (low + high) / 2f;
 
         // Compute confidence as ratio of max variance to average variance
-        double finalVariance = projectionVariance(binary, width, height, bestAngle);
-        double zeroVariance = projectionVariance(binary, width, height, 0);
+        double finalVariance = projectionVariance(binary, width, height, bestAngle, xShift, rowSums);
+        double zeroVariance = projectionVariance(binary, width, height, 0, xShift, rowSums);
         float confidence = (zeroVariance > 0) ? (float) (finalVariance / zeroVariance) : 1.0f;
 
         return new DeskewResult(bestAngle, confidence, false);
@@ -214,20 +221,22 @@ public final class PdfDeskew {
     /**
      * Compute variance of horizontal projection profile at a given shear angle.
      */
-    private static double projectionVariance(boolean[][] binary, int width, int height,
-                                              float angleDeg) {
+    private static double projectionVariance(boolean[] binary, int width, int height,
+                                              float angleDeg, int[] xShift, int[] rowSums) {
         double angleRad = Math.toRadians(angleDeg);
         double tanAngle = Math.tan(angleRad);
 
-        long[] rowSums = new long[height];
-        long totalSum = 0;
+        for (int x = 0; x < width; x++) {
+            xShift[x] = (int) (x * tanAngle);
+        }
 
+        long totalSum = 0;
         for (int y = 0; y < height; y++) {
-            long sum = 0;
+            int sum = 0;
             for (int x = 0; x < width; x++) {
                 // Apply horizontal shear
-                int shiftedY = y + (int) (x * tanAngle);
-                if (shiftedY >= 0 && shiftedY < height && binary[shiftedY][x]) {
+                int shiftedY = y + xShift[x];
+                if (shiftedY >= 0 && shiftedY < height && binary[shiftedY * width + x]) {
                     sum++;
                 }
             }

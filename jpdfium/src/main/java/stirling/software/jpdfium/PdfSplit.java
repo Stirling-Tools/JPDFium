@@ -123,6 +123,9 @@ public final class PdfSplit {
     public static List<PdfDocument> split(PdfDocument doc, SplitStrategy strategy,
             StorageOptions options) {
         List<int[]> ranges = strategy.computeRanges(doc);
+        if (ranges.isEmpty()) {
+            return List.of();
+        }
         if (ranges.size() > 1 && options.mode() != StorageOptions.Mode.MEMORY
                 && QpdfLib.isExtractFileSupported()) {
             // Snapshot unless the caller vouched for the source file. Source
@@ -192,19 +195,19 @@ public final class PdfSplit {
                     if (Thread.currentThread().isInterrupted()) {
                         throw new JPDFiumException("split cancelled between outputs");
                     }
-                    int count = range[1] - range[0] + 1;
-                    int[] idx = new int[count];
-                    for (int i = 0; i < count; i++) idx[i] = range[0] + i;
                     List<Bookmark> remapped = sourceBookmarks.isEmpty() ? List.of()
                             : filterBookmarksForRange(sourceBookmarks, range[0], range[1]);
                     COUNTERS.sourceLoads.incrementAndGet();
                     FileExtract extracted;
                     if (batched != null) {
                         extracted = batched.get(batchedIndex++);
+                    } else if (snapshotRefused) {
+                        extracted = FileExtract.REFUSED;
                     } else {
-                        extracted = snapshotRefused
-                                ? FileExtract.REFUSED
-                                : extractToTemp(reusable, idx, remapped, options);
+                        int count = range[1] - range[0] + 1;
+                        int[] idx = new int[count];
+                        for (int i = 0; i < count; i++) idx[i] = range[0] + i;
+                        extracted = extractToTemp(reusable, idx, remapped, options);
                     }
                     COUNTERS.outputWrites.incrementAndGet();
                     if (extracted.part() != null) {
@@ -239,7 +242,7 @@ public final class PdfSplit {
                 if (ownsReusable) deleteQuietly(reusable);
             }
         }
-        List<PdfDocument> results = new ArrayList<>();
+        List<PdfDocument> results = new ArrayList<>(ranges.size());
         for (int[] range : ranges) {
             results.add(extractPageRange(doc, range[0], range[1], options));
         }

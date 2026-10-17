@@ -56,8 +56,10 @@ public final class PdfTextExtractor {
      * @return list of page text results
      */
     public static List<PageText> extractAll(PdfDocument doc) {
-        List<PageText> results = new ArrayList<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        if (count == 0) return List.of();
+        List<PageText> results = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
             results.add(extractPage(doc, i));
         }
         return results;
@@ -86,7 +88,7 @@ public final class PdfTextExtractor {
      * Malformed objects are skipped wholesale.
      */
     static List<TextChar> parseCharsJson(String json) {
-        if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         final int jsonLength = json.length();
         List<TextChar> characters = new ArrayList<>(Math.max(8, jsonLength / 56));
         int searchPosition = 0;

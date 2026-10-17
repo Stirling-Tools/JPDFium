@@ -60,7 +60,7 @@ public final class PdfPageGeometry {
      * @param degrees   rotation in degrees (0, 90, 180, 270)
      */
     public static void setRotation(PdfDocument doc, int pageIndex, int degrees) {
-        int nativeRot = (degrees / 90) % 4;
+        int nativeRot = Math.floorMod(degrees / 90, 4);
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
         }
@@ -393,7 +393,9 @@ public final class PdfPageGeometry {
      * @param size target page size
      */
     public static void resizeAll(PdfDocument doc, PageSize size) {
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        if (count == 0) return;
+        for (int i = 0; i < count; i++) {
             setMediaBox(doc, i, size);
         }
     }
@@ -407,7 +409,7 @@ public final class PdfPageGeometry {
     public static void rotateAll(PdfDocument doc, int degrees) {
         int count = doc.pageCount();
         if (count == 0) return;
-        int nativeRot = (degrees / 90) % 4;
+        int nativeRot = Math.floorMod(degrees / 90, 4);
         boolean modified = false;
         for (int i = 0; i < count; i++) {
             try (PdfPage page = doc.page(i)) {

@@ -28,6 +28,18 @@ public final class PdfPageInterleaver {
                                   MemorySegment rawDoc2, boolean reverseSecond) {
         int count1 = getPageCount(rawDoc1);
         int count2 = getPageCount(rawDoc2);
+        if (count1 <= 0 && count2 <= 0) {
+            return 0;
+        }
+        if (count1 <= 0) {
+            if (!reverseSecond) {
+                PdfPageImporter.importPages(rawDest, rawDoc2, null, 0);
+                return count2;
+            }
+        } else if (count2 <= 0) {
+            PdfPageImporter.importPages(rawDest, rawDoc1, null, 0);
+            return count1;
+        }
         int maxPages = Math.max(count1, count2);
         int insertIndex = 0;
 
