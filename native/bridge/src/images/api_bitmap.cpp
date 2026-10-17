@@ -147,7 +147,13 @@ struct Sampler {
 };
 
 uint8_t saturate(double v) noexcept {
-    return static_cast<uint8_t>(std::clamp(std::lround(v), 0L, 255L));
+    // Rounds half away from zero exactly like std::lround, but without the library call
+    // (lround may set errno, so the compiler cannot inline it) and without the
+    // undefined conversion of a non-finite value.
+    const double r = std::round(v);
+    if (!(r > 0.0)) return 0;
+    if (r > 255.0) return 255;
+    return static_cast<uint8_t>(r);
 }
 
 }  // namespace
@@ -275,8 +281,10 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
             const int y0 = static_cast<int>(std::floor(y));
             const double fx = x - x0, fy = y - y0;
             if (interpolation == JPDF_INTERP_NEAREST) {
-                const int xn = static_cast<int>(std::lround(x));
-                const int yn = static_cast<int>(std::lround(y));
+                // std::round lowers to a single rounding instruction; std::lround would be a
+                // library call on every pixel of the nearest-neighbour fast path.
+                const int xn = static_cast<int>(std::round(x));
+                const int yn = static_cast<int>(std::round(y));
                 if (xn >= 0 && yn >= 0 && xn < sw && yn < sh) {
                     const uint8_t* const srow = src_base + static_cast<ptrdiff_t>(yn) * sstride +
                                                 static_cast<ptrdiff_t>(xn) * channels;
