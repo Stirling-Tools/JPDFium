@@ -769,13 +769,21 @@ public final class PdfPage implements AutoCloseable {
 
         MemorySegment ensureCapacity(int req) {
             if (req > capacity) {
-                capacity = Math.max(req, capacity * 2);
-                buf = arena.allocate(ValueLayout.JAVA_SHORT, capacity);
-                charBuf = new char[capacity];
+                // Grow into locals and publish only once every allocation succeeded; publishing
+                // the capacity first would leave the scratch claiming a buffer it does not own.
+                int newCapacity = Math.max(req, capacity * 2);
+                MemorySegment newBuf = arena.allocate(ValueLayout.JAVA_SHORT, newCapacity);
+                char[] newCharBuf = new char[newCapacity];
+                capacity = newCapacity;
+                buf = newBuf;
+                charBuf = newCharBuf;
             }
             return buf;
         }
     }
+
+    /** Upper bound on one page's text layer; guards the scratch against corrupt counts. */
+    private static final int MAX_PAGE_TEXT_CHARS = 1 << 24;
 
     private static final ThreadLocal<TextScratch> TEXT_SCRATCH = ThreadLocal.withInitial(TextScratch::new);
 
@@ -833,6 +841,9 @@ public final class PdfPage implements AutoCloseable {
             }
             int count = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
             if (count <= 0) return "";
+            if (count >= MAX_PAGE_TEXT_CHARS) {
+                throw new JPDFiumException("page text layer too large: " + count + " chars");
+            }
             MemorySegment buf = scratch.ensureCapacity(count + 1);
             int written = (int) TextPageBindings.FPDFText_GetText.invokeExact(textPage, 0, count, buf);
             if (written <= 1) return "";
@@ -1409,10 +1420,12 @@ public final class PdfPage implements AutoCloseable {
             throw new UnsupportedOperationException("EPDFText_RedactInRect is not supported by this PDFium build");
         }
         Scratch scratch = FfmHelper.scratch();
+        // FS_RECTF is left, top, right, bottom and Rect carries the bottom edge in y(),
+        // so top is y + height; an inverted rect silently under-redacts.
         scratch.rect.set(ValueLayout.JAVA_FLOAT, 0, rect.x());
-        scratch.rect.set(ValueLayout.JAVA_FLOAT, 4, rect.y());
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 4, rect.y() + rect.height());
         scratch.rect.set(ValueLayout.JAVA_FLOAT, 8, rect.x() + rect.width());
-        scratch.rect.set(ValueLayout.JAVA_FLOAT, 12, rect.y() + rect.height());
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 12, rect.y());
         try {
             int ok = (int) redactHandle.invokeExact(rawPageSegment, scratch.rect, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
             if (ok != 0) {
