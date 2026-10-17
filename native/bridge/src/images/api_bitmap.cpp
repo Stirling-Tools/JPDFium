@@ -157,6 +157,105 @@ uint8_t saturate(double v) noexcept {
     return static_cast<uint8_t>(std::min(std::max(r, 0.0), 255.0));
 }
 
+// The pixel loop of warp(), specialized on the channel count and interpolation mode: the
+// interpolation test vanishes and each mode is unswitched straight-line code. The nearest arm
+// also runs its channel loop with a compile-time trip count, so the byte copies unroll into
+// fixed-width loads and stores. The arithmetic arms keep the runtime bound instead: that is
+// the form clang vectorizes 2 lanes wide (NEON doubles) over the channel loop, while a
+// compile-time 1/3/4 makes it fully unroll scalars and measures slower for RGB.
+template <int Channels, int Interp>
+void warpLoop(const uint8_t* src_base, int32_t sw, int32_t sh, int32_t sstride, const Sampler& s,
+              const Homography& h, int32_t width, int32_t height, uint8_t* base, int32_t stride) {
+    const int channels = s.channels;
+    for (int32_t v = 0; v < height; ++v) {
+        uint8_t* row = base + static_cast<ptrdiff_t>(v) * static_cast<ptrdiff_t>(stride);
+        for (int32_t u = 0; u < width; ++u) {
+            const double w = h[6] * u + h[7] * v + h[8];
+            double x = (h[0] * u + h[1] * v + h[2]) / w;
+            double y = (h[3] * u + h[4] * v + h[5]) / w;
+            uint8_t* px = row + static_cast<ptrdiff_t>(u) * Channels;
+            if (!std::isfinite(x) || !std::isfinite(y)) {
+                for (int c = 0; c < Channels; ++c) px[c] = s.border_value(c);
+                continue;
+            }
+            // Every sample more than 4 px outside the source is a border sample, so clamping
+            // keeps the result identical while keeping the int conversions defined for a
+            // caller-supplied quad (or a vanishing denominator) far outside the int range.
+            x = std::clamp(x, -4.0, static_cast<double>(sw) + 4.0);
+            y = std::clamp(y, -4.0, static_cast<double>(sh) + 4.0);
+            // The sample position and interpolation weights are the same for every colour
+            // channel, so derive them once per pixel. Samples strictly inside the source also
+            // need no bounds check, which lets the taps read the pixel bytes directly.
+            const int x0 = static_cast<int>(std::floor(x));
+            const int y0 = static_cast<int>(std::floor(y));
+            const double fx = x - x0, fy = y - y0;
+            if constexpr (Interp == JPDF_INTERP_NEAREST) {
+                // std::round lowers to a single rounding instruction; std::lround would be a
+                // library call on every pixel of the nearest-neighbour fast path.
+                const int xn = static_cast<int>(std::round(x));
+                const int yn = static_cast<int>(std::round(y));
+                if (xn >= 0 && yn >= 0 && xn < sw && yn < sh) {
+                    const uint8_t* const srow = src_base + static_cast<ptrdiff_t>(yn) * sstride +
+                                                static_cast<ptrdiff_t>(xn) * Channels;
+                    for (int c = 0; c < Channels; ++c) px[c] = srow[c];
+                } else {
+                    for (int c = 0; c < Channels; ++c) px[c] = saturate(s.get(xn, yn, c));
+                }
+                continue;
+            }
+            const double nfx = 1 - fx, nfy = 1 - fy;
+            if constexpr (Interp == JPDF_INTERP_BILINEAR) {
+                if (x0 >= 0 && y0 >= 0 && x0 + 1 < sw && y0 + 1 < sh) {
+                    const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0) * sstride +
+                                              static_cast<ptrdiff_t>(x0) * Channels;
+                    const uint8_t* const r1 = r0 + sstride;
+                    for (int c = 0; c < channels; ++c) {
+                        const double top = r0[c] * nfx + r0[c + channels] * fx;
+                        const double bottom = r1[c] * nfx + r1[c + channels] * fx;
+                        px[c] = saturate(top * nfy + bottom * fy);
+                    }
+                } else {
+                    for (int c = 0; c < channels; ++c) {
+                        const double top = s.get(x0, y0, c) * nfx + s.get(x0 + 1, y0, c) * fx;
+                        const double bottom =
+                            s.get(x0, y0 + 1, c) * nfx + s.get(x0 + 1, y0 + 1, c) * fx;
+                        px[c] = saturate(top * nfy + bottom * fy);
+                    }
+                }
+                continue;
+            }
+            double wx[4] = {}, wy[4] = {};
+            cubic_weights(fx, wx);
+            cubic_weights(fy, wy);
+            if (x0 >= 1 && y0 >= 1 && x0 + 2 < sw && y0 + 2 < sh) {
+                const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0 - 1) * sstride +
+                                          static_cast<ptrdiff_t>(x0 - 1) * channels;
+                for (int c = 0; c < channels; ++c) {
+                    double acc = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        const uint8_t* const rj = r0 + static_cast<ptrdiff_t>(j) * sstride;
+                        double line = 0;
+                        for (int i = 0; i < 4; ++i) line += rj[i * channels + c] * wx[i];
+                        acc += line * wy[j];
+                    }
+                    px[c] = saturate(acc);
+                }
+            } else {
+                for (int c = 0; c < channels; ++c) {
+                    double acc = 0;
+                    for (int j = 0; j < 4; ++j) {
+                        double line = 0;
+                        for (int i = 0; i < 4; ++i)
+                            line += s.get(x0 - 1 + i, y0 - 1 + j, c) * wx[i];
+                        acc += line * wy[j];
+                    }
+                    px[c] = saturate(acc);
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 jpdf_status normalize_quad(const double* corners, Quad* out) noexcept {
@@ -254,97 +353,38 @@ jpdf_status warp(const PixelStorage& source, const Homography& h, int32_t width,
     if (!out->data) return fail(JPDF_E_NO_MEMORY, "rectified image allocation failed");
     const Sampler s{source, channels, border == JPDF_BORDER_REPLICATE};
     uint8_t* const base = out->data.get();
-    const uint8_t* const src_base = source.data.get();
-    const int32_t sw = source.width;
-    const int32_t sh = source.height;
-    const int32_t sstride = source.stride;
-    for (int32_t v = 0; v < height; ++v) {
-        uint8_t* row = base + static_cast<ptrdiff_t>(v) * static_cast<ptrdiff_t>(stride);
-        for (int32_t u = 0; u < width; ++u) {
-            const double w = h[6] * u + h[7] * v + h[8];
-            double x = (h[0] * u + h[1] * v + h[2]) / w;
-            double y = (h[3] * u + h[4] * v + h[5]) / w;
-            uint8_t* px = row + static_cast<ptrdiff_t>(u) * channels;
-            if (!std::isfinite(x) || !std::isfinite(y)) {
-                for (int c = 0; c < channels; ++c) px[c] = s.border_value(c);
-                continue;
-            }
-            // Every sample more than 4 px outside the source is a border sample, so clamping
-            // keeps the result identical while keeping the int conversions defined for a
-            // caller-supplied quad (or a vanishing denominator) far outside the int range.
-            x = std::clamp(x, -4.0, static_cast<double>(sw) + 4.0);
-            y = std::clamp(y, -4.0, static_cast<double>(sh) + 4.0);
-            // The sample position and interpolation weights are the same for every colour
-            // channel, so derive them once per pixel, and branch once on the interpolation
-            // mode instead of once per channel. Samples strictly inside the source also
-            // need no bounds check, which lets the taps read the pixel bytes directly.
-            const int x0 = static_cast<int>(std::floor(x));
-            const int y0 = static_cast<int>(std::floor(y));
-            const double fx = x - x0, fy = y - y0;
-            if (interpolation == JPDF_INTERP_NEAREST) {
-                // std::round lowers to a single rounding instruction; std::lround would be a
-                // library call on every pixel of the nearest-neighbour fast path.
-                const int xn = static_cast<int>(std::round(x));
-                const int yn = static_cast<int>(std::round(y));
-                if (xn >= 0 && yn >= 0 && xn < sw && yn < sh) {
-                    const uint8_t* const srow = src_base + static_cast<ptrdiff_t>(yn) * sstride +
-                                                static_cast<ptrdiff_t>(xn) * channels;
-                    for (int c = 0; c < channels; ++c) px[c] = srow[c];
-                } else {
-                    for (int c = 0; c < channels; ++c) px[c] = saturate(s.get(xn, yn, c));
-                }
-                continue;
-            }
-            const double nfx = 1 - fx, nfy = 1 - fy;
-            if (interpolation == JPDF_INTERP_BILINEAR) {
-                if (x0 >= 0 && y0 >= 0 && x0 + 1 < sw && y0 + 1 < sh) {
-                    const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0) * sstride +
-                                              static_cast<ptrdiff_t>(x0) * channels;
-                    const uint8_t* const r1 = r0 + sstride;
-                    for (int c = 0; c < channels; ++c) {
-                        const double top = r0[c] * nfx + r0[c + channels] * fx;
-                        const double bottom = r1[c] * nfx + r1[c + channels] * fx;
-                        px[c] = saturate(top * nfy + bottom * fy);
-                    }
-                } else {
-                    for (int c = 0; c < channels; ++c) {
-                        const double top = s.get(x0, y0, c) * nfx + s.get(x0 + 1, y0, c) * fx;
-                        const double bottom =
-                            s.get(x0, y0 + 1, c) * nfx + s.get(x0 + 1, y0 + 1, c) * fx;
-                        px[c] = saturate(top * nfy + bottom * fy);
-                    }
-                }
-                continue;
-            }
-            double wx[4] = {}, wy[4] = {};
-            cubic_weights(fx, wx);
-            cubic_weights(fy, wy);
-            if (x0 >= 1 && y0 >= 1 && x0 + 2 < sw && y0 + 2 < sh) {
-                const uint8_t* const r0 = src_base + static_cast<ptrdiff_t>(y0 - 1) * sstride +
-                                          static_cast<ptrdiff_t>(x0 - 1) * channels;
-                for (int c = 0; c < channels; ++c) {
-                    double acc = 0;
-                    for (int j = 0; j < 4; ++j) {
-                        const uint8_t* const rj = r0 + static_cast<ptrdiff_t>(j) * sstride;
-                        double line = 0;
-                        for (int i = 0; i < 4; ++i) line += rj[i * channels + c] * wx[i];
-                        acc += line * wy[j];
-                    }
-                    px[c] = saturate(acc);
-                }
-            } else {
-                for (int c = 0; c < channels; ++c) {
-                    double acc = 0;
-                    for (int j = 0; j < 4; ++j) {
-                        double line = 0;
-                        for (int i = 0; i < 4; ++i)
-                            line += s.get(x0 - 1 + i, y0 - 1 + j, c) * wx[i];
-                        acc += line * wy[j];
-                    }
-                    px[c] = saturate(acc);
-                }
-            }
+    // One dispatch per image instead of a per-pixel branch: the channel count and the
+    // interpolation mode pick an unswitched loop body.
+    const auto dispatch = [&]<int Channels>() {
+        const uint8_t* const src_base = source.data.get();
+        switch (interpolation) {
+            case JPDF_INTERP_NEAREST:
+                warpLoop<Channels, JPDF_INTERP_NEAREST>(src_base, source.width, source.height,
+                                                        source.stride, s, h, width, height, base,
+                                                        static_cast<int32_t>(stride));
+                break;
+            case JPDF_INTERP_BILINEAR:
+                warpLoop<Channels, JPDF_INTERP_BILINEAR>(src_base, source.width, source.height,
+                                                         source.stride, s, h, width, height, base,
+                                                         static_cast<int32_t>(stride));
+                break;
+            default:
+                warpLoop<Channels, JPDF_INTERP_BICUBIC>(src_base, source.width, source.height,
+                                                        source.stride, s, h, width, height, base,
+                                                        static_cast<int32_t>(stride));
+                break;
         }
+    };
+    switch (channels) {
+        case 1:
+            dispatch.template operator()<1>();
+            break;
+        case 3:
+            dispatch.template operator()<3>();
+            break;
+        default:
+            dispatch.template operator()<4>();
+            break;
     }
     out->width = width;
     out->height = height;
