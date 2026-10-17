@@ -5,7 +5,11 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -168,7 +172,14 @@ public final class RedactionSession implements AutoCloseable {
         if (!useRegex && words.length > 0) {
             FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
             Set<String> pageMatches = new HashSet<>();
-            try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+            try (Arena arena = Arena.ofConfined();
+                 PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+                Map<String, MemorySegment> wordSegments = new HashMap<>(words.length);
+                for (String w : words) {
+                    if (w != null && !w.isEmpty()) {
+                        wordSegments.put(w, arena.allocateFrom(w));
+                    }
+                }
                 for (int i = 0; i < pageCount; i++) {
                     try (PdfPage page = document.page(i)) {
                         int charCount = scratch.extractChars(page.rawHandle());
@@ -188,8 +199,16 @@ public final class RedactionSession implements AutoCloseable {
                         kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
                         if (pageMatches.isEmpty()) continue;
 
-                        String[] matchedWords = pageMatches.toArray(String[]::new);
-                        int count = page.markRedactWords(matchedWords, argbColor, padding,
+                        int matchCount = pageMatches.size();
+                        String[] matchedWords = new String[matchCount];
+                        MemorySegment ptrs = arena.allocate(ValueLayout.ADDRESS, matchCount);
+                        int mIdx = 0;
+                        for (String m : pageMatches) {
+                            matchedWords[mIdx] = m;
+                            ptrs.setAtIndex(ValueLayout.ADDRESS, mIdx, wordSegments.get(m));
+                            mIdx++;
+                        }
+                        int count = page.markRedactWords(ptrs, matchCount, argbColor, padding,
                                 wholeWord, useRegex, caseSensitive);
                         if (count > 0) {
                             pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())

@@ -83,9 +83,11 @@ public final class PdfMerge {
         List<Bookmark> mergedBookmarks = new ArrayList<>();
         int pageOffset = 0;
         for (PdfDocument sourceDoc : documents) {
-            List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
-            if (!sourceBookmarks.isEmpty()) {
-                mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+            if (sourceDoc.hasBookmarks()) {
+                List<Bookmark> sourceBookmarks = sourceDoc.bookmarks();
+                if (!sourceBookmarks.isEmpty()) {
+                    mergedBookmarks.addAll(offsetBookmarks(sourceBookmarks, pageOffset));
+                }
             }
             pageOffset += sourceDoc.pageCount();
         }

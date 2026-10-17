@@ -4,10 +4,10 @@ import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.panama.WebLinkBindings;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
@@ -212,31 +212,34 @@ public final class PdfWebLinks {
     }
 
     private static String getUrl(MemorySegment webLinks, int index) {
-        try (Arena arena = Arena.ofConfined()) {
-            int charCount = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
-                    webLinks, index, MemorySegment.NULL, 0);
-            if (charCount <= 0)
-                return "";
-            MemorySegment buf = arena.allocate((long) charCount * 2);
-            int written = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(webLinks, index, buf, charCount);
-            return FfmHelper.fromWideString(buf, written);
+        Scratch scratch = FfmHelper.scratch();
+        int capChars = (int) (scratch.bufferSize() / 2);
+        try {
+            int written = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
+                    webLinks, index, scratch.buffer(), capChars);
+            if (written <= 0) return "";
+            if (written > capChars) {
+                MemorySegment largeBuf = scratch.ensureNativeBuffer((long) written * 2);
+                int actual = (int) WebLinkBindings.FPDFLink_GetURL.invokeExact(
+                        webLinks, index, largeBuf, written);
+                return scratch.decodeWideChars(largeBuf, actual);
+            }
+            return scratch.decodeWideChars(scratch.buffer(), written);
         } catch (Throwable t) {
             return "";
         }
     }
 
     private static int[] getTextRange(MemorySegment webLinks, int index) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment startIdx = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment count = arena.allocate(ValueLayout.JAVA_INT);
+        Scratch scratch = FfmHelper.scratch();
+        try {
             int ok = (int) WebLinkBindings.FPDFLink_GetTextRange.invokeExact(
-                    webLinks, index, startIdx, count);
+                    webLinks, index, scratch.int0, scratch.int1);
             if (ok == 0)
                 return new int[] { 0, 0 };
-            return new int[] {
-                    startIdx.get(ValueLayout.JAVA_INT, 0),
-                    startIdx.get(ValueLayout.JAVA_INT, 0) + count.get(ValueLayout.JAVA_INT, 0)
-            };
+            int start = scratch.int0.get(ValueLayout.JAVA_INT, 0);
+            int count = scratch.int1.get(ValueLayout.JAVA_INT, 0);
+            return new int[] { start, start + count };
         } catch (Throwable t) {
             return new int[] { 0, 0 };
         }
@@ -251,19 +254,16 @@ public final class PdfWebLinks {
         }
 
         List<Rect> rects = new ArrayList<>(rectCount);
+        Scratch scratch = FfmHelper.scratch();
         for (int r = 0; r < rectCount; r++) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment left = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                MemorySegment top = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                MemorySegment right = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                MemorySegment bottom = arena.allocate(ValueLayout.JAVA_DOUBLE);
+            try {
                 int ok = (int) WebLinkBindings.FPDFLink_GetRect.invokeExact(
-                        webLinks, index, r, left, top, right, bottom);
+                        webLinks, index, r, scratch.double0, scratch.double1, scratch.double2, scratch.double3);
                 if (ok != 0) {
-                    float l = (float) left.get(ValueLayout.JAVA_DOUBLE, 0);
-                    float b = (float) bottom.get(ValueLayout.JAVA_DOUBLE, 0);
-                    float ri = (float) right.get(ValueLayout.JAVA_DOUBLE, 0);
-                    float t = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float l = (float) scratch.double0.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float b = (float) scratch.double3.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float ri = (float) scratch.double2.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float t = (float) scratch.double1.get(ValueLayout.JAVA_DOUBLE, 0);
                     rects.add(new Rect(l, b, ri - l, t - b));
                 }
             } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }

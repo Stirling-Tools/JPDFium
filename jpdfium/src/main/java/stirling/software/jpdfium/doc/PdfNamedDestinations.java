@@ -4,6 +4,7 @@ import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.ActionBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -41,23 +42,26 @@ public final class PdfNamedDestinations {
 
         int destCount = (int) count;
         List<NamedDestination> result = new ArrayList<>(destCount);
+        Scratch scratch = FfmHelper.scratch();
         for (int i = 0; i < destCount; i++) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment bufLenSeg = arena.allocate(ValueLayout.JAVA_LONG);
-                bufLenSeg.set(ValueLayout.JAVA_LONG, 0, 0L);
-
+            try {
+                scratch.long0.set(ValueLayout.JAVA_LONG, 0, scratch.bufferSize());
                 MemorySegment dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
-                        rawDoc, i, MemorySegment.NULL, bufLenSeg);
-                long bufLen = bufLenSeg.get(ValueLayout.JAVA_LONG, 0);
+                        rawDoc, i, scratch.buffer(), scratch.long0);
+                long bufLen = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
                 if (bufLen <= 2 || dest.equals(MemorySegment.NULL)) continue;
 
-                MemorySegment nameBuf = arena.allocate(bufLen);
-                bufLenSeg.set(ValueLayout.JAVA_LONG, 0, bufLen);
-                dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
-                        rawDoc, i, nameBuf, bufLenSeg);
-                if (dest.equals(MemorySegment.NULL)) continue;
-
-                String name = FfmHelper.fromWideString(nameBuf, bufLen);
+                String name;
+                if (bufLen > scratch.bufferSize()) {
+                    MemorySegment largeBuf = scratch.ensureNativeBuffer(bufLen);
+                    scratch.long0.set(ValueLayout.JAVA_LONG, 0, bufLen);
+                    dest = (MemorySegment) DocBindings.FPDF_GetNamedDest.invokeExact(
+                            rawDoc, i, largeBuf, scratch.long0);
+                    if (dest.equals(MemorySegment.NULL)) continue;
+                    name = scratch.decodeWideString(largeBuf, bufLen);
+                } else {
+                    name = scratch.decodeWideString(bufLen);
+                }
 
                 int pageIndex;
                 try {
@@ -71,14 +75,12 @@ public final class PdfNamedDestinations {
                 ViewType viewType = ViewType.UNKNOWN;
 
                 try {
-                    MemorySegment numParams = arena.allocate(ValueLayout.JAVA_LONG);
-                    MemorySegment params = arena.allocate(ValueLayout.JAVA_FLOAT, 4);
-                    long viewCode = (long) ActionBindings.FPDFDest_GetView.invokeExact(dest, numParams, params);
+                    long viewCode = (long) ActionBindings.FPDFDest_GetView.invokeExact(dest, scratch.long1, scratch.rect);
                     viewType = ViewType.fromCode(viewCode);
-                    long np = numParams.get(ValueLayout.JAVA_LONG, 0);
-                    if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
-                    if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
-                    if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
+                    long np = scratch.long1.get(ValueLayout.JAVA_LONG, 0);
+                    if (np >= 1) x = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
+                    if (np >= 2) y = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
+                    if (np >= 3) zoom = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
                 } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                 result.add(new NamedDestination(name, pageIndex, x, y, zoom, viewType));
@@ -98,6 +100,7 @@ public final class PdfNamedDestinations {
      */
     public static NamedDestination find(MemorySegment rawDoc, String name) {
         try (Arena arena = Arena.ofConfined()) {
+            Scratch scratch = FfmHelper.scratch();
             MemorySegment nameSeg = arena.allocateFrom(name);
             MemorySegment dest = (MemorySegment) DocBindings.FPDF_GetNamedDestByName.invokeExact(rawDoc, nameSeg);
             if (dest.equals(MemorySegment.NULL)) return null;
@@ -113,14 +116,12 @@ public final class PdfNamedDestinations {
             float x = 0, y = 0, zoom = 0;
             ViewType viewType = ViewType.UNKNOWN;
             try {
-                MemorySegment numParams = arena.allocate(ValueLayout.JAVA_LONG);
-                MemorySegment params = arena.allocate(ValueLayout.JAVA_FLOAT, 4);
-                long viewCode = (long) ActionBindings.FPDFDest_GetView.invokeExact(dest, numParams, params);
+                long viewCode = (long) ActionBindings.FPDFDest_GetView.invokeExact(dest, scratch.long1, scratch.rect);
                 viewType = ViewType.fromCode(viewCode);
-                long np = numParams.get(ValueLayout.JAVA_LONG, 0);
-                if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
-                if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
-                if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
+                long np = scratch.long1.get(ValueLayout.JAVA_LONG, 0);
+                if (np >= 1) x = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
+                if (np >= 2) y = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
+                if (np >= 3) zoom = scratch.rect.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
             } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             return new NamedDestination(name, pageIndex, x, y, zoom, viewType);

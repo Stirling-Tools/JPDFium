@@ -371,21 +371,23 @@ public final class PdfTextExtractor {
         if (characters.isEmpty()) return List.of();
 
         List<TextLine> lines = new ArrayList<>();
-        List<TextChar> currentLineChars = new ArrayList<>();
+        int count = characters.size();
+        int lineStart = 0;
         float currentLineY = characters.getFirst().y();
         float lineThreshold = characters.getFirst().height() * 0.5f;
 
-        for (TextChar textChar : characters) {
-            if (!currentLineChars.isEmpty() && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
-                lines.add(buildLine(currentLineChars));
-                currentLineChars.clear();
+        for (int i = 0; i < count; i++) {
+            TextChar textChar = characters.get(i);
+            if (i > lineStart && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
+                lines.add(buildLine(characters.subList(lineStart, i)));
+                lineStart = i;
                 lineThreshold = textChar.height() * 0.5f;
             }
-            currentLineChars.add(textChar);
             currentLineY = textChar.y();
         }
-
-        lines.add(buildLine(currentLineChars));
+        if (lineStart < count) {
+            lines.add(buildLine(characters.subList(lineStart, count)));
+        }
 
         return lines;
     }
@@ -411,34 +413,43 @@ public final class PdfTextExtractor {
     }
 
     private static List<TextWord> buildWords(List<TextChar> lineChars) {
+        if (lineChars.isEmpty()) return List.of();
         List<TextWord> words = new ArrayList<>();
-        List<TextChar> currentWord = new ArrayList<>();
+        int count = lineChars.size();
+        int wordStart = -1;
 
-        for (TextChar textChar : lineChars) {
+        for (int i = 0; i < count; i++) {
+            TextChar textChar = lineChars.get(i);
             if (textChar.isWhitespace() || textChar.isNewline()) {
-                if (!currentWord.isEmpty()) {
-                    words.add(buildWord(currentWord));
-                    currentWord = new ArrayList<>();
+                if (wordStart >= 0) {
+                    words.add(buildWord(lineChars, wordStart, i));
+                    wordStart = -1;
                 }
             } else {
-                currentWord.add(textChar);
+                if (wordStart < 0) {
+                    wordStart = i;
+                }
             }
         }
 
-        if (!currentWord.isEmpty()) {
-            words.add(buildWord(currentWord));
+        if (wordStart >= 0) {
+            words.add(buildWord(lineChars, wordStart, count));
         }
 
         return words;
     }
 
-    private static TextWord buildWord(List<TextChar> wordChars) {
-        if (wordChars.isEmpty()) return new TextWord(wordChars, 0f, 0f, 0f, 0f);
+    private static TextWord buildWord(List<TextChar> lineChars, int fromIndex, int toIndex) {
+        int wordLen = toIndex - fromIndex;
+        if (wordLen <= 0) return new TextWord(List.of(), 0f, 0f, 0f, 0f);
         float minX = Float.POSITIVE_INFINITY;
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        for (TextChar textChar : wordChars) {
+        List<TextChar> wordChars = new ArrayList<>(wordLen);
+        for (int i = fromIndex; i < toIndex; i++) {
+            TextChar textChar = lineChars.get(i);
+            wordChars.add(textChar);
             float charX = textChar.x();
             float charY = textChar.y();
             if (charX < minX) minX = charX;

@@ -1,11 +1,11 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.SignatureBindings;
 import stirling.software.jpdfium.util.NativeJsonParser;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
@@ -98,89 +98,96 @@ public final class PdfSignatures {
     }
 
     private static Optional<String> getSubFilter(MemorySegment signatureSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 1) return Optional.empty();
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return Optional.of(FfmHelper.fromByteString(bufferSegment, needed));
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 1) return Optional.empty();
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetSubFilter.invokeExact(signatureSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(scratch.decodeByteString(largeBuf, needed));
+        }
+        return Optional.of(scratch.decodeByteString(needed));
     }
 
     private static Optional<String> getReason(MemorySegment signatureSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 2) return Optional.empty();
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return Optional.of(FfmHelper.fromWideString(bufferSegment, needed));
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 2) return Optional.empty();
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetReason.invokeExact(signatureSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(scratch.decodeWideString(largeBuf, needed));
+        }
+        return Optional.of(scratch.decodeWideString(needed));
     }
 
     private static Optional<String> getTime(MemorySegment signatureSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 1) return Optional.empty();
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return Optional.of(FfmHelper.fromByteString(bufferSegment, needed));
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 1) return Optional.empty();
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) SignatureBindings.FPDFSignatureObj_GetTime.invokeExact(signatureSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return Optional.of(scratch.decodeByteString(largeBuf, needed));
+        }
+        return Optional.of(scratch.decodeByteString(needed));
     }
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
     private static byte[] getContents(MemorySegment signatureSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 0) return EMPTY_BYTES;
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return bufferSegment.toArray(ValueLayout.JAVA_BYTE);
+        Scratch scratch = FfmHelper.scratch();
+        long needed;
+        try {
+            needed = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment,
+                    MemorySegment.NULL, 0L);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 0) return EMPTY_BYTES;
+
+        MemorySegment bufferSegment = scratch.ensureNativeBuffer(needed);
+        try {
+            long _ = (long) SignatureBindings.FPDFSignatureObj_GetContents.invokeExact(signatureSegment, bufferSegment, needed);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
+        byte[] result = new byte[(int) needed];
+        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, (int) needed);
+        return result;
     }
 
     private static int getPermission(MemorySegment signatureSegment) {

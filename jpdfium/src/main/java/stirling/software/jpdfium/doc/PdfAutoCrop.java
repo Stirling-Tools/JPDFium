@@ -82,10 +82,11 @@ public final class PdfAutoCrop {
                 boolean foundAny = false;
 
                 try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment left = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment right = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment bottom = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment top = arena.allocate(ValueLayout.JAVA_DOUBLE);
+                    MemorySegment box = arena.allocate(32);
+                    MemorySegment left = box;
+                    MemorySegment right = box.asSlice(8);
+                    MemorySegment bottom = box.asSlice(16);
+                    MemorySegment top = box.asSlice(24);
 
                     for (int i = 0; i < charCount; i++) {
                         int ok;
@@ -95,10 +96,10 @@ public final class PdfAutoCrop {
                         } catch (Throwable t) { continue; }
                         if (ok == 0) continue;
 
-                        float l = (float) left.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float r = (float) right.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float b = (float) bottom.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float t2 = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
+                        float l = (float) box.get(ValueLayout.JAVA_DOUBLE, 0);
+                        float r = (float) box.get(ValueLayout.JAVA_DOUBLE, 8);
+                        float b = (float) box.get(ValueLayout.JAVA_DOUBLE, 16);
+                        float t2 = (float) box.get(ValueLayout.JAVA_DOUBLE, 24);
 
                         // Skip generated space characters (width ~0, position ~0)
                         if (l == r && b == t2) continue;
@@ -205,11 +206,12 @@ public final class PdfAutoCrop {
                 // BGRx read as one 32-bit word; little-endian, since the masks assume the low byte is B.
                 ValueLayout.OfInt pixelLayout =
                         ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+                int[] rowPixels = new int[bmpW];
                 for (int y = 0; y < bmpH; y++) {
                     long rowOffset = (long) y * stride;
+                    MemorySegment.copy(buffer, pixelLayout, rowOffset, rowPixels, 0, bmpW);
                     for (int x = 0; x < bmpW; x++) {
-                        // low byte = B, then G, then R. One access beats three.
-                        int pixel = buffer.get(pixelLayout, rowOffset + (long) x * 4);
+                        int pixel = rowPixels[x];
                         int b = pixel & 0xFF;
                         int g = (pixel >>> 8) & 0xFF;
                         int r = (pixel >>> 16) & 0xFF;

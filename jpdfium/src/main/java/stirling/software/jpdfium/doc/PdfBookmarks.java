@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.panama.ActionBindings;
 import stirling.software.jpdfium.panama.BookmarkBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -40,9 +41,44 @@ public final class PdfBookmarks {
      * @param rawDocSegment raw FPDF_DOCUMENT segment
      * @return root-level bookmarks (each may have children)
      */
+    public static boolean hasBookmarks(MemorySegment rawDocSegment) {
+        if (BookmarkBindings.FPDFBookmark_GetFirstChild == null) return false;
+        try {
+            MemorySegment first = (MemorySegment) BookmarkBindings.FPDFBookmark_GetFirstChild.invokeExact(
+                    rawDocSegment, MemorySegment.NULL);
+            return first != null && !first.equals(MemorySegment.NULL);
+        } catch (Throwable _) {
+            return false;
+        }
+    }
+
     public static List<Bookmark> list(MemorySegment rawDocSegment) {
+        if (BookmarkBindings.FPDFBookmark_GetFirstChild == null) return Collections.emptyList();
+        MemorySegment childBookmark;
+        try {
+            childBookmark = (MemorySegment) BookmarkBindings.FPDFBookmark_GetFirstChild.invokeExact(
+                    rawDocSegment, MemorySegment.NULL);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFBookmark_GetFirstChild failed", t);
+        }
+        if (childBookmark.equals(MemorySegment.NULL)) {
+            return Collections.emptyList();
+        }
         Set<Long> visited = new HashSet<>();
-        return collectChildren(rawDocSegment, MemorySegment.NULL, 0, visited);
+        List<Bookmark> result = new ArrayList<>();
+        while (!childBookmark.equals(MemorySegment.NULL)) {
+            long addr = childBookmark.address();
+            if (!visited.add(addr)) {
+                break;
+            }
+            result.add(toBookmark(rawDocSegment, childBookmark, 0, visited));
+            try {
+                childBookmark = (MemorySegment) BookmarkBindings.FPDFBookmark_GetNextSibling.invokeExact(rawDocSegment, childBookmark);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFBookmark_GetNextSibling failed", t);
+            }
+        }
+        return Collections.unmodifiableList(result);
     }
 
     /**
@@ -158,65 +194,71 @@ public final class PdfBookmarks {
     }
 
     private static String getTitle(MemorySegment bookmarkSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 2) return "";
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return FfmHelper.fromWideString(bufferSegment, needed);
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 2) return "";
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) BookmarkBindings.FPDFBookmark_GetTitle.invokeExact(bookmarkSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return scratch.decodeWideString(largeBuf, needed);
+        }
+        return scratch.decodeWideString(needed);
     }
 
     private static String getActionUri(MemorySegment rawDocSegment, MemorySegment actionSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 1) return null;
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return FfmHelper.fromByteString(bufferSegment, needed);
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 1) return null;
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(rawDocSegment, actionSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return scratch.decodeByteString(largeBuf, needed);
+        }
+        return scratch.decodeByteString(needed);
     }
 
     private static String getActionFilePath(MemorySegment actionSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 1) return null;
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return FfmHelper.fromByteString(bufferSegment, needed);
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 1) return null;
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            try {
+                long _ = (long) ActionBindings.FPDFAction_GetFilePath.invokeExact(actionSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return scratch.decodeByteString(largeBuf, needed);
+        }
+        return scratch.decodeByteString(needed);
     }
 }

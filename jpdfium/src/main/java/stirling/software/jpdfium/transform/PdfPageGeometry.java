@@ -405,8 +405,21 @@ public final class PdfPageGeometry {
      * @param degrees rotation in degrees (0, 90, 180, 270)
      */
     public static void rotateAll(PdfDocument doc, int degrees) {
-        for (int i = 0; i < doc.pageCount(); i++) {
-            setRotation(doc, i, degrees);
+        int count = doc.pageCount();
+        if (count == 0) return;
+        int nativeRot = (degrees / 90) % 4;
+        boolean modified = false;
+        for (int i = 0; i < count; i++) {
+            try (PdfPage page = doc.page(i)) {
+                int currentRot = PdfPageEditor.getRotation(page.rawHandle());
+                if (currentRot != nativeRot) {
+                    PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
+                    modified = true;
+                }
+            }
+        }
+        if (modified) {
+            doc.markContentModified();
         }
     }
 }

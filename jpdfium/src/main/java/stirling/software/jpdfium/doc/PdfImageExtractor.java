@@ -6,6 +6,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -198,17 +199,15 @@ public final class PdfImageExtractor {
     }
 
     private static Rect getObjBounds(MemorySegment obj) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment l = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment b = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment r = arena.allocate(ValueLayout.JAVA_FLOAT);
-            MemorySegment t = arena.allocate(ValueLayout.JAVA_FLOAT);
-            int ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(obj, l, b, r, t);
+        Scratch scratch = FfmHelper.scratch();
+        try {
+            int ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(obj,
+                    scratch.float0, scratch.float1, scratch.float2, scratch.float3);
             if (ok == 0) return new Rect(0, 0, 0, 0);
-            float left = l.get(ValueLayout.JAVA_FLOAT, 0);
-            float bottom = b.get(ValueLayout.JAVA_FLOAT, 0);
-            float right = r.get(ValueLayout.JAVA_FLOAT, 0);
-            float top = t.get(ValueLayout.JAVA_FLOAT, 0);
+            float left = scratch.float0.get(ValueLayout.JAVA_FLOAT, 0);
+            float bottom = scratch.float1.get(ValueLayout.JAVA_FLOAT, 0);
+            float right = scratch.float2.get(ValueLayout.JAVA_FLOAT, 0);
+            float top = scratch.float3.get(ValueLayout.JAVA_FLOAT, 0);
             return new Rect(left, bottom, right - left, top - bottom);
         } catch (Throwable e) { return new Rect(0, 0, 0, 0); }
     }
@@ -217,14 +216,18 @@ public final class PdfImageExtractor {
         try {
             int filterCount = (int) ImageObjBindings.FPDFImageObj_GetImageFilterCount.invokeExact(obj);
             if (filterCount <= 0) return "none";
-            try (Arena arena = Arena.ofConfined()) {
-                long needed = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(
-                        obj, 0, MemorySegment.NULL, 0L);
-                if (needed <= 1) return "none";
-                MemorySegment buf = arena.allocate(needed);
-                long written = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(obj, 0, buf, needed);
-                return FfmHelper.fromByteString(buf, written);
+            Scratch scratch = FfmHelper.scratch();
+            MemorySegment buf = scratch.buffer();
+            long cap = scratch.bufferSize();
+            long needed = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(
+                    obj, 0, buf, cap);
+            if (needed <= 1) return "none";
+            if (needed > cap) {
+                MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+                long written = (long) ImageObjBindings.FPDFImageObj_GetImageFilter.invokeExact(obj, 0, largeBuf, needed);
+                return scratch.decodeByteString(largeBuf, written);
             }
+            return scratch.decodeByteString(needed);
         } catch (Throwable t) { return "unknown"; }
     }
 }

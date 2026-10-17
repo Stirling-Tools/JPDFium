@@ -21,6 +21,8 @@ import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
@@ -1213,8 +1215,9 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getBox = EmbedPdfDocumentBindings.EPDF_GetPageBoxByIndex;
         if (getBox != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment rectBuf = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                MemorySegment rectBuf = scratch.rect;
                 Rect mediaBox = queryBoxByIndex(getBox, pageIndex, 0, rectBuf)
                         .orElseGet(() -> {
                             try (PdfPage p = page(pageIndex)) {
@@ -1248,10 +1251,10 @@ public final class PdfDocument implements AutoCloseable {
         try {
             int ok = (int) getBox.invokeExact(rawDocSegment, pageIndex, boxType, rectBuf);
             if (ok == 0) return Optional.empty();
-            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")));
-            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")));
-            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")));
-            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")));
+            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, 0);
+            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, 4);
+            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, 8);
+            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, 12);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
         } catch (Throwable t) {
             return Optional.empty();
@@ -1295,11 +1298,11 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
         if (getUnit != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
-                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, scratch.float0);
                 if (ok != 0) {
-                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                    return scratch.float0.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
@@ -1481,6 +1484,10 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * Get the document's complete bookmark tree.
      */
+    public boolean hasBookmarks() {
+        return PdfBookmarks.hasBookmarks(rawHandleForRead());
+    }
+
     public List<Bookmark> bookmarks() {
         return PdfBookmarks.list(rawHandleForRead());
     }

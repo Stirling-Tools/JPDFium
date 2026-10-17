@@ -2,11 +2,10 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.ActionBindings;
-import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.LinkBindings;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
@@ -47,25 +46,21 @@ public final class PdfLinks {
      */
     public static List<PdfLink> list(MemorySegment doc, MemorySegment page) {
         List<PdfLink> result = new ArrayList<>();
+        Scratch scratch = FfmHelper.scratch();
+        scratch.int0.set(ValueLayout.JAVA_INT, 0, 0);
 
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment startPos = arena.allocate(ValueLayout.JAVA_INT);
-            MemorySegment linkSeg = arena.allocate(ValueLayout.ADDRESS);
-            startPos.set(ValueLayout.JAVA_INT, 0, 0);
+        while (true) {
+            int ok;
+            try {
+                ok = (int) LinkBindings.FPDFLink_Enumerate.invokeExact(page, scratch.int0, scratch.addr0);
+            } catch (Throwable t) { throw new JPDFiumException("FPDFLink_Enumerate failed", t); }
 
-            while (true) {
-                int ok;
-                try {
-                    ok = (int) LinkBindings.FPDFLink_Enumerate.invokeExact(page, startPos, linkSeg);
-                } catch (Throwable t) { throw new JPDFiumException("FPDFLink_Enumerate failed", t); }
+            if (ok == 0) break;
 
-                if (ok == 0) break;
+            MemorySegment link = scratch.addr0.get(ValueLayout.ADDRESS, 0);
+            if (link.equals(MemorySegment.NULL)) break;
 
-                MemorySegment link = linkSeg.get(ValueLayout.ADDRESS, 0);
-                if (link.equals(MemorySegment.NULL)) break;
-
-                result.add(toLinkRecord(doc, link));
-            }
+            result.add(toLinkRecord(doc, link));
         }
         return Collections.unmodifiableList(result);
     }
@@ -138,36 +133,36 @@ public final class PdfLinks {
     }
 
     private static Rect getLinkRect(MemorySegment link) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
-            int ok;
-            try {
-                ok = (int) LinkBindings.FPDFLink_GetAnnotRect.invokeExact(link, rectSeg);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            if (ok == 0) return new Rect(0, 0, 0, 0);
+        Scratch scratch = FfmHelper.scratch();
+        int ok;
+        try {
+            ok = (int) LinkBindings.FPDFLink_GetAnnotRect.invokeExact(link, scratch.rect);
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        if (ok == 0) return new Rect(0, 0, 0, 0);
 
-            float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
-            float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
-            float right = rectSeg.get(ValueLayout.JAVA_FLOAT, 8);
-            float bottom = rectSeg.get(ValueLayout.JAVA_FLOAT, 12);
-            return new Rect(left, bottom, right - left, top - bottom);
-        }
+        float left = scratch.rect.get(ValueLayout.JAVA_FLOAT, 0);
+        float top = scratch.rect.get(ValueLayout.JAVA_FLOAT, 4);
+        float right = scratch.rect.get(ValueLayout.JAVA_FLOAT, 8);
+        float bottom = scratch.rect.get(ValueLayout.JAVA_FLOAT, 12);
+        return new Rect(left, bottom, right - left, top - bottom);
     }
 
     private static String getUri(MemorySegment doc, MemorySegment action) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, buf, cap);
+        } catch (Throwable t) { throw new JPDFiumException(t); }
+        if (needed <= 1) return null;
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
             try {
-                needed = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action,
-                        MemorySegment.NULL, 0L);
+                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, largeBuf, needed);
             } catch (Throwable t) { throw new JPDFiumException(t); }
-            if (needed <= 1) return null;
-
-            MemorySegment buf = arena.allocate(needed);
-            try {
-                long _ = (long) ActionBindings.FPDFAction_GetURIPath.invokeExact(doc, action, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            return FfmHelper.fromByteString(buf, needed);
+            return scratch.decodeByteString(largeBuf, needed);
         }
+        return scratch.decodeByteString(needed);
     }
 }
