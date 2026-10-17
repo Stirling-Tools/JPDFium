@@ -104,12 +104,15 @@ FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
 // target).
 //
 // The staging file carries mode 0600 from exclusive creation, which is right
-// while it holds a partial PDF and wrong for the published artifact: a rename
-// would hand the destination owner-only permissions and silently drop the
-// mode of the file it replaced. Mirror applyDestinationPermissions on the
-// Java side - keep an existing destination's mode, otherwise the umask
-// default - so saves behave like a direct write. Windows inherits the
-// directory ACL on move, so there is nothing to copy there.
+// while it holds a partial PDF and wrong for the published artifact when the
+// destination already exists: a rename would hand the destination owner-only
+// permissions and silently drop the mode of the file it replaced. An existing
+// destination keeps its mode (mirror applyDestinationPermissions on the Java
+// side); a NEW destination keeps the restrictive 0600 staging mode.
+// output_transaction.cpp made the same call: learning the umask default from a
+// probe file needs a 0666 creation (CodeQL cpp/world-writable-file-creation)
+// and reading umask(2) would race process-wide with other threads. Windows
+// inherits the directory ACL on move, so there is nothing to copy there.
 bool publish_staged(const std::string& staging, const char* destination) {
 #if defined(_WIN32)
     // Windows rename fails if the target exists, so MOVEFILE_REPLACE_EXISTING is
@@ -132,20 +135,12 @@ bool publish_staged(const std::string& staging, const char* destination) {
     std::memset(&st, 0, sizeof(st));
     if (::stat(destination, &st) == 0) {
         ::chmod(staging.c_str(), st.st_mode & 07777);
-    } else {
-        // No destination yet: learn the umask default from a probe file, the
-        // way Files.createFile does on the Java side. Reading umask(2) would
-        // race process-wide with other threads creating files.
-        const std::string probe = staging + ".permmode";
-        int pfd = ::open(probe.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
-        if (pfd >= 0) {
-            if (::fstat(pfd, &st) == 0) ::chmod(staging.c_str(), st.st_mode & 07777);
-            ::close(pfd);
-            ::remove(probe.c_str());
-        }
-        // If even the probe fails, the staging keeps 0600: restrictive beats
-        // permissive when the default cannot be determined.
     }
+    // No destination yet: the staging keeps its 0600 creation mode. A probe
+    // file would be created 0666 (CodeQL cpp/world-writable-file-creation, the
+    // reason output_transaction.cpp dropped the same probe) and umask(2) races
+    // process-wide. Restrictive beats permissive when the default cannot be
+    // determined without either.
     return std::rename(staging.c_str(), destination) == 0;
 #endif
 }
@@ -654,6 +649,8 @@ int32_t jpdfium_doc_save(int64_t doc, const char* path) {
 }
 
 int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
+    // Both outputs are required: every success path writes through them.
+    if (!data || !len) return JPDFIUM_ERR_INVALID;
     // Grows with realloc so the finished buffer IS the caller's buffer: the
     // old vector-then-malloc+memcpy tail copied every byte twice. The pointer
     // stays malloc-family owned, so jpdfium_free_buffer keeps working.

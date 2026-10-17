@@ -423,10 +423,9 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         }
 
         // Audit that nothing content-bearing remains fully outside the crop.
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit);
-        FPDFText_ClosePage(audit);
+        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit.get());
         if (!auditOk) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         return JPDFIUM_OK;
     } catch (...) {

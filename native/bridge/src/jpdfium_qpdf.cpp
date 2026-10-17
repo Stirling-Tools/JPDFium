@@ -872,7 +872,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_decrypt(const uint8_t*, int64_t, const char*
     return -1;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_sanitize_file(const char*, const char*, int32_t) {
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(const char*, const int32_t*, const int32_t*,
+                                                        int32_t,
+                                                        const char* const*) JPDFIUM_NOEXCEPT {
     return -1;
 }
 

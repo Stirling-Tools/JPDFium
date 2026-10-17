@@ -424,8 +424,7 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
     // Form XObjects in this scope.
     if (res.hasKey("/XObject") && res.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = res.getKey("/XObject");
-        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
-        for (auto [name, xo] : xos.ditems()) {
+        for (auto& [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visitedObjs.count(id)) continue;
@@ -437,8 +436,11 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                 // resources when present, else the enclosing scope's.
                 QPDFObjectHandle formRes =
                     xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
-                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
-                auto scanBuf = [&](QPDFObjectHandle s) {
+                // Takes a mutable lvalue reference: the pinned Linux qpdf's
+                // QPDFObjectHandle accessors are non-const, so a by-value parameter
+                // is not needed for portability and the array call site binds a
+                // local first.
+                auto scanBuf = [&](QPDFObjectHandle& s) {
                     auto b = streamData(s);
                     if (b)
                         scanContentStream(std::string(reinterpret_cast<const char*>(b->getBuffer()),
@@ -448,7 +450,10 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                 if (xoDict.hasKey("/Contents")) {
                     QPDFObjectHandle fc = xoDict.getKey("/Contents");
                     if (fc.isArray()) {
-                        for (int i = 0; i < fc.getArrayNItems(); i++) scanBuf(fc.getArrayItem(i));
+                        for (int i = 0; i < fc.getArrayNItems(); i++) {
+                            QPDFObjectHandle item = fc.getArrayItem(i);
+                            scanBuf(item);
+                        }
                     } else if (fc.isStream()) {
                         scanBuf(fc);
                     }
@@ -476,8 +481,7 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRe
     if (depth > 12 || !scopeRes.isDictionary()) return;
     if (scopeRes.hasKey("/XObject") && scopeRes.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = scopeRes.getKey("/XObject");
-        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
-        for (auto [name, xo] : xos.ditems()) {
+        for (auto& [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
             if (visited.count(id)) continue;
@@ -491,8 +495,7 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRe
                     }
                     QPDFObjectHandle pageFonts = pageRes.getKey("/Font");
                     if (pageFonts.isDictionary()) {
-                        // NOLINTNEXTLINE(performance-for-range-copy) - keep the element mutable.
-                        for (auto [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
+                        for (auto& [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
                             if (!pageFonts.hasKey(fontName)) {
                                 pageFonts.replaceKey(fontName, fontDict);
                             }
@@ -642,8 +645,9 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             // Content scan: page streams + form XObject streams.
             if (page.hasKey("/Contents")) {
                 QPDFObjectHandle contents = page.getKey("/Contents");
-                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
-                auto scanOne = [&](QPDFObjectHandle s) {
+                // Mutable lvalue reference parameter: portable against the pinned
+                // Linux qpdf's non-const accessors without a by-value copy.
+                auto scanOne = [&](QPDFObjectHandle& s) {
                     auto buf = streamData(s);
                     if (buf)
                         scanContentStream(
@@ -652,8 +656,10 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
                             pageScans[pi]);
                 };
                 if (contents.isArray()) {
-                    for (int ci = 0; ci < contents.getArrayNItems(); ci++)
-                        scanOne(contents.getArrayItem(ci));
+                    for (int ci = 0; ci < contents.getArrayNItems(); ci++) {
+                        QPDFObjectHandle item = contents.getArrayItem(ci);
+                        scanOne(item);
+                    }
                 } else {
                     scanOne(contents);
                 }
@@ -679,7 +685,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             QPDFObjectHandle fonts = res.getKey("/Font");
             if (!fonts.isDictionary()) continue;
             ContentScan& scan = pageScans[pi];
-            for (auto [name, font] : fonts.ditems()) {
+            for (auto& [name, font] : fonts.ditems()) {
                 if (!font.isDictionary()) continue;
                 std::string id = font.getObjGen().unparse();
                 // qpdf dict keys carry the leading slash; the content scan

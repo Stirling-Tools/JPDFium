@@ -446,8 +446,10 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
     // FreeType font cache: avoid re-loading font data for every fragment.
 #ifdef JPDFIUM_HAS_FREETYPE
+    // Move-only with a noexcept destructor: a std::vector throw between
+    // FT_New_Memory_Face and the explicit release below must not leak the face.
     struct FtFontCache {
-        FT_Face face = nullptr;         // owned; freed after the plans are built
+        FT_Face face = nullptr;         // owned; freed by destroy()/the destructor
         std::vector<uint8_t> fontData;  // backing store for |face|, must outlive it
         std::unordered_map<uint32_t, uint32_t> unicodeToGid;
         // glyph id -> advance (font units, FT_LOAD_NO_SCALE), loaded on first use.
@@ -455,6 +457,42 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         short upem = 0;
         bool isCidKeyed = false;
         bool valid = false;
+
+        FtFontCache() = default;
+        ~FtFontCache() noexcept {
+            destroy();
+        }
+        FtFontCache(const FtFontCache&) = delete;
+        FtFontCache& operator=(const FtFontCache&) = delete;
+        FtFontCache(FtFontCache&& other) noexcept
+            : face(other.face),
+              fontData(std::move(other.fontData)),
+              unicodeToGid(std::move(other.unicodeToGid)),
+              advances(std::move(other.advances)),
+              upem(other.upem),
+              isCidKeyed(other.isCidKeyed),
+              valid(other.valid) {
+            other.face = nullptr;
+        }
+        FtFontCache& operator=(FtFontCache&& other) noexcept {
+            if (this != &other) {
+                destroy();
+                face = other.face;
+                fontData = std::move(other.fontData);
+                unicodeToGid = std::move(other.unicodeToGid);
+                advances = std::move(other.advances);
+                upem = other.upem;
+                isCidKeyed = other.isCidKeyed;
+                valid = other.valid;
+                other.face = nullptr;
+            }
+            return *this;
+        }
+
+        void destroy() noexcept {
+            if (face) FT_Done_Face(face);
+            face = nullptr;
+        }
     };
     std::unordered_map<uintptr_t, FtFontCache> ftCache;
 
@@ -708,8 +746,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
 #ifdef JPDFIUM_HAS_FREETYPE
     // The deviation detector is done with the faces once every plan is built.
+    // destroy() is idempotent, so the destructor also covers an early throw.
     for (auto& [key, cache] : ftCache) {
-        if (cache.face) FT_Done_Face(cache.face);
+        cache.destroy();
     }
     ftCache.clear();
 #endif

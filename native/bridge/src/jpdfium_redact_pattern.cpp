@@ -662,10 +662,17 @@ void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
 }
 
 // Must stay in sync with FastKeywordIndex.isKeywordSpace(), the prefilter that
-// decides which pages reach this matcher.
+// decides which pages reach this matcher. The set is Unicode White_Space minus
+// U+180E (not whitespace since Unicode 6.3): ASCII fast path first because
+// page text is overwhelmingly ASCII.
 static bool isLiteralSpace(char32_t ch) {
-    return ch == U' ' || ch == U'\t' || ch == U'\r' || ch == U'\n' || ch == U'\u00A0' ||
-           ch == U'\u2007' || ch == U'\u202F' || ch == U'\u2028' || ch == U'\u2029';
+    if (ch <= 0x7F) {
+        return ch == U'\t' || ch == U'\n' || ch == U'\u000B' || ch == U'\u000C' || ch == U'\r' ||
+               ch == U' ';
+    }
+    return ch == U'\u0085' || ch == U'\u00A0' || ch == U'\u1680' ||
+           (ch >= U'\u2000' && ch <= U'\u200A') || ch == U'\u2028' || ch == U'\u2029' ||
+           ch == U'\u202F' || ch == U'\u205F' || ch == U'\u3000';
 }
 
 // Escape regex metacharacters for literal matching. A whitespace run matches
@@ -938,9 +945,40 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
     std::vector<FPDF_PAGEOBJECT> ordered;
 
     // Shape font cache: FPDF_FONT pointer -> hb_font (owns its face).
+    // Move-only with a noexcept destructor: a throw between hb_font_create and
+    // the explicit release at the end must not leak the HarfBuzz handles.
     struct HbFont {
         hb_font_t* font = nullptr;
         hb_face_t* face = nullptr;
+
+        HbFont() = default;
+        HbFont(hb_font_t* f, hb_face_t* fc) noexcept : font(f), face(fc) {}
+        ~HbFont() noexcept {
+            destroy();
+        }
+        HbFont(const HbFont&) = delete;
+        HbFont& operator=(const HbFont&) = delete;
+        HbFont(HbFont&& other) noexcept : font(other.font), face(other.face) {
+            other.font = nullptr;
+            other.face = nullptr;
+        }
+        HbFont& operator=(HbFont&& other) noexcept {
+            if (this != &other) {
+                destroy();
+                font = other.font;
+                face = other.face;
+                other.font = nullptr;
+                other.face = nullptr;
+            }
+            return *this;
+        }
+
+        void destroy() noexcept {
+            if (font) hb_font_destroy(font);
+            if (face) hb_face_destroy(face);
+            font = nullptr;
+            face = nullptr;
+        }
     };
     std::unordered_map<uintptr_t, HbFont> hbCache;
 
@@ -1131,8 +1169,7 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
     }
 
     for (auto& [k, e] : hbCache) {
-        if (e.font) hb_font_destroy(e.font);
-        if (e.face) hb_face_destroy(e.face);
+        e.destroy();
     }
 }
 #endif
