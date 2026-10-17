@@ -673,11 +673,12 @@ public final class PdfAnnotationExchange {
             if (needed <= 2) return null;
 
             MemorySegment buf = arena.allocate(needed);
+            long written;
             try {
-                long _ = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
+                written = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
                         annot, keySeg, buf, needed);
             } catch (Throwable t) { return null; }
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         }
     }
 

@@ -92,6 +92,10 @@ final class FastKeywordIndex {
         if (caseSensitive) {
             return codePoint;
         }
+        // Fast path for ASCII characters
+        if (codePoint < 128) {
+            return (codePoint >= 'A' && codePoint <= 'Z') ? (codePoint + 32) : codePoint;
+        }
         // Lowercase via uppercase first so PCRE2 case-equivalent variants
         // without NFKC decompositions (Cyrillic U+1C80-U+1C88, long s, etc.)
         // merge to the same form instead of being missed.
@@ -281,59 +285,70 @@ final class FastKeywordIndex {
 
             int codePoint = Character.codePointAt(text, i, len);
             int folded = foldCodePoint(codePoint, caseSensitive);
+
+            if (folded <= 0xFFFF) {
+                char fc0 = (char) folded;
+                TrieNode node = lookupFirst(fc0);
+                if (node == null) {
+                    continue;
+                }
+                int charLen = Character.charCount(codePoint);
+                if (charLen > 1) {
+                    if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
+                            && checkRightBound(text, i + charLen, len, wholeWord, node)) {
+                        out.addAll(node.keywords);
+                    }
+                    scanContinuationCharArray(text, len, i, i + charLen, wholeWord, node, out);
+                    continue;
+                }
+
+                if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
+                        && checkRightBound(text, i + 1, len, wholeWord, node)) {
+                    out.addAll(node.keywords);
+                }
+
+                TrieNode curr = node;
+                for (int j = i + 1; j < len; j++) {
+                    char cj = text[j];
+                    if (!caseSensitive && Character.isSurrogate(cj)) {
+                        break;
+                    }
+                    int foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
+                    curr = curr.findChild((char) foldedJ);
+                    if (curr == null) {
+                        break;
+                    }
+                    if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
+                            && checkRightBound(text, j + 1, len, wholeWord, curr)) {
+                        out.addAll(curr.keywords);
+                    }
+                }
+                continue;
+            }
+
             char[] foldedChars = Character.toChars(folded);
             TrieNode node = lookupFirst(foldedChars[0]);
             if (node == null) {
                 continue;
             }
             int charLen = Character.charCount(codePoint);
-            // For supplementary code points the trie holds surrogate pairs;
-            // walk the remaining folded chars before matching continuations.
-            if (foldedChars.length > 1 || charLen > 1) {
-                TrieNode curr = node;
-                boolean ok = true;
-                for (int k = 1; k < foldedChars.length; k++) {
-                    curr = curr.findChild(foldedChars[k]);
-                    if (curr == null) {
-                        ok = false;
-                        break;
-                    }
+            TrieNode curr = node;
+            boolean ok = true;
+            for (int k = 1; k < foldedChars.length; k++) {
+                curr = curr.findChild(foldedChars[k]);
+                if (curr == null) {
+                    ok = false;
+                    break;
                 }
-                if (!ok) {
-                    continue;
-                }
-                if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
-                        && checkRightBound(text, i + charLen, len, wholeWord, curr)) {
-                    out.addAll(curr.keywords);
-                }
-                scanContinuationCharArray(text, len, i, i + charLen, wholeWord, curr, out);
+            }
+            if (!ok) {
                 continue;
             }
-
-            if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
-                    && checkRightBound(text, i + 1, len, wholeWord, node)) {
-                out.addAll(node.keywords);
+            if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
+                    && checkRightBound(text, i + charLen, len, wholeWord, curr)) {
+                out.addAll(curr.keywords);
             }
-
-            TrieNode curr = node;
-            for (int j = i + 1; j < len; j++) {
-                char cj = text[j];
-                // Fold single BMP char; lone surrogates fall back to conservative path above.
-                int foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
-                // Supplementary text chars are handled via the code-point entry;
-                // a BMP trie edge never matches a surrogate unit here.
-                if (!caseSensitive && Character.isSurrogate(cj)) {
-                    break;
-                }
-                curr = curr.findChild((char) foldedJ);
-                if (curr == null) {
-                    break;
-                }
-                if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
-                        && checkRightBound(text, j + 1, len, wholeWord, curr)) {
-                    out.addAll(curr.keywords);
-                }
-            }
+            scanContinuationCharArray(text, len, i, i + charLen, wholeWord, curr, out);
         }
     }
 
@@ -344,11 +359,18 @@ final class FastKeywordIndex {
         while (j < len) {
             int codePoint = Character.codePointAt(text, j, len);
             int folded = foldCodePoint(codePoint, caseSensitive);
-            char[] foldedChars = Character.toChars(folded);
-            for (char fc : foldedChars) {
-                curr = curr.findChild(fc);
+            if (folded <= 0xFFFF) {
+                curr = curr.findChild((char) folded);
                 if (curr == null) {
                     return;
+                }
+            } else {
+                char[] foldedChars = Character.toChars(folded);
+                for (char fc : foldedChars) {
+                    curr = curr.findChild(fc);
+                    if (curr == null) {
+                        return;
+                    }
                 }
             }
             j += Character.charCount(codePoint);
@@ -378,54 +400,70 @@ final class FastKeywordIndex {
 
             int codePoint = Character.codePointAt(text, i);
             int folded = foldCodePoint(codePoint, caseSensitive);
+
+            if (folded <= 0xFFFF) {
+                char fc0 = (char) folded;
+                TrieNode node = lookupFirst(fc0);
+                if (node == null) {
+                    continue;
+                }
+                int charLen = Character.charCount(codePoint);
+                if (charLen > 1) {
+                    if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
+                            && checkRightBound(text, i + charLen, len, wholeWord, node)) {
+                        out.addAll(node.keywords);
+                    }
+                    scanContinuationCharSequence(text, len, i, i + charLen, wholeWord, node, out);
+                    continue;
+                }
+
+                if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
+                    && checkRightBound(text, i + 1, len, wholeWord, node)) {
+                    out.addAll(node.keywords);
+                }
+
+                TrieNode curr = node;
+                for (int j = i + 1; j < len; j++) {
+                    char cj = text.charAt(j);
+                    if (!caseSensitive && Character.isSurrogate(cj)) {
+                        break;
+                    }
+                    int foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
+                    curr = curr.findChild((char) foldedJ);
+                    if (curr == null) {
+                        break;
+                    }
+                    if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
+                            && checkRightBound(text, j + 1, len, wholeWord, curr)) {
+                        out.addAll(curr.keywords);
+                    }
+                }
+                continue;
+            }
+
             char[] foldedChars = Character.toChars(folded);
             TrieNode node = lookupFirst(foldedChars[0]);
             if (node == null) {
                 continue;
             }
             int charLen = Character.charCount(codePoint);
-            if (foldedChars.length > 1 || charLen > 1) {
-                TrieNode curr = node;
-                boolean ok = true;
-                for (int k = 1; k < foldedChars.length; k++) {
-                    curr = curr.findChild(foldedChars[k]);
-                    if (curr == null) {
-                        ok = false;
-                        break;
-                    }
+            TrieNode curr = node;
+            boolean ok = true;
+            for (int k = 1; k < foldedChars.length; k++) {
+                curr = curr.findChild(foldedChars[k]);
+                if (curr == null) {
+                    ok = false;
+                    break;
                 }
-                if (!ok) {
-                    continue;
-                }
-                if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
-                        && checkRightBound(text, i + charLen, len, wholeWord, curr)) {
-                    out.addAll(curr.keywords);
-                }
-                scanContinuationCharSequence(text, len, i, i + charLen, wholeWord, curr, out);
+            }
+            if (!ok) {
                 continue;
             }
-
-            if (node.keywords != null && checkLeftBound(text, i, wholeWord, node)
-                    && checkRightBound(text, i + 1, len, wholeWord, node)) {
-                out.addAll(node.keywords);
+            if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
+                    && checkRightBound(text, i + charLen, len, wholeWord, curr)) {
+                out.addAll(curr.keywords);
             }
-
-            TrieNode curr = node;
-            for (int j = i + 1; j < len; j++) {
-                char cj = text.charAt(j);
-                if (!caseSensitive && Character.isSurrogate(cj)) {
-                    break;
-                }
-                int foldedJ = caseSensitive ? cj : foldCodePoint(cj, false);
-                curr = curr.findChild((char) foldedJ);
-                if (curr == null) {
-                    break;
-                }
-                if (curr.keywords != null && checkLeftBound(text, i, wholeWord, curr)
-                        && checkRightBound(text, j + 1, len, wholeWord, curr)) {
-                    out.addAll(curr.keywords);
-                }
-            }
+            scanContinuationCharSequence(text, len, i, i + charLen, wholeWord, curr, out);
         }
     }
 
@@ -436,11 +474,18 @@ final class FastKeywordIndex {
         while (j < len) {
             int codePoint = Character.codePointAt(text, j);
             int folded = foldCodePoint(codePoint, caseSensitive);
-            char[] foldedChars = Character.toChars(folded);
-            for (char fc : foldedChars) {
-                curr = curr.findChild(fc);
+            if (folded <= 0xFFFF) {
+                curr = curr.findChild((char) folded);
                 if (curr == null) {
                     return;
+                }
+            } else {
+                char[] foldedChars = Character.toChars(folded);
+                for (char fc : foldedChars) {
+                    curr = curr.findChild(fc);
+                    if (curr == null) {
+                        return;
+                    }
                 }
             }
             j += Character.charCount(codePoint);

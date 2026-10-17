@@ -360,6 +360,10 @@ jobs:
             -Pjmh.iterations=5 \
             --no-daemon
 
+      # Bumped v2 -> v3: the guarded-downcall architecture admits every bridge
+      # entry point through a native jpdf_guard_* shim, which deliberately costs
+      # more per call than the previous raw+Java-guard path. The first run with
+      # the new key re-baselines from this architecture instead of the old one.
       - name: Restore main-branch baseline from cache
         id: cache-baseline
         uses: actions/cache/restore@3edfce9056124e459a23f683a21433670d47daca # v6.1.0
@@ -374,8 +378,9 @@ jobs:
           RESULTS="jpdfium/build/results/jmh/results.json"
           BASELINE="jpdfium/build/results/jmh/baseline.json"
           if [ ! -f "$BASELINE" ]; then
-            echo "No baseline found -- this is either the first run or the cache expired."
-            echo "Storing current results as the new baseline."
+            # Reported, not silent: a reset run only seeds the baseline and produces no
+            # verdict, so it is not evidence that the new admission path is affordable.
+            echo "::warning title=JMH baseline reset::No v3 baseline found; storing current results as the new baseline. This run yields no regression verdict."
             cp "$RESULTS" "$BASELINE"
             exit 0
           fi

@@ -1,6 +1,7 @@
 // jpdfium_sanitize.cpp - Post-redaction document sanitization.
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -123,7 +124,7 @@ void scanContentStream(const std::string& data, ContentScan& out) {
         if (tt == QPDFTokenizer::tt_space || tt == QPDFTokenizer::tt_comment) continue;
 
         if (tt == QPDFTokenizer::tt_word) {
-            std::string w = t.getValue();
+            const std::string& w = t.getValue();
             if (w == "Tf") {
                 // PDF syntax: <fontname> <size> Tf.
                 curFont = lastNonNumber;
@@ -141,7 +142,7 @@ void scanContentStream(const std::string& data, ContentScan& out) {
             // deliberate superset: strings outside show operators only widen
             // the used set, and keeping an entry that is still used costs
             // nothing while dropping a live mapping breaks extraction.
-            std::string s = t.getValue();
+            const std::string& s = t.getValue();
             if (!curFont.empty()) {
                 out.fontStrings[curFont].push_back(s);
             }
@@ -187,7 +188,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
         return static_cast<size_t>(it - lineStarts.begin()) - 1;
     };
 
-    enum class CmapSection { None, BfChar, BfRange };
+    enum class CmapSection : std::uint8_t { None, BfChar, BfRange };
     CmapSection section = CmapSection::None;
     std::vector<std::string> pendingHex;
     size_t pendingLine = 0;
@@ -256,7 +257,7 @@ bool parseToUnicode(const std::shared_ptr<Buffer>& buf, std::vector<CmapEntry>& 
                 flushBfRange();
         }
         if (tt == QPDFTokenizer::tt_word) {
-            std::string w = t.getValue();
+            const std::string& w = t.getValue();
             if (w == "beginbfchar") {
                 flushBfRange();
                 section = CmapSection::BfChar;
@@ -339,6 +340,9 @@ void removeActionKeys(QPDFObjectHandle obj) {
     }
 }
 
+// qpdf's QPDFObjectHandle accessors (getKey, isStream, ...) are non-const on the pinned Linux
+// build, so the handle is passed by value; clang-tidy on macOS only sees the const overloads.
+// NOLINTNEXTLINE(performance-unnecessary-value-param)
 void walkOutlines(QPDFObjectHandle outline, const std::vector<std::string>& lits,
                   SanitizeStats& st) {
     if (!outline.isDictionary()) return;
@@ -351,6 +355,7 @@ void walkOutlines(QPDFObjectHandle outline, const std::vector<std::string>& lits
     }
 }
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
 void walkFormFields(QPDFObjectHandle field, const std::vector<std::string>& lits,
                     SanitizeStats& st) {
     if (!field.isDictionary()) return;
@@ -412,12 +417,14 @@ void scrubXmpXml(std::string& xml, const std::vector<std::string>& lits) {
 // different scopes (page vs. nested forms), and a name collision only
 // widens the used set - the safe direction (keeping a mapping that is
 // still used costs nothing; dropping one that survives breaks extraction).
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
 void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                        std::set<std::string>& visitedObjs, int depth) {
     if (depth > 12 || !res.isDictionary()) return;
     // Form XObjects in this scope.
     if (res.hasKey("/XObject") && res.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = res.getKey("/XObject");
+        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
         for (auto [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
@@ -430,6 +437,7 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
                 // resources when present, else the enclosing scope's.
                 QPDFObjectHandle formRes =
                     xoDict.hasKey("/Resources") ? xoDict.getKey("/Resources") : res;
+                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
                 auto scanBuf = [&](QPDFObjectHandle s) {
                     auto b = streamData(s);
                     if (b)
@@ -462,11 +470,13 @@ void scanResourceScope(QPDFObjectHandle res, ContentScan& globalScan,
 // Form child text objects promoted/fissioned to page level reference fonts
 // that were originally in the Form XObject's private /Resources. Ensure the
 // page-level /Resources /Font dictionary contains all reachable form fonts.
+// NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
 void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRes,
                               std::set<std::string>& visited, int depth) {
     if (depth > 12 || !scopeRes.isDictionary()) return;
     if (scopeRes.hasKey("/XObject") && scopeRes.getKey("/XObject").isDictionary()) {
         QPDFObjectHandle xos = scopeRes.getKey("/XObject");
+        // NOLINTNEXTLINE(performance-for-range-copy) - the element must stay mutable.
         for (auto [name, xo] : xos.ditems()) {
             if (!xo.isStream()) continue;
             std::string id = xo.getObjGen().unparse();
@@ -481,6 +491,7 @@ void propagateFormFontsToPage(QPDFObjectHandle pageRes, QPDFObjectHandle scopeRe
                     }
                     QPDFObjectHandle pageFonts = pageRes.getKey("/Font");
                     if (pageFonts.isDictionary()) {
+                        // NOLINTNEXTLINE(performance-for-range-copy) - keep the element mutable.
                         for (auto [fontName, fontDict] : formRes.getKey("/Font").ditems()) {
                             if (!pageFonts.hasKey(fontName)) {
                                 pageFonts.replaceKey(fontName, fontDict);
@@ -631,6 +642,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
             // Content scan: page streams + form XObject streams.
             if (page.hasKey("/Contents")) {
                 QPDFObjectHandle contents = page.getKey("/Contents");
+                // NOLINTNEXTLINE(performance-unnecessary-value-param) - see walkOutlines.
                 auto scanOne = [&](QPDFObjectHandle s) {
                     auto buf = streamData(s);
                     if (buf)

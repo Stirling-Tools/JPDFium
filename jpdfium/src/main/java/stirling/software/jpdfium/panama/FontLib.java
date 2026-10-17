@@ -2,9 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 
 import java.util.ArrayList;
@@ -26,15 +24,8 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  */
 public final class FontLib {
 
-    private static final MethodHandle jpdfium_strip_fonts;
-
-    static {
-        NativeLoader.ensureLoaded();
-        var symbol = SymbolLookup.loaderLookup().find("jpdfium_strip_fonts").orElse(null);
-        jpdfium_strip_fonts = (symbol != null)
-                ? PdfiumRuntime.guarded(Linker.nativeLinker().downcallHandle(symbol, FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS)))
-                : null;
-    }
+    private static final MethodHandle jpdfium_strip_fonts = Symbols.downcallOptional(
+            "jpdfium_strip_fonts", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
 
     private static final MethodHandle jpdfium_font_covers_text =
             Symbols.downcallOptional("jpdfium_font_covers_text",

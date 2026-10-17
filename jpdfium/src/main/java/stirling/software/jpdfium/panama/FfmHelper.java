@@ -33,6 +33,25 @@ public final class FfmHelper {
      */
     public static final long MAX_NATIVE_STRING_BYTES = 256L * 1024L * 1024L;
 
+    /**
+     * Validate a native-reported byte length before it is narrowed to an {@code int} or used to
+     * index a segment. Corrupt documents can report negative or absurd lengths, which must fail
+     * loudly instead of wrapping into a negative index or reading past the segment.
+     *
+     * @param byteLen the length reported by the native call
+     * @param availableBytes the size of the segment that would be read
+     * @param what the value being decoded, for the error message
+     * @return the length as an {@code int}, guaranteed to fit the segment and the cap
+     */
+    private static int checkedNativeLength(long byteLen, long availableBytes, String what) {
+        if (byteLen < 0 || byteLen > availableBytes || byteLen > MAX_NATIVE_STRING_BYTES) {
+            throw new JPDFiumException(
+                    what + " length out of range: " + byteLen + " (segment " + availableBytes
+                            + " bytes)");
+        }
+        return (int) byteLen;
+    }
+
     private FfmHelper() {}
 
     /**
@@ -102,6 +121,160 @@ public final class FfmHelper {
         if (byteLen <= 1) return "";
         byte[] data = sourceSegment.asSlice(0, byteLen - 1).toArray(ValueLayout.JAVA_BYTE);
         return new String(data, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Reusable thread-local scratch buffer for Panama/FFM calls.
+     *
+     * <p>Avoids per-call {@code Arena.ofConfined()} lifecycle overhead and native/heap
+     * memory allocations for leaf operations (primitive pointers, rect structs,
+     * double-call string buffers).
+     */
+    public static final class Scratch {
+        private final Arena arena = Arena.ofAuto();
+
+        // 4 reusable float segments (4 bytes each)
+        public final MemorySegment float0;
+        public final MemorySegment float1;
+        public final MemorySegment float2;
+        public final MemorySegment float3;
+
+        // 4 reusable double segments (8 bytes each)
+        public final MemorySegment double0;
+        public final MemorySegment double1;
+        public final MemorySegment double2;
+        public final MemorySegment double3;
+
+        // 2 reusable int segments (4 bytes each)
+        public final MemorySegment int0;
+        public final MemorySegment int1;
+
+        // 2 reusable long segments (8 bytes each)
+        public final MemorySegment long0;
+        public final MemorySegment long1;
+
+        // 1 reusable pointer/address segment (8 bytes)
+        public final MemorySegment addr0;
+
+        // 1 reusable FS_RECTF layout segment (16 bytes)
+        public final MemorySegment rect;
+
+        // Reusable off-heap buffer for string and data retrieval
+        private MemorySegment nativeBuffer;
+
+        // Reusable heap buffers for decoding without intermediate arrays
+        private char[] charBuffer = new char[1024];
+        private byte[] byteBuffer = new byte[1024];
+
+        Scratch() {
+            MemorySegment fSeg = arena.allocate(16, 4);
+            this.float0 = fSeg.asSlice(0, 4);
+            this.float1 = fSeg.asSlice(4, 4);
+            this.float2 = fSeg.asSlice(8, 4);
+            this.float3 = fSeg.asSlice(12, 4);
+
+            MemorySegment dSeg = arena.allocate(32, 8);
+            this.double0 = dSeg.asSlice(0, 8);
+            this.double1 = dSeg.asSlice(8, 8);
+            this.double2 = dSeg.asSlice(16, 8);
+            this.double3 = dSeg.asSlice(24, 8);
+
+            MemorySegment iSeg = arena.allocate(8, 4);
+            this.int0 = iSeg.asSlice(0, 4);
+            this.int1 = iSeg.asSlice(4, 4);
+
+            MemorySegment lSeg = arena.allocate(16, 8);
+            this.long0 = lSeg.asSlice(0, 8);
+            this.long1 = lSeg.asSlice(8, 8);
+
+            this.addr0 = arena.allocate(ValueLayout.ADDRESS);
+            this.rect = arena.allocate(16, 4);
+            this.nativeBuffer = arena.allocate(2048, 8);
+        }
+
+        /**
+         * The current native buffer. It is only valid until the next {@link
+         * #ensureNativeBuffer(long)} call, which may replace the segment with a larger one.
+         *
+         * @return the scratch segment used by the decode helpers
+         */
+        public MemorySegment buffer() {
+            return nativeBuffer;
+        }
+
+        public long bufferSize() {
+            return nativeBuffer.byteSize();
+        }
+
+        public MemorySegment ensureNativeBuffer(long minBytes) {
+            if (minBytes <= nativeBuffer.byteSize()) {
+                return nativeBuffer;
+            }
+            if (minBytes > MAX_NATIVE_STRING_BYTES) {
+                throw new JPDFiumException("native buffer request too large: " + minBytes);
+            }
+            long newCap =
+                    Math.min(
+                            Math.max(minBytes, nativeBuffer.byteSize() * 2),
+                            MAX_NATIVE_STRING_BYTES);
+            nativeBuffer = arena.allocate(newCap, 8);
+            return nativeBuffer;
+        }
+
+        public String decodeWideString(long byteLen) {
+            return decodeWideString(nativeBuffer, byteLen);
+        }
+
+        public String decodeWideString(MemorySegment seg, long byteLen) {
+            int checked = checkedNativeLength(byteLen, seg.byteSize(), "wide string");
+            if (checked <= 2) return "";
+            int charLen = (checked - 2) / 2;
+            if (charBuffer.length < charLen) {
+                charBuffer = new char[Math.max(charLen, charBuffer.length * 2)];
+            }
+            MemorySegment.copy(seg, UTF16LE_CHAR, 0, charBuffer, 0, charLen);
+            return new String(charBuffer, 0, charLen);
+        }
+
+        public String decodeWideChars(int charLenWithNull) {
+            return decodeWideChars(nativeBuffer, charLenWithNull);
+        }
+
+        public String decodeWideChars(MemorySegment seg, int charLenWithNull) {
+            if (charLenWithNull <= 1) return "";
+            checkedNativeLength((long) charLenWithNull * 2, seg.byteSize(), "wide chars");
+            int charLen = charLenWithNull - 1;
+            if (charBuffer.length < charLen) {
+                charBuffer = new char[Math.max(charLen, charBuffer.length * 2)];
+            }
+            MemorySegment.copy(seg, UTF16LE_CHAR, 0, charBuffer, 0, charLen);
+            return new String(charBuffer, 0, charLen);
+        }
+
+        public String decodeByteString(long byteLen) {
+            return decodeByteString(nativeBuffer, byteLen);
+        }
+
+        public String decodeByteString(MemorySegment seg, long byteLen) {
+            int checked = checkedNativeLength(byteLen, seg.byteSize(), "byte string");
+            if (checked <= 1) return "";
+            int len = checked - 1;
+            if (byteBuffer.length < len) {
+                byteBuffer = new byte[Math.max(len, byteBuffer.length * 2)];
+            }
+            MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, byteBuffer, 0, len);
+            return new String(byteBuffer, 0, len, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static final ThreadLocal<Scratch> SCRATCH =
+            ThreadLocal.withInitial(Scratch::new);
+
+    /**
+     * Retrieve the thread-local scratch buffer.
+     */
+    public static Scratch scratch() {
+        return SCRATCH.get();
     }
 
     /**

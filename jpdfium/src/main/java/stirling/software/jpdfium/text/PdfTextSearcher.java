@@ -34,8 +34,12 @@ public final class PdfTextSearcher {
      * @return list of matches across all pages
      */
     public static List<SearchMatch> search(PdfDocument doc, String query) {
+        int pageCount = doc.pageCount();
+        if (pageCount == 0 || query == null || query.isEmpty()) {
+            return List.of();
+        }
         List<SearchMatch> results = new ArrayList<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        for (int i = 0; i < pageCount; i++) {
             results.addAll(searchPage(doc, i, query));
         }
         return Collections.unmodifiableList(results);
@@ -50,6 +54,10 @@ public final class PdfTextSearcher {
      * @return list of matches on this page
      */
     public static List<SearchMatch> searchPage(PdfDocument doc, int pageIndex, String query) {
+        if (query == null || query.isEmpty()) {
+            return List.of();
+        }
+        // Out-of-range pageIndex intentionally propagates from doc.page().
         try (PdfPage page = doc.page(pageIndex)) {
             String json = page.findTextJson(query);
             return parseMatchesJson(json, pageIndex);
@@ -95,10 +103,9 @@ public final class PdfTextSearcher {
                         if (d == ',' || d == '}') break;
                         v1++;
                     }
-                    String val = json.substring(v0, v1);
                     switch (k0) {
-                        case 's' -> start = Integer.parseInt(val);  // "start"
-                        case 'l' -> len = Integer.parseInt(val);    // "len"
+                        case 's' -> start = Integer.parseInt(json, v0, v1, 10);  // "start"
+                        case 'l' -> len = Integer.parseInt(json, v0, v1, 10);    // "len"
                         default -> { }
                     }
                     i = v1;

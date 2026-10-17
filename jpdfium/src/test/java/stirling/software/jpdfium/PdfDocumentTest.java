@@ -353,7 +353,7 @@ class PdfDocumentTest {
     }
 
     @Test
-    void executeBatchAdmitsBatchedWork() throws Exception {
+    void executeBatchRunsBodyAndReturnsValue() throws Exception {
         int pages = PdfiumRuntime.executeBatch(() -> {
             try (var doc = PdfDocument.open(pdfPath())) {
                 return doc.pageCount();

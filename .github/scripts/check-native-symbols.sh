@@ -48,13 +48,19 @@ if [[ "$LIB" == *.dll ]]; then
     echo "dumpbin not found - skipping Windows symbol check"
   fi
 else
+  # Read the tables once: under pipefail, grep -q closing a pipe early fails nm with SIGPIPE.
+  DYNAMIC=$(nm -D "$LIB" 2>/dev/null || true)
+  # Only macOS lacks the dynamic (-D) table; elsewhere the global table is not proof of a
+  # dynamic export, so the fallback is restricted to the platform that needs it.
+  GLOBAL=""
+  if [[ "$PLATFORM" == darwin* ]]; then
+    GLOBAL=$(nm -g "$LIB" 2>/dev/null || true)
+  fi
   for sym in "${EXPECTED[@]}"; do
-    if ! nm -D "$LIB" 2>/dev/null | grep -q " T $sym"; then
-      # Also try without -D for macOS
-      if ! nm -g "$LIB" 2>/dev/null | grep -q " T _\?$sym"; then
-        echo "MISSING export: $sym"
-        MISSING=1
-      fi
+    # Anchor the end so a longer name (jpdfium_init_library for jpdfium_init) cannot satisfy it.
+    if ! grep -qE " T _?${sym}$" <<<"$DYNAMIC" && ! grep -qE " T _?${sym}$" <<<"$GLOBAL"; then
+      echo "MISSING export: $sym"
+      MISSING=1
     fi
   done
 fi

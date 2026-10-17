@@ -22,8 +22,8 @@ public final class NativeJsonParser {
      * @return list of maps, one per JSON object. Values are raw strings (unquoted).
      */
     public static List<Map<String, String>> parseArray(String json) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         List<Map<String, String>> result = new ArrayList<>();
-        if (json == null || "[]".equals(json)) return result;
 
         int pos = 0;
         while (pos < json.length()) {
@@ -70,7 +70,9 @@ public final class NativeJsonParser {
         int end = idx;
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0;
-        return Integer.parseInt(json.substring(idx, end));
+        // Out-of-range values propagate: silently mapping overflow to 0 would
+        // turn a huge offset into a valid-looking one.
+        return Integer.parseInt(json, idx, end, 10);
     }
 
     /** Extract a long field from a single JSON object string. Returns 0 if missing. */
@@ -83,7 +85,7 @@ public final class NativeJsonParser {
         while (end < json.length() && (json.charAt(end) == '-' || Character.isDigit(json.charAt(end)))) end++;
         if (end == idx) return 0L;
         try {
-            return Long.parseLong(json.substring(idx, end));
+            return Long.parseLong(json, idx, end, 10);
         } catch (NumberFormatException e) {
             return 0L;
         }
@@ -118,7 +120,7 @@ public final class NativeJsonParser {
                     case 'u' -> {
                         if (i + 4 < json.length()) {
                             try {
-                                out.append((char) Integer.parseInt(json.substring(i + 1, i + 5), 16));
+                                out.append((char) Integer.parseInt(json, i + 1, i + 5, 16));
                                 i += 4;
                             } catch (NumberFormatException e) {
                                 out.append("\\u");

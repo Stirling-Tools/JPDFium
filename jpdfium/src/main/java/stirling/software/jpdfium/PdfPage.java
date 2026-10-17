@@ -1,6 +1,7 @@
 package stirling.software.jpdfium;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import stirling.software.jpdfium.doc.Annotation;
 import stirling.software.jpdfium.doc.EmbedPdfAnnotations;
 import stirling.software.jpdfium.doc.PageBoxes;
@@ -26,6 +27,7 @@ import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
 import stirling.software.jpdfium.panama.NativeRuntime;
@@ -37,7 +39,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -228,6 +229,9 @@ public final class PdfPage implements AutoCloseable {
     public BufferedImage renderImage(int dpi, ColorType colorType) {
         ensureOpen();
         boolean transparent = (colorType == ColorType.ARGB);
+        if (NativeRuntime.isFull() && (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB)) {
+            return renderImage(dpi, transparent, null);
+        }
         RenderResult result = renderAt(dpi, transparent);
         return result.toBufferedImage(colorType);
     }
@@ -755,6 +759,44 @@ public final class PdfPage implements AutoCloseable {
      *
      * @return extracted plain text from the page
      */
+    private static final class TextScratch {
+        static final ValueLayout.OfChar UTF16LE_CHAR =
+                ValueLayout.JAVA_CHAR_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+        private final Arena arena = Arena.ofAuto();
+        private int capacity = 4096;
+        private MemorySegment buf = arena.allocate(ValueLayout.JAVA_SHORT, capacity);
+        private char[] charBuf = new char[capacity];
+
+        MemorySegment ensureCapacity(int req) {
+            if (req > capacity) {
+                // Grow into locals and publish only once every allocation succeeded; publishing
+                // the capacity first would leave the scratch claiming a buffer it does not own.
+                int newCapacity = Math.max(req, capacity * 2);
+                MemorySegment newBuf = arena.allocate(ValueLayout.JAVA_SHORT, newCapacity);
+                char[] newCharBuf = new char[newCapacity];
+                capacity = newCapacity;
+                buf = newBuf;
+                charBuf = newCharBuf;
+            }
+            return buf;
+        }
+    }
+
+    /** Upper bound on one page's text layer; guards the scratch against corrupt counts. */
+    private static final int MAX_PAGE_TEXT_CHARS = 1 << 24;
+
+    private static final ThreadLocal<TextScratch> TEXT_SCRATCH = ThreadLocal.withInitial(TextScratch::new);
+
+    private static String fromWideStringScratch(TextScratch scratch, MemorySegment sourceSegment, long byteLen) {
+        if (byteLen <= 2) return "";
+        int charLen = (int) ((byteLen - 2) / 2);
+        if (charLen > scratch.charBuf.length) {
+            scratch.charBuf = new char[charLen];
+        }
+        MemorySegment.copy(sourceSegment, TextScratch.UTF16LE_CHAR, 0, scratch.charBuf, 0, charLen);
+        return new String(scratch.charBuf, 0, charLen);
+    }
+
     public String extractText() {
         ensureOpen();
         if (TextPageBindings.FPDFText_LoadPage == null) {
@@ -769,16 +811,22 @@ public final class PdfPage implements AutoCloseable {
         if (textPage == null || textPage.equals(MemorySegment.NULL)) {
             return "";
         }
+        TextScratch scratch = TEXT_SCRATCH.get();
         try {
             MethodHandle fullText = EmbedPdfTextBindings.EPDFText_GetTextFull;
             if (fullText != null) {
-                try (Arena arena = Arena.ofConfined()) {
-                    int req = (int) fullText.invokeExact(textPage, MemorySegment.NULL, 0);
+                try {
+                    MemorySegment buf = scratch.buf;
+                    int req = (int) fullText.invokeExact(textPage, buf, scratch.capacity);
                     if (req > 1) {
-                        MemorySegment buf = arena.allocate(ValueLayout.JAVA_SHORT, req);
-                        int written = (int) fullText.invokeExact(textPage, buf, req);
-                        if (written > 1) {
-                            return FfmHelper.fromWideString(buf, written * 2L);
+                        if (req > scratch.capacity) {
+                            buf = scratch.ensureCapacity(req);
+                            int written = (int) fullText.invokeExact(textPage, buf, req);
+                            if (written > 1) {
+                                return fromWideStringScratch(scratch, buf, written * 2L);
+                            }
+                        } else {
+                            return fromWideStringScratch(scratch, buf, req * 2L);
                         }
                     } else if (req <= 1) {
                         return "";
@@ -793,12 +841,13 @@ public final class PdfPage implements AutoCloseable {
             }
             int count = (int) TextPageBindings.FPDFText_CountChars.invokeExact(textPage);
             if (count <= 0) return "";
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment buf = arena.allocate(ValueLayout.JAVA_SHORT, count + 1);
-                int written = (int) TextPageBindings.FPDFText_GetText.invokeExact(textPage, 0, count, buf);
-                if (written <= 1) return "";
-                return FfmHelper.fromWideString(buf, written * 2L);
+            if (count >= MAX_PAGE_TEXT_CHARS) {
+                throw new JPDFiumException("page text layer too large: " + count + " chars");
             }
+            MemorySegment buf = scratch.ensureCapacity(count + 1);
+            int written = (int) TextPageBindings.FPDFText_GetText.invokeExact(textPage, 0, count, buf);
+            if (written <= 1) return "";
+            return fromWideStringScratch(scratch, buf, written * 2L);
         } catch (Throwable t) {
             throw new JPDFiumException("Failed to extract text from page", t);
         } finally {
@@ -1128,6 +1177,13 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
+     * Returns the number of annotations on this page.
+     */
+    public int annotationCount() {
+        return PdfAnnotations.count(rawHandleForRead());
+    }
+
+    /**
      * List all annotations on this page.
      */
     public List<Annotation> annotations() {
@@ -1335,11 +1391,11 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
         if (getUnit != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
-                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, scratch.float0);
                 if (ok != 0) {
-                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                    return scratch.float0.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
@@ -1363,13 +1419,15 @@ public final class PdfPage implements AutoCloseable {
         if (redactHandle == null) {
             throw new UnsupportedOperationException("EPDFText_RedactInRect is not supported by this PDFium build");
         }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment rectSeg = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
-            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")), rect.x());
-            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")), rect.y());
-            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")), rect.x() + rect.width());
-            rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")), rect.y() + rect.height());
-            int ok = (int) redactHandle.invokeExact(rawPageSegment, rectSeg, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
+        Scratch scratch = FfmHelper.scratch();
+        // FS_RECTF is left, top, right, bottom and Rect carries the bottom edge in y(),
+        // so top is y + height; an inverted rect silently under-redacts.
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 0, rect.x());
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 4, rect.y() + rect.height());
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 8, rect.x() + rect.width());
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 12, rect.y());
+        try {
+            int ok = (int) redactHandle.invokeExact(rawPageSegment, scratch.rect, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
             if (ok != 0) {
                 PdfPageEditor.generateContent(rawPageSegment);
                 return true;

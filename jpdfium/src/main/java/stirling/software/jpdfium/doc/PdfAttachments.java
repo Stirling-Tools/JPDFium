@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.AttachmentBindings;
 
 import java.lang.foreign.Arena;
@@ -138,51 +139,54 @@ public final class PdfAttachments {
     }
 
     private static String getAttachmentName(MemorySegment attachmentSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed;
-            try {
-                needed = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment,
-                        MemorySegment.NULL, 0L);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            if (needed <= 2) return "";
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            try {
-                long _ = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, bufferSegment, needed);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return FfmHelper.fromWideString(bufferSegment, needed);
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        long needed;
+        try {
+            needed = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, buf, cap);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+        if (needed <= 2) return "";
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written;
+            try {
+                written = (long) AttachmentBindings.FPDFAttachment_GetName.invokeExact(attachmentSegment, largeBuf, needed);
+            } catch (Throwable t) {
+                throw new JPDFiumException(t);
+            }
+            return scratch.decodeWideString(largeBuf, written);
+        }
+        return scratch.decodeWideString(needed);
     }
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
     private static byte[] getAttachmentFile(MemorySegment attachmentSegment) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment lengthSegment = arena.allocate(ValueLayout.JAVA_LONG);
-
-            int success;
-            try {
-                success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
-                        MemorySegment.NULL, 0L, lengthSegment);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-
-            long len = lengthSegment.get(ValueLayout.JAVA_LONG, 0);
-            if (success == 0 || len <= 0) return EMPTY_BYTES;
-
-            MemorySegment bufferSegment = arena.allocate(len);
-            try {
-                success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
-                        bufferSegment, len, lengthSegment);
-            } catch (Throwable t) {
-                throw new JPDFiumException(t);
-            }
-            return success != 0 ? bufferSegment.toArray(ValueLayout.JAVA_BYTE) : EMPTY_BYTES;
+        Scratch scratch = FfmHelper.scratch();
+        int success;
+        try {
+            success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
+                    MemorySegment.NULL, 0L, scratch.long0);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
         }
+
+        long len = scratch.long0.get(ValueLayout.JAVA_LONG, 0);
+        if (success == 0 || len <= 0) return EMPTY_BYTES;
+
+        MemorySegment bufferSegment = scratch.ensureNativeBuffer(len);
+        try {
+            success = (int) AttachmentBindings.FPDFAttachment_GetFile.invokeExact(attachmentSegment,
+                    bufferSegment, len, scratch.long0);
+        } catch (Throwable t) {
+            throw new JPDFiumException(t);
+        }
+        if (success == 0) return EMPTY_BYTES;
+        byte[] result = new byte[(int) len];
+        MemorySegment.copy(bufferSegment, ValueLayout.JAVA_BYTE, 0, result, 0, (int) len);
+        return result;
     }
 }

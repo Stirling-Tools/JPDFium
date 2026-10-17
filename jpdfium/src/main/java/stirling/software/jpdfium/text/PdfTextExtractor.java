@@ -56,8 +56,10 @@ public final class PdfTextExtractor {
      * @return list of page text results
      */
     public static List<PageText> extractAll(PdfDocument doc) {
-        List<PageText> results = new ArrayList<>();
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int count = doc.pageCount();
+        if (count == 0) return List.of();
+        List<PageText> results = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
             results.add(extractPage(doc, i));
         }
         return results;
@@ -86,11 +88,14 @@ public final class PdfTextExtractor {
      * Malformed objects are skipped wholesale.
      */
     static List<TextChar> parseCharsJson(String json) {
-        if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         final int jsonLength = json.length();
         List<TextChar> characters = new ArrayList<>(Math.max(8, jsonLength / 56));
         int searchPosition = 0;
         String lastFontName = null;
+        int[] fastInts = new int[2];
+        float[] fastFloats = new float[5];
+        String[] fastFont = new String[1];
         while (true) {
             int objectStart = json.indexOf('{', searchPosition);
             if (objectStart < 0) break;
@@ -105,6 +110,21 @@ public final class PdfTextExtractor {
             String fontName = "";
             boolean complete = false;
             try {
+                int fastEnd = parseObjectFast(json, jsonLength, cursor, fastInts, fastFloats, fastFont,
+                        lastFontName);
+                if (fastEnd >= 0) {
+                    index = fastInts[0];
+                    unicode = fastInts[1];
+                    x = fastFloats[0];
+                    y = fastFloats[1];
+                    width = fastFloats[2];
+                    height = fastFloats[3];
+                    fontSize = fastFloats[4];
+                    fontName = fastFont[0];
+                    lastFontName = fontName;
+                    complete = true;
+                    cursor = fastEnd;
+                } else {
                 while (cursor < jsonLength) {
                     char ch = json.charAt(cursor);
                     if (ch == '}') {
@@ -160,6 +180,7 @@ public final class PdfTextExtractor {
                         cursor = valueEnd;
                     }
                 }
+                }
                 if (complete) characters.add(new TextChar(index, unicode, x, y, width, height, fontName, fontSize));
             } catch (NumberFormatException _) {
                 // Skip malformed entries
@@ -167,6 +188,73 @@ public final class PdfTextExtractor {
             searchPosition = cursor;
         }
         return characters;
+    }
+
+    /** Key literals of the fixed native object layout, in emission order. */
+    private static final String[] FAST_KEYS = {"\"i\":", "\"u\":", "\"x\":", "\"y\":", "\"w\":", "\"h\":"};
+
+    /**
+     * Fast path for {@link #parseCharsJson}: the native layer emits every text object in
+     * fixed key order with no whitespace,
+     * {@code {"i":I,"u":U,"x":X,"y":Y,"w":W,"h":H,"font":"F","size":S}}.
+     * Parses it positionally ({@code ints[0..1]} take index/unicode,
+     * {@code floats[0..4]} take x/y/width/height/fontSize, {@code fontBox[0]} takes the
+     * font name deduplicated against {@code lastFontName}) and returns the cursor just
+     * past the closing brace, or -1 when the object has any other shape. The caller then
+     * runs the generic loop, so foreign or future layouts keep working. Never throws.
+     */
+    private static int parseObjectFast(String json, int jsonLength, int cursor,
+            int[] ints, float[] floats, String[] fontBox, String lastFontName) {
+        try {
+            int p = cursor;
+            for (int k = 0; k < FAST_KEYS.length; k++) {
+                if (!json.startsWith(FAST_KEYS[k], p)) return -1;
+                int valueStart = p + 4;
+                int valueEnd = scanFastNumber(json, jsonLength, valueStart);
+                if (valueEnd < 0 || valueEnd >= jsonLength || json.charAt(valueEnd) != ',') return -1;
+                if (k < 2) {
+                    ints[k] = parseIntFast(json, valueStart, valueEnd);
+                } else {
+                    floats[k - 2] = parseFloatFast(json, valueStart, valueEnd);
+                }
+                p = valueEnd + 1;
+            }
+            if (!json.startsWith("\"font\":\"", p)) return -1;
+            int fontStart = p + 8;
+            int quoteClose = endOfQuoted(json, fontStart);
+            if (quoteClose < 0 || quoteClose + 1 >= jsonLength
+                    || !json.startsWith("\",\"size\":", quoteClose)) {
+                return -1;
+            }
+            int quoteLen = quoteClose - fontStart;
+            if (lastFontName != null && lastFontName.length() == quoteLen
+                    && json.regionMatches(fontStart, lastFontName, 0, quoteLen)) {
+                fontBox[0] = lastFontName;
+            } else {
+                fontBox[0] = unescape(json, fontStart, quoteClose);
+            }
+            int sizeStart = quoteClose + 9;
+            int sizeEnd = scanFastNumber(json, jsonLength, sizeStart);
+            if (sizeEnd < 0 || sizeEnd >= jsonLength || json.charAt(sizeEnd) != '}') return -1;
+            floats[4] = parseFloatFast(json, sizeStart, sizeEnd);
+            return sizeEnd + 1;
+        } catch (RuntimeException _) {
+            return -1;
+        }
+    }
+
+    /** End of a numeric literal; -1 when no number characters follow {@code start}. */
+    private static int scanFastNumber(String json, int jsonLength, int start) {
+        int p = start;
+        while (p < jsonLength) {
+            char c = json.charAt(p);
+            if ((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-') {
+                p++;
+            } else {
+                break;
+            }
+        }
+        return p == start ? -1 : p;
     }
 
     private static int parseIntFast(String s, int start, int end) {
@@ -177,42 +265,67 @@ public final class PdfTextExtractor {
             negative = true;
             i++;
         }
+        if (i >= end) {
+            throw new NumberFormatException("empty integer literal");
+        }
         while (i < end) {
             char c = s.charAt(i);
             i++;
-            if (c >= '0' && c <= '9') {
-                result = result * 10 + (c - '0');
+            if (c < '0' || c > '9') {
+                // The fast key order is integer by contract; a fraction or
+                // exponent here means a foreign layout, so let the generic
+                // parser handle the object instead of silently dropping digits.
+                throw new NumberFormatException("non-integer in integer field");
             }
+            final int digit = c - '0';
+            if (result > (Integer.MAX_VALUE - digit) / 10) {
+                throw new NumberFormatException("integer literal overflows");
+            }
+            result = result * 10 + digit;
         }
         return negative ? -result : result;
     }
 
     private static float parseFloatFast(String s, int start, int end) {
+        // The generic scan stops at the object's `,` or `}`, so a padded literal can
+        // carry trailing whitespace; the value ends at its last numeric character.
+        while (end > start) {
+            char last = s.charAt(end - 1);
+            if ((last >= '0' && last <= '9') || last == '.') break;
+            end--;
+        }
+        int dot = -1;
+        for (int i = start; i < end; i++) {
+            char c = s.charAt(i);
+            // An exponent is rare in this layout, so hand the whole literal to the JDK.
+            if (c == 'e' || c == 'E') {
+                return parseFloatWithJdk(s, start, end);
+            }
+            if (c == '.' && dot < 0) {
+                dot = i;
+            }
+        }
+        if (dot < 0) {
+            return (float) parseIntFast(s, start, end);
+        }
+        int intPart = parseIntFast(s, start, dot);
+        int fracPart = parseIntFast(s, dot + 1, end);
+        int fracDigits = end - (dot + 1);
+        float frac = fracPart;
+        for (int i = 0; i < fracDigits; i++) {
+            frac /= 10.0f;
+        }
+        // The sign lives in the literal, not in intPart: "-0.5" parses "-0" to 0.
+        boolean negative = start < end && s.charAt(start) == '-';
+        return negative ? intPart - frac : intPart + frac;
+    }
+
+    /** Parses one numeric literal the way the generic path does, 0 when the JDK rejects it. */
+    private static float parseFloatWithJdk(String s, int start, int end) {
         try {
-            int dot = -1;
-            for (int i = start; i < end; i++) {
-                if (s.charAt(i) == '.') {
-                    dot = i;
-                    break;
-                }
-            }
-            if (dot < 0) {
-                return (float) parseIntFast(s, start, end);
-            }
-            int intPart = parseIntFast(s, start, dot);
-            int fracPart = parseIntFast(s, dot + 1, end);
-            int fracDigits = end - (dot + 1);
-            float frac = fracPart;
-            for (int i = 0; i < fracDigits; i++) {
-                frac /= 10.0f;
-            }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
-        } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
-            try {
-                return Float.parseFloat(s.substring(start, end));
-            } catch (NumberFormatException _) {
-                return 0.0f;
-            }
+            return Float.parseFloat(s.substring(start, end));
+        } catch (NumberFormatException | IndexOutOfBoundsException _) {
+            return 0.0f;
         }
     }
 
@@ -260,21 +373,23 @@ public final class PdfTextExtractor {
         if (characters.isEmpty()) return List.of();
 
         List<TextLine> lines = new ArrayList<>();
-        List<TextChar> currentLineChars = new ArrayList<>();
+        int count = characters.size();
+        int lineStart = 0;
         float currentLineY = characters.getFirst().y();
         float lineThreshold = characters.getFirst().height() * 0.5f;
 
-        for (TextChar textChar : characters) {
-            if (!currentLineChars.isEmpty() && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
-                lines.add(buildLine(currentLineChars));
-                currentLineChars.clear();
+        for (int i = 0; i < count; i++) {
+            TextChar textChar = characters.get(i);
+            if (i > lineStart && Math.abs(textChar.y() - currentLineY) > lineThreshold) {
+                lines.add(buildLine(characters.subList(lineStart, i)));
+                lineStart = i;
                 lineThreshold = textChar.height() * 0.5f;
             }
-            currentLineChars.add(textChar);
             currentLineY = textChar.y();
         }
-
-        lines.add(buildLine(currentLineChars));
+        if (lineStart < count) {
+            lines.add(buildLine(characters.subList(lineStart, count)));
+        }
 
         return lines;
     }
@@ -300,34 +415,43 @@ public final class PdfTextExtractor {
     }
 
     private static List<TextWord> buildWords(List<TextChar> lineChars) {
+        if (lineChars.isEmpty()) return List.of();
         List<TextWord> words = new ArrayList<>();
-        List<TextChar> currentWord = new ArrayList<>();
+        int count = lineChars.size();
+        int wordStart = -1;
 
-        for (TextChar textChar : lineChars) {
+        for (int i = 0; i < count; i++) {
+            TextChar textChar = lineChars.get(i);
             if (textChar.isWhitespace() || textChar.isNewline()) {
-                if (!currentWord.isEmpty()) {
-                    words.add(buildWord(currentWord));
-                    currentWord = new ArrayList<>();
+                if (wordStart >= 0) {
+                    words.add(buildWord(lineChars, wordStart, i));
+                    wordStart = -1;
                 }
             } else {
-                currentWord.add(textChar);
+                if (wordStart < 0) {
+                    wordStart = i;
+                }
             }
         }
 
-        if (!currentWord.isEmpty()) {
-            words.add(buildWord(currentWord));
+        if (wordStart >= 0) {
+            words.add(buildWord(lineChars, wordStart, count));
         }
 
         return words;
     }
 
-    private static TextWord buildWord(List<TextChar> wordChars) {
-        if (wordChars.isEmpty()) return new TextWord(wordChars, 0f, 0f, 0f, 0f);
+    private static TextWord buildWord(List<TextChar> lineChars, int fromIndex, int toIndex) {
+        int wordLen = toIndex - fromIndex;
+        if (wordLen <= 0) return new TextWord(List.of(), 0f, 0f, 0f, 0f);
         float minX = Float.POSITIVE_INFINITY;
         float minY = Float.POSITIVE_INFINITY;
         float maxX = Float.NEGATIVE_INFINITY;
         float maxY = Float.NEGATIVE_INFINITY;
-        for (TextChar textChar : wordChars) {
+        List<TextChar> wordChars = new ArrayList<>(wordLen);
+        for (int i = fromIndex; i < toIndex; i++) {
+            TextChar textChar = lineChars.get(i);
+            wordChars.add(textChar);
             float charX = textChar.x();
             float charY = textChar.y();
             if (charX < minX) minX = charX;

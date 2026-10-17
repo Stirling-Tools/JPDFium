@@ -11,6 +11,8 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * Detect duplicate or near-identical pages using perceptual hashing.
@@ -50,6 +52,13 @@ public final class PdfDuplicateDetector {
      */
     public static DetectionResult detect(PdfDocument doc, int threshold) {
         int n = doc.pageCount();
+        if (n <= 0) {
+            return new DetectionResult(Collections.emptyList(), 0, 0);
+        }
+        if (n == 1) {
+            return new DetectionResult(Collections.emptyList(), 1, 1);
+        }
+
         long[] hashes = new long[n];
 
         // Compute hash for each page
@@ -57,8 +66,26 @@ public final class PdfDuplicateDetector {
             hashes[i] = computeAverageHash(doc, i);
         }
 
-        // Find duplicate groups
+        // Fast path for exact duplicate matching (O(n) hash grouping)
+        if (threshold == 0) {
+            Map<Long, List<Integer>> byHash = new LinkedHashMap<>();
+            for (int i = 0; i < n; i++) {
+                byHash.computeIfAbsent(hashes[i], k -> new ArrayList<>()).add(i);
+            }
+            List<DuplicateGroup> groups = new ArrayList<>();
+            int duplicatePages = 0;
+            for (List<Integer> cluster : byHash.values()) {
+                if (cluster.size() > 1) {
+                    groups.add(new DuplicateGroup(Collections.unmodifiableList(cluster), 0));
+                    duplicatePages += cluster.size();
+                }
+            }
+            return new DetectionResult(Collections.unmodifiableList(groups), n - duplicatePages, n);
+        }
+
+        // Find duplicate groups for threshold > 0
         boolean[] assigned = new boolean[n];
+        int assignedCount = 0;
         List<DuplicateGroup> groups = new ArrayList<>();
 
         for (int i = 0; i < n; i++) {
@@ -73,17 +100,25 @@ public final class PdfDuplicateDetector {
                 if (dist <= threshold) {
                     cluster.add(j);
                     assigned[j] = true;
+                    assignedCount++;
                     minDist = Math.min(minDist, dist);
                 }
             }
 
             if (cluster.size() > 1) {
                 assigned[i] = true;
+                assignedCount++;
                 groups.add(new DuplicateGroup(Collections.unmodifiableList(cluster), minDist));
+            }
+            if (assignedCount >= n) {
+                break;
             }
         }
 
-        int duplicatePages = groups.stream().mapToInt(g -> g.pages().size()).sum();
+        int duplicatePages = 0;
+        for (DuplicateGroup g : groups) {
+            duplicatePages += g.pages().size();
+        }
         return new DetectionResult(Collections.unmodifiableList(groups), n - duplicatePages, n);
     }
 
@@ -129,8 +164,8 @@ public final class PdfDuplicateDetector {
 
                 MemorySegment pixels = buf.reinterpret((long) stride * thumbSize);
 
-                // Compute grayscale values and average
-                int[] gray = new int[64];
+                // Compute grayscale values and average using integer fixed-point luminance
+                byte[] gray = new byte[64];
                 int sum = 0;
                 for (int y = 0; y < thumbSize; y++) {
                     long rowOfs = (long) y * stride;
@@ -139,8 +174,8 @@ public final class PdfDuplicateDetector {
                         int b = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px));
                         int g = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px + 1));
                         int r = Byte.toUnsignedInt(pixels.get(ValueLayout.JAVA_BYTE, px + 2));
-                        int lum = (int) (0.299 * r + 0.587 * g + 0.114 * b);
-                        gray[y * thumbSize + x] = lum;
+                        int lum = (r * 299 + g * 587 + b * 114 + 500) / 1000;
+                        gray[y * thumbSize + x] = (byte) lum;
                         sum += lum;
                     }
                 }
@@ -148,7 +183,7 @@ public final class PdfDuplicateDetector {
                 int avg = sum / 64;
                 long hash = 0L;
                 for (int i = 0; i < 64; i++) {
-                    if (gray[i] >= avg) hash |= (1L << i);
+                    if (Byte.toUnsignedInt(gray[i]) >= avg) hash |= (1L << i);
                 }
                 return hash;
             } finally {
