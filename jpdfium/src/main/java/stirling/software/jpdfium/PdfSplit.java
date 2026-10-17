@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -581,7 +582,7 @@ public final class PdfSplit {
             for (int i = 0; i < count; i++) idx[i] = range[0] + i;
             indexRanges.add(idx);
         }
-        List<Path> cleanup = new ArrayList<>();
+        Set<Path> cleanup = new HashSet<>();
         List<Path> stagings = new ArrayList<>(n);
         try {
             try {

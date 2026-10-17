@@ -165,45 +165,38 @@ public final class RedactionSession implements AutoCloseable {
         int total = 0;
         int pageCount = document.pageCount();
 
-        if (!useRegex && words.length > 10) {
+        if (!useRegex && words.length > 0) {
             FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
             Set<String> pageMatches = new HashSet<>();
             try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
                 for (int i = 0; i < pageCount; i++) {
-                    int charCount;
                     try (PdfPage page = document.page(i)) {
-                        charCount = scratch.extractChars(page.rawHandle());
-                    }
-                    if (charCount < 0) {
-                        int count;
-                        try (PdfPage page = document.page(i)) {
-                            count = page.markRedactWords(words, argbColor, padding,
+                        int charCount = scratch.extractChars(page.rawHandle());
+                        if (charCount < 0) {
+                            int count = page.markRedactWords(words, argbColor, padding,
                                     wholeWord, useRegex, caseSensitive);
+                            if (count > 0) {
+                                pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                        .add(new WordMark(words.clone(), argbColor, padding,
+                                                wholeWord, useRegex, caseSensitive, count));
+                                total += count;
+                            }
+                            continue;
                         }
+                        if (charCount == 0) continue;
+                        pageMatches.clear();
+                        kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
+                        if (pageMatches.isEmpty()) continue;
+
+                        String[] matchedWords = pageMatches.toArray(String[]::new);
+                        int count = page.markRedactWords(matchedWords, argbColor, padding,
+                                wholeWord, useRegex, caseSensitive);
                         if (count > 0) {
                             pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
-                                    .add(new WordMark(words.clone(), argbColor, padding,
+                                    .add(new WordMark(matchedWords, argbColor, padding,
                                             wholeWord, useRegex, caseSensitive, count));
                             total += count;
                         }
-                        continue;
-                    }
-                    if (charCount == 0) continue;
-                    pageMatches.clear();
-                    kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
-                    if (pageMatches.isEmpty()) continue;
-
-                    String[] matchedWords = pageMatches.toArray(String[]::new);
-                    int count;
-                    try (PdfPage page = document.page(i)) {
-                        count = page.markRedactWords(matchedWords, argbColor, padding,
-                                wholeWord, useRegex, caseSensitive);
-                    }
-                    if (count > 0) {
-                        pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
-                                .add(new WordMark(matchedWords, argbColor, padding,
-                                        wholeWord, useRegex, caseSensitive, count));
-                        total += count;
                     }
                 }
             }
@@ -396,7 +389,9 @@ public final class RedactionSession implements AutoCloseable {
             // the page, and so the document does not carry uncommitted marks
             // (the native save guard would refuse to save them).
             page.clearPendingRedactions();
-            page.flatten();
+            if (page.annotationCount() > 0) {
+                page.flatten();
+            }
         }
         return totalCommitted;
     }

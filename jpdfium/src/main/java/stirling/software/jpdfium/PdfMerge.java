@@ -7,7 +7,9 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.PdfBookmarkEditor;
@@ -90,18 +92,22 @@ public final class PdfMerge {
 
         if (options.mode() != StorageOptions.Mode.MEMORY) {
             if (QpdfLib.isMergeFilesSupported()) {
-                List<Path> cleanup = new ArrayList<>();
+                Set<Path> cleanup = new HashSet<>();
                 try {
                     // A document opened from a path may have been edited in
                     // memory since; never merge the file behind its back.
-                    // Serialize each live document to a temp (native save, no
-                    // Java heap) and merge those.
+                    // If untouched, reuse the source path directly to avoid re-serialization.
                     List<Path> filePaths = new ArrayList<>(documents.size());
                     for (PdfDocument sourceDoc : documents) {
-                        Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
-                        cleanup.add(materialized);
-                        sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
-                        filePaths.add(materialized);
+                        Path src = sourceDoc.sourcePath();
+                        if (src != null && !sourceDoc.isContentModified() && Files.isReadable(src)) {
+                            filePaths.add(src);
+                        } else {
+                            Path materialized = options.createTempFile("jpdfium-merge-src", ".pdf");
+                            cleanup.add(materialized);
+                            sourceDoc.saveTo(materialized, SaveOptions.ephemeral());
+                            filePaths.add(materialized);
+                        }
                     }
                     Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
                     cleanup.add(tmp);
@@ -202,42 +208,27 @@ public final class PdfMerge {
 
         if (options.mode() != StorageOptions.Mode.MEMORY && QpdfLib.isMergeFilesSupported()) {
             try {
-                int expectedPages = 0;
-                boolean allOpenable = true;
-                for (Path p : paths) {
-                    try (PdfDocument doc = PdfDocument.open(p)) {
-                        expectedPages += doc.pageCount();
-                    } catch (Exception _) {
-                        allOpenable = false;
-                        break;
-                    }
-                }
-                if (allOpenable && expectedPages > 0) {
-                    Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
-                    boolean done = false;
-                    try {
-                        if (QpdfLib.mergeFiles(paths, tmp, false)) {
-                            PdfDocument owned = PdfDocument.openTemp(tmp);
-                            boolean keep = false;
-                            try {
-                                keep = owned.pageCount() == expectedPages;
-                            } finally {
-                                if (!keep) owned.close();
-                            }
-                            if (keep) {
-                                done = true;
-                                return owned;
-                            }
+                Path tmp = options.createTempFile("jpdfium-merge", ".pdf");
+                boolean done = false;
+                try {
+                    if (QpdfLib.mergeFiles(paths, tmp, false)) {
+                        PdfDocument owned = PdfDocument.openTemp(tmp);
+                        boolean keep = false;
+                        try {
+                            keep = owned.pageCount() > 0;
+                        } finally {
+                            if (!keep) owned.close();
                         }
-                    } finally {
-                        if (!done) deleteQuietly(tmp);
+                        if (keep) {
+                            done = true;
+                            return owned;
+                        }
                     }
+                } finally {
+                    if (!done) deleteQuietly(tmp);
                 }
-            // A native failure surfaces as JPDFiumException and openTemp() can throw
-            // runtime exceptions, so catch Exception: otherwise a file-backed
-            // failure escapes instead of falling through to the in-memory paths.
-        } catch (Exception _) {
-                // Fall through to the paths below
+            } catch (Exception _) {
+                // Fall through to the in-memory paths below
             }
         }
         if (options.mode() == StorageOptions.Mode.FILE) {

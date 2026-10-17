@@ -1128,6 +1128,13 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
+     * Returns the number of annotations on this page.
+     */
+    public int annotationCount() {
+        return PdfAnnotations.count(rawHandleForRead());
+    }
+
+    /**
      * List all annotations on this page.
      */
     public List<Annotation> annotations() {

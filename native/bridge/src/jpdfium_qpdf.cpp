@@ -32,6 +32,8 @@
 
 namespace {
 
+static constexpr std::size_t kQpdfIoBufferBytes = static_cast<std::size_t>(256) * 1024;
+
 // Create the output with owner-only permissions on POSIX (CodeQL
 // cpp/world-writable-file-creation); Windows has no mode argument here.
 //
@@ -98,6 +100,7 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path, int32_t
                 int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel) {
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;
+    setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
     bool writerOwnsFile = false;
     try {
         QPDFWriter w{*qpdf};
@@ -393,9 +396,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
-        // returns; if the constructor or setOutputFile throws first, close it
-        // here so a failed write does not leak the descriptor.
+        setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -451,9 +452,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        // QPDFWriter assumes ownership of the FILE* only once setOutputFile
-        // returns; if the constructor or setOutputFile throws first, close it
-        // here so a failed write does not leak the descriptor.
+        setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -513,6 +512,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
                 std::fprintf(stderr, "jpdfium qpdf ranges: cannot open output %s\n", outPaths[r]);
                 return -1;
             }
+            setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
             bool writerOwnsFile = false;
             try {
                 QPDFWriter w{*dest};
