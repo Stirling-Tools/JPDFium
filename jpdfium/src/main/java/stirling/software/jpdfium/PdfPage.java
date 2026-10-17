@@ -58,7 +58,6 @@ public final class PdfPage implements AutoCloseable {
 
     private final PdfDocument ownerDoc;
     private final int ownerEpoch;
-    private final long docHandle;
     private final long handle;
     private final int pageIndex;
     private final MemorySegment rawPageSegment;
@@ -67,10 +66,9 @@ public final class PdfPage implements AutoCloseable {
     private final AtomicBoolean progressiveActive = new AtomicBoolean(false);
     private final AtomicReference<ProgressiveSession> activeSession = new AtomicReference<>();
 
-    private PdfPage(PdfDocument ownerDoc, long docHandle, long handle, int pageIndex) {
+    private PdfPage(PdfDocument ownerDoc, long handle, int pageIndex) {
         this.ownerDoc = ownerDoc;
         this.ownerEpoch = ownerDoc.structureEpoch();
-        this.docHandle = docHandle;
         this.handle = handle;
         this.pageIndex = pageIndex;
         this.rawPageSegment = JpdfiumLib.pageRawHandle(handle);
@@ -78,7 +76,7 @@ public final class PdfPage implements AutoCloseable {
     }
 
     static PdfPage open(PdfDocument ownerDoc, long docHandle, int index) {
-        return new PdfPage(ownerDoc, docHandle, JpdfiumLib.pageOpen(docHandle, index), index);
+        return new PdfPage(ownerDoc, JpdfiumLib.pageOpen(docHandle, index), index);
     }
 
     /** True once a structural document operation freed this page's native state. */
@@ -1203,8 +1201,7 @@ public final class PdfPage implements AutoCloseable {
             case FULL -> {
                 if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
                 close();
-                JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
-                ownerDoc.invalidateOpenPages();
+                ownerDoc.convertPageToImage(pageIndex, dpi);
             }
         }
     }
