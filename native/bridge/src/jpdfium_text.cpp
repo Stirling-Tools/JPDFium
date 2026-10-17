@@ -231,8 +231,8 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             }
 
             unsigned long fnlen =
-                FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf) - 1, nullptr);
-            if (fnlen == 0 || fnlen > sizeof(fontbuf) - 1) {
+                FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
+            if (fnlen == 0 || fnlen > sizeof(fontbuf)) {
                 fontbuf[0] = '\0';
                 fnlen = 0;
             } else {

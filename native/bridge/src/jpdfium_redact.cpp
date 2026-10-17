@@ -495,6 +495,9 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                          caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
                          rejectedPatterns, compiledCount);
         if (rejectedPatterns > 0 && compiledCount == 0) {
+            // Nothing was applied, so report a definite zero rather than leaving the
+            // caller's counter untouched.
+            if (matchCount) *matchCount = 0;
             FPDFText_ClosePage(tp);
             return JPDFIUM_ERR_INVALID;
         }

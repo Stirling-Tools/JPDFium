@@ -42,14 +42,21 @@ static constexpr std::size_t kQpdfIoBufferBytes = static_cast<std::size_t>(256) 
 // after Java created it.
 static FILE* createOutputFile(const char* path) {
 #ifdef _WIN32
-    return std::fopen(path, "wb");
+    FILE* file = std::fopen(path, "wb");
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) return nullptr;
     FILE* file = ::fdopen(fd, "wb");
-    if (!file) ::close(fd);
-    return file;
+    if (!file) {
+        ::close(fd);
+        return nullptr;
+    }
 #endif
+    // Every writer streams its output exactly once, so the default 4 KiB stdio
+    // buffer would turn large saves into thousands of small write(2) calls. One
+    // buffer is set here so no call site can forget it.
+    if (file) setvbuf(file, nullptr, _IOFBF, kQpdfIoBufferBytes);
+    return file;
 }
 
 struct QpdfResult {
@@ -100,7 +107,6 @@ int writeToFile(const std::shared_ptr<QPDF>& qpdf, const char* out_path, int32_t
                 int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel) {
     FILE* out = createOutputFile(out_path);
     if (!out) return -1;
-    setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
     bool writerOwnsFile = false;
     try {
         QPDFWriter w{*qpdf};
@@ -396,7 +402,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -452,7 +457,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
             std::fprintf(stderr, "jpdfium qpdf file: cannot open output %s\n", out_path);
             return -1;
         }
-        setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
         bool writerOwnsFile = false;
         try {
             QPDFWriter w{*dest};
@@ -512,7 +516,6 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_ranges_file(
                 std::fprintf(stderr, "jpdfium qpdf ranges: cannot open output %s\n", outPaths[r]);
                 return -1;
             }
-            setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
             bool writerOwnsFile = false;
             try {
                 QPDFWriter w{*dest};

@@ -262,8 +262,11 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
+            // The bounds feed both the page-extent accumulation and the image/path
+            // straddle test, so they are fetched once per object.
             float ol, ob, or_, ot;
-            if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
+            const bool haveBounds = FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot);
+            if (haveBounds) {
                 pageMinX = std::min(pageMinX, ol);
                 pageMinY = std::min(pageMinY, ob);
                 pageMaxX = std::max(pageMaxX, or_);
@@ -279,14 +282,15 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
                 if (!inside) hasNonTextOutside = true;
             } else if (type == FPDF_PAGEOBJ_IMAGE || type == FPDF_PAGEOBJ_PATH) {
                 if (!inside) hasNonTextOutside = true;
-                float bl, bb, br, bt;
-                if (FPDFPageObj_GetBounds(obj, &bl, &bb, &br, &bt)) {
-                    bool overlapsCrop = rectsOverlap(bl, bb, br, bt, cL, cB, cR, cT);
-                    bool fullyInside = isFullyContained(bl, bb, br, bt, cL, cB, cR, cT);
-                    if (overlapsCrop && !fullyInside) {
-                        requiresFission = true;
-                    }
+                if (haveBounds && rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT) &&
+                    !isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT)) {
+                    requiresFission = true;
                 }
+            } else if (type != FPDF_PAGEOBJ_TEXT && !inside) {
+                // Shadings (and any unknown object type) can paint outside the crop but
+                // cannot be split, so they must reach the removal/verification path
+                // instead of the silent "nothing to remove" fast exit below.
+                hasNonTextOutside = true;
             }
         }
         if (allInside) return JPDFIUM_OK;
