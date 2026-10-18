@@ -7,15 +7,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The native sentence segmenter was replaced by {@code java.text.BreakIterator}.
- * The branch's own native builds export {@code jpdfium_icu_break_sentences} as a
- * tombstone that reports {@code JPDFIUM_ERR_NOT_FOUND}, while the stub bridge and
- * previously published natives still implement it, so the contract asserted here
- * is the one that holds for every generation: a call either fails loudly with a
- * not-found error or returns the documented JSON array - never a silent empty
- * result that a caller could mistake for "no sentences".
- */
+/** {@code IcuLib.breakSentences} either fails loudly or returns JSON, never a silent empty result. */
 @SuppressWarnings("deprecation") // verifying the deprecated tombstone contract
 class IcuTombstoneTest {
 

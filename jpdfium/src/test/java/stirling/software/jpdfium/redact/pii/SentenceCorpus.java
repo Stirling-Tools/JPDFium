@@ -11,21 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Loads the sentence-segmentation corpus and the ICU reference boundaries.
- *
- * <p>Both files are plain TSV so that {@code tools/icu-sentence-golden} (C++,
- * ICU) and the JUnit tests read the same bytes:
- *
- * <ul>
- *   <li>{@code /pii/sentence-corpus.tsv}: {@code <id>\t<text>}
- *   <li>{@code /pii/sentence-goldens.tsv}: {@code <id>\t0\tend1\t...\tlen}
- * </ul>
- *
- * <p>Escape sequences in the text field are Java style: n, r and t escapes, an
- * escaped backslash, and four-hex-digit uXXXX escapes (each written with a
- * leading backslash).
- */
+/** Loads /pii/sentence-corpus.tsv and the ICU goldens beside it. */
 final class SentenceCorpus {
 
     static final String CORPUS_RESOURCE = "/pii/sentence-corpus.tsv";

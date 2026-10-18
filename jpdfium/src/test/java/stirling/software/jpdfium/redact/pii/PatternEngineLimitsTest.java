@@ -17,19 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-/**
- * The PCRE2 engine behind the structural-PII patterns runs every match under a
- * match limit, a depth limit and a bounded JIT stack, and it reuses one match
- * data / JIT stack per compiled handle.
- *
- * <p>Two behaviours are load-bearing and tested here: an aborted match must be
- * a loud failure (the previous behaviour returned the matches found so far,
- * which silently left PII in the document), and concurrent scans on one handle
- * must agree with each other.
- *
- * <p>Needs the full native library: the stub bridge emulates PCRE2 with
- * {@code std::regex}, which has no limits and no JIT stack.
- */
+/** The PCRE2 limits: aborted scans fail loudly, concurrent scans agree. Needs full natives. */
 class PatternEngineLimitsTest {
 
     @Test

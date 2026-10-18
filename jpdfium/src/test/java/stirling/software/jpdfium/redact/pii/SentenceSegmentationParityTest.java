@@ -11,38 +11,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Feature parity between the native ICU segmenter this pipeline used before
- * (recorded in {@code /pii/sentence-goldens.tsv}, produced with ICU 78.3) and
- * the {@link java.text.BreakIterator} replacement.
- *
- * <p>{@code EntityRedactor.splitSentences} additionally restores the list-marker
- * boundaries the JDK's rules drop, so the two implementations agree on every
- * corpus entry except the two documented deviations below.
- */
+/** Pins the JDK segmenter to the ICU boundaries the native bridge produced (sentence-goldens.tsv). */
 class SentenceSegmentationParityTest {
 
     /**
-     * Cases where the JDK's rules still differ from ICU's. Each entry records
-     * the JDK boundaries observed today.
+     * The two cases where the JDK's rules still differ from ICU's, with the JDK
+     * boundaries observed today. Pinned on purpose: if the JDK starts matching ICU,
+     * the test fails and the entry must be deleted.
      *
-     * <p>Both remaining differences are single-boundary placements around
-     * punctuation, both were measured to leave every pronoun-driven coreference
-     * window unchanged (see {@link CoreferenceWindowParityTest}), and in both the
-     * JDK's placement is at least as defensible as ICU's:
-     *
-     * <ul>
-     *   <li>{@code ja-japanese}: ICU keeps the opening quote with the preceding
-     *       sentence ("…ですか？「" | "引用」も含みます。"), the JDK starts the next
-     *       sentence with it ("…ですか？" | "「引用」も含みます。"). One code unit.
-     *   <li>{@code cjk-mixed}: ICU breaks after "no. " and thereby splits
-     *       "Invoice 发票 no. 42。Total…" inside the phrase, the JDK keeps
-     *       "no. 42。" together. The JDK placement is the correct one here.
-     * </ul>
-     *
-     * <p>Entries are pinned on purpose: if a future JDK starts matching ICU on
-     * one of these, this test fails and the entry must be deleted rather than
-     * kept as a stale snapshot.
+     * <p>ja-japanese: ICU keeps the opening quote with the preceding sentence, the JDK
+     * starts the next one with it. cjk-mixed: ICU splits "no. 42。" apart, the JDK
+     * keeps it together. Both leave the coreference windows unchanged.
      */
     private static final Map<String, List<Integer>> DEVIATIONS = new LinkedHashMap<>();
 
