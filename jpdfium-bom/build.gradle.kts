@@ -17,12 +17,17 @@ dependencies {
         api(project(":jpdfium-natives:jpdfium-natives-darwin-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-windows-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-windows-arm64"))
+        api(project(":jpdfium-natives:jpdfium-natives-freebsd-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-linux-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-linux-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-darwin-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-darwin-arm64"))
-        api(project(":jpdfium-natives:jpdfium-natives-vips-windows-x64"))
-        api(project(":jpdfium-natives:jpdfium-natives-vips-windows-arm64"))
+        if (rootProject.file("native/vips.version").let { pin ->
+                pin.exists() && pin.readLines().any { it.isNotBlank() && !it.trimStart().startsWith("#") }
+            }) {
+            api(project(":jpdfium-natives:jpdfium-natives-vips-windows-x64"))
+            api(project(":jpdfium-natives:jpdfium-natives-vips-windows-arm64"))
+        }
     }
 }
 

@@ -1,7 +1,8 @@
 package stirling.software.jpdfium.model;
+import stirling.software.jpdfium.doc.PdfVersionConverter;
 
 /**
- * PDF version numbers for use with {@link stirling.software.jpdfium.doc.PdfVersionConverter}.
+ * PDF version numbers for use with {@link PdfVersionConverter}.
  */
 public enum PdfVersion {
     V1_0(10), V1_1(11), V1_2(12), V1_3(13), V1_4(14),

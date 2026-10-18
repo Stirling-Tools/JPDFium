@@ -6,7 +6,7 @@ DIST_DIR="${1:?usage: check-bundle-lean.sh <dist-dir> [platform]}"
 PLATFORM="${2:-}"
 
 case "$PLATFORM" in
-    linux-*|vips-linux-*)   OS=linux ;;
+    linux-*|vips-linux-*|freebsd-*|openbsd-*)   OS=linux ;;
     darwin-*|vips-darwin-*) OS=darwin ;;
     windows-*|vips-windows-*) OS=windows ;;
     *)
@@ -21,6 +21,17 @@ esac
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# GPL denylist: LGPL is fine, these must never be staged in any bundle.
+find "$DIST_DIR" -maxdepth 1 -type f -exec basename {} \; | tr 'A-Z' 'a-z' | while IFS= read -r base; do
+    case "$base" in
+        *imagequant*|*fftw*|*poppler*|*liblqr*|*lqr-1*|*jbig*|*djvulibre*|*x265*|*avcodec*|*libavformat*|*libavutil*|*swscale*|*ghostscript*|*libgs.*|*unrar*|*libfaac*|*lame*)
+            echo "FAIL: GPL library staged in bundle: $base" >&2
+            echo 1 > "$WORK/failed"
+            ;;
+    esac
+done
+[ ! -f "$WORK/failed" ] || exit 1
 
 if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then
     echo "FAIL: subdirectories found in bundle:" >&2

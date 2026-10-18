@@ -2,21 +2,21 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 
+import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
- * PDF Encryption operations.
+ * PDF encryption.
  *
- * <p>Supports two encryption backends:
- * <ol>
- *   <li><b>Native (in-memory)</b> - AES-256 via {@code EPDF_SetEncryption}, applied
- *       in-memory before save. No external process needed.</li>
- *   <li><b>qpdf subprocess</b> - AES-128/256, file-to-file operations.
- *       Useful when working with file paths directly.</li>
- * </ol>
+ * <p>Two native backends, no external process: in-memory AES-256 via
+ * {@code EPDF_SetEncryption} (applied before save), and in-process qpdf
+ * (AES-128/256 file operations) via {@link PdfSecurity}.
+ *
+ * <p>File-based {@link #encrypt(Path, Path, String, String)} and
+ * {@link #decrypt(Path, Path, String)} delegate to {@link PdfSecurity}.
  */
 public final class PdfEncryption {
 
@@ -95,16 +95,30 @@ public final class PdfEncryption {
     }
 
     /**
-     * Check if any encryption backend is available.
+     * Check if encryption is available. Native encryption is always available.
      *
-     * @return true if qpdf is available (native encryption is always available)
+     * @return true
      */
     public static boolean isSupported() {
         return true;
     }
 
     /**
-     * Encrypt a PDF file with AES and the specified passwords using qpdf.
+     * Check whether the in-process qpdf backend is available.
+     *
+     * @return true when qpdf structural operations are supported
+     * @deprecated use {@link PdfOptimizer#isSupported()}; kept for binary compatibility.
+     */
+    @Deprecated
+    public static boolean isQpdfAvailable() {
+        return PdfOptimizer.isSupported();
+    }
+
+    /**
+     * Encrypt a PDF file with AES using the in-process qpdf backend.
+     *
+     * <p>All permissions are granted; use
+     * {@link PdfSecurity#encrypt(Path, Path, String, String, int, int)} to restrict them.
      *
      * @param input         path to the input PDF
      * @param output        path for the encrypted output PDF
@@ -117,14 +131,16 @@ public final class PdfEncryption {
         if (keyLength != 128 && keyLength != 256) {
             throw new IllegalArgumentException("keyLength must be 128 or 256, got: " + keyLength);
         }
-        QpdfHelper.run("--encrypt", userPassword, ownerPassword,
-                String.valueOf(keyLength), "--",
-                input.toAbsolutePath().toString(),
-                output.toAbsolutePath().toString());
+        try {
+            PdfSecurity.encrypt(input, output, userPassword, ownerPassword,
+                    PdfSecurity.PERM_ALL, keyLength);
+        } catch (IOException e) {
+            throw new JPDFiumException("PDF encryption failed", e);
+        }
     }
 
     /**
-     * Encrypt a PDF with AES-256 (default) using qpdf.
+     * Encrypt a PDF with AES-256 (default) using the in-process qpdf backend.
      *
      * @param input         path to the input PDF
      * @param output        path for the encrypted output PDF
@@ -137,25 +153,18 @@ public final class PdfEncryption {
     }
 
     /**
-     * Decrypt a PDF file (remove encryption) using qpdf.
+     * Decrypt a PDF file (remove encryption) using the in-process qpdf backend.
      *
      * @param input    path to the encrypted PDF
      * @param output   path for the decrypted output PDF
      * @param password password to open the file
      */
     public static void decrypt(Path input, Path output, String password) {
-        QpdfHelper.run("--password=" + password, "--decrypt",
-                input.toAbsolutePath().toString(),
-                output.toAbsolutePath().toString());
-    }
-
-    /**
-     * Check if qpdf-based encryption is available.
-     *
-     * @return true if qpdf is found on the system PATH
-     */
-    public static boolean isQpdfAvailable() {
-        return QpdfHelper.isAvailable();
+        try {
+            PdfSecurity.decrypt(input, output, password);
+        } catch (IOException e) {
+            throw new JPDFiumException("PDF decryption failed", e);
+        }
     }
 
     // Metadata helpers

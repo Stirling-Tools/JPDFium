@@ -57,6 +57,9 @@ public final class HeaderFooterApplier {
                 }
             }
         }
+        if (totalPages > 0) {
+            doc.markContentModified();
+        }
     }
 
     /**
@@ -87,6 +90,9 @@ public final class HeaderFooterApplier {
                 addText(rawDoc, rawPage, batesNum, headerFooterConfig,
                         size.width() / 2f, headerFooterConfig.margin() - headerFooterConfig.fontSize());
             }
+        }
+        if (totalPages > 0) {
+            doc.markContentModified();
         }
     }
 

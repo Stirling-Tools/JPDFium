@@ -25,17 +25,15 @@ class PdfCompressorTest {
     @Test
     void compressReportsNonZeroOriginalSize() throws Exception {
         Path src = minimalPdf();
+        // For a file-backed document, originalSize is the on-disk size, which
+        // avoids a full serialization just to measure the input.
+        long expectedOriginal = Files.size(src);
         try (PdfDocument doc = PdfDocument.open(src)) {
-            Path baseline = Files.createTempFile("jpdfium-compress-baseline-", ".pdf");
-            baseline.toFile().deleteOnExit();
-            doc.save(baseline);
-            long expectedOriginal = Files.size(baseline);
-
             PdfCompressor.CompressResultWithBytes out = PdfCompressor.compress(
                     doc, CompressOptions.builder().build());
 
             assertEquals(expectedOriginal, out.result().originalSize(),
-                    "originalSize must match Files.size() of the doc saved to disk");
+                    "originalSize must equal Files.size() of the source file");
             assertTrue(out.bytes() != null && out.bytes().length > 0,
                     "compressed bytes must be present");
         }

@@ -111,15 +111,24 @@ static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_da
         return JPDFIUM_ERR_NATIVE;
     }
 
-    // Copy pixel data to PDFium bitmap
+    // PDFium bitmaps are always BGRA, so swap R/B when publishing raw RGBA frames.
     void* bmp_buf = FPDFBitmap_GetBuffer(bmp);
     int stride = FPDFBitmap_GetStride(bmp);
 
-    // Copy row-by-row (PDFium bitmap stride may differ from tight pixel packing)
     int row_bytes = img_width * channels;
     for (int row = 0; row < img_height; ++row) {
-        memcpy(static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride,
-               pixels + static_cast<std::ptrdiff_t>(row) * row_bytes, row_bytes);
+        uint8_t* dst = static_cast<uint8_t*>(bmp_buf) + static_cast<std::ptrdiff_t>(row) * stride;
+        const uint8_t* src = pixels + static_cast<std::ptrdiff_t>(row) * row_bytes;
+        if (image_format == 3 && channels == 4) {
+            for (int x = 0; x < img_width; ++x) {
+                uint32_t px;
+                memcpy(&px, src + static_cast<std::ptrdiff_t>(x) * 4, sizeof(px));
+                px = (px & 0xFF00FF00u) | ((px & 0x00FF0000u) >> 16) | ((px & 0x000000FFu) << 16);
+                memcpy(dst + static_cast<std::ptrdiff_t>(x) * 4, &px, sizeof(px));
+            }
+        } else {
+            memcpy(dst, src, static_cast<std::size_t>(row_bytes));
+        }
     }
 
     if (pixels_owned) free(pixels);
@@ -240,32 +249,58 @@ JPDFIUM_EXPORT int32_t jpdfium_image_to_pdf(const uint8_t* image_data, int64_t i
                                             float page_width, float page_height, float margin,
                                             int32_t position, int32_t image_format,
                                             int64_t* doc_handle) {
-    if (!image_data || image_len <= 0 || !doc_handle) {
-        return JPDFIUM_ERR_INVALID;
-    }
+    // Provisional registration guard: if an exception escapes after add()
+    // but before release(), the entry must be removed. Declared outside the
+    // try so the catch can see it.
+    DocWrapper* provisional = nullptr;
+    std::unique_ptr<DocWrapper> dw;
+    try {
+        if (!image_data || image_len <= 0 || !doc_handle) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
-    // Initialize PDFium if needed
-    FPDF_InitLibrary();
+        // Initialize PDFium if needed, keeping the renderer chosen at startup.
+        jpdfium_ensure_library();
 
-    // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.)
-    auto* dw = new DocWrapper();
-    dw->core = makeDocCore(FPDF_CreateNewDocument());
-    if (!dw->core->doc) {
-        delete dw;
+        // Create new document wrapped in a DocWrapper (required for jpdfium_doc_close etc.).
+        // unique_ptr owns it until the raw handle is published, so a throw from
+        // makeDocCore or create_page_with_image cannot leak the wrapper.
+        dw = std::make_unique<DocWrapper>();
+        dw->core = makeDocCore(FPDF_CreateNewDocument());
+        if (!dw->core->doc) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+
+        // Register before the handle is handed to create_page_with_image: that
+        // call decodes the handle via decodeDoc, which now validates against the
+        // registry, so an unregistered handle would be rejected as bogus.
+        DocWrapper* raw = dw.get();
+        DocHandleRegistry::instance().add(raw);
+        provisional = raw;
+
+        int32_t result = create_page_with_image(
+            encodeHandle(raw), image_data, static_cast<size_t>(image_len), page_width, page_height,
+            margin, static_cast<Position>(position), image_format, 0);
+
+        if (result != JPDFIUM_OK) {
+            // The wrapper was registered before the attempt; unregister it so a
+            // failed creation cannot leave a dangling entry behind.
+            DocHandleRegistry::instance().remove(raw);
+            provisional = nullptr;
+            return result;
+        }
+
+        (void)dw.release();
+        provisional = nullptr;
+        *doc_handle = encodeHandle(raw);
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        if (provisional != nullptr) {
+            DocHandleRegistry::instance().remove(provisional);
+        }
         return JPDFIUM_ERR_NATIVE;
     }
-
-    int32_t result = create_page_with_image(
-        encodeHandle(dw), image_data, static_cast<size_t>(image_len), page_width, page_height,
-        margin, static_cast<Position>(position), image_format, 0);
-
-    if (result != JPDFIUM_OK) {
-        delete dw;
-        return result;
-    }
-
-    *doc_handle = encodeHandle(dw);
-    return JPDFIUM_OK;
 }
 
 // Add an image page to an existing document.
@@ -273,13 +308,18 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint
                                                   int64_t image_len, float page_width,
                                                   float page_height, float margin, int32_t position,
                                                   int32_t image_format, int32_t insert_at_index) {
-    if (!image_data || image_len <= 0) {
-        return JPDFIUM_ERR_INVALID;
-    }
+    try {
+        if (!image_data || image_len <= 0) {
+            return JPDFIUM_ERR_INVALID;
+        }
 
-    return create_page_with_image(doc_handle, image_data, static_cast<size_t>(image_len),
-                                  page_width, page_height, margin, static_cast<Position>(position),
-                                  image_format, insert_at_index);
+        return create_page_with_image(
+            doc_handle, image_data, static_cast<size_t>(image_len), page_width, page_height, margin,
+            static_cast<Position>(position), image_format, insert_at_index);
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 // Direct JPEG embedding (no decoding/re-encoding).

@@ -14,6 +14,19 @@ resolver = "2"
 # ABI boundary to return error codes to the JVM. panic=abort would crash
 # the entire JVM instead.
 [profile.release]
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+# Override performance-critical computation engines to opt-level = 3 (vectorization & SIMD)
+# while keeping cold glue code and large parsers at opt-level = "s"
+[profile.release.package.fast_image_resize]
+opt-level = 3
+
+[profile.release.package.oxipng]
+opt-level = 3
+
+[profile.release.package.zopfli]
+opt-level = 3
+

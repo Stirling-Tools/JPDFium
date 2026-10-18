@@ -2,6 +2,7 @@ package stirling.software.jpdfium.transform;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.RenderResult;
 
 import java.awt.image.BufferedImage;
@@ -9,7 +10,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Page-level operations: flatten, convert to image, render to BufferedImage.
+ * Page-level operations: flatten, convert to image, and render to a
+ * {@link BufferedImage}.
+ *
+ * <p>Flattening folds annotations into the page content stream so they no longer
+ * appear as separate objects. {@link FlattenMode#ANNOTATIONS} keeps the page
+ * content and bakes the annotations into it; {@link FlattenMode#FULL} rasterises
+ * the page instead, replacing it with a single image. {@link #convertToImage}
+ * replaces a page with an image, while
+ * {@link #renderPage} rasterises without modifying the document. Mutating
+ * operations update the document in place and are persisted by a later
+ * {@link PdfDocument#save(Path)}.
  *
  * <p><b>Usage Example</b></p>
  * <pre>{@code
@@ -38,20 +49,81 @@ public final class PageOps {
      * @param pageIndex zero-based page index
      */
     public static void flatten(PdfDocument doc, int pageIndex) {
-        try (PdfPage page = doc.page(pageIndex)) {
-            page.flatten();
-        }
+        doc.flattenPage(pageIndex);
     }
 
     /**
-     * Flatten all pages in the document.
+     * Flatten a specific page to an image at the specified resolution.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param dpi       rasterisation resolution in DPI
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, int dpi) {
+        doc.flattenPage(pageIndex, dpi);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode with default DPI.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param mode      flatten strategy
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, FlattenMode mode) {
+        doc.flattenPage(pageIndex, mode);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param mode      flatten strategy
+     * @param dpi       rasterisation resolution in DPI
+     */
+    public static void flatten(PdfDocument doc, int pageIndex, FlattenMode mode, int dpi) {
+        doc.flattenPage(pageIndex, mode, dpi);
+    }
+
+    /**
+     * Flatten all pages in the document (annotations).
      *
      * @param doc open PDF document
      */
     public static void flattenAll(PdfDocument doc) {
-        for (int i = 0; i < doc.pageCount(); i++) {
-            flatten(doc, i);
-        }
+        doc.flatten();
+    }
+
+    /**
+     * Flatten all pages in the document to images at the specified resolution.
+     *
+     * @param doc open PDF document
+     * @param dpi render resolution in DPI
+     */
+    public static void flattenAll(PdfDocument doc, int dpi) {
+        doc.flatten(dpi);
+    }
+
+    /**
+     * Flatten all pages in the document using the specified mode with default DPI.
+     *
+     * @param doc  open PDF document
+     * @param mode flatten strategy
+     */
+    public static void flattenAll(PdfDocument doc, FlattenMode mode) {
+        doc.flatten(mode);
+    }
+
+    /**
+     * Flatten all pages in the document using the specified mode.
+     *
+     * @param doc  open PDF document
+     * @param mode flatten strategy
+     * @param dpi  rasterisation resolution in DPI
+     */
+    public static void flattenAll(PdfDocument doc, FlattenMode mode, int dpi) {
+        doc.flatten(mode, dpi);
     }
 
     /**

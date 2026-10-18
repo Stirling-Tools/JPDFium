@@ -1,17 +1,40 @@
 #pragma once
+#include <fpdf_annot.h>
 #include <fpdf_edit.h>
+#include <fpdf_text.h>
 #include <fpdfview.h>
 
-#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <memory_resource>
+#include <mutex>
+#include <set>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#include "jpdfium_registry.h"
+
+struct TransparentStringHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view sv) const noexcept {
+        return std::hash<std::string_view>{}(sv);
+    }
+};
+
+struct TransparentStringEqual {
+    using is_transparent = void;
+    bool operator()(std::string_view a, std::string_view b) const noexcept {
+        return a == b;
+    }
+};
 
 #define JPDFIUM_OK (0)
 #define JPDFIUM_ERR_INVALID (-1)
@@ -51,23 +74,66 @@ struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
     bool contentRedacted = false;
     bool sanitizeOnSave = false;
+    // Pages on which a redaction mutated content and then stopped
+    // (JPDFIUM_ERR_REDACT_INCOMPLETE): the applied boxes already removed content
+    // while the rest of the match is still extractable, so every save path
+    // refuses while this set is not empty. Only a later successful redaction
+    // commit that really applies rectangles on the SAME page removes that page's
+    // entry, so a commit on another page can never clear the failure.
+    std::set<int32_t> incompleteRedactPages{};
     int32_t unappliedRedactMarksCount = 0;
+    // Structural generation: bumped whenever native state is freed and
+    // replaced (document reload, page raster replacement). Pages capture it
+    // at open; a mismatch means their FPDF_PAGE outlived its document.
+    int64_t generation = 0;
 
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>
+        redactedLiteralsSet{};
     std::vector<std::string> redactedLiterals{};
     std::vector<RedactZone> redactZones{};
+    std::unordered_set<std::string, TransparentStringHash, TransparentStringEqual>
+        touchedFontsSet{};
     std::vector<std::string> touchedFontNames{};
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
+
+    // Filesystem path this document was opened from, or empty for in-memory
+    // documents. Retained only so save can refuse to write over its own input:
+    // O_TRUNC on the source would destroy the bytes PDFium is still reading.
+    // Never a general-purpose ownership handle.
+    std::string sourcePath{};
+
+    void* redactPatternCache = nullptr;
+    void (*redactPatternDeleter)(void*) = nullptr;
+
+    ~DocCore() {
+        clearRedactPatternCache();
+    }
+
+    void clearRedactPatternCache() {
+        if (redactPatternCache && redactPatternDeleter) {
+            redactPatternDeleter(redactPatternCache);
+            redactPatternCache = nullptr;
+        }
+    }
 
     bool hasUnappliedRedactMarks() const {
         return unappliedRedactMarksCount > 0;
     }
 
+    // True while any page still has a redaction that stopped half-way and was
+    // not resolved by a later successful commit on that same page - see
+    // incompleteRedactPages.
+    bool hasIncompleteRedaction() const {
+        return !incompleteRedactPages.empty();
+    }
+
     void addRedactLiteral(const char* s) {
         if (!s || !*s) return;
+        std::string_view sv(s);
+        if (redactedLiteralsSet.find(sv) != redactedLiteralsSet.end()) return;
         std::string lit(s);
-        for (const auto& e : redactedLiterals)
-            if (e == lit) return;
+        redactedLiteralsSet.insert(lit);
         redactedLiterals.push_back(std::move(lit));
     }
     void addRedactZone(int32_t pageIndex, float l, float b, float r, float t) {
@@ -75,9 +141,10 @@ struct DocCore {
     }
     void addTouchedFont(const char* name) {
         if (!name || !*name) return;
+        std::string_view sv(name);
+        if (touchedFontsSet.find(sv) != touchedFontsSet.end()) return;
         std::string fn(name);
-        for (const auto& e : touchedFontNames)
-            if (e == fn) return;
+        touchedFontsSet.insert(fn);
         touchedFontNames.push_back(std::move(fn));
     }
 
@@ -86,11 +153,26 @@ struct DocCore {
 };
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
-                                            int64_t blen = 0) {
+                                            int64_t blen = 0, const char* sourcePath = nullptr) {
+    // Own the document and buffer until DocCore takes them: `new DocCore()` and
+    // the shared_ptr construction below can both throw, and the caller has no
+    // handle to clean up with at that point.
+    struct PendingDoc {
+        FPDF_DOCUMENT doc;
+        uint8_t* buf;
+        ~PendingDoc() {
+            if (doc) FPDF_CloseDocument(doc);
+            if (buf) free(buf);
+        }
+    } pending{doc, buf};
+
     auto* core = new DocCore();
-    core->doc = doc;
-    core->buf = buf;
+    core->doc = pending.doc;
+    core->buf = pending.buf;
     core->blen = blen;
+    if (sourcePath) core->sourcePath = sourcePath;
+    pending.doc = nullptr;
+    pending.buf = nullptr;
     return std::shared_ptr<DocCore>(core, [](DocCore* c) {
         for (FPDF_FONT f : c->loadedFonts) {
             FPDFFont_Close(f);
@@ -121,57 +203,307 @@ struct PageWrapper {
                                   // require the document
     int32_t pageIndex = -1;
     std::shared_ptr<DocCore> core;  // keeps the document (and bookkeeping) alive
+    // DocCore generation at open. A mismatch means the document was freed and
+    // replaced after this page was created, so page points into dead state.
+    int64_t generation = 0;
 
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, int32_t idx, std::shared_ptr<DocCore> o)
-        : page(p), doc(d), pageIndex(idx), core(std::move(o)) {}
+        : page(p), doc(d), pageIndex(idx), core(std::move(o)) {
+        // Read back through the moved-to member: o itself is empty after move.
+        generation = core->generation;
+    }
     PageWrapper(FPDF_PAGE p, FPDF_DOCUMENT d, std::shared_ptr<DocCore> o)
-        : page(p), doc(d), pageIndex(-1), core(std::move(o)) {}
+        : page(p), doc(d), pageIndex(-1), core(std::move(o)) {
+        generation = core->generation;
+    }
+
+    bool stale() const noexcept {
+        return !core || !page || generation != core->generation;
+    }
 
     ~PageWrapper() {
-        if (page) {
+        // Never close a page whose document was already freed and replaced;
+        // FPDF_ClosePage on it would be a use-after-free. The wrapper itself
+        // is still destroyed, so only a few dozen bytes leak on misuse.
+        if (page && !stale()) {
             FPDF_ClosePage(page);
             page = nullptr;
         }
     }
 };
 
+// Registry of live bridge-owned handles.
+//
+// CONTRACT: membership validation does NOT pin lifetime. A handle that validates
+// may be freed by another thread the instant the atomics are read. This
+// registry rejects forged, unknown and retired handles; it does not make
+// concurrent use safe. Safe operations serialize validation through use and
+// destruction in one execution domain (see PdfiumRuntime). Raw C ABI callers
+// must serialize themselves or use a scoped operation.
+//
+// Handle validity lives in HandleRegistry (see jpdfium_registry.h), shared
+// with the cost harness so its exactness checks run against production.
+
+class PageHandleRegistry {
+   public:
+    static PageHandleRegistry& instance() {
+        static PageHandleRegistry r;
+        return r;
+    }
+    void add(const PageWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const PageWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const PageWrapper* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    // Separate table from documents: a live PageWrapper* must never validate
+    // as a DocWrapper* and vice versa. Sharing one table made cross-type
+    // confusion pass membership and then dereference the wrong layout.
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// True when a decoded page handle was issued by this bridge and is still live
+// for its document generation. Validation order is load-bearing: registry
+// membership first, because that reads no page memory, and only then the
+// generation check, which dereferences pw->core.
+inline bool pageAlive(PageWrapper* pw) {
+    if (!pw) return false;
+    if (!PageHandleRegistry::instance().contains(pw)) return false;
+    return !pw->stale();
+}
+
+// Typed aliases keep the call sites self-documenting: a DocWrapper* cannot be
+// passed where a PageWrapper* is expected.
+class DocHandleRegistry {
+   public:
+    static DocHandleRegistry& instance() {
+        static DocHandleRegistry r;
+        return r;
+    }
+    void add(const DocWrapper* w) {
+        registry().add(w);
+    }
+    void remove(const DocWrapper* w) {
+        registry().remove(w);
+    }
+    bool contains(const DocWrapper* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    // Separate table from pages; see PageHandleRegistry above.
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// Auxiliary handles carry a kind tag so membership also establishes type:
+// a valid FlashText handle must not validate as PCRE2 and vice versa.
+class Pcre2HandleRegistry {
+   public:
+    static Pcre2HandleRegistry& instance() {
+        static Pcre2HandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+class FlashTextHandleRegistry {
+   public:
+    static FlashTextHandleRegistry& instance() {
+        static FlashTextHandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// Backwards-compatible alias for call sites that only need "aux, not doc/page".
+// New code uses the kind-specific registries above.
+class AuxHandleRegistry {
+   public:
+    static AuxHandleRegistry& instance() {
+        static AuxHandleRegistry r;
+        return r;
+    }
+    void add(const void* w) {
+        registry().add(w);
+    }
+    void remove(const void* w) {
+        registry().remove(w);
+    }
+    bool contains(const void* w) const {
+        return registry().contains(w);
+    }
+
+   private:
+    static HandleRegistry& registry() {
+        static HandleRegistry r;
+        return r;
+    }
+};
+
+// Renderer selected at library init (0 = AGG, 1 = Skia). Skia is only
+// selectable when the PDFium build includes it (JPDFIUM_HAS_SKIA); the
+// render paths read this to pick the bitmap format and draw call.
+extern bool g_jpdfiumUseSkia;
+
+// Shared PDFium library init so every entry point that lazily initializes
+// uses the same renderer configuration. Returns JPDFIUM_OK, or
+// JPDFIUM_ERR_INVALID when Skia is requested from a non-Skia build.
+int jpdfium_init_library(int renderer);
+
+// Initialize once, preserving whatever renderer was already selected.
+void jpdfium_ensure_library();
+
 // Mandatory qpdf sanitize stage for redacted saves (jpdfium_sanitize.cpp).
 // Returns 0 and fills out/reportJson on success; -1 on failure.
 int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,
                         std::vector<uint8_t>& out, std::string& reportJson);
 
+// Abandon a pending progressive render for a raw FPDF_PAGE without reporting
+// (jpdfium_render.cpp). Called when the owning page is closed while a session
+// is still pending so the map never retains a dangling page identity.
+void jpdfium_render_abandon_progressive(void* fpdf_page) noexcept;
+
+// Forget a pending progressive render without touching PDFium page state
+// (jpdfium_render.cpp). Called when the page is stale, its document was freed
+// and replaced, so FPDF_RenderPage_Close would be a use-after-free. Drops the
+// map entry and destroys only the caller-owned bitmap.
+void jpdfium_render_forget_progressive(void* fpdf_page) noexcept;
+
 // Encode heap pointers as int64_t handles for the Java-visible ABI.
 // The pointer stays alive until the matching close function deletes it.
+//
+// Returns nullptr for a handle that was never issued, has already been closed,
+// or is simply garbage. Callers already null-check the result, so a rejected
+// handle surfaces as JPDFIUM_ERR_INVALID instead of a crash.
 inline DocWrapper* decodeDoc(int64_t h) {
-    return reinterpret_cast<DocWrapper*>(static_cast<uintptr_t>(h));
+    if (h <= 0) return nullptr;
+    auto* w = reinterpret_cast<DocWrapper*>(static_cast<uintptr_t>(h));
+    return DocHandleRegistry::instance().contains(w) ? w : nullptr;
 }
+
+// Decode a page handle, rejecting one whose document was freed and replaced.
+// Returning nullptr here makes every handle-based entry point refuse a stale
+// page (they all null-check the decoded pointer) instead of dereferencing
+// freed PDFium state. jpdfium_page_close still deletes the wrapper, so the
+// stale check must not be duplicated there.
 inline PageWrapper* decodePage(int64_t h) {
-    return reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(h));
+    PageWrapper* pw = reinterpret_cast<PageWrapper*>(static_cast<uintptr_t>(h));
+    return pageAlive(pw) ? pw : nullptr;
 }
 
 inline int64_t encodeHandle(void* p) {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(p));
 }
 
-// Scratch arena for redaction/crop hot paths. All per-call containers
-// (vectors, maps, strings) allocate from a single monotonic buffer so a
-// typical crop/redact performs zero heap allocations outside PDFium itself.
-// The inline buffer covers small/medium pages; overflow spills to the default
-// heap resource, which is still amortised to a handful of allocations.
-class ScratchArena {
-   public:
-    ScratchArena() : mrb_(inlineBuf_.data(), inlineBuf_.size()) {}
-    ScratchArena(const ScratchArena&) = delete;
-    ScratchArena& operator=(const ScratchArena&) = delete;
+// RAII owners for PDFium handles and temporaries.
+//
+// Every acquisition below establishes its owner immediately, so a throwing
+// operation between acquire and release cannot leak. Exception translation is a
+// separate concern: jpdfium_guarded (below) converts a throw into a return code
+// at the C boundary, and it is only correct on top of code whose resources
+// already clean themselves up.
+struct PageCloser {
+    void operator()(FPDF_PAGE p) const noexcept {
+        if (p) FPDF_ClosePage(p);
+    }
+};
+struct TextPageCloser {
+    void operator()(FPDF_TEXTPAGE p) const noexcept {
+        if (p) FPDFText_ClosePage(p);
+    }
+};
+struct SchCloser {
+    void operator()(FPDF_SCHHANDLE s) const noexcept {
+        if (s) FPDFText_FindClose(s);
+    }
+};
+struct BitmapCloser {
+    void operator()(FPDF_BITMAP b) const noexcept {
+        if (b) FPDFBitmap_Destroy(b);
+    }
+};
+struct PageObjectCloser {
+    void operator()(FPDF_PAGEOBJECT o) const noexcept {
+        if (o) FPDFPageObj_Destroy(o);
+    }
+};
+struct AnnotCloser {
+    void operator()(FPDF_ANNOTATION a) const noexcept {
+        if (a) FPDFPage_CloseAnnot(a);
+    }
+};
+struct FileCloser {
+    void operator()(std::FILE* f) const noexcept {
+        if (f) std::fclose(f);
+    }
+};
 
-    std::pmr::memory_resource* resource() noexcept {
-        return &mrb_;
+using UniquePage = std::unique_ptr<std::remove_pointer_t<FPDF_PAGE>, PageCloser>;
+using UniqueTextPage = std::unique_ptr<std::remove_pointer_t<FPDF_TEXTPAGE>, TextPageCloser>;
+using UniqueSch = std::unique_ptr<std::remove_pointer_t<FPDF_SCHHANDLE>, SchCloser>;
+using UniqueBitmap = std::unique_ptr<std::remove_pointer_t<FPDF_BITMAP>, BitmapCloser>;
+using UniquePageObject = std::unique_ptr<std::remove_pointer_t<FPDF_PAGEOBJECT>, PageObjectCloser>;
+using UniqueAnnot = std::unique_ptr<std::remove_pointer_t<FPDF_ANNOTATION>, AnnotCloser>;
+using UniqueFile = std::unique_ptr<std::FILE, FileCloser>;
+
+// Scoped unlink for repair temp files. Untrusted input is written to these
+// paths, so they must not survive the call - on success, on error, or on an
+// exception thrown between creation and release.
+class ScopedUnlink {
+   public:
+    explicit ScopedUnlink(const char* path) : path_(path) {}
+    ~ScopedUnlink() {
+        if (path_) std::remove(path_);
+    }
+    ScopedUnlink(const ScopedUnlink&) = delete;
+    ScopedUnlink& operator=(const ScopedUnlink&) = delete;
+
+    // Give up ownership (the file was already removed deliberately).
+    void release() noexcept {
+        path_ = nullptr;
     }
 
    private:
-    static constexpr std::size_t kInlineCapacity = 16 * 1024;
-    std::array<std::byte, kInlineCapacity> inlineBuf_;
-    std::pmr::monotonic_buffer_resource mrb_;
+    const char* path_;
 };
 
 template <typename Fn>

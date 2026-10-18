@@ -83,7 +83,17 @@ configure<SpotlessExtension> {
 
 tasks.withType<Javadoc> {
     (options as StandardJavadocDocletOptions).apply {
-        addStringOption("Xdoclint:none", "-quiet")
+        // Real validation for the public documentation: doclint checks links, HTML
+        // and references, and `-missing` only silences the "no comment" group so
+        // accessors are not required to carry boilerplate. The flags are booleans:
+        // a string option would append its value to the option list as a separate
+        // token after `-Xdoclint`, which is not what doclint expects. Gradle keeps
+        // the progress chatter out of the log without an explicit `-quiet`.
+        // Warnings are errors, matching the compiler settings below. The generated
+        // `panama` bindings are part of the source set and currently pass, so they
+        // are not validated separately.
+        addBooleanOption("Xdoclint:all,-missing", true)
+        addBooleanOption("Werror", true)
         encoding = "UTF-8"
         charSet = "UTF-8"
     }
@@ -106,9 +116,10 @@ tasks.matching { it.name.lowercase().contains("jmh") }.configureEach {
 
 dependencies {
     // JUnit lives in buildSrc convention plugins; version catalogs don't expose
-    // accessors to precompiled script plugins in Gradle 9, so these stay as
-    // literals aligned with the `junit` catalog version (see gradle/libs.versions.toml).
-    testImplementation(platform("org.junit:junit-bom:5.11.0"))
+    // accessors to precompiled script plugins in Gradle 9, so the coordinate
+    // stays a literal here. The version is the single source of truth in
+    // gradle/libs.versions.toml (`junit`) - keep the two in step.
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -117,7 +128,9 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler", "-Xmx2g")
     maxHeapSize = "2g"
-    systemProperties(System.getProperties().mapKeys { it.key.toString() }.filterKeys { it.startsWith("jpdfium.") })
+    systemProperties(System.getProperties().mapKeys { it.key.toString() }.filterKeys {
+        it.startsWith("jpdfium.") || it.startsWith("vipsffm.")
+    })
 }
 
 // JaCoCo coverage: emit the XML report CI consumes to enforce a coverage
@@ -140,8 +153,8 @@ publishing {
             from(components["java"])
 
             pom {
-                name.set(project.name)
-                description.set("Java 25 FFM bindings for PDFium with PII redaction")
+                name.set("JPDFium")
+                description.set("PDF rendering, editing, and redaction for Java, powered by PDFium")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
                 licenses {

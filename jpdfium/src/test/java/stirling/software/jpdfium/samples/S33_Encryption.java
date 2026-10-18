@@ -11,7 +11,7 @@ import java.util.List;
  * SAMPLE 33 - Encryption & Decryption.
  *
  * <p>Demonstrates PdfEncryption: checking encryption status, encrypting a PDF
- * with AES-256, and decrypting it back. Requires qpdf on PATH.
+ * with AES-256, and decrypting it back.
  */
 public class S33_Encryption {
 
@@ -20,11 +20,11 @@ public class S33_Encryption {
         List<Path> inputs = SampleBase.inputPdfs(args);
         Path outDir = SampleBase.out("S33_encryption");
 
-        System.out.printf("S33_Encryption  |  %d PDF(s)  qpdf=%b%n",
+        System.out.printf("S33_Encryption  |  %d PDF(s)  supported=%b%n",
                 inputs.size(), PdfEncryption.isSupported());
 
         if (!PdfEncryption.isSupported()) {
-            System.out.println("  qpdf not found - skipping encryption tests");
+            System.out.println("  encryption not supported - skipping encryption tests");
             SampleBase.done("S33_Encryption");
             return;
         }

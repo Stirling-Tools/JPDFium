@@ -8,6 +8,7 @@ import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -55,6 +56,10 @@ import java.util.Set;
  * }</pre>
  */
 public final class PdfFormFiller {
+
+    /** FPDFPage_Flatten() return values (fpdf_flatten.h). */
+    private static final int FLATTEN_FAIL = 0;
+    private static final int FLATTEN_SUCCESS = 1;
 
     private final PdfDocument document;
 
@@ -211,14 +216,14 @@ public final class PdfFormFiller {
 
         List<String> filledList = new ArrayList<>();
         List<String> skippedList = new ArrayList<>();
-        int[] flattenedPages = {0};
+        Set<Integer> pagesToFlatten = new LinkedHashSet<>();
 
         FormEnv formEnv = initFormEnvironment(rawDoc);
         try {
             Map<String, List<RadioMember>> radioGroupMembers = new LinkedHashMap<>();
 
-            processStandardFields(formEnv, pageCount, filledList, skippedList, flattenedPages, radioGroupMembers);
-            processRadioGroups(formEnv.formHandle, radioGroupMembers, filledList, flattenedPages);
+            processStandardFields(formEnv, pageCount, filledList, skippedList, pagesToFlatten, radioGroupMembers);
+            processRadioGroups(formEnv.formHandle, radioGroupMembers, filledList, pagesToFlatten);
             collectSkipped(filledList, skippedList);
 
         } finally {
@@ -226,12 +231,16 @@ public final class PdfFormFiller {
             formEnv.arena().close();
         }
 
-        return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages[0]);
+        int flattenedPages = flattenTouchedPages(pagesToFlatten);
+        if (!filledList.isEmpty()) {
+            document.markContentModified();
+        }
+        return new FillResult(List.copyOf(filledList), List.copyOf(skippedList), flattenedPages);
     }
 
-    private record FormEnv(MemorySegment formHandle, Arena arena) {}
+    record FormEnv(MemorySegment formHandle, Arena arena) {}
 
-    private static FormEnv initFormEnvironment(MemorySegment rawDoc) {
+    static FormEnv initFormEnvironment(MemorySegment rawDoc) {
         Arena formArena = Arena.ofConfined();
         MemorySegment formInfo = formArena.allocate(256);
         formInfo.set(ValueLayout.JAVA_INT, 0, 1);
@@ -252,7 +261,8 @@ public final class PdfFormFiller {
 
     private void processStandardFields(FormEnv formEnv, int pageCount,
                                         List<String> filledList, List<String> skippedList,
-                                        int[] flattenedPages, Map<String, List<RadioMember>> radioGroupMembers) {
+                                        Set<Integer> pagesToFlatten,
+                                        Map<String, List<RadioMember>> radioGroupMembers) {
         for (int pageIdx = 0; pageIdx < pageCount; pageIdx++) {
             boolean[] pageModified = {false};
             PdfPage pdfPage = document.page(pageIdx);
@@ -276,25 +286,25 @@ public final class PdfFormFiller {
                     safeSilent0(FormFillBindings.FORM_ForceToKillFocus, formEnv.formHandle);
                 }
                 if (flattenAfterFill && pageModified[0]) {
-                    safeSilentInt2(PageEditBindings.FPDFPage_Flatten, rawPage, 0);
-                    flattenedPages[0]++;
+                    pagesToFlatten.add(pageIdx);
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formEnv.formHandle);
 
             } catch (FormFillException ffe) {
                 throw ffe;
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new FormFillException("Error filling page " + pageIdx, t);
             }
         }
     }
 
     private void processRadioGroups(MemorySegment formHandle, Map<String, List<RadioMember>> radioGroupMembers,
-                                     List<String> filledList, int[] flattenedPages) {
+                                     List<String> filledList, Set<Integer> pagesToFlatten) {
         for (Map.Entry<String, List<RadioMember>> entry : radioGroupMembers.entrySet()) {
             String fieldName = entry.getKey();
             String selectedExportValue = getRadioValue(fieldName);
-            boolean filled = fillRadioGroup(formHandle, selectedExportValue, entry.getValue(), flattenedPages);
+            boolean filled = fillRadioGroup(formHandle, selectedExportValue, entry.getValue(), pagesToFlatten);
             if (filled && !filledList.contains(fieldName)) filledList.add(fieldName);
         }
     }
@@ -413,7 +423,7 @@ public final class PdfFormFiller {
                 setAnnotString(arena, annot, AnnotationKeys.AS, targetValue);
                 return true;
             }
-        } catch (Throwable _) { return false; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return false; }
     }
 
     private boolean handleCombo(MemorySegment formHandle, MemorySegment rawPage, MemorySegment annot,
@@ -465,7 +475,7 @@ public final class PdfFormFiller {
     }
 
     private boolean fillRadioGroup(MemorySegment formHandle, String selectedExportValue,
-                                    List<RadioMember> members, int[] flattenedPages) {
+                                    List<RadioMember> members, Set<Integer> pagesToFlatten) {
         Map<Integer, List<RadioMember>> byPage = new LinkedHashMap<>();
         for (RadioMember m : members) {
             byPage.computeIfAbsent(m.pageIdx(), k -> new ArrayList<>()).add(m);
@@ -514,17 +524,16 @@ public final class PdfFormFiller {
                                 setAnnotString(arena, annot, AnnotationKeys.AS, "Off");
                             }
                         }
-                    } catch (Throwable _) {} finally {
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); } finally {
                         safeSilent0(AnnotationBindings.FPDFPage_CloseAnnot, annot);
                     }
                 }
                 if (pageModified) safeSilent0(FormFillBindings.FORM_ForceToKillFocus, formHandle);
                 if (flattenAfterFill && pageModified) {
-                    safeSilentInt2(PageEditBindings.FPDFPage_Flatten, rawPage, 0);
-                    flattenedPages[0]++;
+                    pagesToFlatten.add(pageIdx);
                 }
                 safeVoid(FormFillBindings.FORM_OnBeforeClosePage, rawPage, formHandle);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
         return anyFilled;
     }
@@ -607,7 +616,7 @@ public final class PdfFormFiller {
             float bottom = rect.get(ValueLayout.JAVA_FLOAT, 12);
             return new double[]{(left + right) / 2.0, (top + bottom) / 2.0};
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }
@@ -621,7 +630,7 @@ public final class PdfFormFiller {
             long written = (long) mh.invokeExact(arg1, arg2, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
     }
@@ -636,7 +645,7 @@ public final class PdfFormFiller {
             long written = (long) AnnotationBindings.FPDFAnnot_GetOptionLabel.invokeExact(formHandle, annot, index, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
     }
@@ -651,7 +660,7 @@ public final class PdfFormFiller {
             @SuppressWarnings("unused")
             int ok = (int) AnnotationBindings.FPDFAnnot_SetStringValue.invokeExact(annot, keyBuf, valueSeg);
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
     }
 
@@ -666,7 +675,7 @@ public final class PdfFormFiller {
     /** Invoke void(ADDRESS) silently. */
     private static void safeSilent0(MethodHandle mh, MemorySegment a) {
         try { mh.invokeExact(a); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
     }
 
@@ -674,14 +683,14 @@ public final class PdfFormFiller {
     @SuppressWarnings("unused")
     private static void safeSilent0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { mh.invokeExact(a, b); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
     }
 
     /** Invoke int(ADDRESS) -> 0 on error. */
     private static int safeInt0(MethodHandle mh, MemorySegment a) {
         try { return (int) mh.invokeExact(a); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
@@ -689,22 +698,86 @@ public final class PdfFormFiller {
     /** Invoke int(ADDRESS, ADDRESS) -> 0 on error. */
     private static int safeInt0b(MethodHandle mh, MemorySegment a, MemorySegment b) {
         try { return (int) mh.invokeExact(a, b); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
 
-    /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
-    private static void safeSilentInt2(MethodHandle mh, MemorySegment a, int b) {
-        try { mh.invokeExact(a, b); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+    /** Invoke long(ADDRESS, int, ADDRESS, long) -> 0 on error. */
+    private static long safeLong4(MethodHandle mh, MemorySegment a, int b, MemorySegment c, long d) {
+        if (mh == null) return 0L;
+        try { return (long) mh.invokeExact(a, b, c, d); } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return 0L;
         }
+    }
+
+    /** Invoke int(ADDRESS, int) -> 0 on error (e.g. FPDFPage_Flatten). */
+    private static int safeInt2(MethodHandle mh, MemorySegment a, int b) {
+        try { return (int) mh.invokeExact(a, b); } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
+    }
+
+    /**
+     * Flatten the touched pages after the form fill environment has been torn
+     * down: PDFium's FPDFPage_Flatten silently fails while a form environment
+     * is active, which previously left every widget annotation in place.
+     *
+     * @return the number of pages flattened
+     */
+    private int flattenTouchedPages(Set<Integer> pageIndices) {
+        if (!flattenAfterFill || pageIndices.isEmpty()) return 0;
+        int flattened = 0;
+        for (int pageIdx : pageIndices) {
+            try (PdfPage page = document.page(pageIdx)) {
+                if (!widgetsHaveAppearance(page.rawHandle())) {
+                    // Flattening removes widget annotations; without an
+                    // appearance stream the painted value would be lost, so
+                    // leave this page unflattened.
+                    continue;
+                }
+                int rc = safeInt2(PageEditBindings.FPDFPage_Flatten, page.rawHandle(), 0);
+                if (rc == FLATTEN_SUCCESS) {
+                    flattened++;
+                } else if (rc == FLATTEN_FAIL) {
+                    throw new FormFillException("FPDFPage_Flatten failed on page " + pageIdx);
+                }
+            }
+        }
+        return flattened;
+    }
+
+    /** True when every widget annotation on the page has a normal appearance. */
+    private static boolean widgetsHaveAppearance(MemorySegment rawPage) {
+        if (AnnotationBindings.FPDFAnnot_GetAP == null) {
+            throw new IllegalStateException(
+                    "FPDFAnnot_GetAP is unavailable in the loaded PDFium; cannot verify widget "
+                            + "appearances before flattening");
+        }
+        int annotCount = safeInt0(AnnotationBindings.FPDFPage_GetAnnotCount, rawPage);
+        for (int i = 0; i < annotCount; i++) {
+            MemorySegment annot = safeSegment(AnnotationBindings.FPDFPage_GetAnnot, rawPage, i);
+            if (MemorySegment.NULL.equals(annot)) continue;
+            try {
+                if (safeInt0(AnnotationBindings.FPDFAnnot_GetSubtype, annot) != 20) continue;
+                long apLen = safeLong4(AnnotationBindings.FPDFAnnot_GetAP, annot, 0,
+                        MemorySegment.NULL, 0L);
+                // FPDFAnnot_GetAP returns the UTF-16LE length including the NUL
+                // terminator, so a widget with no normal appearance yields 2.
+                if (apLen <= 2) return false;
+            } finally {
+                safeSilent0(AnnotationBindings.FPDFPage_CloseAnnot, annot);
+            }
+        }
+        return true;
     }
 
     /** Invoke int(ADDRESS, ADDRESS, int, int) -> 0 on error. */
     private static int safeInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
         try { return (int) mh.invokeExact(a, b, c, d); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
@@ -712,14 +785,14 @@ public final class PdfFormFiller {
     /** Invoke void(ADDRESS, ADDRESS, int, int) silently. */
     private static void safeSilentInt4(MethodHandle mh, MemorySegment a, MemorySegment b, int c, int d) {
         try { mh.invokeExact(a, b, c, d); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
     }
 
     /** Invoke ADDRESS(ADDRESS, int) -> NULL on error. */
     private static MemorySegment safeSegment(MethodHandle mh, MemorySegment a, int b) {
         try { return (MemorySegment) mh.invokeExact(a, b); } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return MemorySegment.NULL;
         }
     }

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import java.lang.foreign.Arena;
@@ -112,7 +113,7 @@ public final class PdfResourceDedup {
                                     w = wBuf.get(ValueLayout.JAVA_INT, 0);
                                     h = hBuf.get(ValueLayout.JAVA_INT, 0);
                                 }
-                            } catch (Throwable _) {}
+                            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                         }
 
                         ImageRef ref = new ImageRef(p, i, w, h);

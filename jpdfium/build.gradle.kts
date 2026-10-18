@@ -12,6 +12,15 @@ application {
     mainClass.set("stirling.software.jpdfium.GraalVmSmokeApp")
 }
 
+// The GraalVM smoke fixtures stay on the build classpath, because GraalVmSmokeApp
+// reads them as classpath resources when the native image runs, but they are about
+// 1 MB of test data with nothing to offer a library consumer, so they are left out
+// of the published jar. Nothing may read them across a project boundary: the
+// jpdfium-vips tests keep their own copy of the one fixture they need.
+tasks.named<Jar>("jar") {
+    exclude("pdfs/**")
+}
+
 graalvmNative {
     metadataRepository {
         enabled.set(false)
@@ -61,7 +70,11 @@ graalvmNative {
 }
 
 dependencies {
-    implementation(libs.imageio.webp)
+    // No imageio-webp: jpdfium-vips registers a libvips-backed ImageCodec as
+    // the default and writes WebP without an ImageIO plugin. WebP writing
+    // without the vips module is intentionally unsupported
+    // (canWrite(WEBP) == false). TwelveMonkeys TIFF stays for the ImageIO
+    // fallback (BigTIFF/CMYK + compression the JDK writer lacks).
     implementation(libs.imageio.tiff)
     // Which platform's native jar lands on the classpath. Auto-detects host OS
     // and arch by default; CI overrides per matrix job with
@@ -97,15 +110,27 @@ dependencies {
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
+    jmhRuntimeOnly(project(":jpdfium-vips"))
+    // The jmh source set needs the same platform natives as testRuntimeOnly.
+    // Without it every benchmark dies in JpdfiumLib's static initializer with
+    // "Symbol not found", so JMH silently measures nothing.
+    jmhRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
 }
 
 jmh {
-    // Run each benchmark for a brief warmup + 3 measurement forks so CI
-    // finishes in reasonable time. Developers can override on the command line:
-    //   ./gradlew :jpdfium:jmh -Pjmh.warmupIterations=5 -Pjmh.iterations=5
+    // CI defaults stay fast (1 fork, 2+3 x 1s). Annotations in bench sources
+    // request the trustworthy shape (Fork 3, 5 warmup + 10 measurement) but the
+    // plugin overrides them, so pass explicit properties for a ranking you can
+    // actually compare:
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark \
+    //     -Pjmh.forks=3 -Pjmh.warmupIterations=5 -Pjmh.iterations=10
+    //   ./gradlew :jpdfium:jmh -Pjmh.include=PdfOperationBenchmark -Pjmh.profilers=gc
+    // Ranking rule: do not claim X faster than Y when 99.9% CIs overlap. With
+    // Cnt=3 the CI is mostly noise (t-distribution); Cnt>=15 is the minimum
+    // for a comparison, Cnt=30 (3x10) is the trustworthy default.
     warmupIterations.set((findProperty("jmh.warmupIterations") as String? ?: "2").toInt())
     iterations.set((findProperty("jmh.iterations") as String? ?: "3").toInt())
-    fork.set(1)
+    fork.set((findProperty("jmh.forks") as String? ?: findProperty("jmh.fork") as String? ?: "1").toInt())
     timeUnit.set("ms")
     resultFormat.set("JSON")
     resultsFile.set(layout.buildDirectory.file("results/jmh/results.json"))
@@ -116,6 +141,31 @@ jmh {
     // Include only benchmarks in the jpdfium bench package.
     val includePattern = findProperty("jmh.include") as String? ?: "stirling.software.jpdfium.bench.*"
     includes.add(includePattern)
+}
+
+// Version stamp for the runtime natives downloader: lets a JVM that has the
+// pure-Java jar but no natives jar resolve the matching
+// com.stirling:jpdfium-natives-<platform>:<version> from Maven Central when
+// -Djpdfium.native.download=true is set. Written to the build dir (never the
+// source tree) and added to processResources below.
+val writeVersionProperties = tasks.register("writeVersionProperties") {
+    description = "Write the library version for runtime natives resolution"
+    val outDir = layout.buildDirectory.dir("generated/version")
+    // The file embeds project.version: without this input a version bump can
+    // leave the task up-to-date and package the previous version, making the
+    // runtime downloader request the wrong natives artifact.
+    inputs.property("projectVersion", project.version.toString())
+    outputs.dir(outDir)
+    doLast {
+        val pkg = outDir.get().asFile.resolve("stirling/software/jpdfium/panama")
+        pkg.mkdirs()
+        pkg.resolve("jpdfium-version.properties").writeText("version=${project.version}\n")
+    }
+}
+
+tasks.named<Copy>("processResources") {
+    dependsOn(writeVersionProperties)
+    from(writeVersionProperties)
 }
 
 // Set jpdfium.jextractHome in ~/.gradle/gradle.properties or JEXTRACT_HOME env var.
@@ -129,12 +179,17 @@ val jextractBin: String = run {
 }
 
 val jpdfiumFunctions = listOf(
-    "jpdfium_init", "jpdfium_destroy",
+    "jpdfium_abi_version", "jpdfium_abi_query",
+    "jpdfium_init",
+    "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
-    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
-    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_close",
-    "jpdfium_render_page", "jpdfium_free_buffer",
+    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_save_to_file", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
+    "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_info",
+    "jpdfium_page_close",
+    "jpdfium_render_page", "jpdfium_render_page_flags", "jpdfium_render_page_into", "jpdfium_render_page_form_into",
+    "jpdfium_render_page_progressive_start", "jpdfium_render_page_progressive_continue", "jpdfium_render_page_progressive_close",
+    "jpdfium_free_buffer",
     "jpdfium_text_get_chars", "jpdfium_text_find", "jpdfium_free_string",
     "jpdfium_text_get_char_positions",
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
@@ -149,7 +204,8 @@ val jpdfiumFunctions = listOf(
     // Font Normalization Pipeline
     "jpdfium_font_get_data", "jpdfium_font_classify",
     "jpdfium_font_fix_tounicode", "jpdfium_font_repair_widths",
-    "jpdfium_font_normalize_page", "jpdfium_font_subset",
+    "jpdfium_font_normalize_page", "jpdfium_font_subset", "jpdfium_font_covers_text",
+    "jpdfium_text_shape",
     // Glyph-Level Redaction
     "jpdfium_redact_glyph_aware",
     // XMP Metadata Redaction
@@ -182,14 +238,27 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_compress_pdf",
     "jpdfium_rust_repair_lopdf",
     "jpdfium_rust_resize_pixels",
+    "jpdfium_rust_unpack_pixels",
+    "jpdfium_rust_svg_to_rgba",
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_optimize_file",
     "jpdfium_qpdf_sanitize",
+    "jpdfium_qpdf_sanitize_file",
     "jpdfium_qpdf_merge",
+    "jpdfium_qpdf_merge_files",
     "jpdfium_qpdf_extract_pages",
+    "jpdfium_qpdf_extract_pages_file",
     "jpdfium_qpdf_encrypt",
-    "jpdfium_qpdf_decrypt"
+    "jpdfium_qpdf_encrypt_file",
+    "jpdfium_qpdf_decrypt",
+    "jpdfium_qpdf_decrypt_file",
+    // Signatures
+    "jpdfium_signature_count",
+    "jpdfium_signature_revision_count",
+    "jpdfium_signature_info",
+    "jpdfium_signature_digest"
 )
 
 val generateBindings = tasks.register<Exec>("generateBindings") {
@@ -290,7 +359,8 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
 
             // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
             val qpdfFuncs = listOf(
-                "jpdfium_qpdf_optimize", "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_file",
+                "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
                 "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
             )
             for (fn in qpdfFuncs) {
@@ -298,6 +368,47 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
                     "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"$fn\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);",
                     "public static final MemorySegment ADDR = SYMBOL_LOOKUP.find(\"$fn\").orElse(null);\n\n        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;"
                 )
+            }
+
+            // jextract emits a plain downcall, which routes heap pointers through
+            // SharedUtils.checkNative and rejects them; only critical(true) allows heap.
+            val plainUnpackBinding =
+                "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);"
+            val criticalUnpackBinding =
+                "public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow(\"jpdfium_rust_unpack_pixels\");\n\n        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC, Linker.Option.critical(true));"
+            // Fail loudly if jextract changes the emitted shape: silently skipping the
+            // rewrite would leave the plain (heap-rejecting) binding in place.
+            check(text.contains(plainUnpackBinding) || text.contains(criticalUnpackBinding)) {
+                "jpdfium_rust_unpack_pixels binding is neither the plain nor the critical form; " +
+                    "jextract output changed, update this patch"
+            }
+            text = text.replace(plainUnpackBinding, criticalUnpackBinding)
+
+            // Ownership-boundary contract for the raw bindings: jextract output
+            // carries no hand documentation, so re-apply it here on every
+            // regeneration, idempotently like the C_LONG patch above. Without
+            // this the committed file drifts from regeneration and the
+            // ffm-layout CI check fails.
+            if (!text.contains("Ownership boundary: handles created through these raw")) {
+                val anchor = "public class JpdfiumH extends JpdfiumH\$shared {"
+                val ownershipNote = """
+                    /**
+                     * Raw jextract bindings to the native bridge: no execution-domain admission,
+                     * no lifecycle accounting, no argument validation.
+                     *
+                     * <p>Ownership boundary: handles created through these raw entry points bypass
+                     * {@link PdfiumRuntime} tracking, so they must never be passed to the managed
+                     * {@link JpdfiumLib} wrappers (e.g. a raw-created document given to
+                     * {@code JpdfiumLib.docClose} would consume another document's live count and
+                     * let shutdown destroy PDFium early). Normal callers use
+                     * {@link stirling.software.jpdfium.PdfDocument} and friends, which keep both
+                     * sides consistent.
+                     */
+                    """.trimIndent() + "\n"
+                if (text.contains(anchor)) {
+                    text = text.replace(anchor, ownershipNote + anchor)
+                    logger.lifecycle("Re-applied JpdfiumH ownership-boundary contract")
+                }
             }
 
             if (text != targetMain.readText()) {
@@ -335,14 +446,16 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.integration", "true")
-    // Forward -Djpdfium.bench.* from gradle invocation to the test JVM.
+    // Forward -Djpdfium.bench.* / -Djpdfium.compress.* from the invocation.
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.bench")) systemProperty(key, v.toString())
+        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")) {
+            systemProperty(key, v.toString())
+        }
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-Xmx4g")
     maxHeapSize = "4g"
-    setForkEvery(20)
+    forkEvery = 20
 }
 
 // Run: ./gradlew :jpdfium:corpusTest -Pjpdfium.testNatives=<platform>
@@ -397,7 +510,10 @@ tasks.register<Test>("nativeSmokeTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.smoke", "true")
-    filter { includeTestsMatching("*NativeSmokeTest") }
+    filter {
+        includeTestsMatching("*NativeSmokeTest")
+        includeTestsMatching("*PdfEncryptionCopyTest")
+    }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     // CI has no access to the HTML report; a load failure must name the
     // missing library in the console.

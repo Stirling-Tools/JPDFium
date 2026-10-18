@@ -1,458 +1,254 @@
 # Contributing to JPDFium
 
+Thank you for contributing to JPDFium. This guide covers local setup, architecture, and coding standards.
+
 ## Development Setup
 
-1. **Clone**
-   ```bash
-   git clone https://github.com/Stirling-Tools/JPDFium.git
-   cd JPDFium
-   ```
+### Prerequisites
 
-2. **Install native dependencies** (for full feature set)
+- Java 25 JDK (Temurin, Oracle, or OpenJDK) with Foreign Function and Memory API support.
+- C++23 compiler (`clang++`, `g++`, or MSVC 2022+).
+- CMake 3.20 or newer.
+- Rust toolchain (`cargo` and `rustc` 1.80+) for the native Rust acceleration crate.
+- Optional: `libvips` development headers for `jpdfium-vips`.
 
-   **Fedora / RHEL:**
-   ```bash
-   sudo dnf install -y gcc-c++ cmake pcre2-devel freetype-devel harfbuzz-devel \
-       libicu-devel qpdf-devel pugixml-devel libunibreak-devel
-   ```
+### Quick Tryout (Stub Mode)
 
-   **Ubuntu / Debian:**
-   ```bash
-   sudo apt install -y g++ cmake libpcre2-dev libfreetype-dev libharfbuzz-dev \
-       libicu-dev libqpdf-dev libpugixml-dev libunibreak-dev
-   ```
+To work exclusively on Java-layer APIs without building PDFium:
 
-3. **Quick Try-Out** (no PDFium or native dependencies needed)
-   ```bash
-   ./gradlew quickTry
-   ```
-   This builds the stub bridge and runs all 87 samples in stub mode. Perfect for testing Java-layer changes.
-
-4. **Full Build with Real PDFium** (recommended for production testing)
-   ```bash
-   # One command: build PDFium from source, build real bridge, run all tests and samples
-   ./gradlew fullBuildAndTest
-   ```
-
-   Or step by step:
-   ```bash
-   ./gradlew buildPdfium         # Build PDFium from EmbedPDF fork (~15 GB, first time takes 15-60 min)
-   ./gradlew buildRealBridge     # Build native bridge against real PDFium
-   ./gradlew test                # Unit tests (stub mode)
-   ./gradlew :jpdfium:integrationTest  # Integration tests (real PDFium)
-   ./gradlew runAllSamples       # Run all 87 samples
-   ```
-
-   > **Note:** The PDFium build requires `git`, `python3`, and ~15 GB disk space.
-   > On Fedora, also install: `sudo dnf install clang lld pkg-config ninja-build`.
-   > The build script installs `depot_tools` (gclient/gn/ninja) automatically.
-   > Subsequent builds with `--rebuild` are much faster (incremental).
-
-### PDFium Build Details
-
-JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) (branch `embedpdf/main`) which adds
-`EPDF_*` APIs for native encryption, annotation control, and redaction.
-
-The build uses a **component build** (`is_component_build=true`) with `use_allocator_shim=false`:
-- Component build produces `libpdfium.so` plus dependency `.so` files (PartitionAlloc, ICU, zlib, abseil)
-- `use_allocator_shim=false` is **required** - without it, PartitionAlloc replaces the system allocator
-  (malloc/free), causing crashes when loaded into a JVM that manages its own heap
-- `COMPONENT_BUILD` + `FPDF_IMPLEMENTATION` defines are set automatically, giving FPDF_EXPORT symbols
-  `__attribute__((visibility("default")))` - no manual header patching needed
-
-The build script applies these source patches:
-- **`base/BUILD.gn`**: Stub file (standalone PDFium lacks full `//base`)
-- **`third_party/libpng/visibility.gni`**: Adds fpdfsdk to libpng visibility (EmbedPDF adds PNG export)
-- **`cpdf_pagecontentgenerator.cpp`**: Fixes two null pointer crashes in PDFium's resource dict handling
-
-The `NativeLoader` reads a `native-libs.txt` manifest to extract all component `.so` files to a temp
-directory before loading. The dynamic linker resolves dependencies via `RUNPATH=$ORIGIN`.
-
-5. **Open in IntelliJ IDEA** - import as a Gradle project. Add
-   `--enable-native-access=ALL-UNNAMED` to Run Configurations -> Templates -> Application -> VM Options.
-
-### Gradle Tasks Overview
-
-| Task | Description |
-|------|-------------|
-| `./gradlew quickTry` | Quick try-out: stub bridge + unit tests + all samples (no PDFium) |
-| `./gradlew buildPdfium` | Build PDFium from EmbedPDF fork source (~15 GB, first build 15-60 min) |
-| `./gradlew buildRealBridge` | Build real native bridge with PDFium |
-| `./gradlew buildStubBridge` | Build stub native bridge (no PDFium) |
-| `./gradlew fullBuildAndTest` | Full end-to-end: PDFium + real bridge + all tests + samples |
-| `./gradlew runAllSamples` | Run all 87 samples (requires real bridge for full features) |
-| `./gradlew runSample -Psample=01` | Run a specific sample (01-87) |
-| `./gradlew test` | Run unit tests (stub mode) |
-| `./gradlew :jpdfium:integrationTest` | Run integration tests (real PDFium required) |
-
-### Sample Numbers
-
-| Sample | Feature | Sample | Feature | Sample | Feature |
-|--------|---------|--------|---------|--------|---------|
-| 01 | Render | 31 | Image Extract | 61 | Search Highlight |
-| 02 | Text Extract | 32 | Page Objects | 62 | Page Split 2-Up |
-| 03 | Text Search | 33 | Encryption | 63 | Page Labels |
-| 04 | Metadata | 34 | Linearizer | 64 | Link Validation |
-| 05 | Bookmarks | 35 | Overlay | 65 | Posterize |
-| 06 | Redact Words | 36 | Annotation Builder | 66 | PDF Diff |
-| 07 | Annotations | 37 | Path Drawer | 67 | Auto-Deskew |
-| 08 | Full Pipeline | 38 | JavaScript Inspector | 68 | Font Audit |
-| 09 | Flatten | 39 | Web Links | 69 | PDF/A Conversion |
-| 10 | Signatures | 40 | Page Boxes | 70 | Page Scaling |
-| 11 | Attachments | 41 | Version Converter | 71 | Margin Adjust |
-| 12 | Links | 42 | Bounded Text | 72 | Selective Flatten |
-| 13 | Page Import | 43 | Stream Optimizer | 73 | Annotation Export |
-| 14 | Structure Tree | 44 | Flatten Rotation | 74 | Image Replace |
-| 15 | Thumbnails (embedded) | 45 | Page Interleaver | 75 | Long Image |
-| 16 | Page Editing | 46 | Named Destinations | 76 | Duplicate Detect |
-| 17 | N-Up Layout | 47 | Blank Page Detector | 77 | Column Extract |
-| 18 | Repair | 48 | EmbedPDF Annotations | 78 | Image DPI |
-| 19 | PDF to Images | 49 | Native Encryption | 79 | Page Mirror |
-| 20 | Images to PDF | 50 | Native Redaction | 80 | Background |
-| 21 | Thumbnails (generated) | 51 | Compress | 81 | Reading Order |
-| 22 | Merge/Split | 52 | Bookmark Editor | 82 | Resource Dedup |
-| 23 | Watermark | 53 | Barcode Generate | 83 | TOC Generate |
-| 24 | Table Extract | 54 | Page Reorder | 84 | Selective Raster |
-| 25 | Page Geometry | 55 | Color Convert | 85 | Annotation Stats |
-| 26 | Header/Footer | 56 | Booklet | 86 | Posterize Sizes |
-| 27 | Security | 58 | Analytics | 87 | AutoCrop Margins |
-| 28 | Doc Info | 59 | Form Fill | | |
-| 29 | Render Options | 60 | AutoCrop | | |
-| 30 | Form Reader | | | | |
-
-**Stub-only development** (no PDFium or native libraries needed):
 ```bash
-bash native/build-stub.sh
+./gradlew buildStubBridge
 ./gradlew test
 ```
-The stub provides pass-through behavior for Java-layer testing only.
 
-## Project Structure
+The stub bridge exposes a lightweight C++ mock that validates Java FFM downcalls and object mapping without requiring a PDFium binary.
 
-```
-JPDFium/
-  native/
-    bridge/
-      include/
-        - jpdfium.h              # Public C API (consumed by jextract)
-        - jpdfium_internal.h     # DocWrapper, PageWrapper, helpers
-      src/
-        - jpdfium_document.cpp   # Core document operations
-        - jpdfium_render.cpp     # Page rendering
-        - jpdfium_text.cpp       # Text extraction and search
-        - jpdfium_redact.cpp     # Redaction (Object Fission)
-        - jpdfium_advanced.cpp   # PII pipeline: PCRE2, FreeType, HarfBuzz, ICU, qpdf, pugixml
-        - jpdfium_repair.cpp     # PDF repair cascade
-        - jpdfium_image.cpp      # PDF to image conversion
-        - jpdfium_brotli.cpp     # Brotli transcoding
-        - jpdfium_lcms.cpp       # ICC color profile validation
-        - jpdfium_openjpeg.cpp   # JPEG2000 validation
-        - jpdfium_pdfio.cpp      # PDFio fallback repair
-        - jpdfium_stub.cpp       # Stub for testing without PDFium
-    - setup-pdfium.sh            # Build PDFium from EmbedPDF fork source
-    - build-real.sh              # Build bridge against real PDFium
-    - build-stub.sh              # Build stub only
+### Full Build with Real PDFium
 
-  jpdfium/                       # All Java source (main module)
-    src/
-      main/java/stirling/software/jpdfium/
-        - PdfDocument.java       # Main document API
-        - PdfPage.java           # Page API
-        - PdfImageConverter.java # PDF <-> Image conversion
-        - PdfMerge.java          # Merge multiple PDFs
-        - PdfSplit.java          # Split PDFs by strategy
-        - Watermark.java         # Watermark builder
-        - WatermarkApplier.java  # Apply watermarks
-        - HeaderFooter.java      # Header/footer builder
-        - HeaderFooterApplier.java # Apply headers/footers
-        - doc/                   # Document inspection APIs
-          - PdfMetadata.java
-          - PdfBookmarks.java
-          - PdfAnnotations.java
-          - PdfLinks.java
-          - PdfSignatures.java
-          - PdfAttachments.java
-          - PdfThumbnails.java
-          - PdfStructureTree.java
-          - PdfPageImporter.java
-          - PdfPageEditor.java
-          - PdfRepair.java
-          - PdfSecurity.java     # Security hardening
-          - PdfTableExtractor.java
-          - PdfOverlay.java      # Page overlay/stamp
-          - PdfLinearizer.java   # Fast web view
-          - PdfStreamOptimizer.java # File size reduction
-          - PdfVersionConverter.java # PDF version
-          - PdfEncryption.java   # AES-256 encrypt/decrypt (native + qpdf file-to-file)
-          - EmbedPdfAnnotations.java # Extended annotation operations (opacity, rotation, redaction, etc.)
-          - PdfPageInterleaver.java # Duplex scan merge
-          - PdfNamedDestinations.java # Named destination lookup
-          - PdfWebLinks.java     # Web link enumeration
-          - PdfPageBoxes.java    # All five page boxes
-          - PdfAnnotationBuilder.java # Create annotations
-          - PdfPathDrawer.java   # Vector path drawing
-          - PdfFlattenRotation.java # Apply rotation transform
-          - PdfFormReader.java   # Form field extraction
-          - PdfImageExtractor.java # Embedded image extraction
-          - PdfJavaScriptInspector.java # JS audit
-          - PdfBoundedText.java  # Bounded text blocks
-          - BlankPageDetector.java # Blank page detection
-          - DocInfo.java         # Comprehensive PDF audit
-          - RenderOptions.java   # Advanced render options
-          - NUpLayout.java
-          - QpdfHelper.java
-          - PdfCompressor.java   # PDF compression
-          - PdfBarcode.java      # QR code generation
-          - PdfBookmarkEditor.java # Bookmark editing
-          - PdfPageReorder.java  # Page reordering
-          - PdfColorConverter.java # Color space conversion
-          - PdfPrint.java        # Booklet imposition
-          - PdfAnalytics.java    # Document analytics
-          - PdfFormFiller.java   # Form field filling
-          - ...
-        - exception/             # JPDFiumException hierarchy
-        - fonts/                 # FontInfo, FontNormalizer
-        - model/                 # Rect, PageSize, RenderResult, ImageFormat, PdfVersion, ColorScheme, FlattenMode, Position, ImageToPdfOptions, PdfToImageOptions
-        - panama/                # NativeLoader, JpdfiumLib, JpdfiumH (generated), DocBindings, PageEditBindings, AnnotationBindings, EmbedPdfAnnotationBindings, EmbedPdfDocumentBindings, TextPageBindings, RenderBindings, JavaScriptBindings, ActionBindings, FontLib, RepairLib, FfmHelper
-        - redact/                # PdfRedactor, RedactOptions, RedactResult, RedactionSession
-          - pii/                 # PatternEngine, PiiCategory, EntityRedactor, GlyphRedactor, XmpRedactor
-        - text/                  # PdfTextExtractor, PdfTextSearcher, PageText, TextLine, TextWord, TextChar, Table
-          - edit/                # TextEditor
-        - transform/             # PageOps, PdfPageGeometry, PdfPageBoxes
-        - convert/               # (PDF <-> Image conversion utilities)
-        - util/                  # NativeJsonParser
-      test/java/stirling/software/jpdfium/
-        - PdfDocumentTest.java   # Unit tests (stub native)
-        - RealPdfIntegrationTest.java  # Integration tests (real PDFium)
-        - ManualTest.java        # Quick smoke-test (right-click -> Run)
-        - samples/               # Numbered manual-test classes (S01-S87)
-          - RunAllSamples.java   # Execute all 87 samples
-          - SampleBase.java      # Base class for samples
-          - S01_Render.java ... S87_AutoCropMargins.java
-        - ...
-
-  jpdfium-natives/               # Platform-specific native JARs
-    - jpdfium-natives-linux-x64/
-    - ...
-  jpdfium-spring/                # Spring Boot auto-configuration
-  jpdfium-bom/                   # Maven BOM
-  buildSrc/                      # Gradle convention plugins
-```
-
-## Adding a New Native Function
-
-Adding a feature follows a consistent pattern across all layers:
-
-**Step 1 - C header** (`native/bridge/include/jpdfium.h`):
-```c
-JPDFIUM_EXPORT int32_t jpdfium_page_rotate(int64_t page, int32_t rotation);
-```
-Rules:
-- Return `int32_t` error codes (`0` = OK, negative = error)
-- Opaque handles use `int64_t`
-- Output params via pointer (`float* width`)
-- Caller-freed buffers via double pointer + length (`uint8_t** data, int64_t* len`)
-- Strings are UTF-8 `const char*` - convert to UTF-16LE internally for PDFium
-
-**Step 2 - Real implementation** (`native/bridge/src/jpdfium_document.cpp`):
-```cpp
-int32_t jpdfium_page_rotate(int64_t page, int32_t rotation) {
-    PageWrapper* pw = decodePage(page);
-    if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
-    FPDFPage_SetRotation(pw->page, rotation);
-    return JPDFIUM_OK;
-}
-```
-
-**Step 3 - Stub** (`native/bridge/src/jpdfium_stub.cpp`):
-```cpp
-int32_t jpdfium_page_rotate(int64_t, int32_t) { return JPDFIUM_OK; }
-```
-
-**Step 4 - jextract function list** (`jpdfium/build.gradle.kts`):
-```kotlin
-val jpdfiumFunctions = listOf(
-    ...,
-    "jpdfium_page_rotate"   // add here
-)
-```
-Regenerate: `./gradlew :jpdfium:generateBindings`
-
-> **Note on redaction functions:** `jpdfium_redact_words` delegates to `jpdfium_redact_words_ex`
-> internally. New redaction features should be added to `jpdfium_redact_words_ex` (and its stub)
-> rather than creating a third variant.
-
-**Step 5 - Java wrapper** (`panama/JpdfiumLib.java`):
-```java
-public static void pageRotate(long page, int rotation) {
-    check(JpdfiumH.jpdfium_page_rotate(page, rotation), "pageRotate");
-}
-```
-
-**Step 6 - High-level API** (`PdfPage.java`):
-```java
-public void rotate(int rotation) {
-    ensureOpen();
-    JpdfiumLib.pageRotate(handle, rotation);
-}
-```
-
-**Step 7 - Tests** - a unit test (stub, always runs in `./gradlew test`) and an
-integration test tagged with `@EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")`.
-
-**Step 8 - Rebuild and verify:**
-```bash
-# Rebuild stub (for unit tests)
-bash native/build-stub.sh
-./gradlew test                       # unit tests (stub)
-
-# Rebuild real (for integration tests)
-bash native/build-real.sh
-./gradlew :jpdfium:integrationTest   # integration tests (real PDFium)
-```
-
-## Adding Native Library Features
-
-Features using PCRE2, FreeType, HarfBuzz, ICU, qpdf, pugixml live in `jpdfium_advanced.cpp`
-and are conditionally compiled with `#ifdef JPDFIUM_HAS_<LIB>` preprocessor guards.
-
-**Architecture:**
-```
-jpdfium.h (API) -> jpdfium_stub.cpp (stub) + jpdfium_advanced.cpp (real impl)
-                                              |
-                                     #ifdef JPDFIUM_HAS_PCRE2  -> pcre2.h
-                                     #ifdef JPDFIUM_HAS_FREETYPE -> ft2build.h
-                                     #ifdef JPDFIUM_HAS_HARFBUZZ -> hb/hb.h, hb-subset.h
-                                     #ifdef JPDFIUM_HAS_ICU -> unicode/unorm2.h, ubrk.h, ubidi.h
-                                     #ifdef JPDFIUM_HAS_QPDF -> qpdf/QPDF.hh
-                                     #ifdef JPDFIUM_HAS_PUGIXML -> pugixml.hpp
-```
-
-**Steps to add a new native feature:**
-
-1. Declare function in `jpdfium.h`
-2. Add stub in `jpdfium_stub.cpp` (must compile without any external libraries)
-3. Add real implementation in `jpdfium_advanced.cpp` guarded by `#ifdef JPDFIUM_HAS_<LIB>`
-4. Add pkg-config detection in `CMakeLists.txt`
-5. Add Java FFM wrapper in `JpdfiumLib.java`
-6. Add function name to jextract list in `jpdfium/build.gradle.kts`
-7. Create high-level Java API class in the appropriate package
-8. Write tests (unit tests run against stub, integration against real libs)
-
-**Building with native libraries:**
-```bash
-# CMake detects all libraries via pkg-config
-bash native/build-real.sh
-```
-
-**Java-side pattern for native features:**
-```java
-// High-level class in redact/pii/ or fonts/
-public final class MyFeature {
-    private MyFeature() {}  // static utility or AutoCloseable
-
-    public static Result doSomething(PdfDocument doc, ...) {
-        // Call JpdfiumLib.myNativeFunction(...)
-        // Parse JSON result from native layer
-        // Return typed Java record
-    }
-}
-```
-
-All native features must work gracefully in stub mode (return empty results,
-not throw) so Java-layer tests pass without installing native dependencies.
-
-## Build with Real PDFium
-
-JPDFium uses the [EmbedPDF fork](https://github.com/embedpdf/pdfium) of PDFium, which adds
-native encryption, annotation, and redaction APIs (the `EPDF_*` / `EPDFAnnot_*` symbols).
-No pre-built binaries are available - the library must be built from source.
+To build the complete native bridge linked against PDFium:
 
 ```bash
-# 1. Build PDFium from EmbedPDF fork source (first run: ~15 GB download + 15-60 min build)
 bash native/setup-pdfium.sh
-
-# Subsequent builds (incremental, much faster):
-bash native/setup-pdfium.sh --rebuild
-
-# Full clean rebuild:
-bash native/setup-pdfium.sh --clean
-
-# 2. Build real bridge with CMake (auto-detects native libraries)
 bash native/build-real.sh
-
-# 3. Integration tests
-./gradlew :jpdfium:integrationTest
+./gradlew test :jpdfium:integrationTest
 ```
 
-### PDFium Build Prerequisites
+Subsequent native builds only need `bash native/build-real.sh`.
 
-| Requirement | Notes |
-|-------------|-------|
-| `git`, `python3` | Used by depot_tools (gclient/gn/ninja) |
-| `clang`, `lld` | C++ compiler and linker (Fedora: `dnf install clang lld`) |
-| ~15 GB disk space | Source checkout + build artifacts |
-| Network access | First build downloads Chromium build toolchain |
+## Architecture Overview
 
-The script installs `depot_tools` automatically. After a successful build, the
-resulting `libpdfium.so` is placed in `native/pdfium/lib/` with headers in
-`native/pdfium/include/`. The build verifies that `EPDF_*` symbols are exported.
+JPDFium consists of four core layers:
 
-## Manual Testing
+1. **Native C++ Bridge (`native/bridge/`)**:
+   - Implements high-performance C-ABI entry points in `native/bridge/src/`.
+   - Bridges PDFium, PCRE2, FreeType, HarfBuzz, ICU, and QPDF.
+   - Compiles with C++23 standard.
+   - Header contracts are defined in `native/bridge/include/jpdfium.h`.
 
-The `samples` package provides quick 1-click runnable classes for each feature:
+2. **Native Rust Integration (`native/rust/jpdfium-impl/`)**:
+   - Provides SIMD image resizing (`fast_image_resize`).
+   - Lossless PNG optimization (`oxipng`).
+   - SVG rasterization (`resvg` / `usvg`).
+   - High-ratio stream compression (`zopfli` and `lopdf`).
+   - Statically compiled into `libjpdfium_rust.a` and linked into `libjpdfium`.
 
-Right-click any `S01_Render` ... `S87_AutoCropMargins` class in IntelliJ and hit Run.
-`RunAllSamples` runs all 87 samples in sequence. Output lands in `jpdfium/samples-output/`.
+3. **Core Java Module (`jpdfium/`)**:
+   - Public APIs: `PdfDocument`, `PdfPage`, `PdfImageConverter`, `PdfRenderer`.
+   - Low-level FFM downcalls in `panama/` package (`JpdfiumLib`, `JpdfiumH`).
+   - Zero-copy native buffers managed via `RenderedPageView`.
+   - Document inspection, selective rasterization, and redaction engines.
 
-See `jpdfium/src/test/java/stirling/software/jpdfium/samples/` for details.
+4. **Vips Codec Extension (`jpdfium-vips/`)**:
+   - Discovered dynamically via `java.util.ServiceLoader` implementing `ImageCodec`.
+   - Provides high-throughput, zero-copy encoding for PNG, JPEG, TIFF, WEBP, AVIF, and HEIC.
 
-## Key Design Decisions
+## Adding New Features
 
-- **C bridge, not raw jextract** - PDFium's 400+ function API has platform-specific wide
-  strings and complex lifetime rules. The bridge owns all of this.
-- **Handles as `int64_t`** - Opaque, no structs across the FFM boundary.
-- **Bridge copies byte buffers** - `jpdfium_doc_open_bytes` copies data because the Java
-  `Arena` frees it before the document is closed.
-- **BGRA -> RGBA in C** - PDFium renders BGRA; the bridge swaps channels so Java always
-  receives consistent RGBA.
-- **No `FPDF_ApplyRedactions`** - Does not exist in the public PDFium API.
-- **Object Fission Algorithm** - True text removal via `jpdfium_redact_words_ex`:
-  1. Map text-page char indices -> page objects (spatial correlation, bounding-box centres).
-     Characters with degenerate bounding boxes (synthetic spaces) are assigned to their
-     nearest neighbor's object.
-  2. Fully-contained objects -> `FPDFPage_RemoveObject` + `FPDFPageObj_Destroy`.
-  3. Partially-overlapping objects -> split surviving characters into per-word text objects.
-     Each word gets original `a,b,c,d` + `e,f` from `FPDFText_GetCharOrigin` of its first
-     character, preserving exact inter-word positioning regardless of font advance widths.
-  4. Fission validation: if any fragment has degenerate bounds (Type 3 fonts), the plan is
-     aborted and the original object is left for fallback removal.
-  5. Fallback: objects unmapped by spatial correlation removed if >= 70% within match bbox.
-  6. Paint filled rectangles at all match bboxes, then single `FPDFPage_GenerateContent`.
-- **UTF-16LE for search** - `FPDFText_FindStart` expects 2-byte UTF-16LE, not 4-byte
-  `wchar_t`. Use `utf8_to_utf16le()` helper.
-- **Wide regex for pattern redaction** - `std::wregex` on a `std::wstring` built from
-  PDFium codepoints handles accented, CJK, and Cyrillic characters correctly.
-- **NativeLoader extracts to a temp directory** - Both `libpdfium.so` and `libjpdfium.so`
-  are extracted to the same temp dir so the `$ORIGIN` rpath resolves at runtime.
-- **Single `jpdfium` module** - All Java API lives in one module. No internal
-  module split (core/bindings/document) to simplify dependency management for consumers.
+When introducing a new native feature, follow this checklist:
 
-## Coding Standards
+1. **C Header**: Declare the signature in `native/bridge/include/jpdfium.h`. Use `JPDFIUM_EXPORT` with C linkage.
+2. **Implementation**: Add implementation in `native/bridge/src/` with proper boundary validation.
+3. **Stub Implementation**: Add matching mock behavior in `native/bridge/src/jpdfium_stub.cpp`.
+4. **Java Downcall**: Add the binding in `jpdfium/src/main/java/stirling/software/jpdfium/panama/JpdfiumLib.java`.
+5. **High-Level API**: Expose clean, fluent Java methods in `PdfDocument`, `PdfPage`, or dedicated service classes.
+6. **Testing**: Add unit tests in `jpdfium/src/test/java/` and verify with `./gradlew test`.
+7. **Benchmarks**: If performance-critical, measure with JMH (`./gradlew :jpdfium:jmh`).
 
-- **Java** - Follow existing style. No Lombok. Records for value types. Javadoc on all public API.
-- **C++** - C++17. All exported functions prefixed `jpdfium_`. RAII via
-  `DocWrapper`/`PageWrapper` destructors. `extern "C"` in `jpdfium.h` is mandatory.
-- **Commits** - Conventional commits: `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`.
-- **Tests** - Every Java API method needs a unit test (stub) and an integration test (real PDFium).
+## Ownership, Mutation, and Security Contracts
 
-## Pull Request Checklist
+PDFium calls are serialized by a process-wide guard, but Java objects can outlive
+the native state behind them. Keep this answer true for every change: **what prevents
+this handle, buffer, or security operation from becoming unsafe when surrounding state changes?**
 
-- [ ] Stub implementation added for any new native function
-- [ ] Implementation guarded by `#ifdef JPDFIUM_HAS_*` (if using native libs)
-- [ ] Function added to jextract list in `jpdfium/build.gradle.kts`
-- [ ] Unit tests pass: `./gradlew test`
-- [ ] Integration tests pass: `./gradlew :jpdfium:integrationTest`
-- [ ] New public API has Javadoc
-- [ ] No memory leaks in C++ (check with valgrind when modifying native code)
-- [ ] README updated if adding user-visible features
+- **Identity vs state**: a `PdfDocument`/`PdfPage` is an identity; structural operations
+  (metadata/font strip, page rasterization) free and replace native state. Such operations
+  bump the document epoch and invalidate previously opened pages, which then fail loudly
+  (`IllegalStateException`) instead of touching freed memory. Never silently retarget a page.
+- **Mutation policy is invalidate, not reject or snapshot**: callers reopen pages after
+  structural operations. Do not mix policies within one operation.
+- **Buffers**: every native output buffer validates null, writability, scope, dimensions
+  (overflow-safe), pixel budget, and byte capacity on the Java side, plus independent
+  dimension checks natively. Render ABIs carry an explicit byte capacity.
+- **Redaction**: content removal is mandatory (visual-only covers are refused in Java
+  and rejected by the bridge). Sanitization on save is opt-in (`setSanitizeOnSave`).
+- **Threads**:   handles are confined to one thread at a time; only `close()` is safe
+  cross-thread. Do not add per-object monitors, use the existing global guard boundary.
+- **Memory**: do not replace shared scratch or add pools without measurements (heap,
+  retained native bytes, guard hold time) proving the benefit. Native tests that change
+  bridge behavior must run against real natives, not just the stub.
+- **Limits are unlimited by default**: pixel, save-result, frame, and concurrency
+  bounds default to 0 = unbounded. Consumers enable them via system properties
+  (`jpdfium.maxRenderPixels`, `jpdfium.image.max_*`, `jpdfium.qpdf.maxConcurrency`,
+  `jpdfium.image.maxConcurrency`, `jpdfium.pipeline.maxParallelism`), explicit
+  options (`SaveOptions.maxOutputBytes`, `StorageOptions`, `ProcessingMode`),
+  or direct APIs (`QpdfLib.setMaxConcurrency`, `VipsImageConverter.setMaxConcurrency`,
+  `QpdfLib.withSlot`). Negative values are invalid configuration and rejected,
+  never silently treated as unlimited. Permits bound admission, not bytes;
+  `maxBytes` on publish bounds acceptance, not transient disk use during native write.
+
+## Performance Contributions
+
+Every optimization must state its workload, measured benefit, bounded-memory policy,
+and correctness regression. Optimize in this order: lifetime/capacity correctness,
+PDFium-call count, crossing count, copies/peak bytes, guard hold time, allocation
+rate/retention, native loops, and only then instruction-level tuning.
+
+- Measure with JMH (micro), component drivers, and end-to-end runs; record heap
+  bytes/op (`-prof gc`), peak RSS, guard wait/hold time (`PdfiumRuntime.stats()`),
+  calls/op, and budgets. Report intervals across forks, not single fastest runs.
+- Prefer fewer calls and fewer copies over hotter leaves: batch repetitive tiny FFM
+  calls, move detached I/O outside the guard, and validate buffer capacity in both
+  Java and native code. Never mark rendering, parsing, saving, redaction, or text
+  extraction as `critical` downcalls.
+- Keep `Arena.ofConfined()` for single-call temporaries and `Arena.ofShared()` for
+  cross-thread memory; never use `ofAuto()` or `global()` for bounded paths.
+- Budgets are opt-in with no default cap: `jpdfium.maxRenderPixels` (0 = unlimited),
+  `jpdfium.maxSaveResultBytes` (0 = disabled), `jpdfium.image.max_*` (0 = unlimited),
+  `jpdfium.qpdf/image.maxConcurrency` (0 = unbounded), `jpdfium.pipeline.maxParallelism`
+  (0 = unbounded), plus the caller-supplied bound in `PdfDocument.open(InputStream, long)`
+  and `SaveOptions.maxOutputBytes`. Stream opens have **no** default cap.
+  Checked arithmetic everywhere. Concurrency permits bound admission, not memory;
+  size checks on publish bound acceptance, not transient native/disk use.
+
+## Code Standards and Style
+
+- **Modern Java 25**: Use modern language features (records, pattern matching, switch expressions). Avoid Lombok.
+- **Imports**: Never use inline fully-qualified class names. Always add explicit imports at the top of the file.
+- **Comments**: Keep inline comments concise, normally at most two lines. Public
+  ownership, safety, cancellation, and output-semantics contracts may use longer
+  Javadoc when the guarantee needs exact wording (what is bounded, when staging
+  publishes, what survives cancellation), and native ABI, struct-layout, and
+  portability rationale may take the lines it needs, because shortening it hides
+  the invariant being documented. Prefer fewer words over more.
+- **Cancellation**: logical cancel never releases resources still owned by
+  running native work. Arenas, leases, staging files, and permits retire on
+  actual task exit (finally), never on `Future.cancel`/`shutdownNow`.
+  Publication uses an explicit commit (`RUNNING→COMMITTING→COMMITTED` vs
+  `RUNNING→CANCELLED`); only the commit winner publishes, late cancel loses.
+  Replacement is staging + atomic rename; no-clobber is `CREATE_NEW` (O_EXCL)
+  streaming, never precheck + move.
+- **Formatting**:
+  - Java: Spotless keeps import hygiene, trailing whitespace, and the final newline
+    in shape (`./gradlew spotlessApply` rewrites, `spotlessCheck` reports, and CI
+    runs the check). It does not reflow code, so keep the surrounding style by hand.
+    The whole `panama` package is excluded from it. `javac -Werror` and the Javadoc
+    doclint gate cover the rest.
+  - C++: Enforced via `.clang-format` and verified via `.clang-tidy`.
+- **Commits**: Use standard, everyday commit messages with only a title and no body
+  (e.g. `Add direct stream rasterization`, `Fix empty page boxes`). No `feat:`/`fix:`
+  prefixes. Keep one concern per commit and fold import-only churn into the commit
+  that needs it instead of a separate style commit.
+
+## Documentation Policy
+
+`README.md`, `CHANGELOG.md`, and `docs/` are written to this policy. The goal is accurate, concise
+documentation that helps a reader finish a task. Write to this standard directly;
+it does not depend on any particular authoring method.
+
+### Accuracy
+
+Review technical accuracy before style. Prose edits never substitute for verification.
+
+- Verify API names, overloads, artifact coordinates, configuration keys, defaults,
+  requirements, and failure behavior against the source or the released artifact.
+- Do not invent capabilities, guarantees, benchmarks, or compatibility.
+- Distinguish verified behavior from recommendations. Where behavior is unknown,
+  record an open question in the pull request rather than guessing in the text.
+- State prerequisites and limitations next to the instruction they affect.
+- Do not silently broaden support or security claims.
+- Keep concurrent safety separate from parallel execution. JPDFium serializes every
+  PDFium call, so "safe from multiple threads" does not mean "runs in parallel".
+- Treat redaction, signing, and save behavior as security-relevant. Describe the exact
+  operation and what it does not change.
+- Distinguish three separate claims: a published coordinate, a nonempty payload, and
+  an executed platform. Publishing a coordinate proves neither of the others — an
+  experimental module can publish an empty jar (see the musl note in
+  [compatibility.md](docs/compatibility.md)), and no published artifact proves the
+  platform was ever run.
+- Treat destructive operations as requiring explicit verification: full rewrites,
+  signature invalidation, metadata removal, and cache mutation.
+
+### Examples
+
+- Use public APIs only.
+- Make quick-start examples runnable, including `throws` clauses for checked
+  exceptions and any imports they need.
+- Use a concrete released version, or a placeholder with instructions to replace it.
+  Remove unexplained placeholders from examples labeled complete. An explicit
+  placeholder such as `<version>` is acceptable in reference documentation.
+- Show required resource cleanup in the first example that needs it.
+- Label incomplete snippets as excerpts.
+- Verify examples against the version the document describes.
+- Do not invent package names or overloads to complete an example.
+
+### Language
+
+- Start with the subject or the task.
+- Use concrete nouns and direct verbs. Prefer "use" to "leverage".
+- Remove unsupported adjectives such as seamless, powerful, robust, cutting-edge,
+  effortless, and enterprise-grade.
+- Do not open with scene-setting or an empty purpose statement.
+- Do not use "not just X, but Y" constructions.
+- Do not invent capability ranges or comparisons. Concrete ranges backed by
+  measurement are fine.
+- Do not force items into groups of three.
+- Do not append filler clauses about improving the user experience.
+- Do not repeat a section's introduction in its conclusion.
+- Do not add conversational prompts or closing questions.
+- Do not start every bullet with a bold label unless the label aids lookup.
+- Keep technical terminology consistent. Call it a page, not a sheet or a surface.
+- Do not use semicolons to make prose sound formal.
+
+### Punctuation
+
+- Avoid unnecessary special characters, such as emojis and arrows.
+- Write ranges as "Java 25 to 26".
+- Use ASCII quotation marks in prose and examples.
+- Preserve exact syntax in commands, identifiers, paths, and literal output. For
+  example `--enable-native-access=ALL-UNNAMED` must remain unchanged.
+- Use three backticks with a language identifier for every fenced block.
+
+### Formatting
+
+- Headings name content or tasks.
+- Bullets for independent items, numbered lists only where order matters, tables
+  for genuinely comparable information.
+- Use bold sparingly.
+- Badges are limited to release version, CI, license, and required runtime.
+- Keep reference material out of the README when it obstructs setup. Link it instead.
+
+### Before opening a pull request
+
+- Check every strong claim: always, never, all, safe, secure, automatic, guaranteed,
+  lossless, thread-safe.
+- Remove unresolved placeholders.
+- Validate relative links, code fence languages, and banned characters.
+- Confirm the examples match the documented release.
+- Record notable user-facing changes under `## [Unreleased]` in `CHANGELOG.md`.
+
+## Running Samples and Benchmarks
+
+- Run all samples: `./gradlew runAllSamples`
+- Run a single sample: `./gradlew runSample -Psample=01`
+- Run JMH microbenchmarks: `./gradlew :jpdfium:jmh`
+- Run specific benchmark: `./gradlew :jpdfium:jmh -Pjmh.include=FlattenBenchmark`

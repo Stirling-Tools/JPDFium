@@ -5,6 +5,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -36,5 +37,26 @@ class PdfPipelineTest {
         try (PdfDocument out = PdfPipeline.process(minimalPdf(), mode, (doc, i) -> {})) {
             assertEquals(3, out.pageCount());
         }
+    }
+
+    @Test
+    void parallelFromFileStagesChunksOffHeap() throws Exception {
+        // Path input in parallel mode must visit every page exactly once and
+        // return a valid merged document (chunks spill to temp files).
+        ProcessingMode mode = ProcessingMode.builder().parallel(2).build();
+        AtomicInteger visited = new AtomicInteger();
+        try (PdfDocument out = PdfPipeline.process(minimalPdf(), mode,
+                (doc, i) -> visited.incrementAndGet())) {
+            assertEquals(3, out.pageCount());
+            assertEquals(3, visited.get());
+        }
+    }
+
+    @Test
+    void forEachParallelFromPathVisitsAllPages() throws Exception {
+        AtomicInteger visited = new AtomicInteger();
+        PdfPipeline.forEach(minimalPdf(), ProcessingMode.builder().parallel(2).build(),
+                (doc, i) -> visited.incrementAndGet());
+        assertEquals(3, visited.get());
     }
 }

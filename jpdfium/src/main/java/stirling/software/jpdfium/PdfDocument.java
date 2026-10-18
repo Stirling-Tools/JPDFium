@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.io.BufferedOutputStream;
 import stirling.software.jpdfium.doc.Attachment;
 import stirling.software.jpdfium.doc.Bookmark;
 import stirling.software.jpdfium.doc.MetadataTag;
@@ -8,15 +9,22 @@ import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfNamedPages;
+import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
+import stirling.software.jpdfium.doc.SignatureDetails;
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.awt.image.BufferedImage;
@@ -32,7 +40,9 @@ import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +50,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.function.ObjIntConsumer;
 
 /**
  * Represents an open PDF document backed by native PDFium.
@@ -49,7 +62,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>Independent {@code PdfDocument} instances may be used from separate threads:
  * PDFium itself is not thread-safe even across independent documents, so every
- * native call is serialised by {@link stirling.software.jpdfium.panama.NativeGuard}.
+ * native call is serialised by the
+ * {@link stirling.software.jpdfium.panama.PdfiumRuntime} execution domain.
  * That makes concurrent use safe, but PDFium work does not run in parallel - the
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
@@ -58,56 +72,313 @@ public final class PdfDocument implements AutoCloseable {
     private final long handle;
     private volatile MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicInteger structureEpoch = new AtomicInteger(0);
+
+    /**
+     * Bumped by every successful content mutation: annotation flattening, cropping,
+     * attachment and named-page edits, and any reload/raster pass that replaces the
+     * native handle. Zero means the live document still matches the bytes it was
+     * opened with, so retained open-time source bytes stay valid.
+     */
+    private final AtomicInteger contentGeneration = new AtomicInteger(0);
+
+    /** Set once on the first content edit; survives handle reloads, unlike {@link #contentGeneration}. */
+    private volatile boolean contentModified;
+
+    /**
+     * Temporary file this document owns, deleted on {@link #close()}.
+     *
+     * <p>Set both when a document is opened from a stream (which spools to a
+     * spool file) and when a file-backed merge or split produces one. PDFium keeps
+     * its own handle on the file for the document's lifetime, so it cannot be
+     * removed earlier. Volatile and cleared on close so the deletion happens once.
+     */
+    private volatile Path ownedTempFile;
+
+    /**
+     * Original file this document was opened from, or null for memory/stream
+     * documents. Used by bulk operations to reuse the stable file-backed
+     * source without snapshotting when the document is still at generation 0
+     * (no structural mutation since open). Never deleted by this document.
+     */
+    private volatile Path sourcePath;
+    private volatile byte[] sourceBytes;
 
     PdfDocument(long handle) {
+        this(handle, null);
+    }
+
+    PdfDocument(long handle, Path ownedTempFile) {
         this.handle = handle;
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        this.ownedTempFile = ownedTempFile;
+    }
+
+    /**
+     * Open a temporary file as a document that deletes the file on close.
+     * Used by file-backed merge and split so large results never sit on the heap.
+     *
+     * @param tmp existing readable PDF file
+     */
+    static PdfDocument openTemp(Path tmp) {
+        Path abs = tmp.toAbsolutePath();
+        return new PdfDocument(JpdfiumLib.docOpen(abs.toString()), abs);
     }
 
     /**
      * Re-queries the raw FPDF_DOCUMENT handle from the native bridge.
-     * Called when native operations (such as QPDF metadata or font stripping)
-     * reload the underlying document.
+     *
+     * <p><strong>Internal use only.</strong> Must be called after any native operation
+     * (QPDF metadata, font stripping) that replaces the underlying {@code FPDF_DOCUMENT}
+     * pointer, so that EmbedPDF direct bindings pick up the new address.
+     * External callers must not invoke this; the invariant is maintained automatically
+     * by every library operation that reloads the document.
+     *
+     * <p>Refreshing implies native replacement: previously opened pages become
+     * stale and fail loudly instead of touching freed memory.
      */
     public void refreshRawHandle() {
         this.rawDocSegment = JpdfiumLib.docRawHandle(handle);
+        structureEpoch.incrementAndGet();
+        contentGeneration.incrementAndGet();
     }
 
+    /** Returns the current structural epoch, bumped by every reload/raster operation. */
+    public int structureEpoch() {
+        return structureEpoch.get();
+    }
+
+    /**
+     * Returns the content mutation generation, bumped by every successful edit that
+     * changes the document's bytes. Zero means the live document still matches its
+     * open-time source bytes and they can be reused verbatim.
+     */
+    public int contentGeneration() {
+        return contentGeneration.get();
+    }
+
+    /** True once an edit changed the content; not bumped by handle reloads, so it flags real caller edits. */
+    public boolean isContentModified() {
+        return contentModified;
+    }
+
+    /** Records a content mutation so retained open-time bytes are not reused. */
+    public void markContentModified() {
+        contentGeneration.incrementAndGet();
+        contentModified = true;
+    }
+
+    /**
+     * Invalidates every previously opened page (internal use only; called
+     * automatically after structural ops that free native state).
+     */
+    void invalidateOpenPages() {
+        refreshRawHandle();
+    }
+
+    /**
+     * Open a document from a file path.
+     *
+     * @param path path to a PDF file; must not be null
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(Path path) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
-        return new PdfDocument(JpdfiumLib.docOpen(path.toAbsolutePath().toString()));
+        Path abs = path.toAbsolutePath();
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
+        doc.sourcePath = abs;
+        return doc;
     }
 
+    /**
+     * Open raw PDF bytes.
+     *
+     * <p>The array is retained by reference for the life of the document so a
+     * signed document can be returned byte-for-byte; the caller must therefore
+     * not modify it until the document is closed. {@link #sourceBytes()} returns
+     * a defensive copy for callers that need the open-time bytes.
+     */
     public static PdfDocument open(byte[] data) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
-        return new PdfDocument(JpdfiumLib.docOpenBytes(data));
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenBytes(data));
+        // Retained by reference (not copied): an eager whole-document copy cost
+        // more than the open itself on hot paths and regressed the byte-open
+        // benchmark, so the snapshot contract moves to the caller: do not mutate
+        // the array until the document is closed. sourceBytes() still clones.
+        doc.sourceBytes = data;
+        return doc;
     }
 
+    /**
+     * Open password-protected raw PDF bytes (see {@link #open(Path, String)} for
+     * the shared null/empty password contract). Like {@link #open(byte[])}, the
+     * array is retained by reference and must not be mutated while the document
+     * is open.
+     */
     public static PdfDocument open(byte[] data, String password) {
         if (data == null) throw new IllegalArgumentException("data must not be null");
         if (data.length == 0) throw new IllegalArgumentException("data must not be empty");
-        if (password == null || password.isEmpty()) {
-            return new PdfDocument(JpdfiumLib.docOpenBytes(data));
-        }
-        return new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        PdfDocument doc = password.isEmpty()
+                ? new PdfDocument(JpdfiumLib.docOpenBytes(data))
+                : new PdfDocument(JpdfiumLib.docOpenBytesProtected(data, password));
+        doc.sourceBytes = data;
+        return doc;
     }
 
+    /**
+     * Opens a document from a stream.
+     *
+     * <p><strong>No size limit is applied.</strong> The stream is spooled to an
+     * owned temporary file and PDFium opens it file-backed, so peak memory stays
+     * bounded by the copy buffer regardless of document size. That is what makes
+     * the absence of a default limit safe: an unbounded stream cannot exhaust the
+     * heap, and is never materialised as a whole-document {@code byte[]}.
+     *
+     * <p>For untrusted input prefer {@link #open(InputStream, long)}, which
+     * rejects an over-long stream while spooling instead of writing it all out.
+     *
+     * @param in source stream (fully consumed)
+     */
     public static PdfDocument open(InputStream in) throws IOException {
-        if (in == null) throw new IllegalArgumentException("in must not be null");
-        return open(in.readAllBytes());
+        return openStream(in, null, null);
     }
 
+    /**
+     * Opens a document from a stream, refusing to spool more than
+     * {@code maxBytes} bytes.
+     *
+     * <p>This is the opt-in bound for untrusted input: the stream is rejected as
+     * soon as it exceeds {@code maxBytes}, so neither the heap nor the temporary
+     * file can grow without limit.
+     *
+     * @param in       source stream (fully consumed up to the bound)
+     * @param maxBytes maximum bytes to spool; non-positive values are rejected
+     * @throws IllegalArgumentException if the stream exceeds {@code maxBytes}
+     */
+    public static PdfDocument open(InputStream in, long maxBytes) throws IOException {
+        if (maxBytes <= 0) throw new IllegalArgumentException("maxBytes must be > 0");
+        return openStream(in, maxBytes, null);
+    }
+
+    /**
+     * Opens a password-protected document from a stream.
+     *
+     * <p>See {@link #open(InputStream)} for the file-backed spooling contract.
+     */
     public static PdfDocument open(InputStream in, String password) throws IOException {
-        if (in == null) throw new IllegalArgumentException("in must not be null");
-        return open(in.readAllBytes(), password);
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) return openStream(in, null, null);
+        return openStream(in, null, password);
     }
 
+    /**
+     * Opens a password-protected document from a stream with an explicit spool bound
+     * (see {@link #open(InputStream, long)} and the shared password contract on
+     * {@link #open(Path, String)}).
+     */
+    public static PdfDocument open(InputStream in, String password, long maxBytes) throws IOException {
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (maxBytes <= 0) throw new IllegalArgumentException("maxBytes must be > 0");
+        if (password.isEmpty()) return openStream(in, maxBytes, null);
+        return openStream(in, maxBytes, password);
+    }
+
+    /**
+     * Spool {@code in} to an owner-only temporary file and open it file-backed.
+     *
+     * <p>The temp file outlives this call because PDFium keeps its own handle on
+     * the document, so it is deleted by {@link #close()}. Every failure path
+     * deletes it immediately, so a rejected stream leaves nothing behind.
+     */
+    private static PdfDocument openStream(InputStream in, Long maxBytes, String password)
+            throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        Path spooled = spool(in, maxBytes);
+        long handle = 0;
+        boolean ok = false;
+        try {
+            handle = password == null
+                    ? JpdfiumLib.docOpen(spooled.toAbsolutePath().toString())
+                    : JpdfiumLib.docOpenProtected(spooled.toAbsolutePath().toString(), password);
+            PdfDocument doc = new PdfDocument(handle, spooled);
+            ok = true;
+            return doc;
+        } finally {
+            if (!ok) {
+                // The constructor can still throw (for example while resolving the
+                // raw handle), so the native document is closed here and the spool
+                // is removed instead of being orphaned.
+                if (handle != 0) JpdfiumLib.docClose(handle);
+                deleteQuietly(spooled);
+            }
+        }
+    }
+
+    /**
+     * Copy a stream to an owner-only temporary file, enforcing an optional bound.
+     *
+     * <p>The bound is checked as bytes arrive, so an over-long or endless stream
+     * is abandoned without ever being fully written.
+     */
+    private static Path spool(InputStream in, Long maxBytes) throws IOException {
+        Path tmp;
+        try {
+            tmp = Files.createTempFile("jpdfium-spool-", ".pdf",
+                    PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        } catch (UnsupportedOperationException ignored) {
+            tmp = Files.createTempFile("jpdfium-spool-", ".pdf");
+        }
+        try {
+            try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(tmp))) {
+                byte[] buf = new byte[64 * 1024];
+                long total = 0;
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    total += n;
+                    if (maxBytes != null && total > maxBytes) {
+                        throw new IllegalArgumentException("input stream exceeds maxBytes=" + maxBytes);
+                    }
+                    out.write(buf, 0, n);
+                }
+            }
+            return tmp;
+        } catch (Throwable e) {
+            // Covers Error (OOM, StackOverflow) as well as IOException and
+            // RuntimeException, so a partially written spool is never left behind.
+            deleteQuietly(tmp);
+            throw e;
+        }
+    }
+
+    private static void deleteQuietly(Path p) {
+        try {
+            Files.deleteIfExists(p);
+        } catch (IOException ignored) {
+            // Best effort: a leftover spool is removed by the OS temp sweeper.
+        }
+    }
+
+    /**
+     * Open a document from a file.
+     *
+     * @param file PDF file; must not be null
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(File file) {
         if (file == null) throw new IllegalArgumentException("file must not be null");
         return open(file.toPath());
     }
 
+    /**
+     * Open a password-protected document from a file (see {@link #open(Path, String)}
+     * for the shared null/empty password contract).
+     *
+     * @param file     PDF file; must not be null
+     * @param password document password; null is rejected, empty falls back to a plain open
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(File file, String password) {
         if (file == null) throw new IllegalArgumentException("file must not be null");
         return open(file.toPath(), password);
@@ -127,9 +398,11 @@ public final class PdfDocument implements AutoCloseable {
             // View, don't copy: the bridge copies synchronously inside the downcall,
             // so peak heap cost is zero instead of one full-document byte[] transient.
             // Heap buffers still copy once via docOpenBytes (jextract downcalls reject them).
+            int remaining = buffer.remaining();
             MemorySegment seg = MemorySegment.ofBuffer(buffer.duplicate());
             long handle = JpdfiumLib.docOpenSegment(seg, seg.byteSize());
-            buffer.position(buffer.limit());
+            // Advance position to match the heap path (buffer.get(bytes) does the same).
+            buffer.position(buffer.position() + remaining);
             return new PdfDocument(handle);
         }
         byte[] bytes = new byte[buffer.remaining()];
@@ -137,27 +410,254 @@ public final class PdfDocument implements AutoCloseable {
         return open(bytes);
     }
 
+    /**
+     * Open a password-protected document from a byte buffer (see
+     * {@link #open(Path, String)} for the shared null/empty password contract).
+     * A heap buffer is copied once; the position advances to the limit.
+     *
+     * @param buffer   source buffer; must not be null
+     * @param password document password; null is rejected, empty falls back to {@link #open(ByteBuffer)}
+     * @return open document, closed by the caller
+     */
     public static PdfDocument open(ByteBuffer buffer, String password) {
         if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
-        if (password == null || password.isEmpty()) return open(buffer);
+        if (password == null) throw new IllegalArgumentException("password must not be null");
+        if (password.isEmpty()) return open(buffer);
         // Password path still needs heap bytes (no segment+password ABI); single copy only.
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         return open(bytes, password);
     }
 
+    /**
+     * Open a password-protected document.
+     *
+     * <p>Password contract (consistent across all {@code open} overloads):
+     * {@code null} is rejected with {@link IllegalArgumentException}, while an
+     * empty password falls back to a plain open - PDFium accepts empty passwords
+     * for documents that need none, so emptiness alone is not an error.
+     */
     public static PdfDocument open(Path path, String password) {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
-        return new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
+        if (password.isEmpty()) return open(path);
+        PdfDocument doc =
+                new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
+        doc.sourcePath = path.toAbsolutePath();
+        return doc;
     }
 
+    /** Original open path, or null when not file-backed. Never deleted here. */
+    public Path sourcePath() {
+        return sourcePath;
+    }
+
+    /**
+     * Retained open-time bytes when the document was opened from a byte array,
+     * or {@code null} otherwise (file-backed and stream documents never
+     * materialise the whole document on the heap; for those, read the original
+     * lazily via {@link #sourcePath()}). A defensive copy is returned so callers
+     * can rely on the retained bytes being immutable; the retained array itself
+     * is the one passed to {@link #open(byte[])} and remains the caller's
+     * responsibility not to mutate while the document is open.
+     */
+    public byte[] sourceBytes() {
+        byte[] s = sourceBytes;
+        return s == null ? null : s.clone();
+    }
+
+    /**
+     * Create a document with one page per image, using default
+     * {@link ImageToPdfOptions} (page sized to the image).
+     *
+     * @param images source images, laid out one page each in list order
+     * @return new in-memory document
+     */
     public static PdfDocument fromImages(List<BufferedImage> images) {
         return PdfImageConverter.imagesToPdfFromImages(images, ImageToPdfOptions.builder().build());
     }
 
+    /**
+     * Create a document with one page per image and explicit page options.
+     *
+     * @param images  source images, laid out one page each in list order
+     * @param options page sizing, margins, and compression policy
+     * @return new in-memory document
+     */
     public static PdfDocument fromImages(List<BufferedImage> images, ImageToPdfOptions options) {
         return PdfImageConverter.imagesToPdfFromImages(images, options);
+    }
+
+    /**
+     * Create a PDF document containing a single image.
+     *
+     * @param imagePath path to image file
+     * @return new PDF document
+     * @throws IOException if reading or decoding fails
+     */
+    public static PdfDocument fromImage(Path imagePath) throws IOException {
+        return PdfImageConverter.imageToPdf(imagePath, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document containing a single image with custom options.
+     */
+    public static PdfDocument fromImage(Path imagePath, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imageToPdf(imagePath, options);
+    }
+
+    /**
+     * Create a PDF document containing a single image file.
+     */
+    public static PdfDocument fromImage(File imageFile) throws IOException {
+        if (imageFile == null) throw new IllegalArgumentException("imageFile must not be null");
+        return fromImage(imageFile.toPath());
+    }
+
+    /**
+     * Create a PDF document containing a single image file with custom options.
+     */
+    public static PdfDocument fromImage(File imageFile, ImageToPdfOptions options) throws IOException {
+        if (imageFile == null) throw new IllegalArgumentException("imageFile must not be null");
+        return fromImage(imageFile.toPath(), options);
+    }
+
+    /**
+     * Create a PDF document containing a single BufferedImage.
+     */
+    public static PdfDocument fromImage(BufferedImage image) {
+        return fromImages(List.of(image));
+    }
+
+    /**
+     * Create a PDF document containing a single BufferedImage with custom options.
+     */
+    public static PdfDocument fromImage(BufferedImage image, ImageToPdfOptions options) {
+        return fromImages(List.of(image), options);
+    }
+
+    /**
+     * Create a PDF document from multiple image paths.
+     */
+    public static PdfDocument fromImages(Path... imagePaths) throws IOException {
+        if (imagePaths == null || imagePaths.length == 0) {
+            throw new IllegalArgumentException("At least one image path is required");
+        }
+        return PdfImageConverter.imagesToPdf(List.of(imagePaths), ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image paths.
+     */
+    public static PdfDocument fromImagePaths(List<Path> imagePaths) throws IOException {
+        return PdfImageConverter.imagesToPdf(imagePaths, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image paths with custom options.
+     */
+    public static PdfDocument fromImagePaths(List<Path> imagePaths, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdf(imagePaths, options);
+    }
+
+    /**
+     * Create a PDF document from multiple image files.
+     */
+    public static PdfDocument fromImages(File... imageFiles) throws IOException {
+        if (imageFiles == null || imageFiles.length == 0) {
+            throw new IllegalArgumentException("At least one image file is required");
+        }
+        return fromImageFiles(List.of(imageFiles));
+    }
+
+    /**
+     * Create a PDF document from a list of image files.
+     */
+    public static PdfDocument fromImageFiles(List<File> imageFiles) throws IOException {
+        return fromImageFiles(imageFiles, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of image files with custom options.
+     */
+    public static PdfDocument fromImageFiles(List<File> imageFiles, ImageToPdfOptions options) throws IOException {
+        if (imageFiles == null || imageFiles.isEmpty()) {
+            throw new IllegalArgumentException("imageFiles must not be empty");
+        }
+        List<Path> paths = new ArrayList<>(imageFiles.size());
+        for (File f : imageFiles) {
+            paths.add(f.toPath());
+        }
+        return PdfImageConverter.imagesToPdf(paths, options);
+    }
+
+    /**
+     * Create a PDF document from one or more raw image byte arrays.
+     * Supports multi-page TIFFs and mixed image formats.
+     */
+    public static PdfDocument fromImageBytes(byte[]... imageBytes) throws IOException {
+        if (imageBytes == null || imageBytes.length == 0) {
+            throw new IllegalArgumentException("At least one image byte array is required");
+        }
+        return fromImageBytes(List.of(imageBytes), ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of raw image byte arrays.
+     */
+    public static PdfDocument fromImageBytes(List<byte[]> imageBytes) throws IOException {
+        return fromImageBytes(imageBytes, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a list of raw image byte arrays with custom options.
+     */
+    public static PdfDocument fromImageBytes(List<byte[]> imageBytes, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdfFromBytes(imageBytes, options);
+    }
+
+    /**
+     * Create a PDF document from a single raw image byte array.
+     */
+    public static PdfDocument fromImage(byte[] imageBytes) throws IOException {
+        return fromImage(imageBytes, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from a single raw image byte array with custom options.
+     */
+    public static PdfDocument fromImage(byte[] imageBytes, ImageToPdfOptions options) throws IOException {
+        if (imageBytes == null) throw new IllegalArgumentException("imageBytes must not be null");
+        return fromImageBytes(List.of(imageBytes), options);
+    }
+
+    /**
+     * Create a PDF document from an image InputStream.
+     */
+    public static PdfDocument fromImage(InputStream in) throws IOException {
+        return fromImage(in, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from an image InputStream with custom options.
+     */
+    public static PdfDocument fromImage(InputStream in, ImageToPdfOptions options) throws IOException {
+        if (in == null) throw new IllegalArgumentException("in must not be null");
+        return fromImage(in.readAllBytes(), options);
+    }
+
+    /**
+     * Create a PDF document from multiple image InputStreams.
+     */
+    public static PdfDocument fromImageStreams(List<InputStream> streams) throws IOException {
+        return fromImageStreams(streams, ImageToPdfOptions.builder().build());
+    }
+
+    /**
+     * Create a PDF document from multiple image InputStreams with custom options.
+     */
+    public static PdfDocument fromImageStreams(List<InputStream> streams, ImageToPdfOptions options) throws IOException {
+        return PdfImageConverter.imagesToPdfFromStreams(streams, options);
     }
 
     /**
@@ -191,11 +691,12 @@ public final class PdfDocument implements AutoCloseable {
      * Uses QPDF when available with fallback to safe PDFium page import.
      *
      * @param inputs list of PDF byte arrays
-     * @return merged PDF bytes, or {@code null} on failure
+     * @return merged PDF bytes
+     * @throws IllegalArgumentException if {@code inputs} is null or empty
      */
     public static byte[] mergeBytes(List<byte[]> inputs) {
         if (inputs == null || inputs.isEmpty()) {
-            return null;
+            throw new IllegalArgumentException("inputs must not be null or empty");
         }
         if (PdfMerger.isSupported()) {
             byte[] result = PdfMerger.mergeBytes(inputs);
@@ -243,39 +744,303 @@ public final class PdfDocument implements AutoCloseable {
         return PdfMerge.merge(List.of(documents));
     }
 
+    /**
+     * Number of pages in the document.
+     *
+     * @return page count
+     */
     public int pageCount() {
         ensureOpen();
         return JpdfiumLib.docPageCount(handle);
     }
 
+    /**
+     * Open a page for rendering or editing. The returned handle owns native
+     * state and must be closed by the caller; it is invalidated by structural
+     * document operations (see {@link PdfPage}).
+     *
+     * @param index zero-based page index
+     * @return open page handle
+     */
     public PdfPage page(int index) {
         ensureOpen();
-        return PdfPage.open(handle, index);
+        return PdfPage.open(this, handle, index);
     }
 
     /**
-     * Flatten all pages using the specified mode with default DPI (150).
+     * Get the count of named page registrations in the given tree (/Names /Pages or /Names /Templates).
+     */
+    public int namedPageCount(PdfNamedPages.Tree tree) {
+        ensureOpen();
+        return PdfNamedPages.count(rawDocSegment, tree);
+    }
+
+    /**
+     * List all entries in the given named page tree.
+     */
+    public List<PdfNamedPages.NamedPageEntry> namedPages(PdfNamedPages.Tree tree) {
+        ensureOpen();
+        return PdfNamedPages.list(rawDocSegment, tree);
+    }
+
+    /**
+     * Register a name for a page's object number in {@code /Names /Pages}.
+     */
+    public boolean setNamedPage(String name, int pageObjectNumber) {
+        ensureOpen();
+        boolean set = PdfNamedPages.setNamedPage(rawDocSegment, name, pageObjectNumber);
+        if (set) markContentModified();
+        return set;
+    }
+
+    /**
+     * Remove a named page registration by name.
+     */
+    public boolean removeNamedPage(String name) {
+        ensureOpen();
+        boolean removed = PdfNamedPages.removeNamedPage(rawDocSegment, name);
+        if (removed) markContentModified();
+        return removed;
+    }
+
+    /**
+     * Return the indirect object number of the page at the given zero-based index.
+     * Returns 0 when the native build does not support the lookup.
+     */
+    public int getPageObjectNumber(int pageIndex) {
+        ensureOpen();
+        return PdfNamedPages.getPageObjectNumber(rawDocSegment, pageIndex);
+    }
+
+    /**
+     * Executes the given action on each page in the document in sequential order.
+     * Each page is automatically closed after the action completes.
      *
-     * @param mode what to flatten - see {@link FlattenMode}
+     * @param action consumer receiving each open page
+     */
+    public void forEachPage(Consumer<PdfPage> action) {
+        ensureOpen();
+        if (action == null) throw new IllegalArgumentException("action must not be null");
+        int count = pageCount();
+        for (int i = 0; i < count; i++) {
+            try (PdfPage page = page(i)) {
+                action.accept(page);
+            }
+        }
+    }
+
+    /**
+     * Executes the given action on each page in the document along with its 0-based page index.
+     * Each page is automatically closed after the action completes.
+     *
+     * @param action consumer receiving each open page and its index
+     */
+    public void forEachPage(ObjIntConsumer<PdfPage> action) {
+        ensureOpen();
+        if (action == null) throw new IllegalArgumentException("action must not be null");
+        int count = pageCount();
+        for (int i = 0; i < count; i++) {
+            try (PdfPage page = page(i)) {
+                action.accept(page, i);
+            }
+        }
+    }
+
+    /**
+     * Creates a new {@link PdfRenderer} for this document.
+     */
+    public PdfRenderer renderer() {
+        ensureOpen();
+        return new PdfRenderer(this);
+    }
+
+    /**
+     * Renders all pages in sequential order at the specified DPI.
+     */
+    public List<BufferedImage> renderImages(float dpi) {
+        return renderer().renderImages(dpi);
+    }
+
+    /**
+     * Renders all pages in sequential order at the specified DPI with the given color type.
+     */
+    public List<BufferedImage> renderImages(float dpi, ColorType colorType) {
+        return renderer().renderImages(dpi, colorType);
+    }
+
+    /**
+     * Combines all pages vertically into a single image, centered horizontally.
+     */
+    public BufferedImage renderCombinedImage(float dpi) {
+        return renderer().renderCombinedImage(dpi);
+    }
+
+    /**
+     * Combines all pages vertically into a single image with the given color type.
+     */
+    public BufferedImage renderCombinedImage(float dpi, ColorType colorType) {
+        return renderer().renderCombinedImage(dpi, colorType);
+    }
+
+    /**
+     * Renders all pages into a multi-page TIFF file.
+     */
+    public void renderToMultiPageTiff(Path outputPath, float dpi) throws IOException {
+        renderer().renderToMultiPageTiff(outputPath, dpi);
+    }
+
+    /**
+     * Renders all pages into a multi-page TIFF file with the given color type.
+     */
+    public void renderToMultiPageTiff(Path outputPath, float dpi, ColorType colorType) throws IOException {
+        renderer().renderToMultiPageTiff(outputPath, dpi, colorType);
+    }
+
+    /**
+     * Renders all pages into multi-page TIFF bytes.
+     */
+    public byte[] renderToMultiPageTiffBytes(float dpi) throws IOException {
+        return renderer().renderToMultiPageTiffBytes(dpi);
+    }
+
+    /**
+     * Renders all pages into multi-page TIFF bytes with the given color type.
+     */
+    public byte[] renderToMultiPageTiffBytes(float dpi, ColorType colorType) throws IOException {
+        return renderer().renderToMultiPageTiffBytes(dpi, colorType);
+    }
+
+    /**
+     * Render the page at the given index to a {@link BufferedImage} at 72 DPI.
+     */
+    public BufferedImage renderImage(int pageIndex) {
+        return renderer().renderImage(pageIndex);
+    }
+
+    /**
+     * Render the page at the given index to a {@link BufferedImage} at the specified DPI.
+     */
+    public BufferedImage renderImage(int pageIndex, int dpi) {
+        return renderer().renderImageWithDPI(pageIndex, dpi);
+    }
+
+    /**
+     * Render the page at the given index to encoded image bytes.
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, ImageFormat format) throws IOException {
+        return renderer().renderToBytes(pageIndex, dpi, format);
+    }
+
+    /**
+     * Render the page at the given index to encoded image bytes using the format name.
+     */
+    public byte[] renderToBytes(int pageIndex, int dpi, String formatName) throws IOException {
+        return renderer().renderToBytes(pageIndex, dpi, formatName);
+    }
+
+    /**
+     * Render the page at the given index directly to an image file.
+     */
+    public void renderToFile(int pageIndex, Path outputPath, int dpi) throws IOException {
+        renderer().renderToFile(pageIndex, outputPath, dpi);
+    }
+
+    /**
+     * Render the page at the given index directly to an image file at default 150 DPI.
+     */
+    public void renderToFile(int pageIndex, Path outputPath) throws IOException {
+        renderer().renderToFile(pageIndex, outputPath);
+    }
+
+    private static final int DEFAULT_FLATTEN_DPI = Integer.getInteger("jpdfium.flatten.dpi", 150);
+
+    /**
+     * Flatten annotations and form fields on all pages into static page content.
+     * Shortcut for {@code flatten(FlattenMode.ANNOTATIONS)}.
+     */
+    public void flatten() {
+        flatten(FlattenMode.ANNOTATIONS, DEFAULT_FLATTEN_DPI);
+    }
+
+    /**
+     * Flatten all pages by rasterizing them as images at the specified resolution in DPI.
+     * Shortcut for {@code flatten(FlattenMode.FULL, dpi)}.
+     *
+     * @param dpi render resolution in DPI
+     */
+    public void flatten(int dpi) {
+        flatten(FlattenMode.FULL, dpi);
+    }
+
+    /**
+     * Flatten annotations and form fields on a specific page.
+     * Shortcut for {@code flattenPage(pageIndex, FlattenMode.ANNOTATIONS)}.
+     */
+    public void flattenPage(int pageIndex) {
+        flattenPage(pageIndex, FlattenMode.ANNOTATIONS, DEFAULT_FLATTEN_DPI);
+    }
+
+    /**
+     * Flatten a specific page by rasterizing it as an image at the specified resolution in DPI.
+     * Shortcut for {@code flattenPage(pageIndex, FlattenMode.FULL, dpi)}.
+     *
+     * @param pageIndex zero-based page index
+     * @param dpi       render resolution in DPI
+     */
+    public void flattenPage(int pageIndex, int dpi) {
+        flattenPage(pageIndex, FlattenMode.FULL, dpi);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode with default DPI.
+     */
+    public void flattenPage(int pageIndex, FlattenMode mode) {
+        flattenPage(pageIndex, mode, DEFAULT_FLATTEN_DPI);
+    }
+
+    /**
+     * Flatten a specific page using the specified mode.
+     */
+    public void flattenPage(int pageIndex, FlattenMode mode, int dpi) {
+        ensureOpen();
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
+        switch (mode) {
+            case ANNOTATIONS -> {
+                long pageHandle = JpdfiumLib.pageOpen(handle, pageIndex);
+                try {
+                    JpdfiumLib.pageFlatten(pageHandle);
+                } finally {
+                    JpdfiumLib.pageClose(pageHandle);
+                }
+                markContentModified();
+            }
+            case FULL -> convertPageToImage(pageIndex, dpi);
+        }
+    }
+
+    /**
+     * Flatten all pages using the specified mode with default DPI.
+     *
+     * @param mode what to flatten (see {@link FlattenMode})
      * @see #flatten(FlattenMode, int)
      */
     public void flatten(FlattenMode mode) {
-        flatten(mode, 150);
+        flatten(mode, DEFAULT_FLATTEN_DPI);
     }
 
     /**
      * Flatten all pages using the specified mode.
      *
      * <ul>
-     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into
+     *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
      *       the content stream. Text remains selectable. Uses native PDFium
      *       {@code jpdfium_page_flatten}.</li>
-     *   <li>{@link FlattenMode#FULL} - rasterizes each page at the given DPI,
+     *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
      *       replacing all content with an image. Nothing is selectable. Uses native
      *       PDFium {@code jpdfium_page_to_image}.</li>
      * </ul>
      *
-     * @param mode what to flatten - see {@link FlattenMode}
+     * @param mode what to flatten (see {@link FlattenMode})
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
     public void flatten(FlattenMode mode, int dpi) {
@@ -284,43 +1049,155 @@ public final class PdfDocument implements AutoCloseable {
         for (int i = 0; i < count; i++) {
             switch (mode) {
                 case ANNOTATIONS -> {
-                    try (PdfPage page = page(i)) {
-                        page.flatten();
+                    long pageHandle = JpdfiumLib.pageOpen(handle, i);
+                    try {
+                        JpdfiumLib.pageFlatten(pageHandle);
+                    } finally {
+                        JpdfiumLib.pageClose(pageHandle);
                     }
+                    markContentModified();
                 }
                 case FULL -> convertPageToImage(i, dpi);
             }
         }
     }
 
+    /**
+     * Save to a file with bounded memory and transactional publish.
+     *
+     * <p>PDFium streams via native {@code FPDF_FILEWRITE} to a sibling staging
+     * file (no document-sized buffer), then the staging file is atomically
+     * moved into place. A failed save leaves the destination untouched.
+     */
     public void save(Path path) {
-        ensureOpen();
-        JpdfiumLib.docSave(handle, path.toAbsolutePath().toString());
+        saveTo(path, SaveOptions.fast());
     }
 
     /**
-     * Save the document directly to a {@link WritableByteChannel} without intermediate Java heap byte[] allocation.
+     * Save to a file with an explicit output policy (byte budget, optional
+     * reopen validation).
+     */
+    public void saveTo(Path destination) {
+        saveTo(destination, SaveOptions.fast());
+    }
+
+    /**
+     * Save the document to a file with an explicit output policy.
+     *
+     * @param destination target file, overwritten on success
+     * @param options     save policy; null uses {@link SaveOptions#fast()}
+     */
+    public void saveTo(Path destination, SaveOptions options) {
+        ensureOpen();
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        // Staging, reopen validation, and publish all live in docSaveToFile
+        // (via OutputTransaction.publish); duplicating the probe here would
+        // let the two paths drift.
+        JpdfiumLib.docSaveToFile(handle, destination, opts);
+    }
+
+    /**
+     * Save the document to a {@link WritableByteChannel} with bounded memory.
+     *
+     * <p>PDFium first spools to an owned temp file (guard held only for the
+     * file write), then the temp file is transferred in bounded chunks with
+     * the guard released, so a slow channel never stalls unrelated PDFium
+     * work. Neither a document-sized native buffer nor a Java {@code byte[]}
+     * is ever materialized.
      *
      * @param channel target output channel
      * @throws IOException if an I/O error occurs
      */
     public void save(WritableByteChannel channel) throws IOException {
-        ensureOpen();
-        JpdfiumLib.docSaveTo(handle, channel);
+        saveTo(channel, SaveOptions.fast());
     }
 
     /**
-     * Save the document directly to an {@link OutputStream}.
+     * Save the document to a channel with the {@link SaveOptions#fast()} policy
+     * (see {@link #saveTo(WritableByteChannel, SaveOptions)}).
+     *
+     * @param channel target output channel
+     * @throws IOException if an I/O error occurs
+     */
+    public void saveTo(WritableByteChannel channel) throws IOException {
+        saveTo(channel, SaveOptions.fast());
+    }
+
+    /**
+     * Save the document to a channel with an explicit output policy.
+     *
+     * @param channel target output channel
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @throws IOException if an I/O error occurs
+     */
+    public void saveTo(WritableByteChannel channel, SaveOptions options) throws IOException {
+        ensureOpen();
+        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
+     * Save the document to an {@link OutputStream} (delegates to the bounded
+     * channel-spool path).
      *
      * @param out target output stream
      * @throws IOException if an I/O error occurs
      */
     public void save(OutputStream out) throws IOException {
-        ensureOpen();
-        WritableByteChannel channel = Channels.newChannel(out);
-        JpdfiumLib.docSaveTo(handle, channel);
+        saveTo(out, SaveOptions.fast());
     }
 
+    /**
+     * Save the document to a stream with the {@link SaveOptions#fast()} policy
+     * (see {@link #saveTo(OutputStream, SaveOptions)}).
+     *
+     * @param out target output stream
+     * @throws IOException if an I/O error occurs
+     */
+    public void saveTo(OutputStream out) throws IOException {
+        saveTo(out, SaveOptions.fast());
+    }
+
+    /**
+     * Save the document to a stream with an explicit output policy.
+     *
+     * @param out     target output stream
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @throws IOException if an I/O error occurs
+     */
+    public void saveTo(OutputStream out, SaveOptions options) throws IOException {
+        ensureOpen();
+        if (out == null) throw new IllegalArgumentException("out must not be null");
+        WritableByteChannel channel = Channels.newChannel(out);
+        JpdfiumLib.docSaveTo(handle, channel, options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
+     * Save to an owned temporary file; the caller owns deletion.
+     * Useful when the caller needs a file path without choosing one.
+     */
+    public Path saveToTempFile() {
+        ensureOpen();
+        return JpdfiumLib.docSaveToTempFile(handle, SaveOptions.fast());
+    }
+
+    /**
+     * Save to an owned temporary file with an explicit output policy; the caller
+     * owns deletion (see {@link #saveToTempFile()}).
+     *
+     * @param options save policy; null uses {@link SaveOptions#fast()}
+     * @return path to the temporary file
+     */
+    public Path saveToTempFile(SaveOptions options) {
+        ensureOpen();
+        return JpdfiumLib.docSaveToTempFile(handle, options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
+     * Serialise the document to a byte array.
+     *
+     * @return PDF bytes
+     */
     public byte[] saveBytes() {
         ensureOpen();
         return JpdfiumLib.docSaveBytes(handle);
@@ -349,7 +1226,11 @@ public final class PdfDocument implements AutoCloseable {
                 Optional<Rect> trimBox = queryBoxByIndex(getBox, pageIndex, 3, rectBuf);
                 Optional<Rect> artBox = queryBoxByIndex(getBox, pageIndex, 4, rectBuf);
                 return new PageBoxes(mediaBox, cropBox, bleedBox, trimBox, artBox);
-            } catch (Throwable _) {}
+            } catch (Throwable t) {
+                // Rethrow JVM-fatal errors (OOM, StackOverflow, etc.) - only native
+                // MethodHandle dispatch failures are swallowed to trigger the fallback.
+                NativeRuntime.rethrowFatal(t);
+            }
         }
         try (PdfPage p = page(pageIndex)) {
             return p.boxes();
@@ -391,14 +1272,14 @@ public final class PdfDocument implements AutoCloseable {
                 int rot = (int) getRot.invokeExact(rawDocSegment, pageIndex);
                 if (rot >= 0) return rot;
             } catch (Throwable t) {
-                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                NativeRuntime.rethrowFatal(t);
             }
         }
         try (PdfPage p = page(pageIndex)) {
-            int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandle());
+            int r = (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(p.rawHandleForRead());
             return r * 90;
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
             return 0;
         }
     }
@@ -421,7 +1302,7 @@ public final class PdfDocument implements AutoCloseable {
                     return buf.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
-                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                NativeRuntime.rethrowFatal(t);
             }
         }
         return 1.0f;
@@ -482,18 +1363,18 @@ public final class PdfDocument implements AutoCloseable {
      */
     public void convertPageToImage(int pageIndex, int dpi) {
         ensureOpen();
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        invalidateOpenPages();
     }
 
     /**
-     * JSON report of the last mandatory sanitize stage (qpdf pass) that ran
-     * when a redacted document was saved, or empty when none has run.
+     * JSON report of the last sanitize stage (qpdf pass) that ran when a
+     * redacted document was saved, or empty when none has run.
      *
-     * <p>Every save of a redacted document runs a sanitize pass that purges
-     * dead objects, scrubs metadata/XMP/annotations/form values/outlines,
-     * strips the structure tree, filters ToUnicode maps and erases redacted
-     * glyph outlines from touched font programs. The report carries the
-     * per-category counts (see {@code RedactionSession#sanitizeReport()}).
+     * <p>Sanitization is <strong>opt-in</strong> (needs
+     * {@link #setSanitizeOnSave(boolean) setSanitizeOnSave(true)} plus redaction);
+     * default saves leave metadata and structure untouched.
      */
     public String sanitizeReport() {
         ensureOpen();
@@ -513,9 +1394,37 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <p><strong>Lifetime:</strong> zero-length view owned by this {@code PdfDocument}.
      * Must not outlive {@link #close()}, must stay on the owning thread, and native
-     * calls using it must hold {@code NativeGuard}.
+     * calls using it must run inside the PdfiumRuntime execution domain
+     * (via the {@code *Bindings} or {@code JpdfiumLib} helpers).
+     *
+     * <p><strong>Outside the execution-domain guarantee:</strong> direct use of
+     * this handle bypasses the admission, batching, and lifecycle ordering that
+     * {@link stirling.software.jpdfium.panama.PdfiumRuntime} enforces for all
+     * built-in operations. It keeps working, but the domain makes no promise
+     * about it; prefer the typed API, which is the migration target for scoped
+     * advanced access in a future major version.
+     *
+     * <p><strong>Edit tracking:</strong> JPDFium cannot see what is done through the
+     * handle, so taking it marks the document as modified ({@link #isContentModified()}).
+     * Compression then no longer returns the open-time bytes of a signed document.
      */
     public MemorySegment rawHandle() {
+        ensureOpen();
+        markContentModified();
+        return rawDocSegment;
+    }
+
+    /**
+     * {@link #rawHandle()} for library-internal reads that cannot change the document.
+     * Unlike {@link #rawHandle()}, taking it does not mark the document as modified.
+     *
+     * <p>Do not write through the returned handle. Such writes are invisible to
+     * {@link #isContentModified()}, and on an encrypted document they cannot be
+     * detected by re-serialising either, because PDFium re-encrypts with a fresh key
+     * on every save. An edit made that way can therefore be dropped when a signed
+     * document is returned unchanged.
+     */
+    public MemorySegment rawHandleForRead() {
         ensureOpen();
         return rawDocSegment;
     }
@@ -524,7 +1433,7 @@ public final class PdfDocument implements AutoCloseable {
      * Get all document metadata as key->value map.
      */
     public Map<String, String> metadata() {
-        return PdfMetadata.of(rawHandle()).all();
+        return PdfMetadata.of(rawHandleForRead()).all();
     }
 
     /**
@@ -533,7 +1442,7 @@ public final class PdfDocument implements AutoCloseable {
     public Optional<String> metadata(String tag) {
         for (MetadataTag metadataTag : MetadataTag.values()) {
             if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
-                return PdfMetadata.of(rawHandle()).get(metadataTag);
+                return PdfMetadata.of(rawHandleForRead()).get(metadataTag);
             }
         }
         return Optional.empty();
@@ -549,7 +1458,7 @@ public final class PdfDocument implements AutoCloseable {
                 return (int) DocBindings.FPDF_GetDocPermissions.invokeExact(rawDocSegment);
             }
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
         return 0L;
     }
@@ -564,7 +1473,7 @@ public final class PdfDocument implements AutoCloseable {
                 return (int) DocBindings.FPDF_GetSecurityHandlerRevision.invokeExact(rawDocSegment);
             }
         } catch (Throwable t) {
-            stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+            NativeRuntime.rethrowFatal(t);
         }
         return 0;
     }
@@ -573,28 +1482,65 @@ public final class PdfDocument implements AutoCloseable {
      * Get the document's complete bookmark tree.
      */
     public List<Bookmark> bookmarks() {
-        return PdfBookmarks.list(rawHandle());
+        return PdfBookmarks.list(rawHandleForRead());
     }
 
     /**
      * Find a bookmark by title.
      */
     public Optional<Bookmark> findBookmark(String title) {
-        return PdfBookmarks.find(rawHandle(), title);
+        return PdfBookmarks.find(rawHandleForRead(), title);
     }
 
     /**
      * Get all digital signatures in the document.
      */
     public List<Signature> signatures() {
-        return PdfSignatures.list(rawHandle());
+        return PdfSignatures.list(rawHandleForRead());
+    }
+
+    /** Number of digital signatures PDFium finds, without reading their details. */
+    public int signatureCount() {
+        MemorySegment raw = rawHandleForRead();
+        if (raw == null || raw.equals(MemorySegment.NULL)) {
+            return 0;
+        }
+        return PdfSignatures.count(raw);
+    }
+
+    /**
+     * Verification-oriented details for one signature field: /ByteRange coverage,
+     * the revision it seals, DocMDP permission and the signing strings.
+     *
+     * @param index 0-based signature field index
+     */
+    public SignatureDetails signatureDetails(int index) {
+        ensureOpen();
+        return PdfSignatures.details(handle, index);
+    }
+
+    /**
+     * Digest of the signature's /ByteRange over the document's own bytes.
+     *
+     * @param index     0-based signature field index
+     * @param algorithm 0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512
+     */
+    public byte[] signatureDigest(int index, int algorithm) {
+        ensureOpen();
+        return PdfSignatures.digest(handle, index, algorithm);
+    }
+
+    /** Number of byte revisions in the loaded document (-1 when indeterminate). */
+    public int signatureRevisionCount() {
+        ensureOpen();
+        return PdfSignatures.revisionCount(handle);
     }
 
     /**
      * Get all embedded file attachments.
      */
     public List<Attachment> attachments() {
-        return PdfAttachments.list(rawHandle());
+        return PdfAttachments.list(rawHandleForRead());
     }
 
     /**
@@ -605,7 +1551,9 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean addAttachment(String name, byte[] contents) {
-        return PdfAttachments.add(rawHandle(), name, contents);
+        boolean added = PdfAttachments.add(rawHandleForRead(), name, contents);
+        if (added) markContentModified();
+        return added;
     }
 
     /**
@@ -615,7 +1563,9 @@ public final class PdfDocument implements AutoCloseable {
      * @return true if successful
      */
     public boolean deleteAttachment(int index) {
-        return PdfAttachments.delete(rawHandle(), index);
+        boolean deleted = PdfAttachments.delete(rawHandleForRead(), index);
+        if (deleted) markContentModified();
+        return deleted;
     }
 
     /**
@@ -664,11 +1614,18 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Returns the native document handle for use by internal library code.
-     * External callers should not use this; it bypasses the safety checks in this class.
+     * Returns the raw bridge document handle.
+     *
+     * <p><strong>Internal use only.</strong> This handle is an opaque token understood
+     * only by {@link JpdfiumLib} and its companions.
+     * External callers bypassing this method bypass all closed-document checks and
+     * thread-safety contracts enforced by this class.
+     *
+     * <p>Like {@link #rawHandle()}, taking it marks the document as modified.
      */
     public long nativeHandle() {
         ensureOpen();
+        markContentModified();
         return handle;
     }
 
@@ -676,11 +1633,30 @@ public final class PdfDocument implements AutoCloseable {
         if (closed.get()) throw new IllegalStateException("PdfDocument is already closed");
     }
 
+    /**
+     * Close the document and release native state. Idempotent; a document backed
+     * by an owned temporary spool file deletes it here.
+     */
     @Override
     public void close() {
         // compareAndSet, not check-then-set: a lost race here frees the same
         // native document twice and corrupts the heap.
         if (!closed.compareAndSet(false, true)) return;
-        JpdfiumLib.docClose(handle);
+        try {
+            JpdfiumLib.docClose(handle);
+        } finally {
+            // PDFium has released its handle on the temp file, so it can go now.
+            // A still-locked file (Windows) falls back to delete-on-exit rather
+            // than leaving document content behind for an unbounded time.
+            Path tmp = ownedTempFile;
+            if (tmp != null) {
+                ownedTempFile = null;
+                try {
+                    Files.deleteIfExists(tmp);
+                } catch (IOException | RuntimeException ignored) {
+                    tmp.toFile().deleteOnExit();
+                }
+            }
+        }
     }
 }

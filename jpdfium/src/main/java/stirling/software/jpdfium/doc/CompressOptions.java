@@ -2,6 +2,8 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.ProcessingMode;
 
+import java.util.Objects;
+
 /**
  * Options for PDF compression (builder pattern).
  *
@@ -20,38 +22,43 @@ public final class CompressOptions {
 
     private final int imageQuality;       // JPEG quality 1-100, -1 = skip
     private final int maxImageDpi;        // max DPI for downsampling, -1 = skip
-    private final boolean recompressLossless;
     private final boolean convertPngToJpeg;
     private final boolean optimizeStreams;
     private final boolean removeUnusedObjects;
     private final boolean removeMetadata;
-    private final boolean removeThumbnails;
+    private final PreservationMode preservationMode;
     private final ProcessingMode processingMode;
     private final boolean useZopfliDeflate;  // Rust: zopfli post-processing pass
     private final int zopfliIterations;      // Rust: zopfli iteration count
+    private final int zopfliMaxInputBytes;   // Rust: skip zopfli above this size, 0 = unlimited
 
     private CompressOptions(Builder b) {
         this.imageQuality = b.imageQuality;
         this.maxImageDpi = b.maxImageDpi;
-        this.recompressLossless = b.recompressLossless;
         this.convertPngToJpeg = b.convertPngToJpeg;
         this.optimizeStreams = b.optimizeStreams;
         this.removeUnusedObjects = b.removeUnusedObjects;
         this.removeMetadata = b.removeMetadata;
-        this.removeThumbnails = b.removeThumbnails;
+        this.preservationMode = b.preservationMode;
         this.processingMode = b.processingMode;
         this.useZopfliDeflate = b.useZopfliDeflate;
         this.zopfliIterations = b.zopfliIterations;
+        this.zopfliMaxInputBytes = b.zopfliMaxInputBytes;
     }
 
     public int imageQuality() { return imageQuality; }
     public int maxImageDpi() { return maxImageDpi; }
-    public boolean recompressLossless() { return recompressLossless; }
     public boolean convertPngToJpeg() { return convertPngToJpeg; }
     public boolean optimizeStreams() { return optimizeStreams; }
     public boolean removeUnusedObjects() { return removeUnusedObjects; }
     public boolean removeMetadata() { return removeMetadata; }
-    public boolean removeThumbnails() { return removeThumbnails; }
+    /**
+     * Preservation contract for this run: which actions are allowed and how
+     * much preview drift the verify-and-rollback pass tolerates. Defaults to
+     * {@link PreservationMode#VISUALLY_CONSTRAINED}; a preset sets it and an
+     * explicit call overrides the preset.
+     */
+    public PreservationMode preservationMode() { return preservationMode; }
     /** Processing mode for batch operations (streaming, parallel, or both). */
     public ProcessingMode processingMode() { return processingMode; }
     /**
@@ -70,21 +77,41 @@ public final class CompressOptions {
      * Only used when {@link #useZopfliDeflate()} is {@code true}.
      */
     public int zopfliIterations() { return zopfliIterations; }
+    /**
+     * Skip the Rust/zopfli pass when the input exceeds this many bytes.
+     * {@code 0} means unlimited. Use to bound worst-case zopfli cost on large
+     * files. Only used when {@link #useZopfliDeflate()} is {@code true}.
+     */
+    public int zopfliMaxInputBytes() { return zopfliMaxInputBytes; }
+
+    /**
+     * @deprecated the option was removed; the lossless path no longer recompresses
+     *     images separately. Always returns {@code false}.
+     */
+    @Deprecated
+    public boolean recompressLossless() { return false; }
+
+    /**
+     * @deprecated the option was removed; page thumbnails are no longer stripped.
+     *     Always returns {@code false}.
+     */
+    @Deprecated
+    public boolean removeThumbnails() { return false; }
 
     public static Builder builder() { return new Builder(); }
 
     public static final class Builder {
         private int imageQuality = -1;
         private int maxImageDpi = -1;
-        private boolean recompressLossless;
         private boolean convertPngToJpeg;
         private boolean optimizeStreams = true;
         private boolean removeUnusedObjects = true;
         private boolean removeMetadata;
-        private boolean removeThumbnails;
+        private PreservationMode preservationMode = PreservationMode.VISUALLY_CONSTRAINED;
         private ProcessingMode processingMode = ProcessingMode.DEFAULT;
         private boolean useZopfliDeflate = false;
         private int zopfliIterations = 15;
+        private int zopfliMaxInputBytes = 0;
 
         private Builder() {}
 
@@ -92,8 +119,6 @@ public final class CompressOptions {
         public Builder imageQuality(int q) { this.imageQuality = q; return this; }
         /** Maximum image DPI. Images above this will be downsampled. -1 to skip. */
         public Builder maxImageDpi(int dpi) { this.maxImageDpi = dpi; return this; }
-        /** Recompress lossless images (PNG/Flate) with better settings. */
-        public Builder recompressLossless(boolean v) { this.recompressLossless = v; return this; }
         /** Convert non-transparent PNG images to JPEG. */
         public Builder convertPngToJpeg(boolean v) { this.convertPngToJpeg = v; return this; }
         /** Generate object streams and cross-reference streams (qpdf). */
@@ -102,17 +127,21 @@ public final class CompressOptions {
         public Builder removeUnusedObjects(boolean v) { this.removeUnusedObjects = v; return this; }
         /** Strip XMP and document metadata. */
         public Builder removeMetadata(boolean v) { this.removeMetadata = v; return this; }
-        /** Remove embedded page thumbnails. */
-        public Builder removeThumbnails(boolean v) { this.removeThumbnails = v; return this; }
-
+        /**
+         * Set the preservation contract. Defaults to
+         * {@link PreservationMode#VISUALLY_CONSTRAINED}; overrides the value
+         * set by {@link #preset(CompressPreset)}.
+         */
+        public Builder preservationMode(PreservationMode mode) { this.preservationMode = Objects.requireNonNull(mode, "mode"); return this; }
         /** Apply a preset, overriding current values. Individual setters can override after. */
         public Builder preset(CompressPreset preset) {
             this.imageQuality = preset.imageQuality();
             this.maxImageDpi = preset.maxImageDpi();
-            this.recompressLossless = preset.recompressLossless();
             this.convertPngToJpeg = preset.convertPngToJpeg();
             this.optimizeStreams = preset.optimizeStreams();
             this.removeMetadata = preset.removeMetadata();
+            this.preservationMode = preset.preservationMode();
+            this.useZopfliDeflate = preset.useZopfliDeflate();
             return this;
         }
 
@@ -147,6 +176,28 @@ public final class CompressOptions {
             this.zopfliIterations = Math.max(1, iterations);
             return this;
         }
+
+        /**
+         * Skip the zopfli pass when the input exceeds {@code bytes} (0 = unlimited).
+         * Bounds worst-case cost on large files. Ignored unless
+         * {@link #useZopfliDeflate(boolean)} is {@code true}.
+         */
+        public Builder zopfliMaxInputBytes(int bytes) {
+            this.zopfliMaxInputBytes = Math.max(0, bytes);
+            return this;
+        }
+
+        /**
+         * @deprecated removed option; no-op retained for binary compatibility.
+         */
+        @Deprecated
+        public Builder recompressLossless(boolean ignored) { return this; }
+
+        /**
+         * @deprecated removed option; no-op retained for binary compatibility.
+         */
+        @Deprecated
+        public Builder removeThumbnails(boolean ignored) { return this; }
 
         public CompressOptions build() { return new CompressOptions(this); }
     }

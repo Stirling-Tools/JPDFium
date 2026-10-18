@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
@@ -8,21 +9,19 @@ import stirling.software.jpdfium.model.Position;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
-import javax.imageio.IIOImage;
-import javax.imageio.ImageIO;
-import javax.imageio.ImageWriteParam;
-import javax.imageio.ImageWriter;
+import stirling.software.jpdfium.internal.ImageCodecs;
+
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
@@ -60,11 +59,6 @@ import java.util.Set;
  */
 public final class PdfImageConverter {
 
-    static {
-        // Ensure ImageIO is initialized with all providers
-        ImageIO.scanForPlugins();
-    }
-
     private PdfImageConverter() {}
 
     // PDF -> Images
@@ -95,16 +89,36 @@ public final class PdfImageConverter {
 
         List<Path> outputFiles = new ArrayList<>();
         int totalPages = doc.pageCount();
-        Set<Integer> pages = options.pages();
+        Set<Integer> pages = options.resolvedPages(totalPages);
 
-        for (int i = 0; i < totalPages; i++) {
-            if (pages != null && !pages.isEmpty() && !pages.contains(i)) {
-                continue;
+        if (options.singleImage()) {
+            List<BufferedImage> rendered = new ArrayList<>();
+            for (int i : pages) {
+                BufferedImage img = renderPageToImage(doc, i, options.dpi(), options.transparent());
+                rendered.add(applyColorType(img, options.colorType()));
             }
+            if (options.format() == ImageFormat.TIFF) {
+                Path outputFile = outputDir.resolve("document.tiff");
+                PdfImageIO.writeMultiPageTiff(rendered, outputFile);
+                outputFiles.add(outputFile);
+            } else {
+                BufferedImage combined = PdfImageIO.combineVertically(rendered, options.colorType(), options.transparent());
+                Path outputFile = outputDir.resolve("combined." + options.format().extension());
+                writeImage(combined, outputFile, options);
+                outputFiles.add(outputFile);
+            }
+            return outputFiles;
+        }
 
-            BufferedImage image = renderPageToImage(doc, i, options.dpi(), options.transparent());
+        for (int i : pages) {
             Path outputFile = outputDir.resolve(formatFilename(i, options.format()));
-            writeImage(image, outputFile, options);
+            try (PdfPage page = doc.page(i)) {
+                int effectiveDpi = effectiveDpi(page.size(), options.dpi());
+                ColorType ct = options.transparent()
+                        ? (options.colorType() == null || options.colorType() == ColorType.RGB ? ColorType.ARGB : options.colorType())
+                        : options.colorType();
+                page.renderTo(outputFile, effectiveDpi, options.format(), options.quality(), ct);
+            }
             outputFiles.add(outputFile);
         }
 
@@ -134,17 +148,32 @@ public final class PdfImageConverter {
      */
     public static BufferedImage pageToImage(PdfDocument doc, int pageIndex, int dpi, boolean transparent) {
         try (PdfPage page = doc.page(pageIndex)) {
-            PageSize sz = page.size();
-            int effectiveDpi = dpi;
-            if (sz.width() > 0 && sz.height() > 0) {
-                int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-                int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-                effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
-                if (effectiveDpi < 1) effectiveDpi = 1;
-            }
-            RenderResult result = page.renderAt(effectiveDpi);
-            return result.toBufferedImage(transparent);
+            return pageToImage(page, dpi, transparent);
         }
+    }
+
+    /**
+     * Convert an open PDF page to a BufferedImage.
+     *
+     * @param page open PDF page
+     * @param dpi  render DPI
+     * @return rendered image
+     */
+    public static BufferedImage pageToImage(PdfPage page, int dpi) {
+        return pageToImage(page, dpi, false);
+    }
+
+    /**
+     * Convert an open PDF page to a BufferedImage.
+     *
+     * @param page        open PDF page
+     * @param dpi         render DPI
+     * @param transparent transparent background (for PNG/WEBP)
+     * @return rendered image
+     */
+    public static BufferedImage pageToImage(PdfPage page, int dpi, boolean transparent) {
+        RenderResult result = page.renderAt(effectiveDpi(page.size(), dpi));
+        return result.toBufferedImage(transparent);
     }
 
     /**
@@ -175,7 +204,24 @@ public final class PdfImageConverter {
      */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi, ImageFormat format,
                                       int quality, boolean transparent) throws IOException {
-        BufferedImage image = pageToImage(doc, pageIndex, dpi, transparent);
+        try (PdfPage page = doc.page(pageIndex)) {
+            return pageToBytes(page, dpi, format, quality, transparent);
+        }
+    }
+
+    /**
+     * Convert an open PDF page to bytes in the specified format.
+     */
+    public static byte[] pageToBytes(PdfPage page, int dpi, ImageFormat format) throws IOException {
+        return pageToBytes(page, dpi, format, 90, false);
+    }
+
+    /**
+     * Convert an open PDF page to bytes in the specified format with custom quality and transparency.
+     */
+    public static byte[] pageToBytes(PdfPage page, int dpi, ImageFormat format,
+                                      int quality, boolean transparent) throws IOException {
+        BufferedImage image = pageToImage(page, dpi, transparent);
         return imageToBytes(image, format, quality);
     }
 
@@ -191,11 +237,63 @@ public final class PdfImageConverter {
      */
     public static byte[] thumbnail(PdfDocument doc, int pageIndex, int maxSize, ImageFormat format) throws IOException {
         try (PdfPage page = doc.page(pageIndex)) {
-            RenderResult result = page.renderAt(72);
-            BufferedImage img = result.toBufferedImage();
-
+            PageSize size = page.size();
+            float longer = Math.max(size.width(), size.height());
+            int dpi = (int) Math.max(1.0, Math.round(72.0 * maxSize / Math.max(1.0f, longer)));
+            BufferedImage img = pageToImage(page, dpi, false);
             img = resizeToFit(img, maxSize, maxSize);
             return imageToBytes(img, format, 85);
+        }
+    }
+
+    /**
+     * Converts a PDF to image bytes matching Stirling-PDF's convertFromPdf requirements.
+     * When singleImage is true:
+     * <ul>
+     *   <li>For TIFF: encodes all pages as consecutive frames in a multi-page TIFF byte array.</li>
+     *   <li>For other formats: stitches all pages vertically centered into a single image byte array.</li>
+     * </ul>
+     * When singleImage is false, renders the first page to bytes.
+     *
+     * @param doc         PDF document
+     * @param format      image format
+     * @param colorType   color type (RGB, ARGB, GRAY, BINARY)
+     * @param singleImage true to produce a single image
+     * @param dpi         render resolution
+     * @return image bytes
+     * @throws IOException on error
+     */
+    public static byte[] convertFromPdf(PdfDocument doc, ImageFormat format, ColorType colorType, boolean singleImage, int dpi) throws IOException {
+        if (doc == null) throw new IllegalArgumentException("doc must not be null");
+        if (format == null) format = ImageFormat.PNG;
+        if (colorType == null) colorType = ColorType.RGB;
+
+        PdfRenderer renderer = new PdfRenderer(doc);
+        if (singleImage) {
+            if (format == ImageFormat.TIFF) {
+                return renderer.renderToMultiPageTiffBytes(dpi, colorType);
+            } else {
+                return renderer.renderCombinedToBytes(dpi, format, colorType);
+            }
+        }
+        return renderer.renderToBytes(0, dpi, format, colorType);
+    }
+
+    /**
+     * Converts a PDF to image bytes by format name and color type name.
+     */
+    public static byte[] convertFromPdf(PdfDocument doc, String formatName, String colorTypeName, boolean singleImage, int dpi) throws IOException {
+        ImageFormat format = ImageFormat.fromExtension(formatName);
+        ColorType colorType = ColorType.fromString(colorTypeName);
+        return convertFromPdf(doc, format, colorType, singleImage, dpi);
+    }
+
+    /**
+     * Converts PDF bytes directly to image bytes.
+     */
+    public static byte[] convertFromPdf(byte[] pdfBytes, String formatName, String colorTypeName, boolean singleImage, int dpi) throws IOException {
+        try (PdfDocument doc = PdfDocument.open(pdfBytes)) {
+            return convertFromPdf(doc, formatName, colorTypeName, singleImage, dpi);
         }
     }
 
@@ -203,6 +301,7 @@ public final class PdfImageConverter {
 
     /**
      * Convert a list of image files to a PDF document.
+     * If an image is a multi-page format (e.g. multi-page TIFF), every frame becomes a page.
      *
      * @param imagePaths paths to image files
      * @param options    conversion options
@@ -210,11 +309,54 @@ public final class PdfImageConverter {
      * @throws IOException if reading images fails
      */
     public static PdfDocument imagesToPdf(List<Path> imagePaths, ImageToPdfOptions options) throws IOException {
-        List<BufferedImage> images = new ArrayList<>();
+        // Decode through the active codec (libvips when jpdfium-vips is on the
+        // classpath, which also adds HEIC/HEIF/AVIF/JXL/JPEG2000 inputs), with
+        // ImageIO as the fallback.
+        List<byte[]> frames = new ArrayList<>(imagePaths.size());
         for (Path path : imagePaths) {
-            images.add(ImageIO.read(path.toFile()));
+            frames.addAll(ImageCodecs.decodeFrames(path));
         }
-        return imagesToPdfInternal(images, options);
+        return embedRgbaImages(frames, options);
+    }
+
+    /**
+     * Convert a list of in-memory image byte arrays to a PDF document.
+     * Supports multi-page TIFFs and mixed image formats.
+     *
+     * @param imageBytes list of raw image byte arrays
+     * @param options    conversion options
+     * @return PDF document
+     * @throws IOException if decoding fails
+     */
+    public static PdfDocument imagesToPdfFromBytes(List<byte[]> imageBytes, ImageToPdfOptions options) throws IOException {
+        if (imageBytes == null || imageBytes.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required");
+        }
+        List<byte[]> frames = new ArrayList<>(imageBytes.size());
+        for (byte[] data : imageBytes) {
+            frames.addAll(ImageCodecs.decodeFrames(data));
+        }
+        return embedRgbaImages(frames, options);
+    }
+
+    /**
+     * Convert a list of InputStreams to a PDF document.
+     * Supports multi-page TIFFs and mixed image formats.
+     *
+     * @param streams list of image input streams
+     * @param options conversion options
+     * @return PDF document
+     * @throws IOException if reading fails
+     */
+    public static PdfDocument imagesToPdfFromStreams(List<InputStream> streams, ImageToPdfOptions options) throws IOException {
+        if (streams == null || streams.isEmpty()) {
+            throw new IllegalArgumentException("At least one stream is required");
+        }
+        List<byte[]> frames = new ArrayList<>(streams.size());
+        for (InputStream in : streams) {
+            frames.addAll(ImageCodecs.decodeFrames(in));
+        }
+        return embedRgbaImages(frames, options);
     }
 
     /**
@@ -237,7 +379,7 @@ public final class PdfImageConverter {
         }
         List<byte[]> frames = new ArrayList<>(images.size());
         for (BufferedImage image : images) {
-            frames.add(bufferedImageToRgba(image));
+            frames.add(ImageCodecs.frameFromImage(image));
         }
         return embedRgbaImages(frames, options);
     }
@@ -246,10 +388,10 @@ public final class PdfImageConverter {
      * Embed pre-decoded RGBA frames into a new PDF document. Each frame must
      * carry the 8-byte {@code [width LE][height LE]} header the C bridge's
      * {@code format=3} path reads, followed by {@code width*height*4} RGBA bytes
-     * (the layout {@link #bufferedImageToRgba} produces). Shared by
-     * {@link #imagesToPdfInternal} (ImageIO decode) and the optional
-     * {@code jpdfium-vips} {@code VipsImageToPdf} (libvips decode) so the
-     * page-size/position/embed logic lives in one place.
+     * (the layout {@link ImageCodecs#frameFromImage} produces). Shared by
+     * {@link #imagesToPdfInternal} and the optional {@code jpdfium-vips}
+     * {@code VipsImageToPdf} (libvips decode) so the page-size/position/embed
+     * logic lives in one place.
      */
     public static PdfDocument embedRgbaImages(List<byte[]> rgbaFrames, ImageToPdfOptions options) {
         if (rgbaFrames.isEmpty()) {
@@ -276,6 +418,19 @@ public final class PdfImageConverter {
                 if (pageWidth <= 0 || pageHeight <= 0) {
                     pageWidth = w * 72f / 96;
                     pageHeight = h * 72f / 96;
+                } else if (options.autoRotate()) {
+                    boolean pageLandscape = pageWidth > pageHeight;
+                    boolean imageLandscape = w > h;
+                    if (pageLandscape != imageLandscape) {
+                        float tmp = pageWidth;
+                        pageWidth = pageHeight;
+                        pageHeight = tmp;
+                    }
+                }
+
+                if (options.colorType() == ColorType.GRAY || options.colorType() == ColorType.BINARY) {
+                    rgba = rgba.clone();
+                    applyColorType(rgba, w, h, options.colorType());
                 }
 
                 int position = toNativePosition(options.position());
@@ -299,6 +454,36 @@ public final class PdfImageConverter {
         }
     }
 
+    private static BufferedImage applyColorType(BufferedImage img, ColorType colorType) {
+        if (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB) {
+            return img;
+        }
+        BufferedImage converted = new BufferedImage(img.getWidth(), img.getHeight(), colorType.bufferedImageType());
+        Graphics2D g = converted.createGraphics();
+        try {
+            g.drawImage(img, 0, 0, null);
+        } finally {
+            g.dispose();
+        }
+        return converted;
+    }
+
+    private static void applyColorType(byte[] rgba, int w, int h, ColorType colorType) {
+        int count = w * h;
+        boolean isBinary = (colorType == ColorType.BINARY);
+        for (int i = 0; i < count; i++) {
+            int off = 8 + i * 4;
+            int r = rgba[off] & 0xFF;
+            int g = rgba[off + 1] & 0xFF;
+            int b = rgba[off + 2] & 0xFF;
+            int gray = (int) (0.299 * r + 0.587 * g + 0.114 * b);
+            byte val = isBinary ? (gray >= 128 ? (byte) 255 : (byte) 0) : (byte) gray;
+            rgba[off] = val;
+            rgba[off + 1] = val;
+            rgba[off + 2] = val;
+        }
+    }
+
     private static int readLeInt32(byte[] b, int off) {
         return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8)
                 | ((b[off + 2] & 0xFF) << 16) | ((b[off + 3] & 0xFF) << 24);
@@ -318,62 +503,36 @@ public final class PdfImageConverter {
 
     // Internal helpers
 
-    private static final int MAX_IMAGE_DIMENSION = 65000;
+    // DPI cap, unlimited by default; set -Djpdfium.image.max_dimension=N to bound.
+    private static final int MAX_IMAGE_DIMENSION = validatedDimension();
 
-    private static BufferedImage renderPageToImage(PdfDocument doc, int pageIndex, int dpi, boolean transparent) {
-        try (PdfPage page = doc.page(pageIndex)) {
-            // Cap DPI so neither rendered dimension exceeds MAX_IMAGE_DIMENSION pixels
-            PageSize sz = page.size();
-            int effectiveDpi = dpi;
-            if (sz.width() > 0 && sz.height() > 0) {
-                int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.width());
-                int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / sz.height());
-                effectiveDpi = Math.min(dpi, Math.min(maxDpiW, maxDpiH));
-                if (effectiveDpi < 1) effectiveDpi = 1;
-            }
-
-            RenderResult result = page.renderAt(effectiveDpi);
-            BufferedImage img = result.toBufferedImage();
-
-            if (!transparent) {
-                img = createWhiteBackground(img);
-            }
-
-            return img;
-        }
+    private static int validatedDimension() {
+        int v = Integer.getInteger("jpdfium.image.max_dimension", 0);
+        if (v < 0) throw new IllegalStateException(
+                "invalid jpdfium.image.max_dimension=" + v + " (use 0 for unlimited)");
+        return v;
     }
 
     /**
-     * Encode a BufferedImage as raw RGBA bytes with an 8-byte header [width int32_le][height int32_le].
-     * The C bridge's format=3 path reads the header to determine pixel dimensions without a separate codec.
+     * Lower {@code dpi} so neither rendered dimension exceeds the opt-in
+     * {@code jpdfium.image.max_dimension} ceiling. Unlimited (0) returns the
+     * requested DPI untouched: clamping against a zero ceiling would collapse
+     * every render to 1 DPI.
      */
-    private static byte[] bufferedImageToRgba(BufferedImage img) {
-        int w = img.getWidth();
-        int h = img.getHeight();
-        // 8-byte header: [width int32 LE][height int32 LE] + pixel data
-        byte[] rgba = new byte[8 + w * h * 4];
+    private static int effectiveDpi(PageSize size, int dpi) {
+        if (MAX_IMAGE_DIMENSION <= 0 || size == null) return dpi;
+        double w = size.width();
+        double h = size.height();
+        if (w <= 0 || h <= 0) return dpi;
+        int maxDpiW = (int) (MAX_IMAGE_DIMENSION * 72.0 / w);
+        int maxDpiH = (int) (MAX_IMAGE_DIMENSION * 72.0 / h);
+        return Math.max(1, Math.min(dpi, Math.min(maxDpiW, maxDpiH)));
+    }
 
-        rgba[0] = (byte)(w & 0xFF);
-        rgba[1] = (byte)((w >> 8) & 0xFF);
-        rgba[2] = (byte)((w >> 16) & 0xFF);
-        rgba[3] = (byte)((w >> 24) & 0xFF);
-        rgba[4] = (byte)(h & 0xFF);
-        rgba[5] = (byte)((h >> 8) & 0xFF);
-        rgba[6] = (byte)((h >> 16) & 0xFF);
-        rgba[7] = (byte)((h >> 24) & 0xFF);
-
-        int[] pixels = new int[w * h];
-        img.getRGB(0, 0, w, h, pixels, 0, w);
-
-        for (int i = 0; i < pixels.length; i++) {
-            int p = pixels[i];
-            rgba[8 + i * 4]     = (byte) ((p >> 16) & 0xFF); // R
-            rgba[8 + i * 4 + 1] = (byte) ((p >> 8) & 0xFF);  // G
-            rgba[8 + i * 4 + 2] = (byte) (p & 0xFF);          // B
-            rgba[8 + i * 4 + 3] = (byte) ((p >> 24) & 0xFF); // A
+    private static BufferedImage renderPageToImage(PdfDocument doc, int pageIndex, int dpi, boolean transparent) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            return page.renderImage(effectiveDpi(page.size(), dpi), transparent);
         }
-
-        return rgba;
     }
 
     private static int toNativePosition(Position pos) {
@@ -434,41 +593,7 @@ public final class PdfImageConverter {
     }
 
     private static void writeImage(BufferedImage image, Path path, PdfToImageOptions options) throws IOException {
-        BufferedImage bufferedImage = image;
-        ImageFormat format = options.format();
-        String formatName = format.extension();
-
-        if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            if (bufferedImage.getColorModel().hasAlpha()) {
-                bufferedImage = createWhiteBackground(bufferedImage);
-            }
-            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(formatName);
-            if (writers.hasNext()) {
-                ImageWriter writer = writers.next();
-                try {
-                    ImageWriteParam param = writer.getDefaultWriteParam();
-                    param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                    param.setCompressionQuality(options.quality() / 100.0f);
-                    try (var out = ImageIO.createImageOutputStream(path.toFile())) {
-                        writer.setOutput(out);
-                        writer.write(null, new IIOImage(bufferedImage, null, null), param);
-                    }
-                } finally {
-                    writer.dispose();
-                }
-                return;
-            }
-            throw new IOException(
-                    "No ImageIO writer found for format: " + formatName
-                    + (format == ImageFormat.WEBP
-                        ? ". WebP writing requires a WebP ImageIO plugin with write support"
-                            + " (e.g., org.sejda.imageio:webp-imageio)."
-                        : ""));
-        }
-
-        if (!ImageIO.write(bufferedImage, formatName, path.toFile())) {
-            throw new IOException("No ImageIO writer found for format: " + formatName);
-        }
+        Files.write(path, ImageCodecs.encode(image, options.format(), options.quality()));
     }
 
     /**
@@ -478,35 +603,68 @@ public final class PdfImageConverter {
      * @return true if the format can be written
      */
     public static boolean canWrite(ImageFormat format) {
-        return ImageIO.getImageWritersByFormatName(format.extension()).hasNext();
+        return ImageCodecs.canEncode(format);
     }
 
-    private static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
-        BufferedImage bufferedImage = image;
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    /**
+     * Encode an image to bytes using the active codec.
+     *
+     * @param image   source image
+     * @param format  target format
+     * @param quality encoder quality hint (format-specific; ignored where unsupported)
+     * @return encoded image bytes
+     * @throws IOException if encoding fails
+     */
+    public static byte[] imageToBytes(BufferedImage image, ImageFormat format, int quality) throws IOException {
+        return ImageCodecs.encode(image, format, quality);
+    }
 
-        if (format == ImageFormat.JPEG || format == ImageFormat.WEBP) {
-            // JPEG/WEBP don't support alpha channels; composite over white if needed
-            if (bufferedImage.getColorModel().hasAlpha()) {
-                bufferedImage = createWhiteBackground(bufferedImage);
-            }
-            Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName(format.extension());
-            if (writers.hasNext()) {
-                ImageWriter writer = writers.next();
-                try {
-                    ImageWriteParam param = writer.getDefaultWriteParam();
-                    param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
-                    param.setCompressionQuality(quality / 100.0f);
-                    writer.setOutput(ImageIO.createImageOutputStream(baos));
-                    writer.write(null, new IIOImage(bufferedImage, null, null), param);
-                } finally {
-                    writer.dispose();
-                }
-                return baos.toByteArray();
-            }
-        }
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, String formatName, Path output) throws IOException {
+        return PdfImageIO.write(im, formatName, output);
+    }
 
-        ImageIO.write(bufferedImage, format.extension(), baos);
-        return baos.toByteArray();
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, String formatName, File output) throws IOException {
+        return PdfImageIO.write(im, formatName, output);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, ImageFormat format, Path output) throws IOException {
+        return PdfImageIO.write(im, format, output);
+    }
+
+    /**
+     * Write an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static boolean write(BufferedImage im, ImageFormat format, File output) throws IOException {
+        return PdfImageIO.write(im, format, output);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(Path input) throws IOException {
+        return PdfImageIO.read(input);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(File input) throws IOException {
+        return PdfImageIO.read(input);
+    }
+
+    /**
+     * Read an image using the active codec (libvips when present, else ImageIO).
+     */
+    public static BufferedImage read(byte[] data) throws IOException {
+        return PdfImageIO.read(data);
     }
 }

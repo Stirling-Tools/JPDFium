@@ -1,0 +1,55 @@
+JPDFium
+Copyright (c) 2026 Stirling Tools
+License: MIT (see LICENSE)
+
+This project links and bundles third-party code. Full license texts
+for bundled binaries live in native/licenses/.
+
+Native bridge deps (linked at build time):
+- PDFium (EmbedPDF fork) - BSD-3-Clause (native/licenses/PDFIUM-BSD-3.txt)
+- PCRE2 - BSD-3-Clause
+- FreeType - FTL (native/licenses/FREETYPE.txt)
+- HarfBuzz - MIT (native/licenses/HARFBUZZ.txt)
+- ICU - Unicode-3.0 (native/licenses/ICU.txt)
+- QPDF - Apache-2.0 (native/licenses/QPDF-APACHE-2.0.txt)
+- pugixml - MIT
+- libunibreak - zlib
+
+Bundled image stack (shipped in jpdfium-natives-vips-* jars,
+see native/licenses/NOTICE.txt for details):
+- libvips - LGPL-2.1-or-later
+- GLib / GObject - LGPL-2.1-or-later
+- libheif - LGPL-3.0-only
+- libde265 - LGPL-3.0-only
+- libjxl - BSD-3-Clause
+- libwebp - BSD-3-Clause
+- libjpeg-turbo - IJG / BSD-style / zlib
+- libpng - libpng License
+- libtiff - libtiff License
+- OpenJPEG - BSD-2-Clause
+- Kvazaar - BSD-3-Clause
+- Little CMS (lcms2) - MIT
+- zlib - zlib License
+- zstd - BSD-3-Clause
+
+Vendored code (compiled into the bridge):
+- simdutf - Apache-2.0 / MIT
+- utf8proc - MIT
+- xxhash - BSD-2-Clause
+
+Java deps (not bundled, resolved from Maven Central):
+- app.photofox.vips-ffm:vips-ffm-core - Apache-2.0
+- com.twelvemonkeys.imageio:imageio-tiff - BSD-3-Clause (production: the TIFF
+  fallback in the core artifact, used when the optional vips module is absent)
+- org.apache.pdfbox:pdfbox (test only) - Apache-2.0
+- org.junit (test only) - EPL-2.0
+
+Rust helper (static-linked into libjpdfium, resolved versions per
+native/rust/Cargo.lock):
+- lopdf 0.45.0 - MIT
+- zopfli 0.8.4 - Apache-2.0
+- oxipng 10.2.1 - MIT
+- flate2 1.1.10 - MIT OR Apache-2.0
+- fast_image_resize 6.1.0 - MIT OR Apache-2.0
+- usvg 0.48.1 - Apache-2.0 OR MIT
+- resvg 0.48.1 - Apache-2.0 OR MIT

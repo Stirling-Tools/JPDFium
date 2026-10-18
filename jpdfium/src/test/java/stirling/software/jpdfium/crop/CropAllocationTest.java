@@ -10,6 +10,7 @@ import stirling.software.jpdfium.panama.JpdfiumLib;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -38,7 +39,7 @@ class CropAllocationTest {
 
     private static Path pdfPath(String name) throws Exception {
         var url = CropAllocationTest.class.getResource("/pdfs/general/" + name);
-        assertTrue(url != null, name + " missing from test resources");
+        assertNotNull(url, name + " missing from test resources");
         return Path.of(url.toURI());
     }
 

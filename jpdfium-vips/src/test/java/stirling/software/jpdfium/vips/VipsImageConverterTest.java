@@ -23,11 +23,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class VipsImageConverterTest {
 
     @Test
-    void roundTripPngAndTiff() {
+    void roundTripPngTiffAndJpeg2000() {
         VipsAvailability.State state = VipsAvailability.probe();
         assumeTrue(state.available(), "libvips unavailable: " + VipsAvailability.installMessage(state));
 
-        for (VipsFormat format : new VipsFormat[] {VipsFormat.PNG, VipsFormat.TIFF}) {
+        for (VipsFormat format : new VipsFormat[] {VipsFormat.PNG, VipsFormat.TIFF, VipsFormat.JPEG2000}) {
             assumeTrue(VipsAvailability.isFormatAvailable(format), format + " save unavailable");
             assumeTrue(VipsAvailability.isFormatDecodable(format), format + " load unavailable");
             try (RenderedPageView view = createTestView()) {

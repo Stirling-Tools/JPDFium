@@ -26,7 +26,7 @@ jobs:
           # Alpine containers on arm64 runners, so a container-based probe leg
           # would need a full docker-run pipeline for little added signal.
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15-intel
           - platform: darwin-arm64
             runner: macos-14
           - platform: windows-x64
@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           # Temurin does not publish JDK 25 for Windows aarch64; Microsoft
           # Build of OpenJDK does, so use it on the windows-arm64 leg.
@@ -60,7 +60,7 @@ jobs:
           tar -xzf /tmp/jx.tar.gz -C "$HOME/jextract-install" --strip-components=1 2>/dev/null || true
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
 
       - name: Build stub bridge (native availability probe covers resource wiring; real PDFium probe is snapshot.yml)
         run: bash native/build-stub.sh ${{ matrix.platform }}
@@ -88,12 +88,14 @@ jobs:
           ls -R ~/.m2/repository/com/stirling/jpdfium-natives-${{ matrix.platform }}/ | head -n 50
 
       - name: Functional smoke test (load native)
-        # darwin-x64 is cross-compiled on an arm64 (macos-14) host: the arm64
-        # JVM cannot load the x64 dylib, and NativeLoader resolves the host
-        # arch (darwin-arm64). Skip it, matching snapshot.yml's darwin-x64
-        # guard. The "Verify artifact contents" step already checks jar wiring.
-        if: matrix.platform != 'darwin-x64'
-        run: ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }} --no-daemon --stacktrace
+        # darwin-x64 runs natively on macos-15-intel, so its x64 JVM loads the
+        # x64 dylib; every probe leg gets the same load smoke.
+        # This job builds the stub bridge only, so the natives jar it stages has
+        # no integrity manifest. Opt out of the production fail-closed guard here
+        # and nowhere else - a real natives artifact must still refuse to load.
+        run: >-
+          ./gradlew :jpdfium:nativeSmokeTest -Pjpdfium.testNatives=${{ matrix.platform }}
+          -Djpdfium.natives.allowUnsigned=true --no-daemon --stacktrace
 
       - name: Symbol export check
         run: |
@@ -114,7 +116,7 @@ jobs:
           # Also report unpacked native size
           find native/dist/${{ matrix.platform }} -type f -exec ls -lh {} \; 2>/dev/null | head -n 30 || true
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: natives-probe-${{ matrix.platform }}

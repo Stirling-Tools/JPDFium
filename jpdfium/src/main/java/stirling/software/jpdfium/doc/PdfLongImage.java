@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -120,7 +121,7 @@ public final class PdfLongImage {
                     }
                 } finally {
                     try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-                    catch (Throwable _) {}
+                    catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                 }
             }
 

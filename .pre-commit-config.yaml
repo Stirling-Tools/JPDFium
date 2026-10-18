@@ -1,17 +1,21 @@
-# Pre-commit configuration for JPDFium
 repos:
+  # Pinned to the v5.0.0 commit rather than the tag, matching the action pin
+  # policy enforced by .github/scripts/lint-action-pins.sh.
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b # v5.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
 
   - repo: local
     hooks:
       - id: clang-format
         name: clang-format
-        entry: bash -c 'git diff --cached --name-only --diff-filter=ACM | grep -E "\.(cpp|hpp|h)$" | xargs -r clang-format --dry-run --Werror'
+        entry: bash -c 'files=$(git diff --cached --name-only --diff-filter=ACM | grep -E "\.(cpp|hpp|h)$" || true); if [ -n "$files" ]; then echo "$files" | xargs clang-format --dry-run --Werror; fi'
         language: system
         pass_filenames: false
 

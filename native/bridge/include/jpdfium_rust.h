@@ -15,6 +15,10 @@
 extern "C" {
 #endif
 
+// Whether the Rust-powered functions are present in this build (1) or the
+// C++ stub bridge answered (0). Lets callers probe resvg/lopdf support.
+JPDFIUM_EXPORT int32_t jpdfium_has_rust(void);
+
 // Compress a PDF using lopdf + zopfli for superior FlateDecode streams.
 //
 // Loads the PDF with lopdf, decompresses all streams, then recompresses each
@@ -67,6 +71,12 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(const uint8_t* src_pixels, int
                                                   int32_t dst_height, uint8_t** out_ptr,
                                                   int64_t* out_len);
 
+// Unpack decoded samples into opaque ARGB u32s. format: 1=gray8 2=rgb24 3=cmyk32
+// 4=bgr24 5=bgrx32/bgra32; rows advance by src_stride. Returns 0 or -1.
+JPDFIUM_EXPORT int32_t jpdfium_rust_unpack_pixels(const uint8_t* src, int32_t width, int32_t height,
+                                                  int64_t src_stride, int32_t format, uint32_t* dst,
+                                                  int64_t dst_len);
+
 // Optimise a standalone PNG byte stream using oxipng (lossless).
 //
 // Useful for PNG images extracted from a PDF before re-embedding. oxipng
@@ -83,6 +93,24 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_resize_pixels(const uint8_t* src_pixels, int
 JPDFIUM_EXPORT int32_t jpdfium_rust_compress_png(const uint8_t* input, int64_t input_len,
                                                  uint8_t** out_ptr, int64_t* out_len,
                                                  int32_t level);
+
+// Rasterize an SVG document to straight (unpremultiplied) RGBA with resvg.
+//
+// width/height <= 0 keep the SVG's natural size; otherwise the document is
+// scaled, preserving aspect ratio, to fit the requested box.
+//
+// @param svg        SVG document bytes
+// @param svg_len    Length of svg
+// @param width      Target box width in pixels (0 = natural)
+// @param height     Target box height in pixels (0 = natural)
+// @param out_ptr    [out] RGBA buffer (caller must free with jpdfium_rust_free)
+// @param out_len    [out] Length of the RGBA buffer
+// @param out_w      [out] Rendered width in pixels (may be NULL)
+// @param out_h      [out] Rendered height in pixels (may be NULL)
+// @return 0 on success, -1 on error
+JPDFIUM_EXPORT int32_t jpdfium_rust_svg_to_rgba(const uint8_t* svg, int64_t svg_len, int32_t width,
+                                                int32_t height, uint8_t** out_ptr, int64_t* out_len,
+                                                int32_t* out_w, int32_t* out_h);
 
 // Free a buffer allocated by any jpdfium_rust_* function.
 //

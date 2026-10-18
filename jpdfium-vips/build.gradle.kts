@@ -2,11 +2,20 @@ plugins {
     id("jpdfium.library-conventions")
 }
 
+// The module has no descriptor because it is compiled against vips-ffm's
+// automatic modules, so give the jar a stable module name for the module path.
+tasks.named<Jar>("jar") {
+    manifest {
+        attributes["Automatic-Module-Name"] = "stirling.software.jpdfium.vips"
+    }
+}
+
 publishing {
     publications {
         getByName<MavenPublication>("mavenJava") {
             pom {
-                description.set("Optional libvips encoding for JPDFium via vips-ffm (HEIC, AVIF, JXL, WebP, PNG, JPEG)")
+                name.set("JPDFium libvips support")
+                description.set("Optional libvips image encoding for JPDFium: WebP, HEIC, AVIF, JXL, and JPEG 2000")
             }
         }
     }
@@ -18,6 +27,9 @@ publishing {
 val testVipsNatives = (findProperty("jpdfium.testVipsNatives") as String?)
     ?: "vips-${findProperty("jpdfium.testNatives") ?: "linux-x64"}"
 
+// The vips tests read a sample PDF from the classpath. jpdfium leaves its
+// GraalVM smoke fixtures out of the published jar, so this module carries its own
+// copy under src/test/resources instead of depending on jpdfium's artifact.
 dependencies {
     api(project(":jpdfium"))
     implementation(libs.vips.ffm)
@@ -26,7 +38,9 @@ dependencies {
     // the other vips tests) exercise the exact bundled libvips being shipped.
     // Resolved lazily by Gradle; a no-op when the dist dir is empty (tests then
     // fall back to a system libvips or skip).
-    testRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testVipsNatives"))
+    findProject(":jpdfium-natives:jpdfium-natives-$testVipsNatives")?.let {
+        testRuntimeOnly(it)
+    }
 }
 
 // Run: ./gradlew :jpdfium-vips:vipsSmokeTest -Pjpdfium.testNatives=<platform> -Pjpdfium.testVipsNatives=vips-<platform>

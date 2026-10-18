@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Locale;
 /**
  * PDF annotation subtypes.
  *
@@ -63,7 +64,7 @@ public enum AnnotationType {
 
     public static AnnotationType fromXfdfTag(String tag) {
         if (tag == null) return null;
-        String lower = tag.toLowerCase();
+        String lower = tag.toLowerCase(Locale.ROOT);
         for (AnnotationType t : values()) {
             if (lower.equals(t.xfdfTag)) return t;
         }

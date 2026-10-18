@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -28,6 +29,10 @@ public final class PdfStreamOptimizer {
      */
     public static void optimize(Path input, Path output) {
         try {
+            if (QpdfLib.optimizeFile(input, output, 0, PdfOptimizer.OBJECT_STREAMS_GENERATE,
+                    PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT)) {
+                return;
+            }
             byte[] out = PdfOptimizer.optimize(
                     Files.readAllBytes(input),
                     0,
@@ -38,7 +43,10 @@ public final class PdfStreamOptimizer {
             if (out == null) {
                 throw new JPDFiumException("qpdf optimization produced no output");
             }
-            Files.write(output, out);
+            try (OutputTransaction tx = OutputTransaction.begin(output)) {
+                Files.write(tx.staging(), out);
+                tx.publish(null);
+            }
         } catch (IOException e) {
             throw new JPDFiumException("qpdf optimization failed", e);
         }
@@ -53,6 +61,10 @@ public final class PdfStreamOptimizer {
      */
     public static void compact(Path input, Path output) {
         try {
+            if (QpdfLib.optimizeFile(input, output, 0, PdfOptimizer.DEFAULT,
+                    PdfOptimizer.DEFAULT, PdfOptimizer.DEFAULT)) {
+                return;
+            }
             byte[] out = PdfOptimizer.optimize(
                     Files.readAllBytes(input),
                     0,
@@ -63,7 +75,10 @@ public final class PdfStreamOptimizer {
             if (out == null) {
                 throw new JPDFiumException("qpdf compaction produced no output");
             }
-            Files.write(output, out);
+            try (OutputTransaction tx = OutputTransaction.begin(output)) {
+                Files.write(tx.staging(), out);
+                tx.publish(null);
+            }
         } catch (IOException e) {
             throw new JPDFiumException("qpdf compaction failed", e);
         }

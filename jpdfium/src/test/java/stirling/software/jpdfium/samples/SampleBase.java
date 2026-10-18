@@ -1,6 +1,8 @@
 package stirling.software.jpdfium.samples;
 
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 import java.io.File;
@@ -153,8 +155,8 @@ final class SampleBase {
      * Samples log the refusal and continue; returns {@code null} when the page
      * was refused.
      */
-    static stirling.software.jpdfium.model.RenderResult renderOrSkip(
-            stirling.software.jpdfium.PdfPage page, int dpi, String what) {
+    static RenderResult renderOrSkip(
+            PdfPage page, int dpi, String what) {
         try {
             return page.renderAt(dpi);
         } catch (JPDFiumException e) {

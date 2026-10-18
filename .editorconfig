@@ -1,4 +1,3 @@
-# Consistent whitespace/encoding across editors and CI formatter checks
 root = true
 
 [*]
@@ -11,16 +10,23 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{cpp,h,hpp,c}]
+[*.{cpp,h,hpp,c,rs}]
 indent_style = space
 indent_size = 4
 
-[*.{yml,yaml}]
+[*.{yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.toml]
 indent_style = space
 indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+[*.{bat,cmd}]
+end_of_line = crlf
 
 [Makefile]
 indent_style = tab

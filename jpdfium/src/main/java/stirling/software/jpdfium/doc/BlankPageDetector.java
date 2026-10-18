@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
@@ -38,7 +39,7 @@ public final class BlankPageDetector {
             return charCount <= 0;
         } finally {
             try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 

@@ -1,9 +1,14 @@
 package stirling.software.jpdfium.vips;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import java.nio.charset.StandardCharsets;
 
+import app.photofox.vipsffm.VImage;
+import app.photofox.vipsffm.VipsOption;
 import java.io.InputStream;
+import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -51,6 +56,10 @@ class VipsSmokeTest {
                 + "HEIF/AVIF=" + state.heifsave() + ", "
                 + "JXL=" + state.jxlsave());
 
+        if (!state.available() && state.error() != null) {
+            System.out.println("Libvips init failure cause:");
+            state.error().printStackTrace(System.out);
+        }
         assertTrue(state.available(), "libvips is not available: " + VipsAvailability.installMessage(state));
 
         List<String> missingSavers = new ArrayList<>();
@@ -73,6 +82,34 @@ class VipsSmokeTest {
             Files.copy(in, pdf, StandardCopyOption.REPLACE_EXISTING);
         }
 
+        // libvips itself must load PDFs through PDFium on the source-built
+        // platforms (Linux/macOS). The Windows bundle is the upstream prebuilt
+        // and ships no PDF loader; VipsImageConverter covers that path.
+        if (!state.platform().startsWith("windows")) {
+            try (Arena arena = Arena.ofConfined()) {
+                VImage pdfImage = VImage.pdfload(
+                        arena,
+                        pdf.toString(),
+                        VipsOption.Int("page", 0),
+                        VipsOption.Double("dpi", (double) RENDER_DPI));
+                assertTrue(pdfImage.getWidth() > 0 && pdfImage.getHeight() > 0,
+                        "pdfload must render page 0 through PDFium, got "
+                                + pdfImage.getWidth() + "x" + pdfImage.getHeight());
+                System.out.println("PDFium pdfload dimensions: "
+                        + pdfImage.getWidth() + "x" + pdfImage.getHeight());
+            }
+        }
+
+        // SVG must round-trip through the core resvg rasterizer + vips encoder
+        // (the source-built vips ships no librsvg, so this is the SVG path).
+        String svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"16\">"
+                + "<rect width=\"32\" height=\"16\" fill=\"#00ff00\"/></svg>";
+        byte[] svgPng = VipsImageConverter.svgToBytes(
+                svg.getBytes(StandardCharsets.UTF_8), 32, 16, VipsFormat.PNG);
+        assertTrue(svgPng.length > 8, "SVG -> vips encode produced no bytes");
+        assertEquals((byte) 0x89, svgPng[0], "SVG output must be a PNG");
+        System.out.println("SVG -> vips PNG bytes: " + svgPng.length);
+
         int expectedW;
         int expectedH;
         try (PdfDocument doc = PdfDocument.open(pdf)) {
@@ -89,6 +126,9 @@ class VipsSmokeTest {
             List<String> failures = new ArrayList<>();
             for (VipsFormat format : VipsFormat.values()) {
                 System.out.println("Testing format: " + format + " ...");
+                // Every platform encodes HEVC through kvazaar (BSD-3-Clause);
+                // the Windows prebuild builds libheif from source against it
+                // because vcpkg's libheif offers only GPL-2.0 x265 for HEVC.
                 try {
                     byte[] imageBytes = testFormatRoundTrip(doc, format, expectedW, expectedH);
                     System.out.println("  [PASS] " + format + " (size: " + imageBytes.length + " bytes)");
@@ -160,6 +200,9 @@ class VipsSmokeTest {
                     || (u8(data, 0) == 'M' && u8(data, 1) == 'M' && u8(data, 2) == 0 && u8(data, 3) == 42);
             case JXL -> (u8(data, 0) == 0xFF && u8(data, 1) == 0x0A)
                     || (u8(data, 4) == 'J' && u8(data, 5) == 'X' && u8(data, 6) == 'L' && u8(data, 7) == ' ');
+            case JPEG2000 -> (u8(data, 0) == 0x00 && u8(data, 1) == 0x00 && u8(data, 2) == 0x00 && u8(data, 3) == 0x0C
+                    && u8(data, 4) == 'j' && u8(data, 5) == 'P' && u8(data, 6) == ' ' && u8(data, 7) == ' ')
+                    || (u8(data, 0) == 0xFF && u8(data, 1) == 0x4F && u8(data, 2) == 0xFF && u8(data, 3) == 0x51);
             case HEIC, HEIF, AVIF -> u8(data, 4) == 'f' && u8(data, 5) == 't'
                     && u8(data, 6) == 'y' && u8(data, 7) == 'p';
         };

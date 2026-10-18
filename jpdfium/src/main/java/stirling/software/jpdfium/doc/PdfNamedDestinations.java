@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.ActionBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
@@ -31,7 +32,10 @@ public final class PdfNamedDestinations {
         long count;
         try {
             count = (long) DocBindings.FPDF_CountNamedDests.invokeExact(rawDoc);
-        } catch (Throwable t) { return Collections.emptyList(); }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return Collections.emptyList();
+        }
 
         if (count <= 0 || count > Integer.MAX_VALUE) return Collections.emptyList();
 
@@ -58,7 +62,10 @@ public final class PdfNamedDestinations {
                 int pageIndex;
                 try {
                     pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(rawDoc, dest);
-                } catch (Throwable t) { pageIndex = -1; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    pageIndex = -1;
+                }
 
                 float x = 0, y = 0, zoom = 0;
                 ViewType viewType = ViewType.UNKNOWN;
@@ -72,10 +79,12 @@ public final class PdfNamedDestinations {
                     if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
                     if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
                     if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                 result.add(new NamedDestination(name, pageIndex, x, y, zoom, viewType));
-            } catch (Throwable _) {}
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+            }
         }
         return Collections.unmodifiableList(result);
     }
@@ -96,7 +105,10 @@ public final class PdfNamedDestinations {
             int pageIndex;
             try {
                 pageIndex = (int) ActionBindings.FPDFDest_GetDestPageIndex.invokeExact(rawDoc, dest);
-            } catch (Throwable t) { pageIndex = -1; }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                pageIndex = -1;
+            }
 
             float x = 0, y = 0, zoom = 0;
             ViewType viewType = ViewType.UNKNOWN;
@@ -109,9 +121,12 @@ public final class PdfNamedDestinations {
                 if (np >= 1) x = params.getAtIndex(ValueLayout.JAVA_FLOAT, 0);
                 if (np >= 2) y = params.getAtIndex(ValueLayout.JAVA_FLOAT, 1);
                 if (np >= 3) zoom = params.getAtIndex(ValueLayout.JAVA_FLOAT, 2);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             return new NamedDestination(name, pageIndex, x, y, zoom, viewType);
-        } catch (Throwable t) { return null; }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return null;
+        }
     }
 }

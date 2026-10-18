@@ -11,7 +11,10 @@ case "$PLATFORM" in
     linux-*)
         OS=linux
         LIBVIPS_NAME="libvips.so.42"
-        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+        # native/pdfium/lib holds the component PDFium the vips build links;
+        # ldd needs it on the search path to stage libpdfium + its deps.
+        PDFIUM_LIB_DIR="$(dirname "$0")/pdfium/lib"
+        export LD_LIBRARY_PATH="/usr/local/lib:${PDFIUM_LIB_DIR}:${LD_LIBRARY_PATH:-}"
         ;;
     darwin-*)
         OS=darwin
@@ -57,6 +60,23 @@ resolve_libvips() {
     return 1
 }
 
+# In CI the source build must have produced the libvips we bundle: falling
+# back to a system/brew libvips silently ships its whole dependency set
+# (librsvg/X11/...) and a different feature set. JPDFIUM_REQUIRE_SOURCE_VIPS=1
+# turns that fallback into an error.
+if [ "${JPDFIUM_REQUIRE_SOURCE_VIPS:-}" = "1" ]; then
+    case "$OS" in
+        linux) REQUIRED_VIPS="/usr/local/lib/$LIBVIPS_NAME" ;;
+        darwin) REQUIRED_VIPS="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib/$LIBVIPS_NAME" ;;
+        *) REQUIRED_VIPS="" ;;
+    esac
+    if [ -n "$REQUIRED_VIPS" ] && [ ! -f "$REQUIRED_VIPS" ]; then
+        echo "ERROR: source-built libvips not found at $REQUIRED_VIPS." >&2
+        echo "The full-codecs build must succeed; refusing to bundle a system libvips." >&2
+        exit 1
+    fi
+fi
+
 VIPS_LOC="$(resolve_libvips || true)"
 if [ -z "$VIPS_LOC" ]; then
     echo "ERROR: libvips ($LIBVIPS_NAME) not found for $PLATFORM." >&2
@@ -67,6 +87,31 @@ fi
 
 if [ "$OS" = "windows" ]; then
     cp -v "$VIPS_LOC"/*.dll "$DIST"/ 2>/dev/null || true
+    # The upstream MXE zip is GPL-contaminated (libimagequant is linked into
+    # libvips-42.dll; libpoppler/libfftw3 are unused and dropped below). A
+    # separate-DLL check cannot see a statically linked copy, so only the
+    # source-built provenance marker is accepted: there is no GPL path.
+    rm -f "$DIST"/libpoppler*.dll "$DIST"/libfftw3*.dll
+    if [ ! -f "$VIPS_LOC/vips-source-built" ] && \
+       [ ! -f "$(dirname "$VIPS_LOC")/vips-source-built" ]; then
+        echo "ERROR: Windows vips must come from the GPL-free source prebuild" >&2
+        echo "(prebuild-vips.yml, pinned in native/vips.version)." >&2
+        exit 1
+    fi
+    if ls "$DIST"/libimagequant*.dll >/dev/null 2>&1; then
+        echo "ERROR: staged vips links GPL-3 libimagequant." >&2
+        exit 1
+    fi
+    # The JXL codec ships as a loadable module, not linked into libvips.
+    if [ -f "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" ]; then
+        cp -v "$VIPS_LOC/vips-modules-8.18/vips-jxl.dll" "$DIST"/
+    else
+        echo "WARNING: vips-jxl.dll plugin not found under $VIPS_LOC" >&2
+    fi
+    # Both bundles ship their own LLVM libc++ under the same file name and
+    # Windows binds loaded DLLs by name process-wide, so rename ours (plus
+    # every import reference to it) to coexist with the core bundle's copy.
+    "$(command -v python3 || command -v python)" "$(dirname "$0")/patch-windows-libcxx.py" "$DIST"
 else
     cp -v "$VIPS_LOC" "$DIST/"
     # If libvips has dynamic modules (e.g. Homebrew vips-modules-*/vips-heif.dylib, vips-jxl.dylib),
@@ -77,7 +122,14 @@ else
     done || true
 fi
 
-export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
+if [ "$OS" = "windows" ]; then
+    # meson/MSVC names the DLL vips-42.dll (no lib prefix); the upstream MXE
+    # zip uses libvips-42.dll. Accept either, fail loudly if neither exists.
+    export BUNDLE_ROOT="$DIST/vips-42.dll"
+    [ -f "$BUNDLE_ROOT" ] || export BUNDLE_ROOT="$DIST/libvips-42.dll"
+else
+    export BUNDLE_ROOT="$DIST/$LIBVIPS_NAME"
+fi
 bash "$(dirname "$0")/bundle-runtime-deps.sh" "vips-$PLATFORM"
 
 echo ""

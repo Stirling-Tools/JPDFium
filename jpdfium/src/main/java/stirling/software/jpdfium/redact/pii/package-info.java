@@ -1,18 +1,14 @@
 /**
- * PII detection engines - PCRE2 JIT patterns, glyph-level precision,
- * XMP metadata redaction, and entity recognition.
+ * PII detection engines used by {@link stirling.software.jpdfium.redact.PdfRedactor}.
  *
- * <p>These classes are used internally by
- * {@link stirling.software.jpdfium.redact.PdfRedactor} when PII-related
- * options are enabled in {@link stirling.software.jpdfium.redact.RedactOptions}.
+ * <p>These classes are normally configured through {@link
+ * stirling.software.jpdfium.redact.RedactOptions} and driven by the redactor:
+ * {@link stirling.software.jpdfium.redact.pii.PatternEngine} runs PCRE2 JIT
+ * pattern matching, {@link stirling.software.jpdfium.redact.pii.GlyphRedactor}
+ * handles glyph-precise removal, {@link
+ * stirling.software.jpdfium.redact.pii.XmpRedactor} cleans metadata, and {@link
+ * stirling.software.jpdfium.redact.pii.EntityRedactor} matches named entities.
  *
- * <p><b>Key Classes</b></p>
- * <ul>
- *   <li>{@link PiiCategory} - PII categories with built-in PCRE2 patterns</li>
- *   <li>{@link PatternEngine} - PCRE2 JIT compiled pattern matching</li>
- *   <li>{@link GlyphRedactor} - HarfBuzz-aware glyph-level redaction</li>
- *   <li>{@link XmpRedactor} - XMP metadata and /Info dictionary redaction</li>
- *   <li>{@link EntityRedactor} - NER with coreference expansion</li>
- * </ul>
+ * @see stirling.software.jpdfium.redact.pii.PiiCategory
  */
 package stirling.software.jpdfium.redact.pii;

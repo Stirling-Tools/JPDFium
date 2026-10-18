@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.Rect;
@@ -165,7 +166,7 @@ public final class PdfSearchHighlighter {
                         }
                     } finally {
                         try { TextPageBindings.FPDFText_FindClose.invokeExact(searchHandle); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
 
@@ -173,7 +174,7 @@ public final class PdfSearchHighlighter {
                         Collections.unmodifiableList(matchRects));
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
     }

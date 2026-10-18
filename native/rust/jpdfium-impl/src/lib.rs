@@ -6,6 +6,7 @@
 //   jpdfium_rust_compress_pdf   - lopdf + zopfli superior DEFLATE, flate2 fallback decompression
 //   jpdfium_rust_repair_lopdf   - lopdf tolerant XRef rebuild / repair
 //   jpdfium_rust_resize_pixels  - fast_image_resize SIMD pixel scaling (Lanczos3)
+//   jpdfium_rust_unpack_pixels  - gray/rgb/cmyk/bgr samples -> opaque ARGB u32
 //   jpdfium_rust_compress_png   - oxipng lossless PNG optimisation
 //   jpdfium_rust_free           - free buffers allocated by any of the above
 //
@@ -23,6 +24,7 @@ use zopfli::{Format, Options, compress as zopfli_compress};
 
 // Return codes matching jpdfium.h / jpdfium_rust.h
 const JPDFIUM_OK: i32 = 0;
+const JPDFIUM_ERR_INVALID: i32 = -1;
 const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
@@ -70,6 +72,18 @@ fn zopfli_compress_zlib(input: &[u8], iterations: u32) -> Option<Vec<u8>> {
     }
 }
 
+
+/// Shared system-font database for SVG text rendering (loaded lazily once).
+fn system_fontdb() -> std::sync::Arc<usvg::fontdb::Database> {
+    static DB: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> =
+        std::sync::OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    })
+    .clone()
+}
 
 /// Compress a PDF using lopdf + zopfli for superior FlateDecode streams.
 ///
@@ -315,6 +329,119 @@ fn resize_pixels_impl(
 }
 
 
+/// Unpack raw samples into opaque ARGB u32s. Formats: 1=gray8, 2=rgb24, 3=cmyk32, 4=bgr24, 5=bgrx/bgra.
+///
+/// # Safety
+///
+/// `src` must be readable for `src_stride * (height - 1) + width * bpp` bytes,
+/// where `bpp` is the per-format bytes-per-pixel; `dst` must be writable for
+/// `width * height` u32s.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
+    src: *const u8,
+    width: i32,
+    height: i32,
+    src_stride: i64,
+    format: i32,
+    dst: *mut u32,
+    dst_len: i64,
+) -> i32 {
+    if src.is_null() || dst.is_null() || width <= 0 || height <= 0 {
+        return JPDFIUM_ERR_INVALID;
+    }
+    let bpp: i64 = match format {
+        1 => 1,
+        2 | 4 => 3,
+        3 | 5 => 4,
+        _ => return JPDFIUM_ERR_INVALID,
+    };
+    let pixels = (width as i64) * (height as i64);
+    if dst_len < pixels || src_stride < (width as i64) * bpp {
+        return JPDFIUM_ERR_INVALID;
+    }
+    // Reject strides whose row-major extent overflows or exceeds the addressable
+    // range, so the `y * stride` indexing below can never wrap.
+    let Some(stride_extent) = src_stride.checked_mul(height as i64) else {
+        return JPDFIUM_ERR_INVALID;
+    };
+    if stride_extent > isize::MAX as i64 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let w = width as usize;
+    let h = height as usize;
+    let stride = src_stride as usize;
+
+    match format {
+        1 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (di, &sv) in d.iter_mut().zip(s) {
+                    let v = sv as u32;
+                    *di = 0xFF00_0000 | (v << 16) | (v << 8) | v;
+                }
+            }
+        }
+        2 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 3;
+                    *di = 0xFF00_0000
+                        | ((s[o] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o + 2] as u32);
+                }
+            }
+        }
+        3 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 4);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 4;
+                    let k = s[o + 3] as u32;
+                    let c = 255 - (s[o] as u32 + k).min(255);
+                    let m = 255 - (s[o + 1] as u32 + k).min(255);
+                    let yy = 255 - (s[o + 2] as u32 + k).min(255);
+                    *di = 0xFF00_0000 | (c << 16) | (m << 8) | yy;
+                }
+            }
+        }
+        4 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 3);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 3;
+                    *di = 0xFF00_0000
+                        | ((s[o + 2] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o] as u32);
+                }
+            }
+        }
+        5 => {
+            for y in 0..h {
+                let s = slice::from_raw_parts(src.add(y * stride), w * 4);
+                let d = slice::from_raw_parts_mut(dst.add(y * w), w);
+                for (x, di) in d.iter_mut().enumerate() {
+                    let o = x * 4;
+                    *di = ((s[o + 3] as u32) << 24)
+                        | ((s[o + 2] as u32) << 16)
+                        | ((s[o + 1] as u32) << 8)
+                        | (s[o] as u32);
+                }
+            }
+        }
+        _ => return JPDFIUM_ERR_INVALID,
+    }
+    JPDFIUM_OK
+}
+
+
 /// Optimise a standalone PNG byte stream using oxipng (lossless).
 ///
 /// Useful for PNG images extracted from a PDF (e.g. via jpdfium_render_page or
@@ -363,6 +490,131 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
     }
 }
 
+
+/// Whether this library was built with the Rust-powered features (always 1
+/// here; the C++ stub bridge answers 0 so callers can probe capability).
+#[no_mangle]
+pub extern "C" fn jpdfium_has_rust() -> i32 {
+    1
+}
+
+/// Rasterize an SVG document to straight (unpremultiplied) RGBA using resvg.
+///
+/// `width`/`height` <= 0 keep the SVG's natural size; otherwise the document is
+/// scaled, preserving aspect ratio, to fit the requested box. The output is
+/// allocated with libc::malloc and must be freed with jpdfium_rust_free.
+///
+/// # Safety
+/// `svg` must point to `svg_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
+    svg: *const u8,
+    svg_len: usize,
+    width: i32,
+    height: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+    out_w: *mut i32,
+    out_h: *mut i32,
+) -> i32 {
+    if svg.is_null() || svg_len == 0 || out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let data = slice::from_raw_parts(svg, svg_len);
+    // Untrusted SVG: allow only inline data: images. The default string
+    // resolver reads image files from the local filesystem, which would let a
+    // crafted document embed host files into the raster.
+    let mut options = usvg::Options::default();
+    // usvg's default font database is empty, so <text> in an SVG would parse
+    // but rasterize with no fonts at all. Load the system fonts once (shared,
+    // read-only) instead of per conversion.
+    options.fontdb = system_fontdb();
+    options.image_href_resolver = usvg::ImageHrefResolver {
+        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    let tree = match usvg::Tree::from_data(data, &options) {
+        Ok(tree) => tree,
+        Err(_) => return JPDFIUM_ERR_GENERIC,
+    };
+    let size = tree.size();
+    let (natural_w, natural_h) = (size.width(), size.height());
+    if !(natural_w.is_finite() && natural_h.is_finite()) || natural_w <= 0.0 || natural_h <= 0.0 {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    let (target_w, target_h, scale) = if width > 0 && height > 0 {
+        let scale = (width as f32 / natural_w).min(height as f32 / natural_h);
+        (
+            (natural_w * scale).round().max(1.0) as u32,
+            (natural_h * scale).round().max(1.0) as u32,
+            scale,
+        )
+    } else {
+        (
+            natural_w.round().max(1.0) as u32,
+            natural_h.round().max(1.0) as u32,
+            1.0,
+        )
+    };
+
+    // Untrusted input sets the output size: cap the dimensions and the total
+    // pixels before any allocation so a crafted SVG cannot OOM the JVM.
+    // 16384^2 = 268M pixels, the same 1 GiB RGBA bound the bridge renders use.
+    const MAX_DIM: u32 = 16384;
+    const MAX_PIXELS: u64 = 16384 * 16384;
+    if target_w == 0 || target_h == 0 || target_w > MAX_DIM || target_h > MAX_DIM {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    if (target_w as u64) * (target_h as u64) > MAX_PIXELS {
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    // Render straight into a malloc'd buffer: PixmapMut borrows the exact
+    // memory the caller will free with jpdfium_rust_free, so there is no
+    // intermediate Vec and no second copy. Zero it first (PixmapMut over
+    // uninitialised memory would be UB).
+    let byte_len = (target_w as usize) * (target_h as usize) * 4;
+    let ptr = libc::malloc(byte_len) as *mut u8;
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    std::ptr::write_bytes(ptr, 0, byte_len);
+    let buf = slice::from_raw_parts_mut(ptr, byte_len);
+    let mut pixmap = match tiny_skia::PixmapMut::from_bytes(buf, target_w, target_h) {
+        Some(pixmap) => pixmap,
+        None => {
+            libc::free(ptr as *mut libc::c_void);
+            return JPDFIUM_ERR_GENERIC;
+        }
+    };
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap,
+    );
+    // End the mutable borrow of `buf` before touching it again.
+    drop(pixmap);
+
+    // tiny-skia stores premultiplied RGBA; the JVM and libvips want straight.
+    for px in buf.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            px[0] = ((px[0] as u32 * 255 + a / 2) / a) as u8;
+            px[1] = ((px[1] as u32 * 255 + a / 2) / a) as u8;
+            px[2] = ((px[2] as u32 * 255 + a / 2) / a) as u8;
+        }
+    }
+
+    *out_ptr = ptr;
+    *out_len = byte_len as i64;
+    if !out_w.is_null() {
+        *out_w = target_w as i32;
+    }
+    if !out_h.is_null() {
+        *out_h = target_h as i32;
+    }
+    JPDFIUM_OK
+}
 
 /// Free a buffer previously allocated by any jpdfium_rust_* function.
 ///

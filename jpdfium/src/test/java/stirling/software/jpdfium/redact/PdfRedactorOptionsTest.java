@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact;
 
 import org.junit.jupiter.api.Test;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -9,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class PdfRedactorOptionsTest {
 
@@ -33,6 +35,7 @@ class PdfRedactorOptionsTest {
 
     @Test
     void defaultRedactionDoesNotSanitizeOrFlatten() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Redaction requires real PDFium native library");
         byte[] input = loadSamplePdf();
         RedactOptions opts = RedactOptions.builder()
                 .addWord("SECRET")
@@ -57,6 +60,7 @@ class PdfRedactorOptionsTest {
 
     @Test
     void optInSanitizationRunsSanitizeStage() throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "Sanitize stage requires real PDFium native library");
         byte[] input = loadSamplePdf();
         RedactOptions opts = RedactOptions.builder()
                 .addWord("SECRET")

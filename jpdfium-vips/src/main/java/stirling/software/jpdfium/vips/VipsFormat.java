@@ -8,7 +8,8 @@ public enum VipsFormat {
     WEBP("webpsave", null, "webpload"),
     PNG("pngsave", null, "pngload"),
     JPEG("jpegsave", null, "jpegload"),
-    TIFF("tiffsave", null, "tiffload");
+    TIFF("tiffsave", null, "tiffload"),
+    JPEG2000("jp2ksave", null, "jp2kload");
 
     private final String operation;
     private final String compression;

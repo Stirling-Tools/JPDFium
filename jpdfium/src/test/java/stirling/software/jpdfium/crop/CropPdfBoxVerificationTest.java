@@ -28,6 +28,8 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -101,8 +103,8 @@ class CropPdfBoxVerificationTest {
             }
             // Contract: the fully-outside image must not be drawn; it may also be fully
             // dropped from the page Resources (PDFium resource GC) - both are acceptable.
-            assertTrue(insideName != null, "fully-inside image must survive");
-            assertTrue(straddleName != null, "straddling image must survive");
+            assertNotNull(insideName, "fully-inside image must survive");
+            assertNotNull(straddleName, "straddling image must survive");
 
             Set<String> drawn = drawnXObjectNames(page);
             assertTrue(drawn.contains(insideName), "fully-inside image must still be drawn");
@@ -123,6 +125,49 @@ class CropPdfBoxVerificationTest {
             List<Glyph> glyphs = extractGlyphs(doc);
             assertGlyph(glyphs, "FORM_IN", 100, 700, doc.getPage(0));
             assertNoWord(glyphs, "FORM_OUT");
+        }
+    }
+
+    @Test
+    void formChildTextRemovalLeavesNoStaleStream() throws Exception {
+        // Single survivor run ("KEEP"): a stale form stream would leave
+        // "SECRETKEEP" extractable.
+        byte[] output = cropFirstPage(CropTestPdfGenerator.formNestedSingleWordPdf(),
+                new Rect(155, 0, 457, 792));
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            String text = new PDFTextStripper().getText(doc);
+            assertFalse(text.contains("SECRET"),
+                    "removed form text survived the in-place edit: " + text);
+            assertTrue(text.contains("KEEP"),
+                    "surviving form text lost in the in-place edit: " + text);
+            // Text extraction only sees referenced content: decode every stream,
+            // including unreferenced ones, so a stale form stream cannot hide.
+            // An undecodable stream falls back to raw bytes (an unsupported
+            // filter can still hide ASCII text), and at least one stream must
+            // actually be inspected or the loop proves nothing.
+            int inspected = 0;
+            for (var key : doc.getDocument().getXrefTable().keySet()) {
+                COSBase base;
+                try {
+                    base = doc.getDocument().getObjectFromPool(key).getObject();
+                } catch (Exception _) {
+                    continue;
+                }
+                if (!(base instanceof org.apache.pdfbox.cos.COSStream stream)) continue;
+                byte[] decoded;
+                try (var in = stream.createInputStream()) {
+                    decoded = in.readAllBytes();
+                } catch (Exception _) {
+                    try (var raw = stream.createRawInputStream()) {
+                        decoded = raw.readAllBytes();
+                    }
+                }
+                inspected++;
+                String body = new String(decoded, java.nio.charset.StandardCharsets.ISO_8859_1);
+                assertFalse(body.contains("SECRET"),
+                        "stream " + key + " still contains removed text");
+            }
+            assertTrue(inspected > 0, "no streams inspected");
         }
     }
 
@@ -202,8 +247,7 @@ class CropPdfBoxVerificationTest {
 
     private static void assertNoWord(List<Glyph> glyphs, String word) {
         for (Glyph g : glyphs) {
-            assertFalse(g.text().trim().equals(word),
-                    "word '" + word + "' must be gone but found at x=" + g.x() + " y=" + g.y());
+            assertNotEquals(g.text().trim(), word, "word '" + word + "' must be gone but found at x=" + g.x() + " y=" + g.y());
         }
     }
 

@@ -72,7 +72,7 @@ class MergePerfSanityTest {
                         + " exceeds " + ALLOC_RATIO_LIMIT + ". " + smallRun + " vs " + largeRun);
 
         // Allocations stay proportional to output size (output is the floor).
-        assertTrue(smallRun.allocatedBytes < smallRun.outputBytes * 6,
+        assertTrue(smallRun.allocatedBytes < smallRun.outputBytes * 6L,
                 "Java-heap allocations " + smallRun.allocatedBytes + " are disproportionate to output "
                         + smallRun.outputBytes + " bytes: " + smallRun);
     }

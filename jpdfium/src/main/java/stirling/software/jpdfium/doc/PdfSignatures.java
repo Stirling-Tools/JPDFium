@@ -1,7 +1,9 @@
 package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.SignatureBindings;
+import stirling.software.jpdfium.util.NativeJsonParser;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -190,5 +192,66 @@ public final class PdfSignatures {
         } catch (Throwable t) {
             return 0;
         }
+    }
+
+    /**
+     * Number of byte revisions in the loaded document. Each revision is a byte
+     * prefix closed by an %%EOF; a signature that covers a whole revision seals
+     * exactly that prefix. Returns -1 when the revision chain is indeterminate.
+     */
+    public static int revisionCount(long docHandle) {
+        return JpdfiumLib.signatureRevisionCount(docHandle);
+    }
+
+    /**
+     * Verification-oriented details for one signature field, including the
+     * /ByteRange coverage and the revision the signature seals.
+     *
+     * @param docHandle bridge document handle ({@code doc.nativeHandle()})
+     * @param index     0-based signature field index
+     */
+    public static SignatureDetails details(long docHandle, int index) {
+        String json = JpdfiumLib.signatureInfo(docHandle, index);
+        long[] range = null;
+        if (NativeJsonParser.longField(json, "br0") >= 0) {
+            range = new long[] {
+                NativeJsonParser.longField(json, "br0"),
+                NativeJsonParser.longField(json, "br1"),
+                NativeJsonParser.longField(json, "br2"),
+                NativeJsonParser.longField(json, "br3")
+            };
+        }
+        return new SignatureDetails(
+                index,
+                NativeJsonParser.stringField(json, "fieldName"),
+                NativeJsonParser.boolField(json, "signed"),
+                NativeJsonParser.intField(json, "kind"),
+                NativeJsonParser.intField(json, "coverage"),
+                NativeJsonParser.intField(json, "revisionIndex"),
+                range,
+                NativeJsonParser.intField(json, "docMdpPermission"),
+                NativeJsonParser.boolField(json, "catalogCertification"),
+                NativeJsonParser.boolField(json, "revisionChainValid"),
+                NativeJsonParser.stringField(json, "filter"),
+                NativeJsonParser.stringField(json, "subFilter"),
+                NativeJsonParser.stringField(json, "name"),
+                NativeJsonParser.stringField(json, "reason"),
+                NativeJsonParser.stringField(json, "location"),
+                NativeJsonParser.stringField(json, "contactInfo"),
+                NativeJsonParser.stringField(json, "signingTime"),
+                NativeJsonParser.longField(json, "contentsLength"));
+    }
+
+    /**
+     * Digest of the signature's /ByteRange, computed over the document's own
+     * bytes. Use it with the signature's CMS contents to verify the signature
+     * in a cryptographic library.
+     *
+     * @param docHandle bridge document handle ({@code doc.nativeHandle()})
+     * @param index     0-based signature field index
+     * @param algorithm 0=SHA1, 1=SHA256, 2=SHA384, 3=SHA512
+     */
+    public static byte[] digest(long docHandle, int index, int algorithm) {
+        return JpdfiumLib.signatureDigest(docHandle, index, algorithm);
     }
 }

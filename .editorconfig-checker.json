@@ -7,7 +7,10 @@
     "native/pdfium/",
     "native/vendor/",
     "native/licenses/",
-    "native/vcpkg-overlay/"
+    "native/vcpkg-overlay/",
+    "native/rust/target/",
+    "native/build.*/",
+    "native/dist/"
   ],
   "Disable": {
     "IndentSize": true
