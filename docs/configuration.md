@@ -33,6 +33,28 @@ All limits are opt-in. The default of `0` means unbounded.
 
 Negative values are rejected with `IllegalStateException`.
 
+### Regex engine budget
+
+The PCRE2 engines cap the work a single match may do so that a hostile or
+careless pattern cannot stall a worker. These limits are not opt-in: the caps
+are always in force, with deployment-level overrides.
+
+| Environment variable | Default | Read | Description |
+|---|---|---|---|
+| `JPDFIUM_PCRE2_MATCH_LIMIT` | `1000000` | at pattern compile | Maximum match steps PCRE2 may take for one match attempt. |
+| `JPDFIUM_PCRE2_DEPTH_LIMIT` | `1000` | at pattern compile | Maximum backtracking depth for the interpreter. |
+
+JIT matching additionally runs on a dedicated bounded stack (32 KiB initial,
+512 KiB maximum) instead of the process stack. An empty, unparsable or zero
+value keeps the default, so a typo cannot remove a cap. Limits apply to patterns
+compiled after the change; cached patterns keep the budget they were compiled
+with.
+
+Exceeding any of these bounds aborts the scan and fails the operation with
+`JPDFiumException` (or `RedactIncompleteException` when content was already
+removed and the audit could not finish). The engines never return a partial
+match list, because a partial list would mean silently missing redactions.
+
 ## Concurrency
 
 | Property | Default | Description |
