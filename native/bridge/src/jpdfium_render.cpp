@@ -247,15 +247,11 @@ static bool isCancelRequested(const void* cancel_flag) {
 static std::mutex g_progLock;
 static std::unordered_map<void*, ProgressiveState> g_progMap;
 
-// Render a page (plus optional form widgets) into a caller-provided buffer.
-// Shared by the zero-allocation FFM render paths so the Skia premultiply/
-// matrix handling lives in one place.
-//
-// The caller contract requires capacity for all padded rows (stride * height).
-// Java validates the full contract (null, read-only, scope, budget, capacity)
-// before the downcall; the checks below independently reject malformed
-// dimensions with overflow-safe 64-bit math so raw bridge callers cannot
-// smuggle a wrapped stride past the native write paths.
+// Render a page (plus optional form widgets) into a caller-provided buffer,
+// shared by the zero-allocation FFM render paths. The caller contract requires
+// capacity for all padded rows (stride * height); the checks below re-validate the
+// dimensions with overflow-safe 64-bit math so raw bridge callers cannot smuggle
+// a wrapped stride past the native write paths.
 static bool renderIntoArgsValid(uint64_t target_capacity, int32_t width, int32_t height,
                                 int32_t stride) {
     if (width <= 0 || height <= 0 || stride <= 0) return false;

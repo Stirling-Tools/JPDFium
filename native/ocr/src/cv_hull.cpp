@@ -14,7 +14,6 @@
 
 namespace jpdf::ocr {
 
-// ---------------------------------------------------------------------------------------------
 // convexHull (convhull.cpp, Sklansky, integer points) and minAreaRect (rotcalipers.cpp)
 
 namespace {

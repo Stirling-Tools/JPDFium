@@ -1,5 +1,4 @@
 // jpdfium_image.cpp - Image to PDF conversion.
-//
 // Uses PDFium's native image APIs to embed images into PDF pages.
 // Supports JPEG, PNG, and raw bitmap embedding.
 
@@ -14,8 +13,6 @@
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 #include "runtime/domain.h"
-
-// Internal helpers
 
 static uint8_t* decode_png(const uint8_t* png_data, size_t png_len, int* out_width,
                            int* out_height) {
@@ -55,10 +52,10 @@ static int32_t read_le_i32(const uint8_t* p) {
 
 // Create a new PDF page with an image embedded.
 // image_format: 0=auto-detect, 1=PNG, 2=JPEG, 3=raw RGBA
-//   For format 3, image_data must begin with an 8-byte header:
-//     bytes 0-3: image width  (int32, little-endian)
-//     bytes 4-7: image height (int32, little-endian)
-//   followed immediately by width*height*4 bytes of raw RGBA pixel data.
+// For format 3, image_data must begin with an 8-byte header:
+// bytes 0-3: image width (int32, little-endian)
+// bytes 4-7: image height (int32, little-endian)
+// followed immediately by width*height*4 bytes of raw RGBA pixel data.
 static int32_t create_page_with_image(int64_t docHandle, const uint8_t* image_data,
                                       size_t image_len, float page_width, float page_height,
                                       float margin, Position position, int32_t image_format,

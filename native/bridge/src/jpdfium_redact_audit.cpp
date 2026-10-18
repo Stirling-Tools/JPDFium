@@ -1,7 +1,5 @@
-// jpdfium_redact_audit.cpp - audits and the crop operation.
-//
-// Post-pass audits proving no content survives where it must not, plus
-// jpdfium_crop_remove_content, which shares their geometry helpers.
+// jpdfium_redact_audit.cpp - post-pass audits proving no content survives where
+// it must not, plus jpdfium_crop_remove_content, which shares their geometry helpers.
 
 #include <epdf_redact.h>
 #include <fpdf_annot.h>

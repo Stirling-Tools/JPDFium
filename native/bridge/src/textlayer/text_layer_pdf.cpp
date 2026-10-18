@@ -27,7 +27,7 @@ namespace jpdf {
 
 namespace {
 
-// --- PDF serialization ---
+// PDF serialization
 
 long long scaled(double v) {
     if (!std::isfinite(v)) return 0;  // inputs are validated; this keeps llround defined

@@ -18,7 +18,6 @@ namespace jpdf::ocr {
 using detail::round_int;
 using detail::saturate_short;
 
-// ---------------------------------------------------------------------------------------------
 // warpPerspective, INTER_CUBIC, BORDER_REPLICATE (imgwarp.cpp, lapack.cpp, matrix_decomp.cpp)
 
 namespace {

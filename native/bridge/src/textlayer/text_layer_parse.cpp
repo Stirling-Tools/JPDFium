@@ -21,7 +21,7 @@ namespace jpdf {
 
 namespace {
 
-// --- Unicode classes ---
+// Unicode classes
 
 bool is_control(char32_t c) {
     return c < 0x20 || (c >= 0x7F && c <= 0x9F);

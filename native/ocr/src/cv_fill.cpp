@@ -14,7 +14,6 @@
 
 namespace jpdf::ocr {
 
-// ---------------------------------------------------------------------------------------------
 // fillPoly, LINE_8, shift 0 (drawing.cpp: CollectPolyEdges, FillEdgeCollection, Line)
 
 namespace {

@@ -14,7 +14,7 @@ namespace jpdf::ocr {
 
 namespace {
 
-// --- DBPostProcess helpers ---
+// DBPostProcess helpers
 
 // get_mini_boxes: corners sorted by x, then split into top/bottom pairs.
 std::array<Point2f, 4> mini_box(const std::vector<Point>& points, float* short_side) {

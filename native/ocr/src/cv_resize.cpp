@@ -20,7 +20,6 @@ using detail::saturate_short;
 
 namespace {
 
-// ---------------------------------------------------------------------------------------------
 // resize, INTER_LINEAR, 8-bit (resize.cpp: hal::resize, HResizeLinear, VResizeLinear<uchar>)
 
 constexpr int kResizeCoefBits = 11;

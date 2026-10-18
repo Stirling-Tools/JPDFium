@@ -99,20 +99,16 @@ FILE* open_staging_sibling(const char* path, std::string& stagingOut) {
 }
 
 // Rename staging over the destination. Falls back to a non-atomic replace when
-// the platform refuses (a cross-device rename cannot happen here because the
-// staging file is a sibling, but some filesystems reject rename onto an open
-// target).
+// the platform refuses (a cross-device rename cannot happen for a sibling file,
+// but some filesystems reject rename onto an open target).
 //
-// The staging file carries mode 0600 from exclusive creation, which is right
-// while it holds a partial PDF and wrong for the published artifact when the
-// destination already exists: a rename would hand the destination owner-only
-// permissions and silently drop the mode of the file it replaced. An existing
+// Staging carries mode 0600 from exclusive creation: right for a partial PDF and
+// wrong for the published artifact when the destination exists (a rename would
+// hand it owner-only permissions and drop the replaced file's mode). An existing
 // destination keeps its mode (mirror applyDestinationPermissions on the Java
-// side); a NEW destination keeps the restrictive 0600 staging mode.
-// output_transaction.cpp made the same call: learning the umask default from a
-// probe file needs a 0666 creation (CodeQL cpp/world-writable-file-creation)
-// and reading umask(2) would race process-wide with other threads. Windows
-// inherits the directory ACL on move, so there is nothing to copy there.
+// side); a new one keeps 0600. Learning the umask default from a 0666 probe file
+// was rejected (CodeQL cpp/world-writable-file-creation) and umask(2) would race
+// process-wide; Windows inherits the directory ACL on move.
 bool publish_staged(const std::string& staging, const char* destination) {
 #if defined(_WIN32)
     // Windows rename fails if the target exists, so MOVEFILE_REPLACE_EXISTING is

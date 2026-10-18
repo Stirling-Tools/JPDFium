@@ -84,7 +84,7 @@ public final class EmbedPdfDocumentBindings {
     public static final MethodHandle EPDF_RenderAnnotBitmapUnrotated = downcall("EPDF_RenderAnnotBitmapUnrotated",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
 
-    // --- Extended Page Box & Identity APIs (EmbedPDF) ---
+    // Extended Page Box & Identity APIs (EmbedPDF)
 
     public static final int EPDF_PAGE_BOX_MEDIA = 0;
     public static final int EPDF_PAGE_BOX_CROP  = 1;

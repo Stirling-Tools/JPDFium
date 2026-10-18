@@ -629,13 +629,10 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         int n2 = FPDFText_CountChars(audit.get());
         std::u32string& wtext2 = t_redactScratch.auditWtext;
         buildNormalizedText(audit.get(), n2, idxMap2, wtext2);
-        // Survivor audit. Two orthogonal checks, each exactly as strong as it
-        // can be without false alarms:
-        //   1. (below) no redaction pattern still matches the extracted text -
-        //      checks that no target pattern remains in the audited extraction;
-        //      it does not prove absence from every representation in the file;
-        //   2. text outside every redaction box is unchanged - catches fission
-        //      damage to surviving fragments, which is silent data loss.
+        // Survivor audit, two independent checks: no redaction pattern still
+        // matches the extracted text (not proof of absence from every
+        // representation), and text outside every redaction box is unchanged,
+        // which catches silent fission damage to surviving fragments.
         std::vector<char>& touched2 = t_redactScratch.auditTouched2;
         markTouchedByRects(audit.get(), n2, auditRects, touched2);
         std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, touched2);

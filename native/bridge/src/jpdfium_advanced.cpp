@@ -21,8 +21,6 @@
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 
-// JSON helpers ---------------------------------------------------------------
-
 // Append an integral value without a fixed-size buffer. snprintf into a small
 // stack buffer silently truncated long match or font text and produced malformed
 // JSON; std::to_chars is locale-independent and cannot truncate here.
@@ -918,7 +916,6 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
 // Replace the FPDF_DOCUMENT inside a DocWrapper with a document loaded from new
 // bytes. The DocWrapper pointer itself is unchanged, so the Java-side handle
 // remains valid.
-//
 // Strong failure contract: the candidate is fully prepared, loaded, and
 // validated before anything is retired. If any step fails, the original
 // document is left untouched and usable. Only after a valid candidate exists

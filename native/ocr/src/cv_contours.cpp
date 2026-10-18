@@ -15,7 +15,6 @@
 
 namespace jpdf::ocr {
 
-// ---------------------------------------------------------------------------------------------
 // findContours, RETR_LIST + CHAIN_APPROX_SIMPLE (contours_new.cpp)
 
 namespace {

@@ -738,16 +738,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
         return -1;
     }
     try {
-        // Open the encrypted source with whichever password the caller knows.
-        // The source document is only read for its encryption dictionary, so it
-        // never has to be written back out.
-        //
-        // Pre-256-bit encryption imposes single-byte PDFDocEncoding passwords
-        // while our caller hands us UTF-8, and QPDF::processFile performs no
-        // conversion, so walk the same alternative encodings that QPDFJob tries
-        // for the command line. Without this an AES-128 source protected with a
-        // password that needs a second encoding would refuse a password that
-        // the equivalent qpdf command line accepts.
+        // Open the encrypted source with whichever password the caller knows; it is
+        // only read for its encryption dictionary. Pre-256-bit encryption imposes
+        // single-byte PDFDocEncoding passwords while our caller hands us UTF-8 and
+        // QPDF::processFile performs no conversion, so walk the same alternative
+        // encodings QPDFJob tries for the command line - otherwise an AES-128 source
+        // needing a second encoding rejects a password the equivalent qpdf command
+        // line accepts.
         std::vector<std::string> candidates = QUtil::possible_repaired_encodings(password);
         if (candidates.size() > 1) {
             // Report the supplied password's own failure if every form fails.

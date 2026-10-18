@@ -308,7 +308,7 @@ typedef struct jpdf_text_layer_options {
     int32_t reserved0;
 } jpdf_text_layer_options;
 
-// --- Identity, errors, capabilities. Callable in every runtime state. ---
+// Identity, errors, capabilities. Callable in every runtime state.
 
 // (major << 16) | minor of the loaded library.
 JPDF_API uint32_t jpdf_api_version(void) JPDF_NOEXCEPT;
@@ -322,7 +322,7 @@ JPDF_API jpdf_status jpdf_last_error_message(char* buffer, uint64_t capacity,
 // Readiness of a named operation such as "pdf.render"; unknown names report JPDF_CAP_ABSENT.
 JPDF_API jpdf_status jpdf_capability(const char* name, int32_t* out_level) JPDF_NOEXCEPT;
 
-// --- Runtime lifecycle. ---
+// Runtime lifecycle.
 
 // Explicit lazy init: idempotent while RUNNING, refused once stopped. NULL selects defaults.
 JPDF_API jpdf_status jpdf_runtime_init(const jpdf_runtime_options* options) JPDF_NOEXCEPT;
@@ -336,12 +336,12 @@ JPDF_API jpdf_status jpdf_runtime_shutdown_within(uint32_t timeout_ms) JPDF_NOEX
 // Back to RUNNING after a quiesce or refused shutdown. Never leaves STOPPED or FAILED.
 JPDF_API jpdf_status jpdf_runtime_resume(void) JPDF_NOEXCEPT;
 
-// --- Legacy surface. jpdf_guard_<name> admits jpdfium_* and raw PDFium calls to the domain. ---
+// Legacy surface. jpdf_guard_<name> admits jpdfium_* and raw PDFium calls to the domain.
 
 // A refused jpdf_guard_* call returns a zero value; this reports and clears why, per thread.
 JPDF_API jpdf_status jpdf_guard_take_refusal(void) JPDF_NOEXCEPT;
 
-// --- Documents and pages. All PDFium work runs inside the native domain. ---
+// Documents and pages. All PDFium work runs inside the native domain.
 
 JPDF_API jpdf_status jpdf_doc_open_file(const char* path_utf8, const jpdf_open_options* options,
                                         jpdf_handle* out_doc) JPDF_NOEXCEPT;
@@ -367,7 +367,7 @@ JPDF_API jpdf_status jpdf_page_render_to_file(jpdf_handle page, const jpdf_rende
                                               const char* path_utf8,
                                               const jpdf_write_options* write) JPDF_NOEXCEPT;
 
-// --- Bitmaps. No PDFium state: these never enter the domain. ---
+// Bitmaps. No PDFium state: these never enter the domain.
 
 // Decodes a PNG file into an independently owned GRAY8 or RGB8 bitmap, as OpenCV's IMREAD_COLOR
 // reads it: alpha dropped, 16-bit samples cut to their high byte. DPI comes from pHYs, else 0.
@@ -391,7 +391,7 @@ JPDF_API jpdf_status jpdf_bitmap_rectify(jpdf_handle bitmap, const double quad[8
                                          jpdf_handle* out_bitmap,
                                          jpdf_rectify_result* out_result) JPDF_NOEXCEPT;
 
-// --- Invisible text layers (OCRmyPDF generate_pdf). No PDFium: never enters the domain. ---
+// Invisible text layers (OCRmyPDF generate_pdf). No PDFium: never enters the domain.
 
 // Writes a one-page PDF sized to the image that holds only invisible text, through an output
 // transaction. write may be NULL; its image fields must be 0. See docs/design/DESIGN.md.
@@ -401,7 +401,7 @@ JPDF_API jpdf_status jpdf_text_layer_write(const jpdf_text_layer_options* option
                                            const char* output_path_utf8,
                                            const jpdf_write_options* write) JPDF_NOEXCEPT;
 
-// --- Rasterization for OCR pipelines (the OCRmyPDF rasterize_pdf_page contract). ---
+// Rasterization for OCR pipelines (the OCRmyPDF rasterize_pdf_page contract).
 
 // Opens path_utf8, rasterizes page_index (0-based) and publishes a PNG through an output
 // transaction. out_result may be NULL. See docs/design/DESIGN.md for the reference contract.
@@ -411,7 +411,7 @@ JPDF_API jpdf_status jpdf_rasterize_page_file(const char* path_utf8, int32_t pag
                                               const jpdf_write_options* write,
                                               jpdf_raster_result* out_result) JPDF_NOEXCEPT;
 
-// --- Optional native modules (OCR). Objects live in the core's handle table. ---
+// Optional native modules (OCR). Objects live in the core's handle table.
 
 typedef void (*jpdf_module_destroy_fn)(void* object);
 

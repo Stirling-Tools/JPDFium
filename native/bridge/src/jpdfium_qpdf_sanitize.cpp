@@ -1,10 +1,8 @@
 // jpdfium_qpdf_sanitize.cpp - In-process qpdf structural sanitization (FFM, no CLI).
 //
-// jpdfium_qpdf_sanitize drives the bundled qpdf library entirely in memory via
-// its QPDF/QPDFWriter C++ API. Scrubs metadata/info/structure, JavaScript
-// actions, embedded files, AcroForm widgets, and flattens annotations. Visual
-// redaction of content streams is handled by the pdfium side; this pass cleans
-// up the structural copies it leaves behind.
+// Drives the bundled qpdf library in memory (QPDF/QPDFWriter) to scrub metadata,
+// info, structure, JavaScript actions, embedded files and AcroForm widgets, and to
+// flatten annotations; content-stream redaction belongs to the pdfium side.
 
 #include <cstdint>
 #include <cstdio>

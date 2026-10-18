@@ -78,7 +78,7 @@ bool containsAnyLiteral(const std::string& hay, const std::vector<std::string>& 
     return false;
 }
 
-// ---- content stream tokenizer: collect (font, charcodes) used ----
+// content stream tokenizer: collect (font, charcodes) used
 
 struct ContentScan {
     // resource name -> raw byte strings shown with that font. Code WIDTH is
@@ -159,7 +159,7 @@ std::shared_ptr<Buffer> streamData(QPDFObjectHandle obj) {
     }
 }
 
-// ---- ToUnicode CMap parsing (bfchar / bfrange) ----
+// ToUnicode CMap parsing (bfchar / bfrange)
 
 struct CmapEntry {
     int code = -1;  // source charcode
