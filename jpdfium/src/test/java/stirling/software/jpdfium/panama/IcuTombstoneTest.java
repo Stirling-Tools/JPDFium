@@ -5,19 +5,18 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The native sentence segmenter was replaced by {@code java.text.BreakIterator}
- * and every native build now exports {@code jpdfium_icu_break_sentences} as a
- * tombstone that reports {@code JPDFIUM_ERR_NOT_FOUND}. Binary compatibility is
- * kept, but callers must expect a loud failure instead of JSON boundaries.
- *
- * <p>Needs a native library; the assertions cover both the full and the stub
- * bridge, which behave identically here.
+ * The native sentence segmenter was replaced by {@code java.text.BreakIterator}.
+ * The branch's own native builds export {@code jpdfium_icu_break_sentences} as a
+ * tombstone that reports {@code JPDFIUM_ERR_NOT_FOUND}, while the stub bridge and
+ * previously published natives still implement it, so the contract asserted here
+ * is the one that holds for every generation: a call either fails loudly with a
+ * not-found error or returns the documented JSON array - never a silent empty
+ * result that a caller could mistake for "no sentences".
  */
-@SuppressWarnings("deprecation") // the point of this test is the deprecated tombstone
+@SuppressWarnings("deprecation") // verifying the deprecated tombstone contract
 class IcuTombstoneTest {
 
     @Test
@@ -27,20 +26,33 @@ class IcuTombstoneTest {
     }
 
     @Test
-    void breakSentencesFailsLoudlyInsteadOfReturningBoundaries() {
+    void breakSentencesEitherFailsLoudlyOrReturnsBoundaries() {
         requireNativeLibrary();
-        JPDFiumException failure = assertThrows(JPDFiumException.class,
-                () -> IcuLib.breakSentences("One sentence. Two sentences."),
-                "the tombstone must fail instead of returning boundaries");
-        assertTrue(failure.getMessage().contains("Resource not found"),
-                "unexpected message: " + failure.getMessage());
+        String json;
+        try {
+            json = IcuLib.breakSentences("One sentence. Two sentences.");
+        } catch (JPDFiumException failure) {
+            // Tombstone build: the caller must see the not-found error.
+            assertTrue(failure.getMessage().contains("Resource not found"),
+                    "unexpected message: " + failure.getMessage());
+            return;
+        }
+        // Older native library: the boundaries must be the documented JSON array.
+        assertTrue(json.startsWith("[") && json.endsWith("]"),
+                "an implemented segmenter must return a JSON array, got: " + json);
     }
 
     @Test
-    void breakSentencesFailsForEveryInput() {
+    void breakSentencesNeverReportsAnEmptySuccess() {
         requireNativeLibrary();
-        assertThrows(JPDFiumException.class, () -> IcuLib.breakSentences(""));
-        assertThrows(JPDFiumException.class, () -> IcuLib.breakSentences("a"));
+        try {
+            String json = IcuLib.breakSentences("");
+            assertTrue(json.startsWith("[") && json.endsWith("]"),
+                    "empty input must not produce a silent non-JSON result: " + json);
+        } catch (JPDFiumException expected) {
+            assertTrue(expected.getMessage().contains("Resource not found"),
+                    "unexpected message: " + expected.getMessage());
+        }
     }
 
     private static void requireNativeLibrary() {

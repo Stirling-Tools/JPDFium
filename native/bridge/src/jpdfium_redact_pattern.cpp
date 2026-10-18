@@ -95,8 +95,8 @@ static uint64_t computePatternSignature(const char** words, int32_t wordCount, b
 static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
 static constexpr uint32_t kPcre2DepthLimit = 1'000u;
 
-static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst,
-                                  std::mutex* stack_mutex, Pcre2Pattern& out) {
+static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst, std::mutex* stack_mutex,
+                                  Pcre2Pattern& out) {
     if (!code) return false;
     pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
     if (!md) return false;
@@ -757,8 +757,8 @@ bool scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
         Pcre2Pattern pc;
         bool patternReady = false;
         if (cached && !cached->codes.empty()) {
-            patternReady = createPatternFromCode(cached->codes[0], cached->jst,
-                                                 &cached->stack_mutex, pc);
+            patternReady =
+                createPatternFromCode(cached->codes[0], cached->jst, &cached->stack_mutex, pc);
         }
         if (!patternReady) {
             std::u32string combined;
