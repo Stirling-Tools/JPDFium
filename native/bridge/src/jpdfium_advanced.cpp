@@ -189,14 +189,21 @@ void jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
     auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
     if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return;
     Pcre2HandleRegistry::instance().remove(pw);
-    // A match already in flight on this handle must finish before its buffers
-    // go away; afterwards the handle is rejected by the registry check above.
-    std::lock_guard<std::mutex> handleLock(pw->match_mutex);
-    if (pw->jit_stack) pcre2_jit_stack_free(pw->jit_stack);
-    if (pw->match_ctx) pcre2_match_context_free(pw->match_ctx);
-    if (pw->match_data) pcre2_match_data_free(pw->match_data);
-    if (pw->code) pcre2_code_free(pw->code);
-    delete pw;
+    // A match already in flight on this handle must finish before its buffers go
+    // away; afterwards the handle is rejected by the registry check above.
+    //
+    // Locking can throw (the frees below cannot), and this function is noexcept,
+    // so translate any exception into "leave the allocations to process teardown"
+    // instead of terminating the process. Same idiom as jpdfium_render.cpp.
+    try {
+        std::lock_guard<std::mutex> handleLock(pw->match_mutex);
+        if (pw->jit_stack) pcre2_jit_stack_free(pw->jit_stack);
+        if (pw->match_ctx) pcre2_match_context_free(pw->match_ctx);
+        if (pw->match_data) pcre2_match_data_free(pw->match_data);
+        if (pw->code) pcre2_code_free(pw->code);
+        delete pw;
+    } catch (...) {
+    }
 }
 
 #else  // !JPDFIUM_HAS_PCRE2
