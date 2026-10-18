@@ -1,7 +1,9 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
+        // Central first: the plugin portal proxies Central and throttles shared
+        // runner IPs, so a 429 there would otherwise fail plugin resolution.
         mavenCentral()
+        gradlePluginPortal()
         google()
     }
 }
