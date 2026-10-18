@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Semantic redaction using a context graph: text extraction, sentence tokenization,
@@ -102,26 +105,9 @@ public final class EntityRedactor implements AutoCloseable {
 
             List<Sentence> sentences = splitSentences(text);
 
-            Set<Integer> entitySentenceIndices = new HashSet<>();
-            for (EntityMatch em : pageEntities) {
-                for (int i = 0; i < sentences.size(); i++) {
-                    Sentence s = sentences.get(i);
-                    if (em.start >= s.start && em.start < s.end) {
-                        entitySentenceIndices.add(i);
-                        break;
-                    }
-                }
-            }
-
-            Set<Integer> expandedIndices = new HashSet<>();
-            for (int idx : entitySentenceIndices) {
-                for (int w = -coreferenceWindow; w <= coreferenceWindow; w++) {
-                    int target = idx + w;
-                    if (target >= 0 && target < sentences.size()) {
-                        expandedIndices.add(target);
-                    }
-                }
-            }
+            Set<Integer> entitySentenceIndices = sentenceIndicesFor(sentences, pageEntities);
+            Set<Integer> expandedIndices =
+                    expandWindow(entitySentenceIndices, coreferenceWindow, sentences.size());
 
             for (EntityMatch em : pageEntities) {
                 allTargets.add(new RedactionTarget(page.pageIndex(), em.start, em.end,
@@ -215,12 +201,8 @@ public final class EntityRedactor implements AutoCloseable {
     public static final class Builder {
         private final List<Entity> entities = new ArrayList<>();
         private final Map<PiiCategory, String> patterns = new EnumMap<>(PiiCategory.class);
-        private int coreferenceWindow = 2;
-        private final List<String> coreferencePronouns = new ArrayList<>(List.of(
-                "he", "she", "they", "him", "her", "them", "his", "their",
-                "the patient", "the client", "the employee", "the applicant",
-                "the individual", "the person", "the subject"
-        ));
+        private int coreferenceWindow = DEFAULT_COREFERENCE_WINDOW;
+        private final List<String> coreferencePronouns = new ArrayList<>(defaultCoreferencePronouns());
 
         private Builder() {}
 
@@ -266,23 +248,109 @@ public final class EntityRedactor implements AutoCloseable {
 
     private record Entity(String keyword, String label) {}
 
-    private record Sentence(int start, int end) {}
+    record Sentence(int start, int end) {}
+
+    /**
+     * Sentence distance scanned on both sides of an entity mention for
+     * referring pronouns. See {@link Builder#coreferenceWindow(int)}.
+     */
+    static final int DEFAULT_COREFERENCE_WINDOW = 2;
+
+    /**
+     * Pronouns and referring phrases the coreference window looks for.
+     * See {@link Builder#setCoreferencePronouns(java.util.List)}.
+     */
+    static List<String> defaultCoreferencePronouns() {
+        return List.of("he", "she", "they", "him", "her", "them", "his", "their",
+                "the patient", "the client", "the employee", "the applicant",
+                "the individual", "the person", "the subject");
+    }
+
+    /**
+     * Maps every entity match to the index of the first sentence containing its
+     * start offset. Matches outside every sentence are ignored.
+     */
+    static Set<Integer> sentenceIndicesFor(List<Sentence> sentences, List<EntityMatch> matches) {
+        Set<Integer> result = new HashSet<>();
+        for (EntityMatch em : matches) {
+            for (int i = 0; i < sentences.size(); i++) {
+                Sentence s = sentences.get(i);
+                if (em.start >= s.start && em.start < s.end) {
+                    result.add(i);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Expands sentence indices by {@code window} sentences in both directions,
+     * clamped to the document's sentence count.
+     */
+    static Set<Integer> expandWindow(Set<Integer> indices, int window, int sentenceCount) {
+        Set<Integer> result = new HashSet<>();
+        for (int idx : indices) {
+            for (int w = -window; w <= window; w++) {
+                int target = idx + w;
+                if (target >= 0 && target < sentenceCount) {
+                    result.add(target);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Boundaries {@code java.text.BreakIterator} drops around numbered list
+     * markers.
+     *
+     * <p>The JDK's sentence rules keep a marker attached to the preceding
+     * sentence ("First item. 2. Second item." parses as one sentence, "Stop.
+     * 2.cpp is a file name." stays one sentence, and a parenthesised list is a
+     * single unit) where the ICU rules the bridge used broke after each marker.
+     * The coreference window redacts whole sentences, so the coarser units both
+     * widen redaction regions and, when the merged unit also contains the
+     * entity's own sentence, suppress coreference expansion entirely.
+     *
+     * <p>A marker is a terminator plus whitespace followed by either a
+     * parenthesised number, a number with a closing period or parenthesis (also
+     * when a letter follows the period, as in {@code 2.cpp}), so the pattern
+     * cannot fire inside a decimal fraction ("42.5") or an ordinal inside a
+     * sentence ("Totals were 3. 4 items remain.").
+     */
+    private static final Pattern RESTORED_LIST_BOUNDARY = Pattern.compile(
+            "[.!?\u2026\u3002\uff01\uff1f]+[\\s\u00a0]+"
+                    + "(?=(?:\\(\\d{1,3}\\)\\s|\\d{1,3}[.)](?:\\s|[^\\d\\s])))");
 
     /**
      * Split text into sentence ranges. Offsets are char indices into
      * {@code text}, matching what the coreference window expects.
+     *
+     * <p>{@code java.text.BreakIterator} with {@link Locale#ROOT} replaces the
+     * native ICU segmenter this pipeline used before; the corpus in
+     * {@code src/test/resources/pii/sentence-corpus.tsv} records where the two
+     * rule sets agree and the two cases where they differ.
      */
     static List<Sentence> splitSentences(String text) {
         if (text == null || text.isEmpty()) return List.of();
         BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
         sentences.setText(text);
-        List<Sentence> result = new ArrayList<>();
-        int start = sentences.first();
-        int end = sentences.next();
-        while (end != BreakIterator.DONE) {
-            result.add(new Sentence(start, end));
-            start = end;
-            end = sentences.next();
+        TreeSet<Integer> cuts = new TreeSet<>();
+        for (int p = sentences.first(); p != BreakIterator.DONE; p = sentences.next()) {
+            cuts.add(p);
+        }
+        Matcher markers = RESTORED_LIST_BOUNDARY.matcher(text);
+        while (markers.find()) {
+            cuts.add(markers.end());
+        }
+        List<Sentence> result = new ArrayList<>(cuts.size());
+        Integer previous = null;
+        for (int cut : cuts) {
+            if (previous != null && cut > previous) {
+                result.add(new Sentence(previous, cut));
+            }
+            previous = cut;
         }
         return result;
     }
