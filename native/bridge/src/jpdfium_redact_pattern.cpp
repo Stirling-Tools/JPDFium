@@ -95,7 +95,8 @@ static uint64_t computePatternSignature(const char** words, int32_t wordCount, b
 static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
 static constexpr uint32_t kPcre2DepthLimit = 1'000u;
 
-static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst, Pcre2Pattern& out) {
+static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst,
+                                  std::mutex* stack_mutex, Pcre2Pattern& out) {
     if (!code) return false;
     pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
     if (!md) return false;
@@ -104,14 +105,15 @@ static bool createPatternFromCode(pcre2_code* code, pcre2_jit_stack* jst, Pcre2P
         pcre2_match_data_free(md);
         return false;
     }
-    pcre2_set_match_limit(mctx, kPcre2MatchLimit);
-    pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+    pcre2_set_match_limit(mctx, envUint32("JPDFIUM_PCRE2_MATCH_LIMIT", kPcre2MatchLimit));
+    pcre2_set_depth_limit(mctx, envUint32("JPDFIUM_PCRE2_DEPTH_LIMIT", kPcre2DepthLimit));
     if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
     out.code = code;
     out.md = md;
     out.mctx = mctx;
     out.jst = jst;
     out.ownsCode = false;
+    out.shared_stack_mutex = stack_mutex;
     return true;
 }
 
@@ -147,8 +149,8 @@ bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& ou
         pcre2_code_free(code);
         return false;
     }
-    pcre2_set_match_limit(mctx, kPcre2MatchLimit);
-    pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+    pcre2_set_match_limit(mctx, envUint32("JPDFIUM_PCRE2_MATCH_LIMIT", kPcre2MatchLimit));
+    pcre2_set_depth_limit(mctx, envUint32("JPDFIUM_PCRE2_DEPTH_LIMIT", kPcre2DepthLimit));
     // JIT stack 32KB initial / 512KB max; freed by the Pcre2Pattern destructor.
     pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
     if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
@@ -630,15 +632,21 @@ static void appendMatchChars(CharBoxCache& chars, const std::vector<int>& idxMap
 #ifdef JPDFIUM_HAS_PCRE2
 // Run a compiled PCRE2 pattern over the search buffer -> TextMatch vector.
 // Non-overlapping matches (same iteration model as wsregex_iterator).
-static void collectPcre2Matches(CharBoxCache& chars, const std::u32string& text,
+// Returns false when a match call aborted (match/depth limit, JIT stack, bad
+// UTF): `out` then holds a partial list, and the caller must fail loudly rather
+// than treat the page as fully searched - a truncated list means redactions
+// that were never applied.
+static bool collectPcre2Matches(CharBoxCache& chars, const std::u32string& text,
                                 const std::vector<int>& idxMap, const Pcre2Pattern& pc,
                                 float padding, std::vector<TextMatch>& out) {
+    std::unique_lock<std::mutex> stackLock;
+    if (pc.shared_stack_mutex) stackLock = std::unique_lock<std::mutex>(*pc.shared_stack_mutex);
     size_t offset = 0;
     while (offset <= text.size()) {
         int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(text.data()), text.size(),
                              offset, 0, pc.md, pc.mctx);
         if (rc == PCRE2_ERROR_NOMATCH) break;
-        if (rc < 0) break;  // error (limit exceeded): report what matched so far
+        if (rc < 0) return false;  // aborted: the caller must not report success
         PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
         PCRE2_SIZE start = ov[0];
         PCRE2_SIZE end = ov[1];
@@ -651,13 +659,14 @@ static void collectPcre2Matches(CharBoxCache& chars, const std::u32string& text,
                          padding, out);
         offset = end;
     }
+    return true;
 }
 
-void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
+bool collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
                          const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
                          std::vector<TextMatch>& out) {
     CharBoxCache chars(textPage);
-    collectPcre2Matches(chars, text, idxMap, pc, padding, out);
+    return collectPcre2Matches(chars, text, idxMap, pc, padding, out);
 }
 
 // Must stay in sync with FastKeywordIndex.isKeywordSpace(), the prefilter that
@@ -728,12 +737,13 @@ static bool buildLiteralAlternation(const char** words, int32_t wordCount, bool 
     return true;
 }
 
-void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
+bool scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
                       const std::vector<int>& idxMap, const char** words, int32_t wordCount,
                       bool wholeWord, bool caseSensitive, bool useRegex, float padding,
                       std::vector<TextMatch>& matches,
                       std::vector<Pcre2Pattern>* outCompiledPatterns, int& rejectedPatterns,
                       int& compiledCount) {
+    bool aborted = false;
     CharBoxCache chars(tp);
     uint64_t sig = computePatternSignature(words, wordCount, wholeWord, caseSensitive, useRegex);
     std::string key = buildCanonicalKey(words, wordCount, wholeWord, caseSensitive, useRegex);
@@ -747,7 +757,8 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
         Pcre2Pattern pc;
         bool patternReady = false;
         if (cached && !cached->codes.empty()) {
-            patternReady = createPatternFromCode(cached->codes[0], cached->jst, pc);
+            patternReady = createPatternFromCode(cached->codes[0], cached->jst,
+                                                 &cached->stack_mutex, pc);
         }
         if (!patternReady) {
             std::u32string combined;
@@ -773,12 +784,19 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
         }
         if (patternReady) {
             compiledCount = 1;
+            std::unique_lock<std::mutex> stackLock;
+            if (pc.shared_stack_mutex) {
+                stackLock = std::unique_lock<std::mutex>(*pc.shared_stack_mutex);
+            }
             size_t offset = 0;
             while (offset <= wtext.size()) {
                 int rc = pcre2_match(pc.code, reinterpret_cast<PCRE2_SPTR>(wtext.data()),
                                      wtext.size(), offset, 0, pc.md, pc.mctx);
                 if (rc == PCRE2_ERROR_NOMATCH) break;
-                if (rc < 0) break;
+                if (rc < 0) {  // aborted: the caller must not report success
+                    aborted = true;
+                    break;
+                }
                 PCRE2_SIZE* ov = pcre2_get_ovector_pointer(pc.md);
                 PCRE2_SIZE start = ov[0];
                 PCRE2_SIZE end = ov[1];
@@ -798,9 +816,12 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
             for (size_t wi = 0; wi < cached->codes.size(); ++wi) {
                 if (!cached->codes[wi]) continue;
                 Pcre2Pattern pc;
-                if (createPatternFromCode(cached->codes[wi], cached->jst, pc)) {
+                if (createPatternFromCode(cached->codes[wi], cached->jst, &cached->stack_mutex,
+                                          pc)) {
                     compiledCount++;
-                    collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
+                    if (!collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches)) {
+                        aborted = true;
+                    }
                     if (outCompiledPatterns) outCompiledPatterns->push_back(std::move(pc));
                 } else {
                     // Wrapper allocation (match data/context) failed under
@@ -835,7 +856,9 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
                     pc.jst = sharedJst;
                     pcre2_jit_stack_assign(pc.mctx, nullptr, sharedJst);
                 }
-                collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches);
+                if (!collectPcre2Matches(chars, wtext, idxMap, pc, padding, matches)) {
+                    aborted = true;
+                }
                 if (cache) {
                     newCodes.push_back(pc.code);
                     if (!sharedJst && pc.jst) sharedJst = pc.jst;
@@ -853,6 +876,7 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
             }
         }
     }
+    return !aborted;
 }
 #endif
 
