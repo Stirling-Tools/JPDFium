@@ -21,9 +21,34 @@ publishing workflows, not library releases, so they are not listed here.
 
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
+- `JPDFIUM_PCRE2_MATCH_LIMIT` and `JPDFIUM_PCRE2_DEPTH_LIMIT` override the regex
+  engine's match and backtracking-depth budget for deployments that need a
+  different bound. Unset, unparsable or zero values keep the built-in defaults
+  (1,000,000 match steps, depth 1,000), so a typo cannot remove the cap.
+- A sentence-segmentation corpus and parity suite
+  (`jpdfium/src/test/resources/pii/sentence-corpus.tsv`) that pins the Java
+  segmenter against the ICU boundaries the native segmenter produced, plus
+  tests for the structural guarantees (contiguous ranges, no split surrogate
+  pairs, deterministic and thread-safe behaviour).
 
 ### Changed
 
+- Sentence segmentation for the PII pipeline runs in Java
+  (`java.text.BreakIterator` with the root locale, plus a restored boundary
+  after numbered list markers) instead of the native ICU segmenter, which is
+  what let the `icu-i18n` link and its `brkitr` data go. The parity suite pins
+  the two remaining differences to ICU: ICU keeps an opening quote with the
+  preceding sentence in Japanese text and breaks inside "no. 42。" in mixed CJK
+  text; the JDK's placement is at least as accurate in both. Both were measured
+  to leave the pronoun-driven coreference windows, and therefore the redacted
+  regions, identical across the whole corpus.
+- Both regex engines fail loudly when the engine aborts a scan (match limit,
+  depth limit, JIT stack exhaustion, invalid UTF). The content redaction engine
+  used to return the matches found so far, which meant redacting only part of
+  what the caller asked to remove; the structural-PII engine did the same until
+  the PCRE2 hardening landed. A pre-mutation scan now reports the native error,
+  an audit after mutation reports the redaction as incomplete, and the
+  `jpdfium_pcre2_match_all` API throws instead of returning a partial list.
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
   still reads them.
@@ -38,6 +63,13 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Removed
 
+- Native ICU sentence segmentation. `jpdfium_icu_break_sentences` still exists in
+  every native build, but now reports not-found with an empty result, and
+  `IcuLib.breakSentences(String)` still exists for binary compatibility and
+  always fails with `JPDFiumException` ("Resource not found"). The trimmed ICU
+  data no longer ships the `brkitr` tables (about 56 KiB per platform bundle).
+  Code that needs boundaries should use `java.text.BreakIterator`, which is what
+  the pipeline itself does now.
 - `stirling.software.jpdfium.text.edit` and its `TextEditor` placeholder, which
   had no members and could not be instantiated, and which nothing in the API, the
   tests, or the documentation referred to. The package and the class were public
