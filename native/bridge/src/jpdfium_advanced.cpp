@@ -9,6 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <new>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -25,9 +27,26 @@
 #include <pcre2.h>
 
 struct Pcre2Pattern {
-    pcre2_code* code;
-    pcre2_match_data* match_data;
+    pcre2_code* code = nullptr;
+    pcre2_match_data* match_data = nullptr;
+    pcre2_match_context* match_ctx = nullptr;
+    pcre2_jit_stack* jit_stack = nullptr;
+
+    // The match data, match context and JIT stack above are reused by every
+    // call on this handle. PdfiumRuntime.execute() enforces calling context,
+    // not mutual exclusion, so two threads can hold the same handle: the lock
+    // keeps that from corrupting the ovector or the shared JIT stack. It is
+    // uncontended in single-threaded use.
+    std::mutex match_mutex;
 };
+
+// Same ReDoS budget as the redact engine (jpdfium_redact_pattern.cpp): match
+// work is capped, and JIT matching gets a dedicated bounded stack instead of
+// the 32 KiB machine-stack default. JPDFIUM_PCRE2_MATCH_LIMIT and
+// JPDFIUM_PCRE2_DEPTH_LIMIT raise or lower the caps per deployment; an
+// unparsable value keeps the default rather than removing the cap.
+static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
+static constexpr uint32_t kPcre2DepthLimit = 1'000u;
 
 int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* handle) {
     try {
@@ -50,9 +69,37 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
         // JIT compile for speed - failure is non-fatal (falls back to interpreter)
         pcre2_jit_compile(code, PCRE2_JIT_COMPLETE);
 
-        auto* pw = new Pcre2Pattern();
+        pcre2_match_data* md = pcre2_match_data_create_from_pattern(code, nullptr);
+        if (!md) {
+            pcre2_code_free(code);
+            return JPDFIUM_ERR_NATIVE;
+        }
+        pcre2_match_context* mctx = pcre2_match_context_create(nullptr);
+        if (!mctx) {
+            pcre2_match_data_free(md);
+            pcre2_code_free(code);
+            return JPDFIUM_ERR_NATIVE;
+        }
+        pcre2_set_match_limit(mctx, envUint32("JPDFIUM_PCRE2_MATCH_LIMIT", kPcre2MatchLimit));
+        pcre2_set_depth_limit(mctx, envUint32("JPDFIUM_PCRE2_DEPTH_LIMIT", kPcre2DepthLimit));
+        // Dedicated JIT stack (32 KiB initial, 512 KiB max); owned by the pattern.
+        // Every native call runs under the global NativeGuard lock, so sharing one
+        // stack across this pattern's sequential matches is safe.
+        pcre2_jit_stack* jst = pcre2_jit_stack_create(32 * 1024, 512 * 1024, nullptr);
+        if (jst) pcre2_jit_stack_assign(mctx, nullptr, jst);
+
+        auto* pw = new (std::nothrow) Pcre2Pattern();
+        if (!pw) {
+            if (jst) pcre2_jit_stack_free(jst);
+            pcre2_match_context_free(mctx);
+            pcre2_match_data_free(md);
+            pcre2_code_free(code);
+            return JPDFIUM_ERR_NATIVE;
+        }
         pw->code = code;
-        pw->match_data = pcre2_match_data_create_from_pattern(code, nullptr);
+        pw->match_data = md;
+        pw->match_ctx = mctx;
+        pw->jit_stack = jst;
 
         Pcre2HandleRegistry::instance().add(pw);
         *handle = reinterpret_cast<int64_t>(pw);
@@ -70,6 +117,7 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
         if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return JPDFIUM_ERR_INVALID;
         if (!pw->code) return JPDFIUM_ERR_INVALID;
 
+        std::lock_guard<std::mutex> handleLock(pw->match_mutex);
         PCRE2_SIZE subject_len = strlen(text);
         std::string json = "[";
         bool first = true;
@@ -77,8 +125,14 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
 
         while (offset < subject_len) {
             int rc = pcre2_match(pw->code, (PCRE2_SPTR)text, subject_len, offset, 0, pw->match_data,
-                                 nullptr);
-            if (rc < 0) break;
+                                 pw->match_ctx);
+            if (rc == PCRE2_ERROR_NOMATCH) break;
+            if (rc < 0) {
+                // Match aborted (limit hit, JIT stack exhausted, bad UTF, ...).
+                // Returning the partial list with OK would silently drop PII, so
+                // fail loud and let the caller surface it.
+                return JPDFIUM_ERR_NATIVE;
+            }
 
             PCRE2_SIZE* ovector = pcre2_get_ovector_pointer(pw->match_data);
             PCRE2_SIZE start = ovector[0];
@@ -135,9 +189,21 @@ void jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
     auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
     if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return;
     Pcre2HandleRegistry::instance().remove(pw);
-    if (pw->match_data) pcre2_match_data_free(pw->match_data);
-    if (pw->code) pcre2_code_free(pw->code);
-    delete pw;
+    // A match already in flight on this handle must finish before its buffers go
+    // away; afterwards the handle is rejected by the registry check above.
+    //
+    // Locking can throw (the frees below cannot), and this function is noexcept,
+    // so translate any exception into "leave the allocations to process teardown"
+    // instead of terminating the process. Same idiom as jpdfium_render.cpp.
+    try {
+        std::lock_guard<std::mutex> handleLock(pw->match_mutex);
+        if (pw->jit_stack) pcre2_jit_stack_free(pw->jit_stack);
+        if (pw->match_ctx) pcre2_match_context_free(pw->match_ctx);
+        if (pw->match_data) pcre2_match_data_free(pw->match_data);
+        if (pw->code) pcre2_code_free(pw->code);
+        delete pw;
+    } catch (...) {
+    }
 }
 
 #else  // !JPDFIUM_HAS_PCRE2
@@ -1044,7 +1110,6 @@ int32_t jpdfium_xmp_redact_patterns(int64_t, const char**, int32_t, int32_t* f) 
 
 #ifdef JPDFIUM_HAS_ICU
 
-#include <unicode/brkiter.h>
 #include <unicode/normlzr.h>
 #include <unicode/ubidi.h>
 #include <unicode/unistr.h>
@@ -1073,76 +1138,13 @@ int32_t jpdfium_icu_normalize_nfc(const char* text, char** result) {
     }
 }
 
-int32_t jpdfium_icu_break_sentences(const char* text, char** json_result) {
-    try {
-        if (!text || !json_result) return JPDFIUM_ERR_INVALID;
-
-        UErrorCode status = U_ZERO_ERROR;
-        std::unique_ptr<icu::BreakIterator> bi(
-            icu::BreakIterator::createSentenceInstance(icu::Locale::getDefault(), status));
-
-        if (U_FAILURE(status)) {
-            *json_result = strdup("[]");
-            return JPDFIUM_ERR_NATIVE;
-        }
-
-        icu::UnicodeString utext = icu::UnicodeString::fromUTF8(text);
-        bi->setText(utext);
-
-        std::string json = "[";
-        bool first = true;
-        int32_t start = bi->first();
-        int32_t end = bi->next();
-
-        while (end != icu::BreakIterator::DONE) {
-            if (!first) json += ",";
-            first = false;
-
-            icu::UnicodeString segment;
-            utext.extractBetween(start, end, segment);
-            std::string segUtf8;
-            segment.toUTF8String(segUtf8);
-
-            // Escape for JSON
-            std::string escaped;
-            for (char c : segUtf8) {
-                switch (c) {
-                    case '"':
-                        escaped += "\\\"";
-                        break;
-                    case '\\':
-                        escaped += "\\\\";
-                        break;
-                    case '\n':
-                        escaped += "\\n";
-                        break;
-                    case '\r':
-                        escaped += "\\r";
-                        break;
-                    case '\t':
-                        escaped += "\\t";
-                        break;
-                    default:
-                        escaped += c;
-                }
-            }
-
-            char buf[4096];
-            snprintf(buf, sizeof(buf), "{\"start\":%d,\"end\":%d,\"text\":\"%s\"}", start, end,
-                     escaped.c_str());
-            json += buf;
-
-            start = end;
-            end = bi->next();
-        }
-
-        json += "]";
-        *json_result = strdup(json.c_str());
-        return JPDFIUM_OK;
-
-    } catch (...) {
-        return JPDFIUM_ERR_NATIVE;
-    }
+int32_t jpdfium_icu_break_sentences(const char*, char** json_result) {
+    // Sentence segmentation moved to java.text.BreakIterator (same UAX #29);
+    // the bridge no longer links icu-i18n. Tombstone kept so existing
+    // bindings resolve.
+    if (!json_result) return JPDFIUM_ERR_INVALID;
+    *json_result = strdup("[]");
+    return JPDFIUM_ERR_NOT_FOUND;
 }
 
 int32_t jpdfium_icu_bidi_reorder(const char* text, char** result) {

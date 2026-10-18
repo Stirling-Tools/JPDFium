@@ -2,11 +2,11 @@ package stirling.software.jpdfium.redact.pii;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.FlashTextLib;
-import stirling.software.jpdfium.panama.IcuLib;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.util.NativeJsonParser;
 
+import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -15,6 +15,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Semantic redaction using a context graph: text extraction, sentence tokenization,
@@ -27,7 +30,8 @@ import java.util.Set;
  * <p>Pipeline:
  * <ol>
  *   <li>Extract all text with PDFium's FPDFText_*</li>
- *   <li>ICU4C BreakIterator tokenizes into sentences</li>
+ *   <li>Split into sentences with {@code java.text.BreakIterator} (same UAX #29
+ *       rules the native ICU segmenter used, without the native dependency)</li>
  *   <li>FlashText trie-based NER finds known entities at O(n)</li>
  *   <li>PCRE2 pattern engine finds structural PII (dates, IDs, numbers)</li>
  *   <li>Coreference window: sentences adjacent to an entity match are flagged for
@@ -99,29 +103,11 @@ public final class EntityRedactor implements AutoCloseable {
                 }
             }
 
-            String sentenceJson = IcuLib.breakSentences(text);
-            List<Sentence> sentences = parseSentenceJson(sentenceJson);
+            List<Sentence> sentences = splitSentences(text);
 
-            Set<Integer> entitySentenceIndices = new HashSet<>();
-            for (EntityMatch em : pageEntities) {
-                for (int i = 0; i < sentences.size(); i++) {
-                    Sentence s = sentences.get(i);
-                    if (em.start >= s.start && em.start < s.end) {
-                        entitySentenceIndices.add(i);
-                        break;
-                    }
-                }
-            }
-
-            Set<Integer> expandedIndices = new HashSet<>();
-            for (int idx : entitySentenceIndices) {
-                for (int w = -coreferenceWindow; w <= coreferenceWindow; w++) {
-                    int target = idx + w;
-                    if (target >= 0 && target < sentences.size()) {
-                        expandedIndices.add(target);
-                    }
-                }
-            }
+            Set<Integer> entitySentenceIndices = sentenceIndicesFor(sentences, pageEntities);
+            Set<Integer> expandedIndices =
+                    expandWindow(entitySentenceIndices, coreferenceWindow, sentences.size());
 
             for (EntityMatch em : pageEntities) {
                 allTargets.add(new RedactionTarget(page.pageIndex(), em.start, em.end,
@@ -215,12 +201,8 @@ public final class EntityRedactor implements AutoCloseable {
     public static final class Builder {
         private final List<Entity> entities = new ArrayList<>();
         private final Map<PiiCategory, String> patterns = new EnumMap<>(PiiCategory.class);
-        private int coreferenceWindow = 2;
-        private final List<String> coreferencePronouns = new ArrayList<>(List.of(
-                "he", "she", "they", "him", "her", "them", "his", "their",
-                "the patient", "the client", "the employee", "the applicant",
-                "the individual", "the person", "the subject"
-        ));
+        private int coreferenceWindow = DEFAULT_COREFERENCE_WINDOW;
+        private final List<String> coreferencePronouns = new ArrayList<>(defaultCoreferencePronouns());
 
         private Builder() {}
 
@@ -266,7 +248,92 @@ public final class EntityRedactor implements AutoCloseable {
 
     private record Entity(String keyword, String label) {}
 
-    private record Sentence(int start, int end) {}
+    record Sentence(int start, int end) {}
+
+    /**
+     * Sentence distance scanned on both sides of an entity mention for
+     * referring pronouns. See {@link Builder#coreferenceWindow(int)}.
+     */
+    static final int DEFAULT_COREFERENCE_WINDOW = 2;
+
+    /**
+     * Pronouns and referring phrases the coreference window looks for.
+     * See {@link Builder#setCoreferencePronouns(java.util.List)}.
+     */
+    static List<String> defaultCoreferencePronouns() {
+        return List.of("he", "she", "they", "him", "her", "them", "his", "their",
+                "the patient", "the client", "the employee", "the applicant",
+                "the individual", "the person", "the subject");
+    }
+
+    /**
+     * Maps every entity match to the index of the first sentence containing its
+     * start offset. Matches outside every sentence are ignored.
+     */
+    static Set<Integer> sentenceIndicesFor(List<Sentence> sentences, List<EntityMatch> matches) {
+        Set<Integer> result = new HashSet<>();
+        for (EntityMatch em : matches) {
+            for (int i = 0; i < sentences.size(); i++) {
+                Sentence s = sentences.get(i);
+                if (em.start >= s.start && em.start < s.end) {
+                    result.add(i);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Expands sentence indices by {@code window} sentences in both directions,
+     * clamped to the document's sentence count.
+     */
+    static Set<Integer> expandWindow(Set<Integer> indices, int window, int sentenceCount) {
+        Set<Integer> result = new HashSet<>();
+        for (int idx : indices) {
+            for (int w = -window; w <= window; w++) {
+                int target = idx + w;
+                if (target >= 0 && target < sentenceCount) {
+                    result.add(target);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Boundaries the JDK drops around numbered list markers ("First item. 2. Second
+     * item.", "(2) Beta.", "2.cpp") that ICU broke after. The window redacts whole
+     * sentences, so the coarser units widened redactions and could suppress the
+     * coreference expansion. Cannot fire inside "42.5" or "Totals were 3. 4 items".
+     */
+    private static final Pattern RESTORED_LIST_BOUNDARY = Pattern.compile(
+            "[.!?\u2026\u3002\uff01\uff1f]+[\\s\u00a0]+"
+                    + "(?=(?:\\(\\d{1,3}\\)\\s|\\d{1,3}[.)](?:\\s|[^\\d\\s])))");
+
+    /** Sentence ranges as char indices into {@code text} (JDK rules + list marker repair). */
+    static List<Sentence> splitSentences(String text) {
+        if (text == null || text.isEmpty()) return List.of();
+        BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
+        sentences.setText(text);
+        TreeSet<Integer> cuts = new TreeSet<>();
+        for (int p = sentences.first(); p != BreakIterator.DONE; p = sentences.next()) {
+            cuts.add(p);
+        }
+        Matcher markers = RESTORED_LIST_BOUNDARY.matcher(text);
+        while (markers.find()) {
+            cuts.add(markers.end());
+        }
+        List<Sentence> result = new ArrayList<>(cuts.size());
+        Integer previous = null;
+        for (int cut : cuts) {
+            if (previous != null && cut > previous) {
+                result.add(new Sentence(previous, cut));
+            }
+            previous = cut;
+        }
+        return result;
+    }
 
     public static List<EntityMatch> parseEntityJson(String json, int pageIndex) {
         List<EntityMatch> matches = new ArrayList<>();
@@ -278,15 +345,5 @@ public final class EntityRedactor implements AutoCloseable {
             matches.add(new EntityMatch(pageIndex, start, end, keyword, label));
         }
         return matches;
-    }
-
-    private static List<Sentence> parseSentenceJson(String json) {
-        List<Sentence> sentences = new ArrayList<>();
-        for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
-            int start = Integer.parseInt(fields.getOrDefault("start", "0"));
-            int end = Integer.parseInt(fields.getOrDefault("end", "0"));
-            sentences.add(new Sentence(start, end));
-        }
-        return sentences;
     }
 }

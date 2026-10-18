@@ -404,13 +404,14 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
-    # ICU4C - Unicode normalization, BiDi, sentence segmentation. All of those
-    # live in libicuuc: the bridge references u_init, u_setDataDirectory and the
-    # ubidi_* entry points and nothing from libicui18n. Requesting the i18n
-    # library only added a NEEDED entry, which macOS kept (ld64 keeps unused
-    # dylibs) and the bundler then copied - about 2.6 MB per darwin bundle for
-    # no symbols. Linux and Windows already dropped it; with lld and MSVC the
-    # unused library never reaches the load commands.
+    # ICU4C - Unicode normalization and BiDi only (all in libicuuc). Sentence
+    # segmentation moved to java.text.BreakIterator, so the bridge references
+    # u_init, u_setDataDirectory and the ubidi_* entry points and nothing from
+    # libicui18n. Requesting the i18n library only added a NEEDED entry, which
+    # macOS kept (ld64 keeps unused dylibs) and the bundler then copied - about
+    # 2.6 MB per darwin bundle for no symbols. Linux and Windows already
+    # dropped it; with lld and MSVC the unused library never reaches the
+    # load commands.
     pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
     target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)

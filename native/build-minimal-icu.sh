@@ -6,9 +6,11 @@
 # JPDFium's ICU usage (verified by grep over native/bridge/src/):
 #   - u_strFromUTF8                  (UTF-8 <-> UTF-16; needs cnvalias)
 #   - icu::Normalizer / unorm_*      (NFC normalization)
-#   - icu::BreakIterator             (SENTENCE boundaries only; sent.brk)
 #   - ubidi_*                        (BiDi text)
 #   - basic uchar properties         (always needed)
+#
+# Sentence segmentation is NOT here: it moved to java.text.BreakIterator,
+# so brkitr/* stays out and icu-i18n is no longer linked at all.
 #
 # We DON'T need: full locale data, region data, currency data, transliterations,
 # collations, RBNF, units, non-essential converters, or the word/line break
@@ -121,18 +123,18 @@ EOF
 echo "Extracted   : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1)) from icudt${ICU_VER}_dat symbol"
 
 # Items to KEEP - patterns matching item names in the .dat.
-# The bridge only opens a sentence BreakIterator (jpdfium_advanced.cpp:862),
-# so keep the sentence rules plus the shared data the runtime loads eagerly
-# (pool.res, cnvalias, ulayout, root/en locale fallback). Word/line rules and
-# their dictionaries are unused: cjdict ~2 MB, khmer/lao/burmese/thai ~1 MB.
+# The bridge no longer opens a sentence BreakIterator (sentences are split in
+# Java), so the sentence rules go too, along with the word/line rules and
+# their dictionaries: cjdict ~2 MB, khmer/lao/burmese/thai ~1 MB. What stays
+# is the shared data the runtime loads eagerly (pool.res, cnvalias, ulayout,
+# root/en locale fallback).
 # Verified on ICU 74 and ICU 78: the tightened .dat (0.42-0.45 MB) passes
-# sentence breaking (en/hu/ja), NFC, u_strFromUTF8 and ubidi.
+# NFC, u_strFromUTF8 and ubidi.
 KEEP=(
     '^cnvalias\.icu$'
     '^ulayout\.icu$'
-    '^brkitr/.*\.res$'
-    '^brkitr/sent\.brk$'
-    '^brkitr/sent_el\.brk$'
+    '^cnvalias\.icu$'
+    '^ulayout\.icu$'
     '^root\.res$'
     '^en\.res$'
 )
@@ -144,7 +146,7 @@ echo "Total items in source : $TOTAL"
 
 # Extract every item to loose files. icupkg -x '*' extracts everything that
 # matches the glob; -d sets the destination directory. This gives us a tree
-# like $EXTRACT/uchar.icu, $EXTRACT/nfc.nrm, $EXTRACT/brkitr/sent.brk, etc.
+# like $EXTRACT/uchar.icu, $EXTRACT/nfc.nrm, $EXTRACT/ubidi.icu, etc.
 EXTRACT="$WORK/extract"
 mkdir -p "$EXTRACT"
 icupkg -x '*' -d "$EXTRACT" "$DAT_FILE" \
