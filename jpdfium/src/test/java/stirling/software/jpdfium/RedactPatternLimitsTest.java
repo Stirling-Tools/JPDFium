@@ -43,6 +43,10 @@ class RedactPatternLimitsTest {
             String text = page.extractText();
             assertTrue(!text.contains("secret-alpha") && !text.contains("secret-beta"),
                     "all matches must be redacted, got: " + text);
+            // An empty extraction would also satisfy the assertion above, so
+            // require the untouched text to survive the redaction.
+            assertTrue(text.contains("visible"),
+                    "the surviving text is unreadable after the redaction: " + text);
         }
     }
 
