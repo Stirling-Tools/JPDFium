@@ -36,9 +36,11 @@ class SaveEncodingNativeSmokeTest {
 
         try (PdfDocument reopened = PdfDocument.open(fileSave)) {
             assertEquals(1, reopened.pageCount(), "page count changed across the file save");
-            assertTrue(reopened.page(0).extractText().contains("Synthetic corpus page 1"),
-                    "page text is unreadable after the file save: "
-                            + reopened.page(0).extractText());
+            try (PdfPage page = reopened.page(0)) {
+                String text = page.extractText();
+                assertTrue(text.contains("Synthetic corpus page 1"),
+                        "page text is unreadable after the file save: " + text);
+            }
         }
     }
 
@@ -58,11 +60,13 @@ class SaveEncodingNativeSmokeTest {
         assertSameSerialization("redacted file save", Files.readAllBytes(fileSave), byteSave.get());
         try (PdfDocument reopened = PdfDocument.open(fileSave)) {
             assertEquals(1, reopened.pageCount());
-            String text = reopened.page(0).extractText();
-            assertFalse(text.contains("Synthetic"),
-                    "the redaction was lost across the file save: " + text);
-            assertTrue(text.contains("corpus page 1"),
-                    "the surviving text is unreadable after the file save: " + text);
+            try (PdfPage page = reopened.page(0)) {
+                String text = page.extractText();
+                assertFalse(text.contains("Synthetic"),
+                        "the redaction was lost across the file save: " + text);
+                assertTrue(text.contains("corpus page 1"),
+                        "the surviving text is unreadable after the file save: " + text);
+            }
         }
     }
 
@@ -87,12 +91,20 @@ class SaveEncodingNativeSmokeTest {
     }
 
     private static void requireFullNative() {
+        boolean smoke = Boolean.getBoolean("jpdfium.smoke");
         try {
             NativeLoader.ensureLoaded();
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
+            if (smoke) {
+                throw new AssertionError("the smoke run needs the native library", t);
+            }
             assumeTrue(false, "native library not available: " + t);
         }
-        assumeTrue(NativeRuntime.isFull(), "needs the full native PDFium library");
+        if (smoke) {
+            assertTrue(NativeRuntime.isFull(), "the smoke run needs the full native PDFium library");
+        } else {
+            assumeTrue(NativeRuntime.isFull(), "needs the full native PDFium library");
+        }
     }
 }
