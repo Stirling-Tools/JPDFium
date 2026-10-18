@@ -70,7 +70,11 @@ struct Pcre2Pattern {
     Pcre2Pattern(const Pcre2Pattern&) = delete;
     Pcre2Pattern& operator=(const Pcre2Pattern&) = delete;
     Pcre2Pattern(Pcre2Pattern&& o) noexcept
-        : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst), ownsCode(o.ownsCode),
+        : code(o.code),
+          md(o.md),
+          mctx(o.mctx),
+          jst(o.jst),
+          ownsCode(o.ownsCode),
           shared_stack_mutex(o.shared_stack_mutex) {
         o.code = nullptr;
         o.md = nullptr;

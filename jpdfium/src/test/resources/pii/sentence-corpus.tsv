@@ -47,7 +47,7 @@ cjk-mixed	Invoice \u53d1\u7968 no. 42\u3002Total \u5408\u8ba1 100 \u5143\u3002Th
 mixed-scripts	Alpha \u03b1 beta \u03b2. \u0413\u0430\u043c\u043c\u0430 \u03b3 delta \u03b4. \u05e9\u05dc\u05d5\u05dd world.
 pii-sentence-target	Ms. Petrovna lives at 12 Main St. Her email is anna.p@example.org. Call +1 555 0100 tomorrow.
 single-letter-list	A. B. C. D. E. F. G. H. I. J.
-trailing-space	First sentence. Second sentence.   
+trailing-space	First sentence. Second sentence.\u0020\u0020\u0020
 single-char	A
 one-word-period	Yes.
 quotes-unicode	She said \u201cStop.\u201d Then left. He asked \u2018Why?\u2019 and went.
