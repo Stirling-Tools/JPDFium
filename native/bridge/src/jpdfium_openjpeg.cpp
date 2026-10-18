@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -133,97 +134,113 @@ extern "C" {
 
 JPDFIUM_EXPORT int32_t jpdfium_validate_jpx_stream(const uint8_t* jpxData, int64_t jpxLen,
                                                    char** resultJson) {
-    if (!jpxData || jpxLen <= 0 || !resultJson) return JPDFIUM_ERR_INVALID;
+    try {
+        if (!jpxData || jpxLen <= 0 || !resultJson) return JPDFIUM_ERR_INVALID;
 
-    ErrorCtx errCtx;
-    size_t len = static_cast<size_t>(jpxLen);
+        ErrorCtx errCtx;
+        size_t len = static_cast<size_t>(jpxLen);
 
-    // Try JP2 box format first, then raw J2K codestream
-    opj_image_t* image = try_decode(jpxData, len, OPJ_CODEC_JP2, errCtx);
-    if (!image) {
-        errCtx = {};
-        image = try_decode(jpxData, len, OPJ_CODEC_J2K, errCtx);
-    }
+        // Try JP2 box format first, then raw J2K codestream
+        // Own the decoded image the moment it exists: for large JPX input it is
+        // large, and every exit below (including a throw while building the JSON)
+        // must release it.
+        UniqueOpjImage image(try_decode(jpxData, len, OPJ_CODEC_JP2, errCtx));
+        if (!image) {
+            errCtx = {};
+            image.reset(try_decode(jpxData, len, OPJ_CODEC_J2K, errCtx));
+        }
 
-    if (!image) {
+        if (!image) {
+            std::ostringstream os;
+            os << "{\"status\":\"unreadable\",\"width\":0,\"height\":0,\"components\":0,"
+               << "\"error\":\"" << json_escape_opj(errCtx.msg) << "\"}";
+            *resultJson = strdup(os.str().c_str());
+            if (!*resultJson) return JPDFIUM_ERR_NATIVE;
+            return -1;
+        }
+
+        int w = static_cast<int>(image->x1 - image->x0);
+        int h = static_cast<int>(image->y1 - image->y0);
+        int comps = static_cast<int>(image->numcomps);
+
+        const char* status = (errCtx.count > 0) ? "partial" : "valid";
+        int rc = (errCtx.count > 0) ? 1 : 0;
+
         std::ostringstream os;
-        os << "{\"status\":\"unreadable\",\"width\":0,\"height\":0,\"components\":0,\"error\":\""
-           << json_escape_opj(errCtx.msg) << "\"}";
+        os << "{\"status\":\"" << status << "\",\"width\":" << w << ",\"height\":" << h
+           << ",\"components\":" << comps << ",\"error\":\"" << json_escape_opj(errCtx.msg)
+           << "\"}";
+
         *resultJson = strdup(os.str().c_str());
-        return -1;
+        if (!*resultJson) return JPDFIUM_ERR_NATIVE;
+        return rc;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
-
-    int w = static_cast<int>(image->x1 - image->x0);
-    int h = static_cast<int>(image->y1 - image->y0);
-    int comps = static_cast<int>(image->numcomps);
-
-    const char* status = (errCtx.count > 0) ? "partial" : "valid";
-    int rc = (errCtx.count > 0) ? 1 : 0;
-
-    std::ostringstream os;
-    os << "{\"status\":\"" << status << "\",\"width\":" << w << ",\"height\":" << h
-       << ",\"components\":" << comps << ",\"error\":\"" << json_escape_opj(errCtx.msg) << "\"}";
-
-    *resultJson = strdup(os.str().c_str());
-    opj_image_destroy(image);
-    return rc;
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_jpx_to_raw(const uint8_t* jpxData, int64_t jpxLen,
                                           uint8_t** rawPixels, int64_t* rawLen, int32_t* width,
                                           int32_t* height, int32_t* components) {
-    if (!jpxData || jpxLen <= 0 || !rawPixels || !rawLen || !width || !height || !components)
-        return JPDFIUM_ERR_INVALID;
+    try {
+        if (!jpxData || jpxLen <= 0 || !rawPixels || !rawLen || !width || !height || !components)
+            return JPDFIUM_ERR_INVALID;
 
-    ErrorCtx errCtx;
-    size_t len = static_cast<size_t>(jpxLen);
+        ErrorCtx errCtx;
+        size_t len = static_cast<size_t>(jpxLen);
 
-    opj_image_t* image = try_decode(jpxData, len, OPJ_CODEC_JP2, errCtx);
-    if (!image) {
-        errCtx = {};
-        image = try_decode(jpxData, len, OPJ_CODEC_J2K, errCtx);
-    }
+        opj_image_t* image = try_decode(jpxData, len, OPJ_CODEC_JP2, errCtx);
+        if (!image) {
+            errCtx = {};
+            image = try_decode(jpxData, len, OPJ_CODEC_J2K, errCtx);
+        }
 
-    if (!image) return JPDFIUM_ERR_INVALID;
+        if (!image) return JPDFIUM_ERR_INVALID;
 
-    *width = static_cast<int32_t>(image->x1 - image->x0);
-    *height = static_cast<int32_t>(image->y1 - image->y0);
-    *components = static_cast<int32_t>(image->numcomps);
-    if (*width <= 0 || *height <= 0 || *components <= 0) {
-        opj_image_destroy(image);
-        return JPDFIUM_ERR_INVALID;
-    }
+        *width = static_cast<int32_t>(image->x1 - image->x0);
+        *height = static_cast<int32_t>(image->y1 - image->y0);
+        *components = static_cast<int32_t>(image->numcomps);
+        if (*width <= 0 || *height <= 0 || *components <= 0) {
+            opj_image_destroy(image);
+            return JPDFIUM_ERR_INVALID;
+        }
 
-    // Overflow-checked allocation: width * height * components must fit in
-    // both the pixel loop index arithmetic (int) and the malloc size_t.
-    uint64_t pixelCount = static_cast<uint64_t>(*width) * static_cast<uint64_t>(*height) *
-                          static_cast<uint64_t>(*components);
-    if (pixelCount > SIZE_MAX || pixelCount > static_cast<uint64_t>(INT32_MAX)) {
-        opj_image_destroy(image);
-        return JPDFIUM_ERR_INVALID;
-    }
-    *rawPixels = static_cast<uint8_t*>(malloc(static_cast<size_t>(pixelCount)));
-    if (!*rawPixels) {
-        opj_image_destroy(image);
-        return JPDFIUM_ERR_NATIVE;
-    }
+        // Overflow-checked allocation: width * height * components must fit in
+        // both the pixel loop index arithmetic (int) and the malloc size_t.
+        uint64_t pixelCount = static_cast<uint64_t>(*width) * static_cast<uint64_t>(*height) *
+                              static_cast<uint64_t>(*components);
+        if (pixelCount > SIZE_MAX || pixelCount > static_cast<uint64_t>(INT32_MAX)) {
+            opj_image_destroy(image);
+            return JPDFIUM_ERR_INVALID;
+        }
+        *rawPixels = static_cast<uint8_t*>(malloc(static_cast<size_t>(pixelCount)));
+        if (!*rawPixels) {
+            opj_image_destroy(image);
+            return JPDFIUM_ERR_NATIVE;
+        }
 
-    // Interleave component planes into contiguous pixel buffer
-    for (int y = 0; y < *height; y++) {
-        for (int x = 0; x < *width; x++) {
-            for (int c = 0; c < *components; c++) {
-                int val = image->comps[c].data[y * (*width) + x];
-                // Clamp to 8-bit
-                if (val < 0) val = 0;
-                if (val > 255) val = 255;
-                (*rawPixels)[(y * (*width) + x) * (*components) + c] = static_cast<uint8_t>(val);
+        // Interleave component planes into contiguous pixel buffer
+        for (int y = 0; y < *height; y++) {
+            for (int x = 0; x < *width; x++) {
+                for (int c = 0; c < *components; c++) {
+                    int val = image->comps[c].data[y * (*width) + x];
+                    // Clamp to 8-bit
+                    if (val < 0) val = 0;
+                    if (val > 255) val = 255;
+                    (*rawPixels)[(y * (*width) + x) * (*components) + c] =
+                        static_cast<uint8_t>(val);
+                }
             }
         }
-    }
 
-    *rawLen = static_cast<int64_t>(pixelCount);
-    opj_image_destroy(image);
-    return JPDFIUM_OK;
+        *rawLen = static_cast<int64_t>(pixelCount);
+        opj_image_destroy(image);
+        return JPDFIUM_OK;
+
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 }  // extern "C"

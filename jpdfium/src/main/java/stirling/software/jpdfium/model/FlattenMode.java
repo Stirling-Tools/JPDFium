@@ -1,7 +1,8 @@
 package stirling.software.jpdfium.model;
+import stirling.software.jpdfium.PdfDocument;
 
 /**
- * Controls what elements are flattened when calling {@link stirling.software.jpdfium.PdfDocument#flatten}.
+ * Controls what elements are flattened when calling {@link PdfDocument#flatten}.
  *
  * <p>All modes use native PDFium via FFM - no PDFBox involved.
  */

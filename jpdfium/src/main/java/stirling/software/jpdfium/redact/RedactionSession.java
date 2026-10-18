@@ -7,10 +7,13 @@ import stirling.software.jpdfium.model.Rect;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * EmbedPDF-style two-phase redaction session.
@@ -33,10 +36,10 @@ import java.util.Map;
  * without any reload.  Use {@link #saveIncremental()} to write only the
  * changed objects, or {@link #save(Path)} for a full rewrite.
  *
- * <h3>Thread Safety</h3>
+ * <h2>Thread Safety</h2>
  * <p>Like all PDFium operations, a session must be confined to one thread.
  *
- * <h3>Usage Example</h3>
+ * <h2>Usage Example</h2>
  * <pre>{@code
  * try (RedactionSession session = RedactionSession.open(Path.of("input.pdf"))) {
  *     // Mark phase - zero content mutation
@@ -80,6 +83,9 @@ public final class RedactionSession implements AutoCloseable {
     record RegionMark(Rect rect, int argbColor) implements PendingMark {
         @Override public int matchCount() { return 1; }
     }
+
+    /** Matching options that decide whether two word marks can share one commit call. */
+    private record WordOptions(float padding, boolean wholeWord, boolean useRegex, boolean caseSensitive) {}
 
     private RedactionSession(PdfDocument document, boolean ownsDocument) {
         this.document = document;
@@ -155,8 +161,55 @@ public final class RedactionSession implements AutoCloseable {
     public int markWords(String[] words, int argbColor, float padding,
                           boolean wholeWord, boolean useRegex, boolean caseSensitive) {
         ensureOpen();
+        if (words == null || words.length == 0) return 0;
         int total = 0;
         int pageCount = document.pageCount();
+
+        if (!useRegex && words.length > 10) {
+            FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
+            Set<String> pageMatches = new HashSet<>();
+            try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+                for (int i = 0; i < pageCount; i++) {
+                    int charCount;
+                    try (PdfPage page = document.page(i)) {
+                        charCount = scratch.extractChars(page.rawHandle());
+                    }
+                    if (charCount < 0) {
+                        int count;
+                        try (PdfPage page = document.page(i)) {
+                            count = page.markRedactWords(words, argbColor, padding,
+                                    wholeWord, useRegex, caseSensitive);
+                        }
+                        if (count > 0) {
+                            pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                    .add(new WordMark(words.clone(), argbColor, padding,
+                                            wholeWord, useRegex, caseSensitive, count));
+                            total += count;
+                        }
+                        continue;
+                    }
+                    if (charCount == 0) continue;
+                    pageMatches.clear();
+                    kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
+                    if (pageMatches.isEmpty()) continue;
+
+                    String[] matchedWords = pageMatches.toArray(String[]::new);
+                    int count;
+                    try (PdfPage page = document.page(i)) {
+                        count = page.markRedactWords(matchedWords, argbColor, padding,
+                                wholeWord, useRegex, caseSensitive);
+                    }
+                    if (count > 0) {
+                        pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                .add(new WordMark(matchedWords, argbColor, padding,
+                                        wholeWord, useRegex, caseSensitive, count));
+                        total += count;
+                    }
+                }
+            }
+            return total;
+        }
+
         for (int i = 0; i < pageCount; i++) {
             int count = markWordsOnPage(i, words, argbColor, padding,
                     wholeWord, useRegex, caseSensitive);
@@ -312,20 +365,31 @@ public final class RedactionSession implements AutoCloseable {
 
         int totalCommitted = 0;
         try (PdfPage page = document.page(pageIndex)) {
+            // A commit replays the page's content once, so every word mark that
+            // keeps its matching options is folded into the previous call rather
+            // than paying that replay again. Region marks keep their own slot.
+            WordOptions runOptions = null;
+            List<String> runWords = new ArrayList<>();
             for (PendingMark mark : marks) {
                 switch (mark) {
                     case WordMark wordMark -> {
-                        int committed = page.redactWordsEx(wordMark.words(), argbColor,
-                                wordMark.padding(), wordMark.wholeWord(), wordMark.useRegex(),
-                                removeContent, wordMark.caseSensitive());
-                        totalCommitted += committed;
+                        WordOptions options = new WordOptions(wordMark.padding(), wordMark.wholeWord(),
+                                wordMark.useRegex(), wordMark.caseSensitive());
+                        if (!options.equals(runOptions)) {
+                            totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
+                            runOptions = options;
+                        }
+                        Collections.addAll(runWords, wordMark.words());
                     }
                     case RegionMark regionMark -> {
+                        totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
+                        runOptions = null;
                         page.redactRegion(regionMark.rect(), argbColor, removeContent);
                         totalCommitted += 1;
                     }
                 }
             }
+            totalCommitted += commitRun(page, runWords, runOptions, argbColor, removeContent);
             // The mark phase created real REDACT annotations on the page as a
             // preview. After replaying the marks the content is gone - drop
             // the annotations BEFORE flattening so they are not baked into
@@ -335,6 +399,29 @@ public final class RedactionSession implements AutoCloseable {
             page.flatten();
         }
         return totalCommitted;
+    }
+
+    /**
+     * Replays a run of word marks as a single native call, which renders the
+     * page's covers once instead of once per mark. A no-op for an empty run.
+     *
+     * <p>The whole run is matched against the page as it stands when the run
+     * starts, not against the text the previous call left behind. Literal words
+     * become one non-overlapping search with the longest word preferred, so
+     * {@code "foo"} and {@code "foobar"} mark a single span over
+     * {@code "foobar"} and the returned count is that search's match count.
+     * Regular expressions are each compiled and scanned on their own, so two
+     * patterns that overlap can both match and the count can exceed what
+     * separate calls would return. Marks with different matching options, and
+     * region marks, always start a new call.
+     */
+    private static int commitRun(PdfPage page, List<String> runWords, WordOptions options,
+                                 int argbColor, boolean removeContent) {
+        if (options == null) return 0;
+        int committed = page.redactWordsEx(runWords.toArray(String[]::new), argbColor, options.padding(),
+                options.wholeWord(), options.useRegex(), removeContent, options.caseSensitive());
+        runWords.clear();
+        return committed;
     }
 
     /**

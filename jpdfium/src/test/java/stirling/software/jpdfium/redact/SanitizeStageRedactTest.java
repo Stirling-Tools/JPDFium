@@ -1,8 +1,10 @@
 package stirling.software.jpdfium.redact;
 
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -68,7 +70,7 @@ class SanitizeStageRedactTest {
     /** Decode the "u":NN char JSON into a plain string. */
     private static String decodeChars(String json) {
         StringBuilder sb = new StringBuilder();
-        var m = java.util.regex.Pattern.compile("\"u\":(\\d+)").matcher(json);
+        var m = Pattern.compile("\"u\":(\\d+)").matcher(json);
         while (m.find()) {
             int u = Integer.parseInt(m.group(1));
             if (u >= 32 && u < 0x2000) sb.append((char) u);
@@ -153,8 +155,17 @@ class SanitizeStageRedactTest {
         assertTrue(report.contains("\"xmp_scrubbed\":true"), "XMP not scrubbed: " + report);
         assertTrue(report.contains("\"tounicode_filtered\":1"),
                 "embedded font ToUnicode not filtered: " + report);
-        assertTrue(report.contains("\"fonts_subset\":1"),
-                "embedded font program not re-subset: " + report);
+        // Font *program* rewriting is deliberately disabled: hb-subset on an
+        // arbitrary embedded PDF font is unsafe, because text operators address
+        // glyphs through CIDs/char codes that do not match TrueType Unicode
+        // cmaps and can span page trees. The contract is therefore "reported as
+        // skipped", never a silent skip and never an unsafe rewrite.
+        assertTrue(report.contains("\"fonts_subset\":0"),
+                "font programs must not be rewritten in place: " + report);
+        assertTrue(report.contains("\"fonts_subset_skipped\":"),
+                "font subsetting outcome must be reported, never silent: " + report);
+        assertFalse(report.contains("\"fonts_subset_skipped\":0"),
+                "the embedded font program must be accounted for as skipped: " + report);
 
         // The surviving document still opens and renders; survivors remain.
         try (var doc = PdfDocument.open(redacted);
@@ -166,6 +177,30 @@ class SanitizeStageRedactTest {
             assertTrue(text.contains("EMBEDDED") && text.contains("LINE"),
                     "embedded-font survivors lost: " + text);
         }
+    }
+
+    @Test
+    void sanitizeStageStillRunsAfterMetadataReload() throws Exception {
+        Path pdf = testPdf("redact-test-sanitize-remnants.pdf");
+        String report;
+        try (var doc = PdfDocument.open(pdf)) {
+            doc.setSanitizeOnSave(true);
+            try (var page = doc.page(0)) {
+                int n = page.redactWordsEx(new String[]{"SECRET"}, 0xFF000000, 0f,
+                        false, false, true, false);
+                assertTrue(n >= 1, "SECRET must match on the page");
+            }
+            // Reload-generating op: it must not drop the sanitize-on-save
+            // intent or the redaction audit trail (literals/zones) that the
+            // save-time pass scrubs XMP against.
+            XmpRedactor.stripAll(doc);
+            doc.saveBytes();
+            report = doc.sanitizeReport();
+        }
+
+        assertTrue(report != null && !report.isEmpty(),
+                "sanitize report missing: reload dropped the sanitize stage");
+        assertFalse(report.contains("\"error\""), "sanitize failed: " + report);
     }
 
     @Test

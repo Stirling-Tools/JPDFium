@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.ThumbnailBindings;
 
@@ -123,7 +124,7 @@ public final class PdfThumbnails {
             return Optional.of(img);
         } finally {
             try { PageEditBindings.FPDFBitmap_Destroy.invokeExact(bitmap); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 

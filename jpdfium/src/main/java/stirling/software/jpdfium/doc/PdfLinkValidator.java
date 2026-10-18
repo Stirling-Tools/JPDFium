@@ -96,7 +96,7 @@ public final class PdfLinkValidator {
         List<PageLink> pageLinks = new ArrayList<>();
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                List<WebLink> webLinks = PdfWebLinks.extract(page.rawHandle(), p);
+                List<WebLink> webLinks = PdfWebLinks.extract(page.rawHandleForRead(), p);
                 for (WebLink wl : webLinks) {
                     pageLinks.add(new PageLink(p, wl.url()));
                 }
@@ -145,7 +145,7 @@ public final class PdfLinkValidator {
         List<LinkResult> results = new ArrayList<>();
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                List<WebLink> webLinks = PdfWebLinks.extract(page.rawHandle(), p);
+                List<WebLink> webLinks = PdfWebLinks.extract(page.rawHandleForRead(), p);
                 for (WebLink wl : webLinks) {
                     results.add(new LinkResult(p, wl.url(), LinkStatus.VALID, 0, null, 0));
                 }

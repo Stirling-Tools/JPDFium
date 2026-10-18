@@ -1,8 +1,21 @@
 package stirling.software.jpdfium.doc;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import stirling.software.jpdfium.panama.NativeLoader;
+import stirling.software.jpdfium.panama.RepairLib;
+
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -201,4 +214,100 @@ class PdfRepairTest {
         assertNotNull(result.repairedPdf());
         assertTrue(result.repairedPdf().length > 0);
     }
+
+    /**
+     * A repaired PDF must be complete on disk before it is read back.
+     *
+     * <p>Pdfio writes the cross-reference table and trailer during its close
+     * step. If the bytes are read while that writer is still open, the result is
+     * a truncated PDF whose xref is missing - which an independent parser
+     * rejects. This test therefore reopens the repair output with PDFBox, which
+     * shares no code with the repair path.
+     */
+    @Test
+    void repairedOutputIsReopenableByAnIndependentParser() throws Exception {
+        byte[] damaged = RepairCorpus.zeroXref(RepairCorpus.validMultiPage());
+        RepairResult result = PdfRepair.builder()
+                .input(damaged)
+                .normalizeXref(true)
+                .fixStartxref(true)
+                .usePdfioFallback(true)
+                .build()
+                .execute();
+
+        assertTrue(result.isUsable(), "repair must succeed: " + result.status());
+        assertNotNull(result.repairedPdf());
+        assertTrue(result.repairedPdf().length > 0, "repair must not return empty bytes");
+
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertTrue(reopened.getNumberOfPages() > 0,
+                    "repaired output must expose its pages (finalised xref + trailer)");
+        }
+    }
+
+    /**
+     * Same guarantee on the PDFio path itself, invoked directly.
+     *
+     * <p>Going through {@link PdfRepair} is not enough: an earlier stage usually
+     * succeeds first, so the PDFio branch never runs. This pins the contract at
+     * the entry point that does the read-back.
+     */
+    @Test
+    void pdfioRepairOutputIsReopenableByAnIndependentParser() throws Exception {
+        // No published build links PDFio (CMakeLists.txt never defines
+        // JPDFIUM_HAS_PDFIO, so the bridge compiles the stub that reports
+        // unavailable). Skip rather than assert a branch that cannot run here;
+        // -Djpdfium.pdfio=true enables it once a PDFio-enabled build exists.
+        Assumptions.assumeTrue(Boolean.getBoolean("jpdfium.pdfio"),
+                "PDFio is not linked into this native build");
+
+        // A zeroed xref table forces PDFio to rebuild from a full object scan,
+        // which is the path its page-copy salvage depends on.
+        byte[] damaged = RepairCorpus.zeroXref(RepairCorpus.validMultiPage());
+        RepairResult result = RepairLib.pdfioRepair(damaged);
+
+        assertTrue(result.isUsable(),
+                "pdfio repair must succeed: " + result.status() + " " + result.diagnosticJson());
+        assertNotNull(result.repairedPdf());
+        assertTrue(result.repairedPdf().length > 0, "pdfio repair must not return empty bytes");
+
+        // An independent parser rejects a file whose xref/trailer was never
+        // written, which is exactly what reading before the writer's close step
+        // would produce.
+        try (PDDocument reopened = Loader.loadPDF(result.repairedPdf())) {
+            assertTrue(reopened.getNumberOfPages() > 0,
+                    "pdfio output must be finalised (xref + trailer) before read-back");
+        }
+    }
+
+    /**
+     * Repair writes untrusted input to temporary files. They must not survive the
+     * call, on any path - success, failure, or exception.
+     */
+    @Test
+    void repairLeavesNoTemporaryFilesBehind() throws Exception {
+        Set<String> before = repairTempFiles();
+
+        PdfRepair.builder().input(RepairCorpus.zeroXref(RepairCorpus.validMultiPage()))
+                .fixStartxref(true).usePdfioFallback(true).build().execute();
+        // Also exercise a hopeless input so the failure path is covered too.
+        PdfRepair.builder().input("not a pdf at all".getBytes(StandardCharsets.UTF_8))
+                .fixStartxref(true).usePdfioFallback(true).build().execute();
+
+        Set<String> after = repairTempFiles();
+        Set<String> leaked = new TreeSet<>(after);
+        leaked.removeAll(before);
+        assertTrue(leaked.isEmpty(), "repair left temporary files behind: " + leaked);
+    }
+
+    /** Snapshot of any jpdfium repair temp files currently present. */
+    private static Set<String> repairTempFiles() throws IOException {
+        Path tmp = Path.of(System.getProperty("java.io.tmpdir"));
+        try (var s = Files.list(tmp)) {
+            return s.map(p -> p.getFileName().toString())
+                    .filter(n -> n.startsWith("jpdfium_pdfio_"))
+                    .collect(Collectors.toCollection(TreeSet::new));
+        }
+    }
+
 }

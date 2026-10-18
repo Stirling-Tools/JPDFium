@@ -1,10 +1,15 @@
 package stirling.software.jpdfium.vips;
 
+import app.photofox.vipsffm.VBlob;
+import app.photofox.vipsffm.VImage;
+import app.photofox.vipsffm.Vips;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 
 import java.io.IOException;
@@ -12,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 
 /**
  * Optional, vips-backed imaging facade for {@code jpdfium}.
@@ -21,7 +27,7 @@ import java.util.List;
  * (a {@code MemorySegment} owned by PDFium) and handed to vips via
  * {@link VImage#newFromMemory} - that single native-to-vips copy is the only
  * allocation in the render -> encode path. Encoding supports every format libvips
- * ships a saver for (PNG, JPEG, WEBP, HEIC, HEIF, AVIF, JXL, TIFF), and decoding
+ * ships a saver for (PNG, JPEG, WEBP, HEIC, HEIF, AVIF, JXL, TIFF, JPEG2000), and decoding
  * flows {@code image bytes -> VipsDecoder -> the bridge's raw-RGBA (format=3)
  * embed}. No {@code BufferedImage}, no {@code ImageIO}, no AWT raster.
  *
@@ -33,6 +39,50 @@ public final class VipsImageConverter {
 
     private VipsImageConverter() {}
 
+    /**
+     * Bound for image jobs, unlimited by default. Negative is rejected.
+     *
+     * <p>{@link #IMAGE_BOUND} carries the configured bound separately from live
+     * semaphore availability: while encodes are in flight
+     * {@code availablePermits()} reports fewer free slots than were configured,
+     * and {@link #setMaxConcurrency} must still hand back the number the caller
+     * set so the documented save-and-restore pattern works.
+     */
+    private static volatile Semaphore IMAGE_PERMITS = createPermits();
+    private static volatile int IMAGE_BOUND = configuredBound();
+
+    private static int configuredBound() {
+        int configured = Integer.getInteger("jpdfium.image.maxConcurrency", 0);
+        if (configured < 0) {
+            throw new IllegalStateException(
+                    "invalid jpdfium.image.maxConcurrency=" + configured + " (use 0 for unlimited)");
+        }
+        return configured;
+    }
+
+    private static Semaphore createPermits() {
+        int configured = configuredBound();
+        return configured == 0 ? null : new Semaphore(Math.max(1, configured));
+    }
+
+    /**
+     * Set the image-job bound (0 = explicit unlimited). Negative is rejected.
+     *
+     * @return the previously configured bound, not the currently free slot count
+     */
+    public static synchronized int setMaxConcurrency(int maxJobs) {
+        if (maxJobs < 0) throw new IllegalArgumentException("maxConcurrency must be >= 0");
+        int prev = IMAGE_BOUND;
+        IMAGE_BOUND = maxJobs;
+        IMAGE_PERMITS = maxJobs == 0 ? null : new Semaphore(Math.max(1, maxJobs));
+        return prev;
+    }
+
+    /** Current configured bound (0 = unlimited). */
+    public static int maxConcurrency() {
+        return IMAGE_BOUND;
+    }
+
     /** @return raw bytes of page {@code pageIndex} rendered at {@code dpi} and encoded to {@code format}. */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi, VipsFormat format) {
         return pageToBytes(doc, pageIndex, dpi, format, 75);
@@ -41,11 +91,81 @@ public final class VipsImageConverter {
     /** @return encoded page bytes; {@code quality} is the codec quality (1-100). */
     public static byte[] pageToBytes(PdfDocument doc, int pageIndex, int dpi,
                                      VipsFormat format, int quality) {
-        try (PdfPage page = doc.page(pageIndex);
-             RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            return pageToBytes(page, dpi, format, quality);
+        }
+    }
+
+    /** @return raw bytes of an open {@link PdfPage} rendered at {@code dpi} and encoded to {@code format}. */
+    public static byte[] pageToBytes(PdfPage page, int dpi, VipsFormat format) {
+        return pageToBytes(page, dpi, format, 75);
+    }
+
+    /** @return raw bytes of an open {@link PdfPage} rendered at {@code dpi} and encoded with custom quality. */
+    public static byte[] pageToBytes(PdfPage page, int dpi, VipsFormat format, int quality) {
+        // Hold on to the semaphore that granted the slot: the bound can be
+        // swapped while this encode runs, and releasing to the new semaphore
+        // would inflate its limit while waiters stayed parked on the old one.
+        Semaphore held = null;
+        try {
+            held = IMAGE_PERMITS;
+            if (held != null) held.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("image encode interrupted while waiting for a job slot", e);
+        }
+        try (RenderedPageView view = JpdfiumLib.renderPageView(page.nativeHandle(), dpi)) {
             VipsEncodeOptions encodeOptions = VipsEncodeOptions.builder(format).quality(quality).build();
             return VipsEncoder.encodeToBytes(view, encodeOptions);
+        } finally {
+            if (held != null) held.release();
         }
+    }
+
+    /** Render a page directly to an image file via libvips. */
+    public static void pageToFile(PdfPage page, int dpi, Path outputPath, VipsFormat format) throws IOException {
+        byte[] bytes = pageToBytes(page, dpi, format);
+        Files.write(outputPath, bytes);
+    }
+
+    /** Render a document page directly to an image file via libvips. */
+    public static void pageToFile(PdfDocument doc, int pageIndex, int dpi, Path outputPath, VipsFormat format) throws IOException {
+        try (PdfPage page = doc.page(pageIndex)) {
+            pageToFile(page, dpi, outputPath, format);
+        }
+    }
+
+    /**
+     * Rasterize an SVG with the core resvg renderer and encode it with libvips.
+     *
+     * <p>This is the SVG path for the vips stack: the source build ships no
+     * librsvg (its cairo/gdk-pixbuf chain hard-links X11), so SVG is rasterized
+     * by the Rust resvg renderer in the core natives and handed to vips as raw
+     * RGBA.
+     *
+     * @param svg     SVG document bytes
+     * @param width   target box width in pixels, or 0 for the natural size
+     * @param height  target box height in pixels, or 0 for the natural size
+     * @param format  output format (any libvips saver)
+     * @param quality codec quality (1-100)
+     * @return encoded image bytes
+     */
+    public static byte[] svgToBytes(byte[] svg, int width, int height, VipsFormat format, int quality) {
+        // The resvg raster stays in native memory and is handed to vips as a
+        // MemorySegment: no Java-heap RGBA copy, no intermediate BufferedImage.
+        try (JpdfiumLib.SvgRaster raster = JpdfiumLib.svgToNative(svg, width, height);
+             RenderedPageView view = new RenderedPageView(
+                     raster.width(), raster.height(), raster.width() * 4, 4,
+                     PixelFormat.RGBA_STRAIGHT, raster.pixels(), null)) {
+            VipsEncodeOptions encodeOptions =
+                    VipsEncodeOptions.builder(format).quality(quality).build();
+            return VipsEncoder.encodeToBytes(view, encodeOptions);
+        }
+    }
+
+    /** @return SVG rasterized and encoded with the codec's default quality. */
+    public static byte[] svgToBytes(byte[] svg, int width, int height, VipsFormat format) {
+        return svgToBytes(svg, width, height, format, 75);
     }
 
     /** @return one encoded byte buffer per page, in page order. */
@@ -88,6 +208,7 @@ public final class VipsImageConverter {
      */
     public static byte[] thumbnail(PdfDocument doc, int pageIndex, int maxDimPx, VipsFormat format) {
         PageSize size = doc.page(pageIndex).size();
+        @SuppressWarnings("PMD.UnnecessaryCast") // PageSize.width/height() return float; cast is required
         int longer = (int) Math.max(size.width(), size.height());
         int dpi = (int) Math.max(72.0, Math.round(72.0 * maxDimPx / longer));
         try (PdfPage page = doc.page(pageIndex);
@@ -97,7 +218,34 @@ public final class VipsImageConverter {
     }
 
     /**
-     * Decode image files (PNG/JPEG/HEIC/HEIF/AVIF/JXL/WEBP/TIFF) into PDF pages.
+     * Thumbnail an image file using libvips shrink-on-load (vips_thumbnail).
+     */
+    public static byte[] thumbnailImage(Path imagePath, int maxDimPx, VipsFormat format, int quality) {
+        VipsAvailability.require(format);
+        byte[][] result = new byte[1][];
+        Vips.run(arena -> {
+            VImage thumb = VImage.thumbnail(arena, imagePath.toAbsolutePath().toString(), maxDimPx);
+            result[0] = VipsEncoder.encodeToBlob(thumb, VipsEncodeOptions.builder(format).quality(quality).build()).getBytes();
+        });
+        return result[0];
+    }
+
+    /**
+     * Thumbnail image bytes using libvips shrink-on-load (vips_thumbnail).
+     */
+    public static byte[] thumbnailImage(byte[] imageBytes, int maxDimPx, VipsFormat format, int quality) {
+        VipsAvailability.require(format);
+        byte[][] result = new byte[1][];
+        Vips.run(arena -> {
+            VBlob blob = VBlob.newFromBytes(arena, imageBytes);
+            VImage thumb = VImage.thumbnailBuffer(arena, blob, maxDimPx);
+            result[0] = VipsEncoder.encodeToBlob(thumb, VipsEncodeOptions.builder(format).quality(quality).build()).getBytes();
+        });
+        return result[0];
+    }
+
+    /**
+     * Decode image files (PNG/JPEG/HEIC/HEIF/AVIF/JXL/WEBP/TIFF/JPEG2000) into PDF pages.
      * The decode is vips-backed ({@link VipsDecoder}); the embed uses the
      * bridge's zero-allocation raw-RGBA path ({@code format=3}).
      */
@@ -116,6 +264,7 @@ public final class VipsImageConverter {
             case AVIF -> "avif";
             case JXL -> "jxl";
             case TIFF -> "tiff";
+            case JPEG2000 -> "jp2";
         };
         return stem + "-p" + index + "." + ext;
     }

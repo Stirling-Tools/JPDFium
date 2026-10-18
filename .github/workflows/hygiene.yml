@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'
@@ -33,10 +33,13 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - run: bash native/build-stub.sh
-      - run: ./gradlew javadoc --no-daemon
+      - name: Build Javadoc
+        # Maven Central rate-limits shared-runner IPs (HTTP 429) mid-download;
+        # the shared wrapper retries those and fails fast on real doc errors.
+        run: bash .github/scripts/retry.sh 3 --delay 20 -- ./gradlew javadoc --no-daemon
 
   editorconfig:
     name: EditorConfig + whitespace hygiene
@@ -52,11 +55,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: DavidAnson/markdownlint-cli2-action@84611f6fdd14490f100dd3f9fc9df32c24ccbeb6 # v24.2.0
+      - uses: DavidAnson/markdownlint-cli2-action@f76d7302a21cbcbf767d5f2ef333ff5ce91371ab # v24.2.0
         with:
           globs: 'README.md,CONTRIBUTING.md,docs/**/*.md'
 
   shellcheck:
+    # The name is kept stable so branch protection rules keep matching; the job
+    # now checks every tracked script, not only `.github/scripts` and `native/`.
     name: Shellcheck (scripts + native/*.sh)
     runs-on: ubuntu-latest
     steps:
@@ -65,4 +70,28 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Shellcheck all shell scripts (warnings are failures)
         run: |
-          shellcheck --severity=warning .github/scripts/*.sh native/*.sh
+          # Every tracked script, so a new directory such as native/ci/ cannot
+          # escape the check by not being listed here.
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
+
+  natives-jar-check:
+    name: Native jar checker regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          # These jobs only read the tree, so the checkout must not leave the
+          # workflow token in the Git configuration.
+          persist-credentials: false
+      - name: Run the native jar checker regression tests
+        run: bash .github/scripts/check-natives-jars-self-test.sh
+
+  version-bump-check:
+    name: Version bump script regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the version bump script regression tests
+        run: bash .github/scripts/bump-release-version-self-test.sh

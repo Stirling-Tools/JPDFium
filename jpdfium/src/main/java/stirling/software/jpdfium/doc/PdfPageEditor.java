@@ -57,7 +57,7 @@ public final class PdfPageEditor {
     /**
      * Create a new empty page in the document.
      *
-     * @param doc       raw FPDF_DOCUMENT
+     * @param rawDocSegment raw FPDF_DOCUMENT
      * @param pageIndex 0-based index where the page will be inserted
      * @param width     page width in points (1 point = 1/72 inch)
      * @param height    page height in points
@@ -211,7 +211,7 @@ public final class PdfPageEditor {
     /**
      * Create a new image page object.
      *
-     * @param doc raw FPDF_DOCUMENT
+     * @param rawDocSegment raw FPDF_DOCUMENT
      * @return raw FPDF_PAGEOBJECT (image type)
      */
     public static MemorySegment createImageObject(MemorySegment rawDocSegment) {
@@ -391,7 +391,7 @@ public final class PdfPageEditor {
     /**
      * Load a font from raw font data (TrueType or Type1).
      *
-     * @param doc      raw FPDF_DOCUMENT
+     * @param rawDocSegment raw FPDF_DOCUMENT
      * @param fontData the raw font file data
      * @param fontType 1 = Type1, 2 = TrueType
      * @param cid      true if CID font

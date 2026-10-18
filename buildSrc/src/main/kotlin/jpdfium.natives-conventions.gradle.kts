@@ -1,4 +1,5 @@
 // Resource-only JAR - ships the platform-specific native library.
+import java.security.MessageDigest
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 
 plugins {
@@ -20,11 +21,12 @@ java {
     withJavadocJar()
 }
 
-// Convention: CI builds the per-platform native libraries and drops them into
-//   native/dist/<platform>/
-// where <platform> matches the module suffix (e.g. linux-x64, darwin-arm64).
-// `processResources` then copies them into src/main/resources/natives/<platform>/
-// and writes a native-libs.txt manifest that NativeLoader reads at runtime.
+// Convention: CI builds the per-platform native libraries outside the build
+// tree, under native/dist/<platform>/, where <platform> matches the module
+// suffix (e.g. linux-x64, darwin-arm64). stageNatives copies those binaries
+// plus native/licenses/ into build/staged-natives, which is registered as a
+// resources source directory below and also receives the native-libs.txt
+// manifest that NativeLoader reads at runtime.
 
 val platform: String = project.name.removePrefix("jpdfium-natives-")
 val distDir = rootProject.layout.projectDirectory.dir("native/dist/$platform")
@@ -49,31 +51,66 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
         into("licenses")
     }
     into(stagedRoot)
-    // Don't fail the build when the dist dir is absent (local dev, stub builds, etc.).
-    // CI is responsible for populating it before `publish`.
-    onlyIf { distDir.asFile.isDirectory && distDir.asFile.listFiles()?.isNotEmpty() == true }
+    // Always run so the doFirst cleanup below executes even when there are no
+    // dist binaries: the licenses source keeps the task non-empty, and a
+    // missing dist dir contributes nothing instead of failing the build (local
+    // dev, stub builds, etc.). Skipping via onlyIf would leave a previous
+    // build's staged bundle in place while writeNativeManifest regenerates
+    // manifests from those stale binaries, publishing the wrong native set.
+    // Copy never removes: without this, switching real<->stub locally leaves
+    // the previous bundle's libraries beside the new ones, and the jar ships
+    // a mixed bridge/dependency set that loads (or crashes) unpredictably.
+    doFirst { stagedRoot.get().asFile.deleteRecursively() }
 }
 
 val writeNativeManifest = tasks.register("writeNativeManifest") {
-    description = "Write native-libs.txt listing every file in the staged natives directory"
+    description = "Write native-libs.txt and native-libs.sha256 for the staged natives"
     group = "build"
     dependsOn(stageNatives)
     val manifest = stagedPlatformDir.map { it.file("native-libs.txt") }
-    outputs.file(manifest)
+    val checksums = stagedPlatformDir.map { it.file("native-libs.sha256") }
+    // Without the dist input Gradle can keep a stale manifest after a rebuild.
+    inputs.files(distDir).withPropertyName("dist").optional()
+    inputs.property("platform", platform)
+    outputs.files(manifest, checksums)
     doLast {
         val dir = stagedPlatformDir.get().asFile
         if (!dir.isDirectory) return@doLast
+        // The checksum file drives the content-addressed runtime cache, so it
+        // must cover exactly the files the manifest lists.
         val entries = dir.listFiles()
-            ?.filter { it.isFile && it.name != "native-libs.txt" }
-            ?.map { it.name }
-            ?.sorted()
+            ?.filter { it.isFile && it.name != "native-libs.txt" && it.name != "native-libs.sha256" }
+            ?.sortedBy { it.name }
             ?: emptyList()
-        manifest.get().asFile.writeText(entries.joinToString("\n") + if (entries.isEmpty()) "" else "\n")
+        manifest.get().asFile.writeText(entries.joinToString("\n") { it.name } + if (entries.isEmpty()) "" else "\n")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        val lines = entries.joinToString("\n") { file ->
+            file.inputStream().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            "$hash  ${file.name}"
+        }
+        checksums.get().asFile.writeText(if (lines.isEmpty()) "" else lines + "\n")
     }
 }
 
 sourceSets.named("main") {
     resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
+}
+
+// Resource-only jars, so the module name would otherwise be derived from the
+// file name (jpdfium.natives.linux.x64). Declare it explicitly instead.
+tasks.named<Jar>("jar") {
+    manifest {
+        attributes["Automatic-Module-Name"] =
+            "stirling.software.jpdfium.natives." + platform.replace('-', '.')
+    }
 }
 
 tasks.withType<AbstractCopyTask>().configureEach {
@@ -82,6 +119,18 @@ tasks.withType<AbstractCopyTask>().configureEach {
 
 tasks.named("processResources") {
     dependsOn(writeNativeManifest)
+}
+
+// A platform leg can be intentionally skipped (see the release workflow
+// matrix NOTE). Publishing its natives jar anyway would resolve for
+// consumers while containing no binaries, so skip those publications with
+// a loud warning instead of failing the whole release.
+tasks.matching { it.name.startsWith("publish") && it.name.endsWith("Repository") }.configureEach {
+    onlyIf("natives bundle present, skipped otherwise (see release.yml matrix NOTE)") {
+        val ok = stagedPlatformDir.get().asFile.listFiles()?.isNotEmpty() == true
+        if (!ok) logger.warn("Skipping ${it.name}: no staged natives for $platform")
+        ok
+    }
 }
 
 tasks.named("sourcesJar") {
@@ -97,8 +146,8 @@ publishing {
             from(components["java"])
 
             pom {
-                name.set(project.name)
-                description.set("JPDFium native libraries for ${project.name.removePrefix("jpdfium-natives-")}")
+                name.set("JPDFium natives for ${project.name.removePrefix("jpdfium-natives-")}")
+                description.set("Prebuilt JPDFium native libraries for ${project.name.removePrefix("jpdfium-natives-")}")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
                 licenses {

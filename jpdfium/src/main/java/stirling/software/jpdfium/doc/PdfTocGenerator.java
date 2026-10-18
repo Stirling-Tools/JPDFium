@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.text.PdfTextExtractor;
@@ -139,7 +140,7 @@ public final class PdfTocGenerator {
         // Close the page handle
         try {
             PageEditBindings.FPDF_ClosePage.invokeExact(tocPage);
-        } catch (Throwable _) {}
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
         return entriesAdded;
     }
@@ -170,7 +171,10 @@ public final class PdfTocGenerator {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFText_SetText failed");
             }
-            } catch (Throwable t) { return; }
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return;
+            }
 
             // Set fill color (black)
             try {
@@ -178,19 +182,20 @@ public final class PdfTocGenerator {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPageObj_SetFillColor failed");
             }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             // Position the text
             try {
                 PageEditBindings.FPDFPageObj_Transform.invokeExact(textObj,
                         1.0, 0.0, 0.0, 1.0, (double) x, (double) y);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             // Insert into page
             try {
                 PageEditBindings.FPDFPage_InsertObject.invokeExact(rawPage, textObj);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             // Swallow - text obj creation failed
         }
     }

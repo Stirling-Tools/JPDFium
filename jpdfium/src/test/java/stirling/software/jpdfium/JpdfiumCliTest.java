@@ -155,8 +155,10 @@ class JpdfiumCliTest {
         // IHDR width/height at fixed offsets 16..23, big-endian.
         int width = ((png[16] & 0xFF) << 24) | ((png[17] & 0xFF) << 16) | ((png[18] & 0xFF) << 8) | (png[19] & 0xFF);
         int height = ((png[20] & 0xFF) << 24) | ((png[21] & 0xFF) << 16) | ((png[22] & 0xFF) << 8) | (png[23] & 0xFF);
-        assertEquals(595, width, "72 dpi render of an A4 page must be 595px wide");
-        assertEquals(842, height, "72 dpi render of an A4 page must be 842px tall");
+        // PDFBox 3.x floors the viewport (Math.floor(widthPt * dpi / 72)); this A4
+        // fixture's MediaBox is 594.95996 x 841.91998 pt, so 72 dpi is 594 x 841 px.
+        assertEquals(594, width, "72 dpi render of an A4 page must be 594px wide (PDFBox floor)");
+        assertEquals(841, height, "72 dpi render of an A4 page must be 841px tall (PDFBox floor)");
     }
 
 

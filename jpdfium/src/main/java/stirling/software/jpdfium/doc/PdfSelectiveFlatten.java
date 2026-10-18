@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.exception.JPDFiumException;
@@ -67,7 +68,7 @@ public final class PdfSelectiveFlatten {
                 }
             } finally {
                 try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
 
@@ -78,7 +79,7 @@ public final class PdfSelectiveFlatten {
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPage_GenerateContent failed");
             }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
 
         return flattened;

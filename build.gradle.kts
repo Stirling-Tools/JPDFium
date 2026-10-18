@@ -1,6 +1,6 @@
 allprojects {
     group = "com.stirling"
-    version = findProperty("jpdfium.version")?.toString() ?: "1.0.0-SNAPSHOT"
+    version = findProperty("jpdfium.version")?.toString() ?: "0.0.0-SNAPSHOT"
 
     repositories {
         mavenCentral()
@@ -46,7 +46,7 @@ tasks.register<Exec>("buildPdfium") {
     commandLine("bash", scriptPath.absolutePath)
 }
 
-// Task to run all 50 samples (full application test)
+// Task to run all samples (full application test)
 tasks.register<JavaExec>("runAllSamples") {
     group = "application"
     description = "Run all samples to test the complete application"
@@ -124,7 +124,6 @@ tasks.register<JavaExec>("runSample") {
         "41" to "S41_VersionConverter",
         "42" to "S42_BoundedText",
         "43" to "S43_StreamOptimizer",
-        "44" to "S44_FlattenRotation",
         "45" to "S45_PageInterleaver",
         "46" to "S46_NamedDestinations",
         "47" to "S47_BlankPageDetector",
@@ -148,7 +147,6 @@ tasks.register<JavaExec>("runSample") {
         "66" to "S66_PdfDiff",
         "67" to "S67_AutoDeskew",
         "68" to "S68_FontAudit",
-        "69" to "S69_PdfAConversion",
         "70" to "S70_PageScaling",
         "71" to "S71_MarginAdjust",
         "72" to "S72_SelectiveFlatten",
@@ -167,16 +165,32 @@ tasks.register<JavaExec>("runSample") {
         "85" to "S85_AnnotStats",
         "86" to "S86_PosterizeSizes",
         "87" to "S87_AutoCropMargins",
+        "88" to "S88_StreamingParallel",
         "89" to "S89_StructureEditor",
         "90" to "S90_Layers",
         "91" to "S91_AnnotationExchange",
-        "92" to "S92_RustCompress"
+        "92" to "S92_RustCompress",
+        "93" to "S93_CropRemoveContent",
+        "94" to "S94_CropPerf",
+        "95" to "S95_RedactPipelinePerf"
     )
 
-    val sampleClass = "stirling.software.jpdfium.samples." +
-        (sampleClasses[sampleNum] ?: "S${sampleNum}_Render")
+    // The map is hand-maintained, so an unknown number fails here with the list
+    // of known samples and a drifted name fails with the missing file path,
+    // instead of surfacing later as a ClassNotFoundException.
+    val sampleName = sampleClasses[sampleNum]
+        ?: throw GradleException(
+            "Unknown sample '$sampleNum'. Known numbers are ${sampleClasses.keys.joinToString(", ")}"
+        )
+    val sampleSource = project(":jpdfium")
+        .file("src/test/java/stirling/software/jpdfium/samples/$sampleName.java")
+    if (!sampleSource.isFile) {
+        throw GradleException(
+            "Sample '$sampleName' maps to ${rootProject.relativePath(sampleSource)}, which does not exist"
+        )
+    }
 
-    mainClass.set(sampleClass)
+    mainClass.set("stirling.software.jpdfium.samples.$sampleName")
     val jpdfiumCompileJava = tasks.getByPath(":jpdfium:compileJava") as JavaCompile
     val jpdfiumCompileTest = tasks.getByPath(":jpdfium:compileTestJava") as JavaCompile
     classpath = project(":jpdfium").configurations.getByName("testRuntimeClasspath") +
@@ -186,7 +200,7 @@ tasks.register<JavaExec>("runSample") {
     workingDir = rootProject.projectDir
 
     doFirst {
-        println("Running sample: $sampleClass")
+        println("Running sample: $sampleName")
     }
 }
 
@@ -212,7 +226,7 @@ tasks.register("fullBuildAndTest") {
         println("  - Real native bridge built")
         println("  - Unit tests passed")
         println("  - Integration tests passed")
-        println("  - All 50 samples executed")
+        println("  - All samples executed")
         println("  - Output: samples-output/")
         println("========================================")
     }

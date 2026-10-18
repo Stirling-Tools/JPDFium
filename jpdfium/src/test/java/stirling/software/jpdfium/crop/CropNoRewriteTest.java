@@ -14,7 +14,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * "Only modify what is necessary" invariant checks for the crop path.
@@ -73,16 +75,21 @@ class CropNoRewriteTest {
         assertArrayEquals(p0Before, p0After, "page 0 content stream changed");
         assertArrayEquals(p2Before, p2After, "page 2 content stream changed");
 
-        // Sanity: the cropped page's content stream really did change (page 1 loses
-        // its text is a rewrite, but page 1 itself must differ from before).
+        // Sanity: the cropped page's content stream really did change. PAGE1_ONLY
+        // sits at x=400, entirely outside the [0,0,306,792] crop, so the rewrite
+        // legitimately empties the stream - assert on the content, not on it
+        // staying non-empty.
         byte[] p1Before = contentStream(input, 1);
         byte[] p1After = contentStream(output, 1);
         assertNotEquals(0, p1Before.length);
-        assertNotEquals(0, p1After.length);
-        // Page 1's stream is regenerated, so a byte difference is expected - but the
-        // word content must change (PAGE1_ONLY is removed).
-        assertNotEquals(new String(p1Before, StandardCharsets.UTF_8),
-                new String(p1After, StandardCharsets.UTF_8));
+        String before = new String(p1Before, StandardCharsets.UTF_8);
+        String after = new String(p1After, StandardCharsets.UTF_8);
+        assertTrue(before.contains("PAGE1_ONLY"), "fixture precondition: page 1 must have text");
+        assertFalse(after.contains("PAGE1_ONLY"),
+                "cropped page still carries content outside the crop rectangle");
+        // Neighbouring pages must be untouched by the rewrite.
+        assertArrayEquals(p0Before, contentStream(output, 0), "page 0 content stream changed");
+        assertArrayEquals(p2Before, contentStream(output, 2), "page 2 content stream changed");
     }
 
     /** Read a page's decoded content stream bytes via PDFBox. */

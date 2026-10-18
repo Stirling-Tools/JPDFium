@@ -62,11 +62,87 @@ bundle_linux() {
     bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
 }
 
+bundle_freebsd() {
+    local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
+    [ -f "$bridge" ] || { echo "no libjpdfium.so found to bundle"; return 0; }
+
+    local sysroot="${FREEBSD_SYSROOT:-native/freebsd-sysroot}"
+    local sys_lib="$sysroot/usr/lib"
+    local skip_regex='^(libc|libm|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|librt|libutil)\.so'
+
+    declare -A visited=()
+    local queue=("$bridge")
+    visited["$(basename "$bridge")"]=1
+
+    # Also enqueue any libraries already staged in DIST_DIR (e.g. libpdfium.so)
+    for staged in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+        [ -e "$staged" ] || continue
+        [ -L "$staged" ] && continue
+        local b
+        b="$(basename "$staged")"
+        if [ -z "${visited["$b"]:-}" ]; then
+            visited["$b"]=1
+            queue+=("$staged")
+        fi
+    done
+
+    while [ "${#queue[@]}" -gt 0 ]; do
+        local target="${queue[0]}"
+        queue=("${queue[@]:1}")
+
+        while IFS= read -r dep; do
+            [ -z "$dep" ] && continue
+            if echo "$dep" | grep -qE "$skip_regex"; then continue; fi
+
+            local dest="$DIST_DIR/$dep"
+            if [ ! -e "$dest" ]; then
+                local found=""
+                for dir in "$sys_lib" "$sysroot/lib" "$DIST_DIR"; do
+                    if [ -e "$dir/$dep" ]; then
+                        found="$dir/$dep"
+                        break
+                    fi
+                done
+                if [ -n "$found" ] && [ "$found" != "$dest" ]; then
+                    cp -v "$found" "$dest"
+                fi
+            fi
+
+            if [ -e "$dest" ] && [ -z "${visited["$dep"]:-}" ]; then
+                visited["$dep"]=1
+                queue+=("$dest")
+            fi
+        done < <(readelf -d "$target" 2>/dev/null | awk '/NEEDED/{gsub(/\[|\]/,"",$5); print $5}' || true)
+    done
+
+    if command -v patchelf >/dev/null 2>&1; then
+        for f in "$DIST_DIR"/lib*.so*; do
+            [ -e "$f" ] || continue
+            [ -L "$f" ] && continue
+            patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
+            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+                echo "Clearing executable stack on $f" >&2
+                patchelf --clear-execstack "$f" || {
+                    echo "ERROR: $f requires an executable stack and patchelf could not clear it" >&2
+                    exit 1
+                }
+            fi
+        done
+    fi
+
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
+}
+
+
 bundle_macos() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.dylib}"
     [ -f "$bridge" ] || { echo "no libjpdfium.dylib found to bundle"; return 0; }
 
-    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib)
+    # native/pdfium/lib is where the vips build links the component PDFium
+    # prebuild; its own @rpath deps (icuuc, harfbuzz-ng, ...) live there too.
+    local rpath_dirs=(/opt/homebrew/lib /usr/local/lib /usr/local/opt/icu4c/lib
+                      "$(dirname "${BASH_SOURCE[0]}")/pdfium/lib")
     local rpath_globs=(/opt/homebrew/opt/*/lib /usr/local/opt/*/lib)
 
     _resolve_rpath_dep() {
@@ -133,17 +209,27 @@ bundle_macos() {
             esac
             [ -f "$dep" ] || continue
 
-            # Canonicalize through symlinks before bundling. Homebrew
-            # versioned libs are alias chains (libicuuc.dylib ->
-            # libicuuc.78.dylib -> libicuuc.78.3.dylib); a plain cp follows
-            # each alias into a full duplicate copy. Converging on the real
-            # file bundles one copy that every alias rewrites to.
-            dep=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dep")
-            [ -f "$dep" ] || continue
-
+            # If the referenced name is already bundled, keep it. This covers
+            # pre-staged shadows: build-minimal-icu-macos.sh stages a trimmed
+            # libicudata.<MAJ>.dylib ahead of time precisely so the bundler
+            # picks it up instead of brew's full copy.
             local base
             base=$(basename "$dep")
             local dest="$DIST_DIR/$base"
+            if [ -e "$dest" ]; then
+                chmod u+w "$dest" 2>/dev/null || true
+                install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
+                continue
+            fi
+
+            # New name: converge Homebrew alias chains on the real file
+            # (libicuuc.dylib -> libicuuc.78.dylib -> libicuuc.78.3.dylib).
+            # A plain cp follows each alias into a full duplicate copy;
+            # bundling one real file that every alias rewrites to avoids it.
+            dep=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$dep")
+            [ -f "$dep" ] || continue
+            base=$(basename "$dep")
+            dest="$DIST_DIR/$base"
             local is_new=0
             if [ ! -e "$dest" ]; then
                 cp -v "$dep" "$dest"
@@ -218,7 +304,7 @@ sign_macos() {
 
 bundle_windows() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/jpdfium.dll}"
-    [ -f "$bridge" ] || { echo "no jpdfium.dll found to bundle"; return 0; }
+    [ -f "$bridge" ] || { echo "ERROR: bundle root $bridge not found" >&2; return 1; }
 
     if ! command -v dumpbin >/dev/null 2>&1; then
         local vs_dumpbin
@@ -256,11 +342,15 @@ bundle_windows() {
     case "$PLATFORM" in
         windows-arm64|vips-windows-arm64) vcpkg_triplet="arm64-windows" ;;
     esac
+    local vcpkg_root="${VCPKG_ROOT:-${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}}"
     local search_dirs=(
         "$DIST_DIR"
-        "$VCPKG_INSTALLATION_ROOT/installed/$vcpkg_triplet/bin"
+        "$vcpkg_root/installed/$vcpkg_triplet/bin"
         "native/pdfium/lib"
     )
+    if [ -n "${VIPS_WIN_DIST:-}" ] && [ -d "$VIPS_WIN_DIST/bin" ]; then
+        search_dirs+=("$VIPS_WIN_DIST/bin")
+    fi
     find_dll() {
         local name="$1"
         local d
@@ -270,7 +360,17 @@ bundle_windows() {
         return 1
     }
 
-    local queue=("$bridge")
+    local -A visited=()
+    local queue=()
+    for f in "$DIST_DIR"/*.dll; do
+        [ -e "$f" ] || continue
+        queue+=("$f")
+        local base
+        base=$(basename "$f")
+        visited["$base"]=1
+    done
+    [ "${#queue[@]}" -gt 0 ] || queue=("$bridge")
+
     while [ "${#queue[@]}" -gt 0 ]; do
         local target="${queue[0]}"
         queue=("${queue[@]:1}")
@@ -282,14 +382,18 @@ bundle_windows() {
             [ -z "$dep" ] && continue
             if is_system_dll "$dep"; then continue; fi
             local dest="$DIST_DIR/$dep"
-            if [ -e "$dest" ]; then continue; fi
-            local src
-            src=$(find_dll "$dep" || true)
-            if [ -z "$src" ]; then
-                continue
+            if [ ! -e "$dest" ]; then
+                local src
+                src=$(find_dll "$dep" || true)
+                if [ -z "$src" ]; then
+                    continue
+                fi
+                cp -v "$src" "$dest"
             fi
-            cp -v "$src" "$dest"
-            queue+=("$dest")
+            if [ -z "${visited["$dep"]:-}" ]; then
+                visited["$dep"]=1
+                queue+=("$dest")
+            fi
         done <<<"$deps"
     done
 
@@ -322,9 +426,107 @@ bundle_windows() {
     fi
 }
 
+# Cross legs have shipped a wrong-arch dependency before (darwin-x64 staged an
+# arm64 libsharpyuv), so every staged binary must match the target arch.
+assert_bundle_arch() {
+    local unix_arch win_arch failed=0 f archs machine
+    case "$PLATFORM" in
+        *-arm64) unix_arch=arm64; win_arch=ARM64 ;;
+        *-x64)   unix_arch=x86_64; win_arch=x64 ;;
+        *) echo "FAIL: cannot derive arch from platform $PLATFORM" >&2; exit 1 ;;
+    esac
+    case "$PLATFORM" in
+        linux-*|vips-linux-*) [ "$unix_arch" = arm64 ] && unix_arch=aarch64 ;;
+    esac
+    case "$PLATFORM" in
+        darwin-*|vips-darwin-*)
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -e "$f" ] || continue
+                archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
+                case " $archs " in
+                    *" $unix_arch "*) ;;
+                    *) echo "FAIL: $(basename "$f") has arch [$archs], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        linux-*|vips-linux-*|freebsd-*|openbsd-*)
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -e "$f" ] || continue
+                machine=$(readelf -h "$f" 2>/dev/null | awk -F: '/Machine:/{print $2}' | xargs)
+                case "$unix_arch:$machine" in
+                    x86_64:"Advanced Micro Devices X86-64") ;;
+                    aarch64:"AArch64") ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $unix_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+        windows-*|vips-windows-*)
+            local db=""
+            if command -v dumpbin >/dev/null 2>&1; then
+                db=dumpbin
+            else
+                db=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+            fi
+            if [ -z "$db" ]; then
+                echo "FAIL: dumpbin not found - cannot verify Windows bundle architecture" >&2
+                exit 1
+            fi
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                machine=$("$db" //headers "$f" 2>/dev/null | grep -m1 "machine (" | sed -E 's/.*machine \(([^)]*)\).*/\1/')
+                case "$win_arch:$machine" in
+                    x64:x64|ARM64:ARM64) ;;
+                    *) echo "FAIL: $(basename "$f") is [$machine], expected $win_arch" >&2; failed=1 ;;
+                esac
+            done
+            ;;
+    esac
+    [ "$failed" -eq 0 ] || exit 1
+}
+
+# The source-built vips links the distro ICU, whose full data file (~30 MB)
+# would dominate the bundle. Swap it for the core bundle's trimmed copy (same
+# data, ~0.45 MB) before strip/sign/checks. The core dist for this platform is
+# native/dist/<platform without the vips- prefix>.
+swap_full_icudata() {
+    case "$PLATFORM" in
+        vips-*) ;;
+        *) return 0 ;;
+    esac
+    local core_platform="${PLATFORM#vips-}"
+    local trimmed=""
+    for cand in "native/dist/$core_platform"/libicudata.* "native/dist/$core_platform"/icudt*.dll; do
+        [ -e "$cand" ] || continue
+        trimmed="$cand"
+        break
+    done
+    [ -n "$trimmed" ] || return 0
+    [ "$(wc -c < "$trimmed")" -lt 1572864 ] || return 0
+    # Only swap same-major ICU versions: the vips build links the distro/
+    # brew ICU, whose major must match the trimmed core data's.
+    icu_major() {
+        echo "$1" | grep -oE '(icudata\.so\.|icudata\.|icudt)([0-9]+)' | grep -oE '[0-9]+$' | head -1
+    }
+    local trimmed_major
+    trimmed_major=$(icu_major "$(basename "$trimmed")")
+    [ -n "$trimmed_major" ] || return 0
+    local f
+    for f in "$DIST_DIR"/libicudata.* "$DIST_DIR"/icudt*.dll; do
+        [ -e "$f" ] || continue
+        [ "$(wc -c < "$f")" -gt 1572864 ] || continue
+        if [ "$(icu_major "$(basename "$f")")" != "$trimmed_major" ]; then
+            echo "WARNING: not replacing $(basename "$f") with ICU $trimmed_major data" >&2
+            continue
+        fi
+        cp -v "$trimmed" "$f"
+    done
+}
+
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
+        assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -335,28 +537,63 @@ case "$PLATFORM" in
             done
         fi
         ;;
+    freebsd-*|vips-freebsd-*)
+        bundle_freebsd
+        assert_bundle_arch
+        find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
+        STRIP_BIN="strip"
+        if command -v llvm-strip >/dev/null 2>&1; then
+            STRIP_BIN="llvm-strip"
+        fi
+        if command -v "$STRIP_BIN" >/dev/null 2>&1; then
+            "$STRIP_BIN" --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
+            for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
+                [ -L "$f" ] && continue
+                [ -e "$f" ] || continue
+                "$STRIP_BIN" --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
+        ;;
     darwin-*|vips-darwin-*)
         bundle_macos
+        assert_bundle_arch
+        swap_full_icudata
         if command -v strip >/dev/null 2>&1; then
-            strip -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
+            # -x drops local symbols too (the static harfbuzz contributes
+            # thousands); exports and the dynamic symbol table stay.
+            strip -x "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
             for f in "$DIST_DIR"/*.dylib; do
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
-                strip -S "$f" 2>/dev/null || true
+                strip -x "$f" 2>/dev/null || true
             done
         fi
         sign_macos
         ;;
     windows-*|vips-windows-*)
         bundle_windows
+        assert_bundle_arch
+        swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
+        if command -v llvm-strip >/dev/null 2>&1; then
+            for f in "$DIST_DIR"/*.dll; do
+                [ -e "$f" ] || continue
+                llvm-strip --strip-unneeded "$f" 2>/dev/null || true
+            done
+        fi
         ;;
     *)
         echo "Unknown platform: $PLATFORM" >&2
         exit 1
         ;;
 esac
+
+# Stripping must not remove exports the JNI loader binds to.
+SYMBOL_CHECK="$(dirname "${BASH_SOURCE[0]}")/../.github/scripts/check-native-symbols.sh"
+if [ -f "$SYMBOL_CHECK" ]; then
+    bash "$SYMBOL_CHECK" "$PLATFORM" "$DIST_DIR"
+fi
 
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-orphans.sh" "$DIST_DIR" "$PLATFORM"
 bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-lean.sh" "$DIST_DIR" "$PLATFORM"

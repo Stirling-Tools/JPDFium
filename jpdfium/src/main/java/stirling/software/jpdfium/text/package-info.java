@@ -1,27 +1,22 @@
 /**
- * Structured text extraction and search for PDF documents.
+ * Text extraction and search.
  *
- * <p>Provides multi-level text access: page -> lines -> words -> characters,
- * with full positional and typographic metadata for each character.
+ * <p>{@link stirling.software.jpdfium.text.PdfTextExtractor} returns a page as
+ * {@link stirling.software.jpdfium.text.PageText}: lines, words, and
+ * characters, each with its position and typography. {@link
+ * stirling.software.jpdfium.text.PdfTextSearcher} finds text across a
+ * document, {@link stirling.software.jpdfium.text.PdfBoundedText} reads a
+ * rectangle, and {@link stirling.software.jpdfium.text.PdfTableExtractor}
+ * recovers tables from text positions.
  *
- * <p><b>Quick Start - Text Extraction</b></p>
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
  *     PageText text = PdfTextExtractor.extractPage(doc, 0);
  *     System.out.println(text.plainText());
- *     System.out.printf("Words: %d, Lines: %d%n", text.wordCount(), text.lineCount());
- * }
- * }</pre>
- *
- * <p><b>Quick Start - Text Search</b></p>
- * <pre>{@code
- * try (PdfDocument doc = PdfDocument.open(Path.of("document.pdf"))) {
- *     var matches = PdfTextSearcher.search(doc, "important");
- *     System.out.printf("Found %d matches%n", matches.size());
  * }
  * }</pre>
  *
  * @see stirling.software.jpdfium.text.PdfTextExtractor
- * @see stirling.software.jpdfium.text.PdfTextSearcher
+ * @see stirling.software.jpdfium.text.PageText
  */
 package stirling.software.jpdfium.text;

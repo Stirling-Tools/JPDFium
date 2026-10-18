@@ -34,6 +34,7 @@ public final class VipsAvailability {
             case PNG -> s.pngsave;
             case JPEG -> s.jpegsave;
             case TIFF -> s.tiffsave;
+            case JPEG2000 -> s.jp2ksave;
         };
     }
 
@@ -51,6 +52,7 @@ public final class VipsAvailability {
             case PNG -> s.pngload;
             case JPEG -> s.jpegload;
             case TIFF -> s.tiffload;
+            case JPEG2000 -> s.jp2kload;
         };
     }
 
@@ -88,6 +90,7 @@ public final class VipsAvailability {
             boolean jxlsave = probeOperation("jxlsave");
             boolean webpsave = probeOperation("webpsave");
             boolean tiffsave = probeOperation("tiffsave");
+            boolean jp2ksave = probeOperation("jp2ksave");
 
             // Load ops (decoding)
             boolean heifload = probeOperation("heifload");
@@ -96,16 +99,17 @@ public final class VipsAvailability {
             boolean pngload = probeOperation("pngload");
             boolean jpegload = probeOperation("jpegload");
             boolean tiffload = probeOperation("tiffload");
+            boolean jp2kload = probeOperation("jp2kload");
 
             return new State(true, platform, version,
-                    heifsave, jxlsave, webpsave, true, true, tiffsave,
-                    heifload, jxlload, webpload, pngload, jpegload, tiffload,
+                    heifsave, jxlsave, webpsave, true, true, tiffsave, jp2ksave,
+                    heifload, jxlload, webpload, pngload, jpegload, tiffload, jp2kload,
                     null);
         } catch (Throwable t) {
             Throwable root = unwrap(t);
             return new State(false, platform, null,
-                    false, false, false, false, false, false,
-                    false, false, false, false, false, false,
+                    false, false, false, false, false, false, false,
+                    false, false, false, false, false, false, false,
                     root);
         }
     }
@@ -155,6 +159,7 @@ public final class VipsAvailability {
             case JXL -> "requires libjxl";
             case WEBP -> "requires libwebp";
             case TIFF -> "requires libtiff";
+            case JPEG2000 -> "requires libvips with openjpeg (JPEG 2000) support";
             default -> "requires libvips with " + format.operation() + " support";
         };
     }
@@ -169,11 +174,13 @@ public final class VipsAvailability {
             boolean pngsave,
             boolean jpegsave,
             boolean tiffsave,
+            boolean jp2ksave,
             boolean heifload,
             boolean jxlload,
             boolean webpload,
             boolean pngload,
             boolean jpegload,
             boolean tiffload,
+            boolean jp2kload,
             Throwable error) {}
 }

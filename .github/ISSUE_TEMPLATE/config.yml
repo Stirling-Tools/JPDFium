@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/Stirling-Tools/JPDFium/tree/main/docs
+    about: Installation, configuration, rendering, redaction, and troubleshooting guides.
+  - name: Report a security vulnerability
+    url: https://github.com/Stirling-Tools/JPDFium/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue.

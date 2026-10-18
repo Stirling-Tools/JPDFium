@@ -25,28 +25,45 @@ public final class Pcre2Lib {
     private Pcre2Lib() {}
 
     /**
-     * Check if PCRE2 support is compiled and available in the native library.
+     * Whether this native build can actually compile patterns.
+     *
+     * <p>The bridge exports {@code jpdfium_pcre2_compile} in every build, but a
+     * build without PCRE2 linked makes it return {@code JPDFIUM_ERR_NOT_FOUND},
+     * so the symbol alone proves nothing. Probe the real capability instead.
      */
     public static boolean isSupported() {
-        return JpdfiumH.jpdfium_pcre2_compile$address() != null;
+        return PdfiumRuntime.execute(() -> {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment handleOut = a.allocate(JAVA_LONG);
+                if (JpdfiumH.jpdfium_pcre2_compile(a.allocateFrom("a"), 0, handleOut) != JpdfiumLib.OK) {
+                    return false;
+                }
+                // The probe really compiled a pattern, so free it - the arena only
+                // released the out-slot, not the native allocation behind it.
+                long handle = handleOut.get(JAVA_LONG, 0);
+                if (handle != 0) {
+                    JpdfiumH.jpdfium_pcre2_free(handle);
+                }
+                return true;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return false;
+            }
+        });
     }
 
     public static long compile(String pattern, int flags) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment hSeg = a.allocate(JAVA_LONG);
                 JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_compile(a.allocateFrom(pattern), flags, hSeg), "pcre2Compile");
                 return hSeg.get(JAVA_LONG, 0);
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static String matchAll(long patternHandle, String text) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 MemorySegment ptrSeg = a.allocate(ADDRESS);
                 JpdfiumLib.check(JpdfiumH.jpdfium_pcre2_match_all(patternHandle, a.allocateFrom(text), ptrSeg), "pcre2MatchAll");
@@ -55,14 +72,11 @@ public final class Pcre2Lib {
                 JpdfiumH.jpdfium_free_string(strPtr);
                 return result;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static void free(long patternHandle) {
-        NativeGuard.acquire();
-        try {
+        PdfiumRuntime.executeTeardown(() -> {
             if (FastLinks.PCRE2_FREE != null) {
                 try {
                     FastLinks.PCRE2_FREE.invokeExact(patternHandle);
@@ -72,19 +86,14 @@ public final class Pcre2Lib {
                 }
             }
             JpdfiumH.jpdfium_pcre2_free(patternHandle);
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 
     public static boolean luhnValidate(String number) {
-        NativeGuard.acquire();
-        try {
+        return PdfiumRuntime.execute(() -> {
             try (Arena a = Arena.ofConfined()) {
                 return JpdfiumH.jpdfium_luhn_validate(a.allocateFrom(number)) == 1;
             }
-        } finally {
-            NativeGuard.release();
-        }
+        });
     }
 }

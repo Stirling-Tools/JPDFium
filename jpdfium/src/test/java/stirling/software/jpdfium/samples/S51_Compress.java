@@ -14,8 +14,8 @@ import java.util.List;
 /**
  * SAMPLE 51 - PDF Compression.
  *
- * <p>Demonstrates the full compression pipeline: Ghostscript (image resampling,
- * font subsetting) - qpdf (structural optimization) - metadata stripping.
+ * <p>Demonstrates the full compression pipeline: in-process image optimization,
+ * qpdf (structural optimization), metadata stripping.
  * Includes all presets and custom options.
  *
  * <h3>Streaming &amp; Parallel Guidance (LOW / not parallelizable)</h3>
@@ -66,8 +66,8 @@ public class S51_Compress {
                     100.0 * (Files.size(input) - compressed.length) / Files.size(input));
         }
 
-        // 2. Web preset (Ghostscript ebook + qpdf)
-        SampleBase.section("Web preset (GS + qpdf)");
+        // 2. Web preset (image optimization + qpdf)
+        SampleBase.section("Web preset (images + qpdf)");
         try (PdfDocument doc = PdfDocument.open(input)) {
             CompressResultWithBytes result = PdfCompressor.compress(doc,
                     CompressOptions.builder().preset(CompressPreset.WEB).build());

@@ -136,6 +136,8 @@ meson setup "$WORK/harfbuzz/build" "$WORK/harfbuzz" \
     --buildtype=release \
     --default-library=static \
     -Db_staticpic=true \
+    -Dc_args=-fvisibility=hidden \
+    -Dcpp_args=-fvisibility=hidden \
     -Dsubset=enabled \
     -Dglib=disabled \
     -Dgobject=disabled \

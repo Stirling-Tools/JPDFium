@@ -5,7 +5,7 @@ set -euo pipefail
 OVERLAY_DIR="$(cd "$(dirname "$0")" && pwd)/vcpkg-overlay/ports"
 
 for attempt in 1 2 3 4 5; do
-    if vcpkg install --overlay-ports="$OVERLAY_DIR" "$@"; then
+    if vcpkg install --overlay-ports="$OVERLAY_DIR" --clean-after-build "$@"; then
         echo "vcpkg install OK (attempt $attempt)"
         exit 0
     fi

@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.DocBindings;
@@ -62,13 +63,13 @@ public final class PdfFormReader {
         // FORM_OnAfterLoadPage is required for export values, IsChecked, and other
         // form-field metadata to become available on the annotations.
         try { FormFillBindings.FORM_OnAfterLoadPage.invokeExact(rawPage, formHandle); }
-        catch (Throwable _) {}
+        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
         try {
             return readPageAnnotations(formHandle, rawPage, pageIndex);
         } finally {
             try { FormFillBindings.FORM_OnBeforeClosePage.invokeExact(rawPage, formHandle); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
         }
     }
 
@@ -107,12 +108,12 @@ public final class PdfFormReader {
                 boolean checked = false;
                 try {
                     checked = (int) AnnotationBindings.FPDFAnnot_IsChecked.invokeExact(formHandle, annot) != 0;
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                 int flags = 0;
                 try {
                     flags = (int) AnnotationBindings.FPDFAnnot_GetFormFieldFlags.invokeExact(formHandle, annot);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                 boolean readOnly = (flags & 1) != 0;
                 boolean required = (flags & 2) != 0;
 
@@ -120,7 +121,7 @@ public final class PdfFormReader {
                 int optCount = 0;
                 try {
                     optCount = (int) AnnotationBindings.FPDFAnnot_GetOptionCount.invokeExact(formHandle, annot);
-                } catch (Throwable _) {}
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
                 List<String> options = new ArrayList<>();
                 List<Integer> selectedIndices = new ArrayList<>();
@@ -131,7 +132,7 @@ public final class PdfFormReader {
                         if ((int) AnnotationBindings.FPDFAnnot_IsOptionSelected.invokeExact(formHandle, annot, o) != 0) {
                             selectedIndices.add(o);
                         }
-                    } catch (Throwable _) {}
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                 }
 
                 Rect rect = getAnnotRect(annot);
@@ -139,7 +140,7 @@ public final class PdfFormReader {
                         checked, readOnly, required, tooltip, options, selectedIndices, rect));
             } finally {
                 try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
         return fields;
@@ -189,7 +190,7 @@ public final class PdfFormReader {
         public void close() {
             try {
                 DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle);
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             arena.close();
         }
     }

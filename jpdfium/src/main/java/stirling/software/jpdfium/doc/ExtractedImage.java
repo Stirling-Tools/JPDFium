@@ -3,12 +3,13 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.model.ColorSpaceType;
 import stirling.software.jpdfium.model.Rect;
 
+import stirling.software.jpdfium.internal.ImageCodecs;
+import stirling.software.jpdfium.model.ImageFormat;
+
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import javax.imageio.ImageIO;
 
 /**
  * An image extracted from a PDF page.
@@ -28,12 +29,12 @@ public record ExtractedImage(
 ) {
     public BufferedImage toBufferedImage() {
         if (decodedBytes == null || decodedBytes.length == 0 || width <= 0 || height <= 0) {
-            // Try to decode raw bytes via ImageIO as last resort
+            // Decode raw bytes through the active codec (libvips when
+            // present, ImageIO otherwise) as a last resort.
             if (rawBytes != null && rawBytes.length > 0) {
                 try {
-                    BufferedImage img = ImageIO.read(new ByteArrayInputStream(rawBytes));
-                    if (img != null) return img;
-                } catch (IOException _) {}
+                    return ImageCodecs.decodeImage(rawBytes);
+                } catch (IOException | RuntimeException _) {}
             }
             return new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
         }
@@ -63,7 +64,7 @@ public record ExtractedImage(
         if (rawBytes != null && rawBytes.length > 0 && suggestedExtension().equals(".jpg")) {
             Files.write(path, rawBytes);
         } else {
-            ImageIO.write(toBufferedImage(), "PNG", path.toFile());
+            Files.write(path, ImageCodecs.encode(toBufferedImage(), ImageFormat.PNG, 100));
         }
     }
 

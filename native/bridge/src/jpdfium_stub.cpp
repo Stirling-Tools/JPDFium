@@ -6,13 +6,21 @@
 
 #include "jpdfium.h"
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
 #include <fcntl.h>
+#include <io.h>
+#include <process.h>
+#include <share.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
 #endif
-
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <concepts>
@@ -21,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <regex>
 #include <string>
@@ -49,13 +58,40 @@ struct FileCloser {
 };
 using FilePtr = std::unique_ptr<std::FILE, FileCloser>;
 
+// Overwrite for caller-created outputs (Java staging files): the file is
+// known to exist as a regular file, so O_TRUNC is correct - but O_NOFOLLOW
+// still refuses a planted symlink swapped in after creation.
 static FilePtr safe_fopen_write(const char* path) {
 #if defined(_WIN32)
     return FilePtr(std::fopen(path, "wb"));
 #else
-    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) return FilePtr(nullptr);
-    return FilePtr(::fdopen(fd, "wb"));
+    FILE* f = ::fdopen(fd, "wb");
+    if (!f) ::close(fd);
+    return FilePtr(f);
+#endif
+}
+
+// Exclusive, no-follow creation for stub-generated sibling staging files:
+// same rationale as the real bridge (see jpdfium_document.cpp) - a
+// predictable sibling name must never truncate through a planted symlink.
+static FilePtr safe_fopen_exclusive(const char* path) {
+#if defined(_WIN32)
+    int fd = -1;
+    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT, _SH_DENYRW,
+                   _S_IREAD | _S_IWRITE) != 0) {
+        return FilePtr(nullptr);
+    }
+    FILE* f = ::_fdopen(fd, "wb");
+    if (!f) ::_close(fd);
+    return FilePtr(f);
+#else
+    int fd = ::open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_TRUNC, 0600);
+    if (fd < 0) return FilePtr(nullptr);
+    FILE* f = ::fdopen(fd, "wb");
+    if (!f) ::close(fd);
+    return FilePtr(f);
 #endif
 }
 
@@ -83,7 +119,75 @@ static FilePtr safe_fopen_write(const char* path) {
     return static_cast<uint8_t*>(std::calloc(len, 1));
 }
 
-// JsonBuf - minimal, allocation-cheap JSON writer.
+// A stub document is openable only when it looks like a PDF. Real PDFium
+// rejects anything without the header; a mock that accepts arbitrary bytes
+// would let failure-path tests pass vacuously instead of proving rejection.
+bool stub_is_pdf(const uint8_t* data, int64_t len) {
+    return data && len >= 5 && std::memcmp(data, "%PDF-", 5) == 0;
+}
+
+// Effective page count using the same rule as doc_page_count: a parsed
+// /Count wins, otherwise the 3-page fallback. Merge and extract use this so
+// their outputs verify against sums of Java-observed counts.
+int32_t stub_effective_pages(const uint8_t* data, int64_t len) {
+    if (!stub_is_pdf(data, len)) return 0;
+    std::string_view sv(reinterpret_cast<const char*>(data), static_cast<std::size_t>(len));
+    if (sv.find("/Type /Pages") != std::string_view::npos) {
+        if (auto countPos = sv.find("/Count "); countPos != std::string_view::npos) {
+            // Saturate instead of overflowing: a long digit run would wrap a
+            // signed int, which is undefined behaviour and halts UBSan.
+            int64_t parsed = 0;
+            for (const char* p = sv.data() + countPos + 7;
+                 p < sv.data() + sv.size() && *p >= '0' && *p <= '9'; ++p) {
+                parsed = parsed * 10 + (*p - '0');
+                if (parsed > INT32_MAX) return 0;
+            }
+            if (parsed > 0) return static_cast<int32_t>(parsed);
+        }
+    }
+    return 3;
+}
+
+// Minimal valid N-page PDF: correct header, /Count, and xref offsets so the
+// output reopens anywhere a real PDF does. Pages are empty; only the count
+// is meaningful from stub structural operations, and tests asserting content
+// must run against real natives.
+std::string stub_pdf_with_n_pages(int32_t n) {
+    if (n <= 0) return {};
+    std::string out = "%PDF-1.4\n";
+    std::vector<std::size_t> offsets;
+    offsets.push_back(0);
+    offsets.push_back(out.size());
+    out += "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n";
+    offsets.push_back(out.size());
+    std::string kids;
+    for (int32_t i = 0; i < n; ++i) {
+        if (i) kids += " ";
+        kids += std::to_string(3 + i) + " 0 R";
+    }
+    out += "2 0 obj<</Type /Pages/Kids[" + kids + "]/Count " + std::to_string(n) + ">>endobj\n";
+    for (int32_t i = 0; i < n; ++i) {
+        offsets.push_back(out.size());
+        out += std::to_string(3 + i) +
+               " 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n";
+    }
+    const std::size_t xref_at = out.size();
+    const int32_t total = 3 + n;
+    out += "xref\n0 " + std::to_string(total) + "\n";
+    char line[32];
+    std::snprintf(line, sizeof(line), "%010u 65535 f \n", 0u);
+    out += line;
+    for (int32_t i = 1; i < total; ++i) {
+        std::snprintf(line, sizeof(line), "%010zu 00000 n \n",
+                      offsets[static_cast<std::size_t>(i)]);
+        out += line;
+    }
+    out += "trailer<</Size " + std::to_string(total) + "/Root 1 0 R>>\nstartxref\n" +
+           std::to_string(xref_at) + "\n%%EOF";
+    return out;
+}
+
+// JsonBuf
 //
 // Backed by std::string with std::to_chars for numerics: no iostream, no
 // locale, no format-string parsing. Numbers render shortest-round-trip; the
@@ -192,6 +296,7 @@ struct StubDoc {
     int32_t unappliedRedactMarksCount = 0;
     std::unordered_map<int32_t, int> pagePendingMarks;
     std::string sanitizeReport;
+    int32_t pageCount = 3;
 
     int32_t unappliedMarks() const {
         return unappliedRedactMarksCount;
@@ -223,10 +328,57 @@ int64_t g_next_flash = 88001;
 
 // Core Document Functions
 
-int32_t jpdfium_init() {
+int32_t jpdfium_init_ex(int32_t) noexcept {
+    return 0;
+}
+
+uint32_t jpdfium_abi_version() JPDFIUM_NOEXCEPT {
+    return JPDFIUM_ABI_VERSION;
+}
+
+int64_t jpdfium_abi_query(int32_t query) JPDFIUM_NOEXCEPT {
+    // The stub links no PDFium headers; these mirror FS_RECTF
+    // {float left, top, right, bottom}, FS_MATRIX {a,b,c,d,e,f}, and
+    // FPDF_FILEWRITE {version + WriteBlock} geometry exactly enough for the
+    // Java handshake to distinguish stub from real builds.
+    switch (query) {
+        case JPDFIUM_ABI_QUERY_PTR_SIZE:
+            return static_cast<int64_t>(sizeof(void*));
+        case JPDFIUM_ABI_QUERY_RECTF_SIZE:
+            return 16;
+        case JPDFIUM_ABI_QUERY_RECTF_RIGHT_OFFSET:
+            return 8;
+        case JPDFIUM_ABI_QUERY_ULONG_SIZE:
+            return static_cast<int64_t>(sizeof(unsigned long));
+        case JPDFIUM_ABI_QUERY_RECTF_LEFT_OFFSET:
+            return 0;
+        case JPDFIUM_ABI_QUERY_RECTF_BOTTOM_OFFSET:
+            return 12;
+        case JPDFIUM_ABI_QUERY_RECTF_TOP_OFFSET:
+            return 4;
+        case JPDFIUM_ABI_QUERY_MATRIX_SIZE:
+            return 24;
+        case JPDFIUM_ABI_QUERY_FILEWRITE_SIZE:
+            // version(int) + padding + function pointer. Cast the operand, not
+            // the product: sizeof yields size_t, and casting the widened
+            // product to int64_t is a misplaced widening cast.
+            return static_cast<int64_t>(sizeof(void*)) * 2;
+        case JPDFIUM_ABI_QUERY_FILEWRITE_VERSION:
+            return 1;
+        case JPDFIUM_ABI_QUERY_HAS_SKIA:
+        case JPDFIUM_ABI_QUERY_HAS_QPDF:
+            return 0;
+        default:
+            return -1;
+    }
+}
+int32_t jpdfium_active_renderer() noexcept {
+    return 0;
+}
+int32_t jpdfium_init() noexcept {
     return JPDFIUM_OK;
 }
-void jpdfium_destroy() {}
+void jpdfium_destroy() noexcept {}
 
 int32_t jpdfium_doc_create(int64_t* handle) {
     if (!handle) return JPDFIUM_ERR_INVALID;
@@ -237,19 +389,70 @@ int32_t jpdfium_doc_create(int64_t* handle) {
 }
 
 int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
+    if (!path || !*path || !handle) return JPDFIUM_ERR_INVALID;
+    // Read the file to sniff the page count, so path-opened documents report
+    // the same counts as byte-opened ones. Content itself is not retained;
+    // saves re-read the path like the byte path keeps its copy.
+    FilePtr f(std::fopen(path, "rb"));
+    if (!f) return JPDFIUM_ERR_IO;
+    std::fseek(f.get(), 0, SEEK_END);
+    const long sz = std::ftell(f.get());
+    if (sz < 0) return JPDFIUM_ERR_IO;
+    std::vector<uint8_t> bytes(static_cast<std::size_t>(sz));
+    std::fseek(f.get(), 0, SEEK_SET);
+    if (!bytes.empty() && std::fread(bytes.data(), 1, bytes.size(), f.get()) != bytes.size()) {
+        return JPDFIUM_ERR_IO;
+    }
+    if (!stub_is_pdf(bytes.data(), static_cast<int64_t>(bytes.size()))) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
     StubDoc doc;
-    doc.path = path ? path : "";
+    doc.path = path;
+    const int32_t sniffed = stub_effective_pages(bytes.data(), static_cast<int64_t>(bytes.size()));
+    if (sniffed > 0) doc.pageCount = sniffed;
     g_docs[*handle] = std::move(doc);
     return JPDFIUM_OK;
 }
 
 int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle) {
     if (!data || !handle || len <= 0) return JPDFIUM_ERR_INVALID;
+    if (!stub_is_pdf(data, len)) return JPDFIUM_ERR_INVALID;
     *handle = g_next_doc++;
     StubDoc doc;
     doc.bytes.assign(data, data + len);
-    g_docs[*handle] = std::move(doc);
+
+    // Sniff page count if present in PDF (/Count N or /Type /Page)
+    std::string_view sv(reinterpret_cast<const char*>(data), static_cast<std::size_t>(len));
+    if (sv.find("/Type /Pages") != std::string_view::npos) {
+        auto countPos = sv.find("/Count ");
+        if (countPos != std::string_view::npos) {
+            // Saturate like stub_effective_pages: a long digit run would wrap
+            // a signed int, which is undefined behaviour and halts UBSan.
+            int64_t parsedCount = 0;
+            const char* p = sv.data() + countPos + 7;
+            while (p < sv.data() + sv.size() && *p >= '0' && *p <= '9') {
+                parsedCount = parsedCount * 10 + (*p - '0');
+                if (parsedCount > INT32_MAX) break;
+                ++p;
+            }
+            if (parsedCount > 0 && parsedCount <= INT32_MAX) {
+                doc.pageCount = static_cast<int32_t>(parsedCount);
+            }
+        }
+    }
+    int64_t newHandle = *handle;
+    g_docs[newHandle] = std::move(doc);
+    // Empty-page shortcut: a single empty stream must not mark a multi-page
+    // document empty (populated pages would report zero chars). Only apply
+    // when the fixture shows no text content at all (no BT/Tj operators).
+    bool hasEmptyStream = sv.find("stream\nendstream") != std::string_view::npos ||
+                          sv.find("stream\r\nendstream") != std::string_view::npos ||
+                          sv.find("/Length 0") != std::string_view::npos;
+    bool hasTextOps = sv.find("BT") != std::string_view::npos ||
+                      sv.find("Tj") != std::string_view::npos ||
+                      sv.find("TJ") != std::string_view::npos;
+    if (hasEmptyStream && !hasTextOps) {
+        g_page_text[newHandle] = "";
+    }
     return JPDFIUM_OK;
 }
 
@@ -259,16 +462,33 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
 }
 
 int32_t jpdfium_doc_open_protected(const char* path, const char*, int64_t* handle) {
-    *handle = g_next_doc++;
-    StubDoc doc;
-    doc.path = path ? path : "";
-    g_docs[*handle] = std::move(doc);
+    return jpdfium_doc_open(path, handle);
+}
+
+int32_t jpdfium_doc_page_count(int64_t handle, int32_t* count) {
+    if (!count) return JPDFIUM_ERR_INVALID;
+    auto it = g_docs.find(handle);
+    if (it == g_docs.end()) return JPDFIUM_ERR_INVALID;
+    *count = it->second.pageCount > 0 ? it->second.pageCount : 3;
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_doc_page_count(int64_t, int32_t* count) {
-    *count = 3;
-    return JPDFIUM_OK;
+// Process id, per platform. Windows has no getpid(); _getpid() is the MSVC and
+// MinGW spelling and lives in <process.h>.
+long stub_pid() {
+#if defined(_WIN32)
+    return static_cast<long>(_getpid());
+#else
+    return static_cast<long>(::getpid());
+#endif
+}
+
+// Sibling staging + rename publish, mirroring the real bridge: a refused save
+// must never remove or truncate a file that already exists at the destination.
+bool stub_publish_staged(const char* staging, const char* destination) {
+    if (std::rename(staging, destination) == 0) return true;
+    std::remove(staging);
+    return false;
 }
 
 int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
@@ -276,6 +496,13 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
     if (it == g_docs.end()) return JPDFIUM_OK;
     const auto& doc = it->second;
     if (doc.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    // Alias protection, same as the real bridge: writing over the document's
+    // own backing file would destroy the input it is still reading from. The
+    // stub tracks sourcePath, so it can express this.
+    if (!doc.path.empty() && output_path &&
+        doc.path == std::filesystem::absolute(output_path).lexically_normal().string()) {
+        return JPDFIUM_ERR_INVALID;
+    }
 
     if (it->second.hasMutatedRedaction && it->second.sanitizeOnSave) {
         it->second.sanitizeReport =
@@ -284,21 +511,52 @@ int32_t jpdfium_doc_save(int64_t handle, const char* output_path) {
             "0}";
     }
 
+    // Serialize into a sibling staging file and publish by rename so a refused
+    // save leaves an existing destination untouched, as the real bridge does.
+    // Sized read, like every other copy in this stub: a chunked read loop
+    // leaves the analyzer unable to prove the stream position stays valid.
+    std::vector<uint8_t> payload;
     if (!doc.path.empty()) {
         FilePtr in(std::fopen(doc.path.c_str(), "rb"));
-        FilePtr out = safe_fopen_write(output_path);
-        if (in && out) {
-            std::array<char, 8192> buf{};
-            while (true) {
-                const std::size_t n = std::fread(buf.data(), 1, buf.size(), in.get());
-                if (n == 0) break;
-                std::fwrite(buf.data(), 1, n, out.get());
+        if (in) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            std::fseek(in.get(), 0, SEEK_SET);
+            if (sz < 0) return JPDFIUM_ERR_IO;
+            payload.resize(static_cast<std::size_t>(sz));
+            if (!payload.empty() &&
+                std::fread(payload.data(), 1, payload.size(), in.get()) != payload.size()) {
+                return JPDFIUM_ERR_IO;
             }
         }
     } else if (!doc.bytes.empty()) {
-        if (FilePtr out = safe_fopen_write(output_path); out)
-            std::fwrite(doc.bytes.data(), 1, doc.bytes.size(), out.get());
+        payload.assign(doc.bytes.begin(), doc.bytes.end());
     }
+    // Unique per attempt: a fixed suffix would let two concurrent saves to
+    // the same destination clobber each other's staging file and then rename
+    // it away. Exclusive creation turns a planted entry into a retry with a
+    // fresh suffix instead of a truncation through it; persistent contention
+    // still fails closed below.
+    static std::atomic<unsigned> counter{0};
+    std::string staging;
+    if (!payload.empty()) {
+        FilePtr out;
+        for (int attempt = 0; attempt < 32 && !out; ++attempt) {
+            const unsigned seq = counter.fetch_add(1, std::memory_order_relaxed);
+            staging = std::string(output_path) + ".jpdfium-save-" + std::to_string(stub_pid()) +
+                      "-" + std::to_string(seq) + ".tmp";
+            out = safe_fopen_exclusive(staging.c_str());
+            if (!out && errno != EEXIST) break;
+        }
+        if (!out) return JPDFIUM_ERR_IO;
+        if (std::fwrite(payload.data(), 1, payload.size(), out.get()) != payload.size()) {
+            out.reset();
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        out.reset();
+    }
+    if (!stub_publish_staged(staging.c_str(), output_path)) return JPDFIUM_ERR_IO;
     return JPDFIUM_OK;
 }
 
@@ -346,40 +604,103 @@ int32_t jpdfium_doc_save_bytes(int64_t handle, uint8_t** data, int64_t* len) {
     return return_stub();
 }
 
-void jpdfium_doc_close(int64_t handle) {
+int32_t jpdfium_doc_save_to_file(int64_t handle, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    if (out_bytes) *out_bytes = 0;
+    if (!path || !*path) return JPDFIUM_ERR_INVALID;
+    if (max_bytes < 0) return JPDFIUM_ERR_INVALID;
+    auto it = g_docs.find(handle);
+    if (it == g_docs.end()) return JPDFIUM_OK;
+    const auto& doc = it->second;
+
+    // Enforce the budget before publishing, exactly like the real bridge: a
+    // refused save must leave the destination untouched, not remove it.
+    int64_t size = 0;
+    if (!doc.path.empty()) {
+        FilePtr in(std::fopen(doc.path.c_str(), "rb"));
+        if (in) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            if (sz < 0) return JPDFIUM_ERR_IO;
+            size = sz;
+        }
+    } else if (!doc.bytes.empty()) {
+        size = static_cast<int64_t>(doc.bytes.size());
+    }
+    if (max_bytes > 0 && size > max_bytes) return JPDFIUM_ERR_TOO_LARGE;
+
+    int32_t rc = jpdfium_doc_save(handle, path);
+    if (rc != JPDFIUM_OK) return rc;
+    if (FilePtr in = FilePtr(std::fopen(path, "rb")); in) {
+        if (out_bytes) {
+            std::fseek(in.get(), 0, SEEK_END);
+            const long sz = std::ftell(in.get());
+            if (sz > 0) *out_bytes = static_cast<int64_t>(sz);
+        }
+        return JPDFIUM_OK;
+    }
+    // jpdfium_doc_save stub may succeed without writing (unknown handle);
+    // report success with zero bytes only when the file truly exists.
+    return JPDFIUM_ERR_IO;
+}
+
+void jpdfium_doc_close(int64_t handle) noexcept {
     g_docs.erase(handle);
 }
 
 // Page Functions
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
+    if (!handle) return JPDFIUM_ERR_INVALID;
+    auto dit = g_docs.find(doc);
+    if (dit == g_docs.end()) return JPDFIUM_ERR_INVALID;
+    const int32_t count = dit->second.pageCount > 0 ? dit->second.pageCount : 3;
+    if (idx < 0 || idx >= count) return JPDFIUM_ERR_NOT_FOUND;
     *handle = g_next_page++;
     g_page_doc[*handle] = doc;  // remember owning doc for page_doc_raw_handle
     g_page_idx[*handle] = idx;
-    auto dit = g_docs.find(doc);
-    if (dit != g_docs.end()) {
+    {
         auto pit = dit->second.pagePendingMarks.find(idx);
         if (pit != dit->second.pagePendingMarks.end()) {
             g_page_annots[*handle] = pit->second;
         }
     }
+    if (auto tit = g_page_text.find(doc); tit != g_page_text.end()) {
+        g_page_text[*handle] = tit->second;
+    }
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_page_width(int64_t, float* w) {
+int32_t jpdfium_page_width(int64_t page, float* w) {
+    if (!w || g_page_doc.find(page) == g_page_doc.end()) return JPDFIUM_ERR_INVALID;
     *w = 595.0f;
     return JPDFIUM_OK;
 }
-int32_t jpdfium_page_height(int64_t, float* h) {
+int32_t jpdfium_page_height(int64_t page, float* h) {
+    if (!h || g_page_doc.find(page) == g_page_doc.end()) return JPDFIUM_ERR_INVALID;
+    *h = 842.0f;
+    return JPDFIUM_OK;
+}
+int32_t jpdfium_page_info(int64_t page, float* w, float* h) {
+    if (!w || !h || g_page_doc.find(page) == g_page_doc.end()) return JPDFIUM_ERR_INVALID;
+    *w = 595.0f;
     *h = 842.0f;
     return JPDFIUM_OK;
 }
 
-void jpdfium_page_close(int64_t handle) {
+void jpdfium_page_close(int64_t handle) noexcept {
     if (auto dit = g_page_doc.find(handle); dit != g_page_doc.end()) {
         if (auto pit = g_page_idx.find(handle); pit != g_page_idx.end()) {
             if (auto ait = g_page_annots.find(handle); ait != g_page_annots.end()) {
-                g_docs[dit->second].pagePendingMarks[pit->second] = ait->second;
+                // find(), not operator[]: this close path is noexcept, and
+                // inserting into a map could throw and terminate the process.
+                auto docIt = g_docs.find(dit->second);
+                if (docIt != g_docs.end()) {
+                    auto pendingIt = docIt->second.pagePendingMarks.find(pit->second);
+                    if (pendingIt != docIt->second.pagePendingMarks.end()) {
+                        pendingIt->second = ait->second;
+                    }
+                }
             }
         }
     }
@@ -389,20 +710,73 @@ void jpdfium_page_close(int64_t handle) {
     g_page_idx.erase(handle);
 }
 
-int32_t jpdfium_render_page(int64_t, int32_t, uint8_t** rgba, int32_t* w, int32_t* h) {
-    // Small fake frame: the stub only needs to exercise the bridge contract
-    // (out-params, buffer ownership, free path). Keeping it small keeps the
-    // JMH microbenchmarks focused on the Java/FFM call-path cost instead of
-    // a large memset + byte[] copy of data that never represents real
-    // rendering work.
-    constexpr int dim = 16;
-    *w = dim;
-    *h = dim;
-    *rgba = alloc_zeroed(static_cast<std::size_t>(dim) * dim * 4);
+int32_t jpdfium_render_page(int64_t, int32_t dpi, uint8_t** rgba, int32_t* w, int32_t* h) {
+    if (!rgba || !w || !h || dpi == INT32_MIN) return JPDFIUM_ERR_INVALID;
+    int32_t target_dpi = dpi < 0 ? -dpi : (dpi > 0 ? dpi : 72);
+    int32_t width = static_cast<int32_t>(595.0f * static_cast<float>(target_dpi) / 72.0f);
+    int32_t height = static_cast<int32_t>(842.0f * static_cast<float>(target_dpi) / 72.0f);
+    if (width <= 0) width = 1;
+    if (height <= 0) height = 1;
+    *w = width;
+    *h = height;
+    *rgba = alloc_zeroed(static_cast<std::size_t>(width) * height * 4);
+    return *rgba ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_render_page_flags(int64_t page, int32_t dpi, int32_t /*flags*/, uint8_t** rgba,
+                                  int32_t* w, int32_t* h) JPDFIUM_NOEXCEPT {
+    return jpdfium_render_page(page, dpi, rgba, w, h);
+}
+
+static bool stubRenderArgsValid(uint8_t* target, uint64_t target_capacity, int32_t width,
+                                int32_t height, int32_t stride, uint64_t* requiredOut) {
+    if (!target || width <= 0 || height <= 0 || stride <= 0) return false;
+    int64_t minStride = static_cast<int64_t>(width) * 4;
+    if (minStride > INT32_MAX || static_cast<int64_t>(stride) < minStride) return false;
+    uint64_t required =
+        static_cast<uint64_t>(static_cast<int64_t>(stride)) * static_cast<uint64_t>(height);
+    if (requiredOut) *requiredOut = required;
+    return target_capacity >= required;
+}
+
+int32_t jpdfium_render_page_into(void*, uint8_t* target, uint64_t target_capacity, int32_t width,
+                                 int32_t height, int32_t stride, int32_t) {
+    uint64_t required = 0;
+    if (!stubRenderArgsValid(target, target_capacity, width, height, stride, &required))
+        return JPDFIUM_ERR_INVALID;
+    std::memset(target, 0xFF, static_cast<std::size_t>(required));
     return JPDFIUM_OK;
 }
 
-void jpdfium_free_buffer(uint8_t* buf) {
+int32_t jpdfium_render_page_form_into(void* page, void*, uint8_t* target, uint64_t target_capacity,
+                                      int32_t width, int32_t height, int32_t stride,
+                                      int32_t flags) {
+    return jpdfium_render_page_into(page, target, target_capacity, width, height, stride, flags);
+}
+
+int32_t jpdfium_render_page_progressive_start(void*, uint8_t* target, uint64_t target_capacity,
+                                              int32_t width, int32_t height, int32_t stride,
+                                              int32_t, void* cancel_flag) JPDFIUM_NOEXCEPT {
+    uint64_t required = 0;
+    if (!stubRenderArgsValid(target, target_capacity, width, height, stride, &required))
+        return JPDFIUM_ERR_INVALID;
+    std::memset(target, 0xFF, static_cast<std::size_t>(required));
+    if (cancel_flag && *static_cast<const int32_t*>(cancel_flag) != 0) {
+        return JPDFIUM_RENDER_TOBECONTINUED;
+    }
+    return JPDFIUM_RENDER_DONE;
+}
+
+int32_t jpdfium_render_page_progressive_continue(void*, void* cancel_flag) JPDFIUM_NOEXCEPT {
+    if (cancel_flag && *static_cast<const int32_t*>(cancel_flag) != 0) {
+        return JPDFIUM_RENDER_TOBECONTINUED;
+    }
+    return JPDFIUM_RENDER_DONE;
+}
+
+void jpdfium_render_page_progressive_close(void*) JPDFIUM_NOEXCEPT {}
+
+void jpdfium_free_buffer(uint8_t* buf) noexcept {
     std::free(buf);
 }
 
@@ -455,7 +829,7 @@ int32_t jpdfium_text_find(int64_t, const char*, char** json) {
     return JPDFIUM_OK;
 }
 
-void jpdfium_free_string(char* s) {
+void jpdfium_free_string(char* s) noexcept {
     std::free(s);
 }
 
@@ -517,8 +891,8 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t word_c
     return JPDFIUM_OK;
 }
 
-int32_t jpdfium_page_flatten(int64_t) noexcept {
-    return JPDFIUM_OK;
+int32_t jpdfium_page_flatten(int64_t page) noexcept {
+    return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
     return JPDFIUM_OK;
@@ -584,7 +958,7 @@ int32_t jpdfium_pcre2_match_all(int64_t handle, const char* text, char** json_re
     return JPDFIUM_OK;
 }
 
-void jpdfium_pcre2_free(int64_t handle) {
+void jpdfium_pcre2_free(int64_t handle) noexcept {
     g_pcre.erase(handle);
 }
 
@@ -659,7 +1033,7 @@ int32_t jpdfium_flashtext_find(int64_t handle, const char* text, char** json_res
     return JPDFIUM_OK;
 }
 
-void jpdfium_flashtext_free(int64_t handle) {
+void jpdfium_flashtext_free(int64_t handle) noexcept {
     g_flash.erase(handle);
 }
 
@@ -709,6 +1083,19 @@ int32_t jpdfium_font_subset(const uint8_t* font_data, int64_t font_len, const ui
     *out_len = font_len;
     *out_data = dup_bytes(font_data, static_cast<std::size_t>(font_len));
     return *out_data ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_font_covers_text(const uint8_t*, int64_t, const int32_t*, int32_t count,
+                                 uint8_t* out_covered) {
+    if (!out_covered || count <= 0) return JPDFIUM_ERR_INVALID;
+    std::memset(out_covered, 1, static_cast<std::size_t>(count));
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_text_shape(const uint8_t*, int64_t, const char*, float, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("[]");
+    return JPDFIUM_OK;
 }
 
 // Glyph-Level Redaction stub
@@ -899,18 +1286,21 @@ int32_t jpdfium_doc_save_incremental(int64_t handle, uint8_t** data, int64_t* le
 }
 
 static uint64_t g_stub_raw_doc = 0;
-static uint64_t g_stub_raw_page = 0;
 
-int64_t jpdfium_doc_raw_handle(int64_t) {
+int64_t jpdfium_doc_raw_handle(int64_t) noexcept {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
 }
 
-int64_t jpdfium_page_raw_handle(int64_t) {
-    return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_page));
+int64_t jpdfium_page_raw_handle(int64_t page) noexcept {
+    return page;
 }
 
-int64_t jpdfium_page_doc_raw_handle(int64_t) {
+int64_t jpdfium_page_doc_raw_handle(int64_t) noexcept {
     return static_cast<int64_t>(reinterpret_cast<uintptr_t>(&g_stub_raw_doc));
+}
+
+int32_t jpdfium_has_rust(void) {
+    return 0;
 }
 
 int32_t jpdfium_rust_compress_pdf(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
@@ -927,17 +1317,75 @@ int32_t jpdfium_rust_resize_pixels(const uint8_t*, int64_t, int32_t, int32_t, in
     return fail_native_bytes(out_ptr, out_len);
 }
 
+int32_t jpdfium_rust_unpack_pixels(const uint8_t*, int32_t, int32_t, int64_t, int32_t, uint32_t*,
+                                   int64_t) {
+    return JPDFIUM_ERR_NATIVE;
+}
+
 int32_t jpdfium_rust_compress_png(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len,
                                   int32_t) {
     return fail_native_bytes(out_ptr, out_len);
 }
 
-void jpdfium_rust_free(uint8_t*) {
-    // No-op: the stub never allocates a Rust-owned buffer.
+int32_t jpdfium_rust_svg_to_rgba(const uint8_t*, int64_t, int32_t width, int32_t height,
+                                 uint8_t** out_ptr, int64_t* out_len, int32_t* out_w,
+                                 int32_t* out_h) {
+    if (!out_ptr || !out_len) return JPDFIUM_ERR_INVALID;
+    int32_t rw = width > 0 ? width : 16;
+    int32_t rh = height > 0 ? height : 16;
+    if (out_w) *out_w = rw;
+    if (out_h) *out_h = rh;
+    *out_len = static_cast<int64_t>(rw) * rh * 4;
+    *out_ptr = alloc_zeroed(static_cast<std::size_t>(*out_len));
+    return *out_ptr ? 0 : JPDFIUM_ERR_NATIVE;
+}
+
+void jpdfium_rust_free(uint8_t* p) {
+    std::free(p);
 }
 
 int32_t jpdfium_brotli_to_flate(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
     return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_brotli_decode(const uint8_t* compressed, int64_t compressedLen, uint8_t** output,
+                              int64_t* outputLen) {
+    if (!compressed || compressedLen <= 0 || !output || !outputLen) return JPDFIUM_ERR_INVALID;
+    *outputLen = compressedLen;
+    *output = dup_bytes(compressed, static_cast<std::size_t>(compressedLen));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_validate_icc_profile(const uint8_t*, int64_t, int32_t, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("{\"valid\":true,\"components\":3,\"profile_class\":\"display\"}");
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_generate_replacement_icc(int32_t, uint8_t** output, int64_t* outputLen) {
+    if (!output || !outputLen) return JPDFIUM_ERR_INVALID;
+    constexpr uint8_t fake_icc[4] = {0, 0, 0, 4};
+    *outputLen = sizeof(fake_icc);
+    *output = dup_bytes(fake_icc, sizeof(fake_icc));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_validate_jpx_stream(const uint8_t*, int64_t, char** json) {
+    if (!json) return JPDFIUM_ERR_INVALID;
+    *json = dup_cstring("{\"valid\":true,\"width\":100,\"height\":100,\"components\":3}");
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_jpx_to_raw(const uint8_t*, int64_t, uint8_t** output, int64_t* outputLen,
+                           int32_t* width, int32_t* height, int32_t* components) {
+    if (!output || !outputLen || !width || !height || !components) return JPDFIUM_ERR_INVALID;
+    constexpr int32_t w = 16, h = 16, comp = 3;
+    *width = w;
+    *height = h;
+    *components = comp;
+    *outputLen = static_cast<int64_t>(w) * h * comp;
+    *output = alloc_zeroed(static_cast<std::size_t>(*outputLen));
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
 }
 
 int32_t jpdfium_pdfio_repair(const uint8_t*, int64_t, uint8_t** out_ptr, int64_t* out_len) {
@@ -985,6 +1433,52 @@ int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_p
     return -1;
 }
 
+// File-backed mocks mirror the real bridge surface so the Java staging,
+// publication, alias, and verification plumbing runs under the stub.
+// optimize/sanitize preserve page counts, so byte copies are count-correct;
+// merge/extract synthesize count-correct documents like their memory twins.
+int32_t stub_copy_pdf_file(const char* in_path, const char* out_path) {
+    if (!in_path || !*in_path || !out_path || !*out_path) return -1;
+    FilePtr in(std::fopen(in_path, "rb"));
+    if (!in) return -1;
+    FilePtr out = safe_fopen_write(out_path);
+    if (!out) return -1;
+    std::array<char, 8192> buf{};
+    bool header_checked = false;
+    while (true) {
+        const std::size_t n = std::fread(buf.data(), 1, buf.size(), in.get());
+        if (n == 0) break;
+        if (!header_checked) {
+            if (n < 5 || std::memcmp(buf.data(), "%PDF-", 5) != 0) {
+                out.reset();
+                std::remove(out_path);
+                return -1;
+            }
+            header_checked = true;
+        }
+        if (std::fwrite(buf.data(), 1, n, out.get()) != n) {
+            out.reset();
+            std::remove(out_path);
+            return -1;
+        }
+    }
+    if (!header_checked) {
+        out.reset();
+        std::remove(out_path);
+        return -1;
+    }
+    return 0;
+}
+
+int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, int32_t, int32_t,
+                                   int32_t, int32_t) {
+    return stub_copy_pdf_file(in_path, out_path);
+}
+
+int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path, int32_t) {
+    return stub_copy_pdf_file(in_path, out_path);
+}
+
 int32_t jpdfium_qpdf_sanitize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
                               int64_t* out_len, int32_t) {
     if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
@@ -1001,30 +1495,109 @@ int32_t jpdfium_qpdf_sanitize(const uint8_t* in, int64_t in_len, uint8_t** out_p
 
 int32_t jpdfium_qpdf_merge(const uint8_t* const* inputs, const int64_t* inputLens, int32_t count,
                            uint8_t** out_ptr, int64_t* out_len) {
-    if (out_ptr && out_len && inputs && inputLens && count > 0 && inputs[0] && inputLens[0] >= 4) {
-        if (auto* p = dup_bytes(inputs[0], static_cast<std::size_t>(inputLens[0]))) {
-            *out_ptr = p;
-            *out_len = inputLens[0];
-            return 0;
-        }
-    }
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
+    if (!inputs || !inputLens || count <= 0 || !out_ptr || !out_len) return -1;
+    // Page-count-correct mock merge: real QPDF concatenates pages, which the
+    // stub cannot parse out of content streams, so it emits a minimal valid
+    // document with the summed count. Content assertions need real natives.
+    int64_t total = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        if (!inputs[i] || inputLens[i] <= 0) return -1;
+        const int32_t pages = stub_effective_pages(inputs[i], inputLens[i]);
+        if (pages <= 0) return -1;
+        total += pages;
+    }
+    if (total <= 0 || total > INT32_MAX) return -1;
+    const std::string pdf = stub_pdf_with_n_pages(static_cast<int32_t>(total));
+    if (pdf.empty()) return -1;
+    if (auto* p = dup_bytes(pdf.data(), pdf.size())) {
+        *out_ptr = p;
+        *out_len = static_cast<int64_t>(pdf.size());
+        return 0;
+    }
     return -1;
 }
 
-int32_t jpdfium_qpdf_extract_pages(const uint8_t* in, int64_t in_len, const int32_t*, int32_t,
+int32_t jpdfium_qpdf_extract_pages(const uint8_t* in, int64_t in_len,
+                                   const int32_t* /*pageIndices*/, int32_t pageCount,
                                    uint8_t** out_ptr, int64_t* out_len) {
-    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
-        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
-            *out_ptr = p;
-            *out_len = in_len;
-            return 0;
-        }
-    }
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
+    if (!in || !out_ptr || !out_len || pageCount <= 0) return -1;
+    // Same count-correct contract as merge: the mock returns a valid document
+    // with exactly the requested page count, not a content subset.
+    if (stub_effective_pages(in, in_len) <= 0) return -1;
+    const std::string pdf = stub_pdf_with_n_pages(pageCount);
+    if (pdf.empty()) return -1;
+    if (auto* p = dup_bytes(pdf.data(), pdf.size())) {
+        *out_ptr = p;
+        *out_len = static_cast<int64_t>(pdf.size());
+        return 0;
+    }
     return -1;
+}
+
+int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_t count, const char* out_path) {
+    if (!paths || count <= 0 || !out_path || !*out_path) return -1;
+    // Same count-correct contract as the memory twin: sum the sniffed input
+    // counts into one minimal valid document. Content stays stub-only.
+    int64_t total = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        const char* path = paths[i];
+        if (!path || !*path) return -1;
+        FilePtr in(std::fopen(path, "rb"));
+        if (!in) return -1;
+        std::fseek(in.get(), 0, SEEK_END);
+        const long sz = std::ftell(in.get());
+        if (sz < 0) return -1;
+        std::vector<uint8_t> bytes(static_cast<std::size_t>(sz));
+        std::fseek(in.get(), 0, SEEK_SET);
+        if (!bytes.empty() && std::fread(bytes.data(), 1, bytes.size(), in.get()) != bytes.size()) {
+            return -1;
+        }
+        const int32_t pages =
+            stub_effective_pages(bytes.data(), static_cast<int64_t>(bytes.size()));
+        if (pages <= 0) return -1;
+        total += pages;
+    }
+    if (total <= 0 || total > INT32_MAX) return -1;
+    const std::string pdf = stub_pdf_with_n_pages(static_cast<int32_t>(total));
+    if (pdf.empty()) return -1;
+    FilePtr out = safe_fopen_write(out_path);
+    if (!out) return -1;
+    if (std::fwrite(pdf.data(), 1, pdf.size(), out.get()) != pdf.size()) {
+        out.reset();
+        std::remove(out_path);
+        return -1;
+    }
+    return 0;
+}
+
+int32_t jpdfium_qpdf_extract_pages_file(const char* in_path, const int32_t* /*pageIndices*/,
+                                        int32_t pageCount, const char* out_path) {
+    if (!in_path || !*in_path || !out_path || !*out_path || pageCount <= 0) return -1;
+    FilePtr in(std::fopen(in_path, "rb"));
+    if (!in) return -1;
+    std::fseek(in.get(), 0, SEEK_END);
+    const long sz = std::ftell(in.get());
+    if (sz < 0) return -1;
+    std::vector<uint8_t> bytes(static_cast<std::size_t>(sz));
+    std::fseek(in.get(), 0, SEEK_SET);
+    if (!bytes.empty() && std::fread(bytes.data(), 1, bytes.size(), in.get()) != bytes.size()) {
+        return -1;
+    }
+    if (stub_effective_pages(bytes.data(), static_cast<int64_t>(bytes.size())) <= 0) return -1;
+    const std::string pdf = stub_pdf_with_n_pages(pageCount);
+    if (pdf.empty()) return -1;
+    FilePtr out = safe_fopen_write(out_path);
+    if (!out) return -1;
+    if (std::fwrite(pdf.data(), 1, pdf.size(), out.get()) != pdf.size()) {
+        out.reset();
+        std::remove(out_path);
+        return -1;
+    }
+    return 0;
 }
 
 int32_t jpdfium_qpdf_encrypt(const uint8_t* in, int64_t in_len, const char*, const char*, int32_t,
@@ -1053,4 +1626,89 @@ int32_t jpdfium_qpdf_decrypt(const uint8_t* in, int64_t in_len, const char*, uin
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
     return -1;
+}
+
+int32_t jpdfium_signature_count(int64_t, int32_t* count) {
+    if (count) *count = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_revision_count(int64_t, int32_t* count) {
+    if (count) *count = -1;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_info(int64_t, int32_t, char** json) {
+    if (json) *json = nullptr;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+int32_t jpdfium_signature_digest(int64_t, int32_t, int32_t, uint8_t** digest, int64_t* len) {
+    if (digest) *digest = nullptr;
+    if (len) *len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_image_to_pdf(const uint8_t*, int64_t, float, float, float, int32_t, int32_t,
+                             int64_t* doc_handle) {
+    if (!doc_handle) return JPDFIUM_ERR_INVALID;
+    *doc_handle = g_next_doc++;
+    StubDoc doc;
+    doc.pageCount = 1;
+    g_docs[*doc_handle] = std::move(doc);
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint8_t*, int64_t, float, float, float,
+                                   int32_t, int32_t, int32_t) {
+    auto it = g_docs.find(doc_handle);
+    if (it == g_docs.end()) return JPDFIUM_ERR_INVALID;
+    it->second.pageCount++;
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_import_n_pages_to_one(void*, float, float, int32_t, int32_t, uint8_t** output,
+                                      int64_t* outputLen) {
+    constexpr std::string_view stub = "%PDF-1.4 stub n-up";
+    if (!output || !outputLen) return JPDFIUM_ERR_INVALID;
+    *outputLen = static_cast<int64_t>(stub.size());
+    *output = dup_bytes(stub.data(), stub.size());
+    return *output ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+// PDFium FPDFText_* stub symbols for unit tests running against stub bridge
+extern "C" {
+
+JPDFIUM_EXPORT void* FPDFText_LoadPage(void* page) {
+    return page;
+}
+
+JPDFIUM_EXPORT void FPDFText_ClosePage(void*) {}
+
+JPDFIUM_EXPORT int FPDFText_CountChars(void* page) {
+    if (page) {
+        int64_t handle = static_cast<int64_t>(reinterpret_cast<uintptr_t>(page));
+        if (auto it = g_page_text.find(handle); it != g_page_text.end()) {
+            return static_cast<int>(it->second.size());
+        }
+    }
+    return static_cast<int>(STUB_TEXT.size());
+}
+
+JPDFIUM_EXPORT int FPDFText_GetText(void* page, int start_index, int count,
+                                    unsigned short* result) {
+    if (!result || start_index < 0 || count < 0) return 0;
+    std::string_view text = STUB_TEXT;
+    if (page) {
+        int64_t handle = static_cast<int64_t>(reinterpret_cast<uintptr_t>(page));
+        if (auto it = g_page_text.find(handle); it != g_page_text.end()) {
+            text = it->second;
+        }
+    }
+    int len = static_cast<int>(text.size());
+    if (start_index >= len) return 0;
+    int to_copy = std::min(count, len - start_index);
+    for (int i = 0; i < to_copy; ++i) {
+        result[i] = static_cast<unsigned short>(static_cast<unsigned char>(text[start_index + i]));
+    }
+    result[to_copy] = 0;
+    return to_copy + 1;
+}
 }

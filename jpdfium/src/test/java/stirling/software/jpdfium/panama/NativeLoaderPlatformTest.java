@@ -20,7 +20,7 @@ class NativeLoaderPlatformTest {
     void detectPlatformReturnsKnownKey() {
         String p = NativeLoader.detectPlatform();
         assertTrue(
-                p.matches("(linux(-musl)?|darwin|windows)-(x64|arm64)"),
+                p.matches("(freebsd|openbsd|linux(-musl)?|darwin|windows)-(x64|arm64)"),
                 "unexpected platform key: " + p);
     }
 

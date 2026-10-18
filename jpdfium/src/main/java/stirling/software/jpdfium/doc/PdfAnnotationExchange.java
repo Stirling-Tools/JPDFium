@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.Rect;
@@ -97,7 +98,7 @@ public final class PdfAnnotationExchange {
                         appendAnnotXfdf(sb, annot, p);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
             }
@@ -145,7 +146,7 @@ public final class PdfAnnotationExchange {
                         appendAnnotFdf(sb, annot, p);
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
             }
@@ -387,7 +388,7 @@ public final class PdfAnnotationExchange {
                             g.get(ValueLayout.JAVA_INT, 0),
                             b.get(ValueLayout.JAVA_INT, 0));
                 }
-            } catch (Throwable _) {}
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
             // Get contents
             String contents = readAnnotString(annot, AnnotationKeys.CONTENTS);
@@ -480,7 +481,7 @@ public final class PdfAnnotationExchange {
                         }
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
             }

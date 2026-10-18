@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -114,7 +115,7 @@ class PdfDocumentFactoryTest {
         try (PdfDocument dA = PdfDocumentFactory.load(docA);
              PdfDocument dB = PdfDocumentFactory.load(docB)) {
             // Merge
-            try (PdfDocument merged = PdfDocumentFactory.merge(java.util.List.of(dA, dB))) {
+            try (PdfDocument merged = PdfDocumentFactory.merge(List.of(dA, dB))) {
                 assertNotNull(merged);
                 assertEquals(2, merged.pageCount());
 
@@ -130,7 +131,7 @@ class PdfDocumentFactoryTest {
                 }
 
                 // Split
-                java.util.List<PdfDocument> parts = merged.splitEveryNPages(1);
+                List<PdfDocument> parts = merged.splitEveryNPages(1);
                 assertNotNull(parts);
                 assertEquals(2, parts.size());
                 parts.forEach(PdfDocument::close);

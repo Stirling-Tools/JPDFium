@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'
@@ -29,7 +29,7 @@ jobs:
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
 
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Install deps (stub build needs no PDFium)
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
 
@@ -75,11 +75,32 @@ jobs:
           JAPICMP_VER=0.23.0
           curl -fsSL --max-time 60 "https://repo1.maven.org/maven2/com/github/siom79/japicmp/japicmp/${JAPICMP_VER}/japicmp-${JAPICMP_VER}-jar-with-dependencies.jar" -o /tmp/japicmp.jar
           set +e  # japicmp exits non-zero on incompatibilities; handle below
+          # Accepted breakage (whole-class removals only): NativeGuard was a
+          # deprecated facade whose documented contract no longer holds (it
+          # cannot admit the execution domain), it has no in-repo callers, and
+          # removal turns cryptic runtime failures into clear compile errors
+          # toward PdfiumRuntime. PdfAConverter was a Ghostscript-backed helper
+          # removed together with the Ghostscript dependency; PDF/A conformance
+          # handling now lives in the in-process compression pipeline (see
+          # PdfCompressor). Both are removed classes, so a class-level exclude is
+          # exact. The compression members and PdfEncryption.isQpdfAvailable()
+          # that the overhaul had dropped were restored for binary compatibility,
+          # so they are no longer excluded — every remaining type and member must
+          # stay compatible. TextEditor was an empty placeholder (private
+          # constructor, no methods) that was removed together with its package.
+          # Nothing in the API, the tests, or the javadoc referenced it and it
+          # could not be instantiated, so dropping it is an accepted, deliberate
+          # break rather than one the gate should catch; it is recorded under
+          # "Removed" in CHANGELOG.md so consumers can see it. Remove entries
+          # from this list as soon as the baseline no longer contains the class.
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
             --only-modified \
             --ignore-missing-classes \
+            --exclude "stirling.software.jpdfium.panama.NativeGuard" \
+            --exclude "stirling.software.jpdfium.doc.PdfAConverter" \
+            --exclude "stirling.software.jpdfium.text.edit.TextEditor" \
             --error-on-binary-incompatibility \
             --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1
@@ -106,7 +127,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'
@@ -117,7 +138,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - name: Build stub
@@ -139,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - uses: actions/setup-java@273229181560643261a71a1544c22304f2a40df8 # v5.7.0
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
         with:
           distribution: temurin
           java-version: '25'
@@ -150,7 +171,7 @@ jobs:
           curl -fsSL --max-time 120 --retry 5 --retry-all-errors --retry-delay 3 "$JEXTRACT_URL" -o /tmp/jextract.tar.gz
           tar -xzf /tmp/jextract.tar.gz -C "$HOME/jextract-install" --strip-components=1
           echo "JEXTRACT_HOME=$HOME/jextract-install" >> "$GITHUB_ENV"
-      - uses: gradle/actions/setup-gradle@346a44564f803579f2a9d82d6570fa5c56d80eff # v6.3.0
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake
       - name: Regenerate FFM bindings and diff (strict - drift is a failure)

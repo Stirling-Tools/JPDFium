@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
@@ -45,14 +46,14 @@ public final class PdfJavaScriptInspector {
         int count;
         try {
             count = (int) JavaScriptBindings.FPDFDoc_GetJavaScriptActionCount.invokeExact(rawDoc);
-        } catch (Throwable _) { return Collections.emptyList(); }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return Collections.emptyList(); }
 
         List<JsAction> scripts = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             MemorySegment jsAction;
             try {
                 jsAction = (MemorySegment) JavaScriptBindings.FPDFDoc_GetJavaScriptAction.invokeExact(rawDoc, i);
-            } catch (Throwable _) { continue; }
+            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (jsAction.equals(MemorySegment.NULL)) continue;
 
             try {
@@ -61,7 +62,7 @@ public final class PdfJavaScriptInspector {
                 scripts.add(new JsAction(name, script, JsAction.JsLocation.DOCUMENT, -1, -1, "document-level"));
             } finally {
                 try { JavaScriptBindings.FPDFDoc_CloseJavaScriptAction.invokeExact(jsAction); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
         return scripts;
@@ -97,13 +98,13 @@ public final class PdfJavaScriptInspector {
                 int annotCount;
                 try {
                     annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(pages.get(p));
-                } catch (Throwable _) { continue; }
+                } catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
 
                 for (int ai = 0; ai < annotCount; ai++) {
                     MemorySegment annot;
                     try {
                         annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(pages.get(p), ai);
-                    } catch (Throwable _) { continue; }
+                    } catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
                     if (annot.equals(MemorySegment.NULL)) continue;
 
                     try {
@@ -116,14 +117,14 @@ public final class PdfJavaScriptInspector {
                         }
                     } finally {
                         try { AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot); }
-                        catch (Throwable _) {}
+                        catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
                     }
                 }
             }
             return scripts;
         } finally {
             try { DocBindings.FPDFDOC_ExitFormFillEnvironment.invokeExact(formHandle); }
-            catch (Throwable _) {}
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             arena.close();
         }
     }
@@ -135,7 +136,7 @@ public final class PdfJavaScriptInspector {
             MemorySegment buf = arena.allocate(needed);
             mh.invokeExact(jsAction, buf, needed);
             return FfmHelper.fromWideString(buf, needed);
-        } catch (Throwable _) { return ""; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return ""; }
     }
 
     private static String getAnnotActionJs(MemorySegment formHandle, MemorySegment annot, int event) {
@@ -147,6 +148,6 @@ public final class PdfJavaScriptInspector {
             long written = (long) AnnotationBindings.FPDFAnnot_GetFormAdditionalActionJavaScript.invokeExact(
                     formHandle, annot, event, buf, needed);
             return FfmHelper.fromWideString(buf, written);
-        } catch (Throwable _) { return ""; }
+        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); return ""; }
     }
 }

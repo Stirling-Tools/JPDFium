@@ -178,7 +178,8 @@ public final class PdfTextExtractor {
             i++;
         }
         while (i < end) {
-            char c = s.charAt(i++);
+            char c = s.charAt(i);
+            i++;
             if (c >= '0' && c <= '9') {
                 result = result * 10 + (c - '0');
             }

@@ -102,7 +102,6 @@ class SamplesSuiteTest {
                 Arguments.of("S66_PdfDiff", S66_PdfDiff.class),
                 Arguments.of("S67_AutoDeskew", S67_AutoDeskew.class),
                 Arguments.of("S68_FontAudit", S68_FontAudit.class),
-                Arguments.of("S69_PdfAConversion", S69_PdfAConversion.class),
                 Arguments.of("S70_PageScaling", S70_PageScaling.class),
                 Arguments.of("S71_MarginAdjust", S71_MarginAdjust.class),
                 Arguments.of("S72_SelectiveFlatten", S72_SelectiveFlatten.class),

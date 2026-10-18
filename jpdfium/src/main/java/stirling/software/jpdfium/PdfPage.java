@@ -1,5 +1,6 @@
 package stirling.software.jpdfium;
 
+import java.nio.ByteBuffer;
 import stirling.software.jpdfium.doc.Annotation;
 import stirling.software.jpdfium.doc.EmbedPdfAnnotations;
 import stirling.software.jpdfium.doc.PageBoxes;
@@ -11,25 +12,41 @@ import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.internal.ImageCodecs;
+import stirling.software.jpdfium.internal.RenderedPageView;
+import stirling.software.jpdfium.model.ColorType;
+import stirling.software.jpdfium.model.FlattenMode;
+import stirling.software.jpdfium.model.ImageFormat;
 import stirling.software.jpdfium.model.PageSize;
+import stirling.software.jpdfium.model.ProgressiveStatus;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.model.RenderFlags;
+import stirling.software.jpdfium.model.RenderQuality;
 import stirling.software.jpdfium.model.RenderResult;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.PdfiumBuffers;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
 
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Represents an open page within a {@link PdfDocument}.
@@ -39,21 +56,34 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class PdfPage implements AutoCloseable {
 
+    private final PdfDocument ownerDoc;
+    private final int ownerEpoch;
+    private final long docHandle;
     private final long handle;
     private final int pageIndex;
     private final MemorySegment rawPageSegment;
     private final MemorySegment rawDocSegment;
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean progressiveActive = new AtomicBoolean(false);
+    private final AtomicReference<ProgressiveSession> activeSession = new AtomicReference<>();
 
-    private PdfPage(long handle, int pageIndex) {
+    private PdfPage(PdfDocument ownerDoc, long docHandle, long handle, int pageIndex) {
+        this.ownerDoc = ownerDoc;
+        this.ownerEpoch = ownerDoc.structureEpoch();
+        this.docHandle = docHandle;
         this.handle = handle;
         this.pageIndex = pageIndex;
         this.rawPageSegment = JpdfiumLib.pageRawHandle(handle);
         this.rawDocSegment = JpdfiumLib.pageDocRawHandle(handle);
     }
 
-    static PdfPage open(long docHandle, int index) {
-        return new PdfPage(JpdfiumLib.pageOpen(docHandle, index), index);
+    static PdfPage open(PdfDocument ownerDoc, long docHandle, int index) {
+        return new PdfPage(ownerDoc, docHandle, JpdfiumLib.pageOpen(docHandle, index), index);
+    }
+
+    /** True once a structural document operation freed this page's native state. */
+    boolean isStale() {
+        return ownerEpoch != ownerDoc.structureEpoch();
     }
 
     /**
@@ -64,14 +94,262 @@ public final class PdfPage implements AutoCloseable {
         return pageIndex;
     }
 
+    /**
+     * Page size in PDF points (1/72 inch), as PDFium reports it: the crop box
+     * intersected with the media box, with the width and height swapped on a page
+     * rotated by 90 or 270 degrees. Use {@link #getMediaBox()} for the unrotated
+     * media box and {@link #getCropBox()} for the crop box.
+     *
+     * @return width and height in points
+     */
     public PageSize size() {
         ensureOpen();
-        return new PageSize(JpdfiumLib.pageWidth(handle), JpdfiumLib.pageHeight(handle));
+        // One coarse domain admission for both dimensions, not two leaf dispatches.
+        JpdfiumLib.PageInfo info = JpdfiumLib.pageInfo(handle);
+        return new PageSize(info.width(), info.height());
     }
 
+    /**
+     * Render the page to a raw RGBA pixel buffer at the given DPI, over a white background.
+     *
+     * @param dpi render resolution in DPI; must be positive
+     * @return rendered pixels and the resulting dimensions
+     */
     public RenderResult renderAt(int dpi) {
+        return renderAt(dpi, false, null);
+    }
+
+    /**
+     * Render the page to a raw RGBA pixel buffer, optionally with a transparent background.
+     *
+     * @param dpi         render resolution in DPI; must be positive
+     * @param transparent true for a transparent background, false for white
+     * @return rendered pixels and the resulting dimensions
+     */
+    public RenderResult renderAt(int dpi, boolean transparent) {
+        return renderAt(dpi, transparent, null);
+    }
+
+    /**
+     * Render the page to a raw RGBA pixel buffer with explicit render quality.
+     *
+     * @param dpi     render resolution in DPI; must be positive
+     * @param quality render quality flags; null uses PDFium defaults
+     * @return rendered pixels and the resulting dimensions
+     */
+    public RenderResult renderAt(int dpi, RenderQuality quality) {
+        return renderAt(dpi, false, quality);
+    }
+
+    /**
+     * Render the page to a raw RGBA pixel buffer with explicit transparency and quality.
+     *
+     * @param dpi         render resolution in DPI; must be positive
+     * @param transparent true for a transparent background, false for white
+     * @param quality     render quality flags; null uses PDFium defaults
+     * @return rendered pixels and the resulting dimensions
+     */
+    public RenderResult renderAt(int dpi, boolean transparent, RenderQuality quality) {
         ensureOpen();
-        return JpdfiumLib.renderPage(handle, dpi);
+        requirePositiveDpi(dpi);
+        int flags = quality != null ? quality.flags() : 0;
+        return JpdfiumLib.renderPage(handle, dpi, transparent, flags);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at 72 DPI.
+     *
+     * @return rendered image
+     */
+    public BufferedImage renderImage() {
+        return renderImage(72, false);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI.
+     *
+     * @param dpi render resolution in DPI
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi) {
+        return renderImage(dpi, false);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with explicit quality.
+     *
+     * @param dpi     render resolution in DPI
+     * @param quality render quality flags; null uses PDFium defaults
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, RenderQuality quality) {
+        return renderImage(dpi, false, quality);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with optional transparency.
+     *
+     * @param dpi         render resolution in DPI
+     * @param transparent true for ARGB with transparent background, false for RGB over white
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, boolean transparent) {
+        return renderImage(dpi, transparent, null);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} with explicit transparency and quality.
+     *
+     * @param dpi         render resolution in DPI
+     * @param transparent true for ARGB with transparent background, false for RGB over white
+     * @param quality     render quality flags; null uses PDFium defaults
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, boolean transparent, RenderQuality quality) {
+        ensureOpen();
+        requirePositiveDpi(dpi);
+        // Real native: render straight into the raster (one int[] instead of a
+        // byte[] plus an int[] and no Java pack loop). Stub: keep the RGBA path.
+        if (NativeRuntime.isFull()) {
+            int flags = quality != null ? quality.flags() : 0;
+            return JpdfiumLib.renderPageImage(handle, dpi, transparent, flags);
+        }
+        RenderResult result = renderAt(dpi, transparent, quality);
+        return result.toBufferedImage(transparent);
+    }
+
+    /**
+     * Render the page to a {@link BufferedImage} at the specified DPI with the given {@link ColorType}.
+     *
+     * @param dpi       render resolution in DPI
+     * @param colorType color type (RGB, ARGB, GRAY, BINARY)
+     * @return rendered image
+     */
+    public BufferedImage renderImage(int dpi, ColorType colorType) {
+        ensureOpen();
+        boolean transparent = (colorType == ColorType.ARGB);
+        RenderResult result = renderAt(dpi, transparent);
+        return result.toBufferedImage(colorType);
+    }
+
+    /**
+     * Render the page to encoded image bytes in the specified format using the active codec.
+     *
+     * @param dpi    render resolution in DPI
+     * @param format output format
+     * @return image bytes
+     * @throws IOException if encoding fails
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format) throws IOException {
+        return renderToBytes(dpi, format, 90, false);
+    }
+
+    /**
+     * Render the page to encoded image bytes using the specified format name.
+     */
+    public byte[] renderToBytes(int dpi, String formatName) throws IOException {
+        return renderToBytes(dpi, ImageFormat.fromExtension(formatName), 90, false);
+    }
+
+    /**
+     * Render the page to encoded image bytes with fine-grained encoding control.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, int quality, boolean transparent) throws IOException {
+        return renderToBytes(dpi, format, quality, transparent ? ColorType.ARGB : ColorType.RGB);
+    }
+
+    /**
+     * Render the page to encoded image bytes with the specified color type.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, ColorType colorType) throws IOException {
+        return renderToBytes(dpi, format, 90, colorType);
+    }
+
+    /**
+     * Render the page to encoded image bytes with fine-grained encoding control and color type.
+     */
+    public byte[] renderToBytes(int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
+        ensureOpen();
+        requirePositiveDpi(dpi);
+        boolean transparent = (colorType == ColorType.ARGB);
+        boolean keepAlpha = transparent && format.supportsTransparency();
+        if (ImageCodecs.canEncode(format) && (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB)) {
+            try (RenderedPageView view = JpdfiumLib.renderPageView(handle, dpi, keepAlpha)) {
+                return ImageCodecs.encodeView(view, format, quality);
+            }
+        }
+        if (ImageCodecs.canEncode(format)) {
+            RenderResult result = renderAt(dpi, keepAlpha);
+            byte[] frame = result.toFrame(keepAlpha, colorType);
+            return ImageCodecs.encodeFrame(frame, format, quality);
+        }
+        BufferedImage image = renderImage(dpi, colorType);
+        return PdfImageIO.writeToBytes(image, format, quality);
+    }
+
+    /**
+     * Render the page directly to a file at the specified DPI. Format is inferred from the path extension.
+     */
+    public void renderTo(Path outputPath, int dpi) throws IOException {
+        renderTo(outputPath, dpi, ImageFormat.fromPath(outputPath), 90, ColorType.RGB);
+    }
+
+    /**
+     * Render the page directly to a file with explicit format, quality, and color type.
+     */
+    public void renderTo(Path outputPath, int dpi, ImageFormat format, int quality, ColorType colorType) throws IOException {
+        if (outputPath == null) throw new IllegalArgumentException("outputPath must not be null");
+        ensureOpen();
+        requirePositiveDpi(dpi);
+        boolean transparent = (colorType == ColorType.ARGB);
+        boolean keepAlpha = transparent && format.supportsTransparency();
+        if (ImageCodecs.canEncode(format) && (colorType == null || colorType == ColorType.RGB || colorType == ColorType.ARGB)) {
+            try (RenderedPageView view = JpdfiumLib.renderPageView(handle, dpi, keepAlpha)) {
+                ImageCodecs.encodeViewToFile(view, outputPath, format, quality);
+                return;
+            }
+        }
+        byte[] bytes = renderToBytes(dpi, format, quality, colorType);
+        Files.write(outputPath, bytes);
+    }
+
+    /**
+     * Render the page directly to a file at default 150 DPI.
+     */
+    public void renderTo(Path outputPath) throws IOException {
+        renderTo(outputPath, 150);
+    }
+
+    /**
+     * Render the page directly to a file at the specified DPI.
+     */
+    public void renderTo(File outputFile, int dpi) throws IOException {
+        if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
+        renderTo(outputFile.toPath(), dpi);
+    }
+
+    /**
+     * Render the page directly to a file at default 150 DPI.
+     */
+    public void renderTo(File outputFile) throws IOException {
+        if (outputFile == null) throw new IllegalArgumentException("outputFile must not be null");
+        renderTo(outputFile.toPath(), 150);
+    }
+
+    /**
+     * Render the page directly to an OutputStream.
+     */
+    public void renderTo(OutputStream output, int dpi, ImageFormat format) throws IOException {
+        if (output == null) throw new IllegalArgumentException("output must not be null");
+        byte[] bytes = renderToBytes(dpi, format);
+        output.write(bytes);
+    }
+
+    /**
+     * Render the page directly to an OutputStream.
+     */
+    public void renderTo(OutputStream output, int dpi, String formatName) throws IOException {
+        renderTo(output, dpi, ImageFormat.fromExtension(formatName));
     }
 
     /**
@@ -84,12 +362,39 @@ public final class PdfPage implements AutoCloseable {
      * @param height       render height in pixels
      */
     public void renderInto(MemorySegment targetBitmap, int width, int height) {
-        ensureOpen();
-        JpdfiumLib.renderPageIntoSegment(rawPageSegment, targetBitmap, width, height, 0x10 | 0x01 /* FPDF_REVERSE_BYTE_ORDER | FPDF_ANNOT */);
+        renderInto(targetBitmap, width, height, RenderFlags.REVERSE_BYTE_ORDER | RenderFlags.ANNOTATIONS);
     }
 
     /**
-     * Render the page directly into a pre-allocated direct {@link java.nio.ByteBuffer}.
+     * Render into a pre-allocated native segment with explicit quality
+     * (BGRA byte order, annotations on).
+     *
+     * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param quality      render quality flags; null renders with annotations only
+     */
+    public void renderInto(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
+        int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
+        renderInto(targetBitmap, width, height, flags);
+    }
+
+    /**
+     * Render into a pre-allocated native segment with explicit PDFium render flags.
+     *
+     * @param targetBitmap pre-allocated MemorySegment (at least width * height * 4 bytes)
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param flags        PDFium render flags
+     */
+    public void renderInto(MemorySegment targetBitmap, int width, int height, int flags) {
+        ensureOpen();
+        JpdfiumLib.checkRenderIntoArgs(targetBitmap, width, height);
+        JpdfiumLib.renderPageIntoSegment(rawPageSegment, targetBitmap, width, height, flags);
+    }
+
+    /**
+     * Render the page directly into a pre-allocated direct {@link ByteBuffer}.
      * Convenience overload: wrapping the buffer per call allocates a segment view
      * (escape-analysis dependent); certified callers reuse a cached
      * {@code MemorySegment} via {@link #renderInto(MemorySegment, int, int)}.
@@ -98,12 +403,347 @@ public final class PdfPage implements AutoCloseable {
      * @param width        render width in pixels
      * @param height       render height in pixels
      */
-    public void renderInto(java.nio.ByteBuffer directBuffer, int width, int height) {
+    public void renderInto(ByteBuffer directBuffer, int width, int height) {
         ensureOpen();
         if (!directBuffer.isDirect()) {
             throw new IllegalArgumentException("targetBuffer must be a direct ByteBuffer");
         }
         renderInto(MemorySegment.ofBuffer(directBuffer), width, height);
+    }
+
+    /**
+     * Start a progressive render with explicit quality (BGRA byte order,
+     * annotations on); see {@link #startProgressiveRender(MemorySegment, int, int, int)}.
+     *
+     * @param targetBitmap caller-owned bitmap the native layer renders into across steps
+     * @param width        render width in pixels
+     * @param height       render height in pixels
+     * @param quality      render quality flags; null renders with annotations only
+     * @return session driving the incremental render
+     */
+    public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, RenderQuality quality) {
+        int flags = (quality != null ? quality.flags() : RenderFlags.ANNOTATIONS) | RenderFlags.REVERSE_BYTE_ORDER;
+        return startProgressiveRender(targetBitmap, width, height, flags);
+    }
+
+    /**
+     * Start a progressive render into a caller-owned bitmap.
+     *
+     * <p>The native layer retains the {@code targetBitmap} pointer across
+     * {@link ProgressiveSession#step()} calls. The caller must keep the
+     * segment's arena alive until the session closes, and must not close this
+     * page before the session completes. Only one session may be active per
+     * page at a time.
+     */
+    public ProgressiveSession startProgressiveRender(MemorySegment targetBitmap, int width, int height, int flags) {
+        ensureOpen();
+        JpdfiumLib.checkRenderIntoArgs(targetBitmap, width, height);
+        int stride = Math.multiplyExact(width, 4);
+        // PDFium keeps a single progressive context per page; a second pending
+        // session would alias the first session's native state. Require callers
+        // to close the active session before starting another. Synchronized
+        // with close() so the page cannot be freed mid-start.
+        synchronized (this) {
+            ensureOpen();
+            if (!progressiveActive.compareAndSet(false, true)) {
+                throw new IllegalStateException("A progressive render session is already active on this page");
+            }
+            boolean started = false;
+            try {
+                ProgressiveSession session = new ProgressiveSession(
+                        this, rawPageSegment, targetBitmap, width, height, stride, flags);
+                // A terminal-at-start session retires inside its constructor;
+                // publishing it as active would retain stale state.
+                if (!session.isRetired()) {
+                    activeSession.set(session);
+                }
+                started = true;
+                return session;
+            } finally {
+                if (!started) {
+                    progressiveActive.set(false);
+                }
+            }
+        }
+    }
+
+    void releaseProgressive() {
+        progressiveActive.set(false);
+    }
+
+    void clearSession(ProgressiveSession session) {
+        activeSession.compareAndSet(session, null);
+    }
+
+    /**
+     * Start a progressive render into an owner-accessible buffer.
+     *
+     * <p>Unlike the segment overloads, the session holds an explicit
+     * {@code RenderLease} on the buffer: the caller may close its own handle
+     * at any time and the target stays valid until the session terminates,
+     * when the last lease reclaims the arena. Prefer this overload for
+     * retained sessions; the segment overloads are legacy synchronous
+     * caller-thread operations.
+     */
+    public ProgressiveSession startProgressiveRender(
+            PdfiumBuffers.SharedRenderBuffer buffer, int flags) {
+        if (buffer == null) throw new IllegalArgumentException("buffer must not be null");
+        ensureOpen();
+        JpdfiumLib.checkRenderIntoArgs(buffer.pixels(), buffer.width(), buffer.height());
+        synchronized (this) {
+            ensureOpen();
+            if (!progressiveActive.compareAndSet(false, true)) {
+                throw new IllegalStateException("A progressive render session is already active on this page");
+            }
+            PdfiumBuffers.RenderLease lease = null;
+            try {
+                lease = buffer.acquireLease();
+                ProgressiveSession session = new ProgressiveSession(
+                        this, rawPageSegment, buffer.pixels(), buffer.width(),
+                        buffer.height(), buffer.stride(), flags, lease);
+                // A terminal-at-start session retires inside its constructor;
+                // publishing it as active would retain stale state.
+                if (!session.isRetired()) {
+                    activeSession.set(session);
+                }
+                return session;
+            } catch (Throwable constructionFailure) {
+                // Best-effort cleanup of the partially-started session. The
+                // lease is retired first: its arena backs the bitmap the
+                // session may have handed to native code, and native state is
+                // released by the page-close abandon backstop if construction
+                // got far enough to start anything. A cleanup failure must not
+                // mask the construction failure, and the page must never stay
+                // marked active.
+                try {
+                    if (lease != null) {
+                        lease.close();
+                    }
+                } catch (Throwable cleanupFailure) {
+                    if (cleanupFailure != constructionFailure) {
+                        constructionFailure.addSuppressed(cleanupFailure);
+                    }
+                } finally {
+                    progressiveActive.set(false);
+                }
+                throw constructionFailure;
+            }
+        }
+    }
+
+    /**
+     * Incremental render session: rasterises a large page in chunks so a caller
+     * can report progress or cancel mid-render. Obtained from
+     * {@link #startProgressiveRender(MemorySegment, int, int, int)}; {@link #step()}
+     * advances the render and {@link #close()} releases native state. Not thread-safe.
+     */
+    public static final class ProgressiveSession implements AutoCloseable {
+        private final PdfPage owner;
+        private final MemorySegment rawPage;
+        private final Arena cancelArena;
+        private final MemorySegment cancelFlag;
+        /**
+         * Buffer lease keeping a shared target's arena alive for the session,
+         * or {@code null} for legacy segment sessions whose lifetime stays
+         * caller-managed. Retired (closed) strictly after the progressive
+         * PDFium state, never before.
+         */
+        private final PdfiumBuffers.RenderLease bufferLease;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+
+        ProgressiveSession(PdfPage owner, MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags) {
+            this(owner, rawPage, targetBitmap, width, height, stride, flags, null);
+        }
+
+        ProgressiveSession(PdfPage owner, MemorySegment rawPage, MemorySegment targetBitmap, int width, int height, int stride, int flags,
+                           PdfiumBuffers.RenderLease bufferLease) {
+            this.owner = owner;
+            this.rawPage = rawPage;
+            this.bufferLease = bufferLease;
+            this.cancelArena = Arena.ofShared();
+            this.cancelFlag = cancelArena.allocate(ValueLayout.JAVA_INT);
+            this.cancelFlag.set(ValueLayout.JAVA_INT, 0, 0);
+            int status;
+            try {
+                status = JpdfiumLib.renderPageProgressiveStart(
+                        rawPage, targetBitmap, width, height, stride, flags, cancelFlag);
+            } catch (Throwable t) {
+                closed.set(true);
+                cancelArena.close();
+                throw t;
+            }
+            if (status != ProgressiveStatus.TO_BE_CONTINUED.code()) {
+                // Terminal at start: the native bridge already closed its
+                // progressive state on this path, so retire Java ownership
+                // without a redundant native close. The factory above must
+                // not publish this session as active (see isRetired check).
+                closed.set(true);
+                retireAll(Retirement.NATIVE_ALREADY_RETIRED, false);
+                if (status != ProgressiveStatus.DONE.code()) {
+                    throw new JPDFiumException("Progressive render start failed: " + status);
+                }
+            }
+        }
+
+        /** True once this session reached any terminal state. */
+        boolean isRetired() {
+            return closed.get();
+        }
+
+        /**
+         * Whether the terminal transition still owes PDFium a progressive
+         * close. Terminal {@code start}/{@code continue} statuses already
+         * closed native state inside the bridge, so re-closing is redundant
+         * (a harmless no-op against a missing entry, but an extra crossing of
+         * the domain for nothing). Every other ending, explicit close, cancel
+         * completion, owner teardown, leaves native state live and must close
+         * it explicitly while the page is still valid.
+         */
+        private enum Retirement {
+            /** Native state is still live: close it explicitly. */
+            NATIVE_LIVE,
+            /** Native state is already gone: only Java ownership remains. */
+            NATIVE_ALREADY_RETIRED
+        }
+
+        /**
+         * Request cancellation of the render; the next {@link #step()} returns a
+         * terminal status. A no-op once the session has been retired.
+         */
+        public void cancel() {
+            if (closed.get()) {
+                return;
+            }
+            try {
+                cancelFlag.set(ValueLayout.JAVA_INT, 0, 1);
+            } catch (IllegalStateException alreadyClosed) {
+                // Session finished concurrently; cancellation is moot.
+            }
+        }
+
+        /**
+         * Advance the render by one chunk.
+         *
+         * @return the new status; anything other than {@code TO_BE_CONTINUED} is terminal
+         * @throws IllegalStateException if the owning page was closed or invalidated
+         */
+        public ProgressiveStatus step() {
+            if (closed.get()) {
+                return ProgressiveStatus.DONE;
+            }
+            // Synchronized with PdfPage.close() on the owner monitor so the
+            // page cannot be freed between the isClosed check and the native
+            // continue call. Lock order is always owner -> domain.
+            synchronized (owner) {
+                if (closed.get()) {
+                    return ProgressiveStatus.DONE;
+                }
+                if (owner.isClosed() || owner.isStale()) {
+                    close();
+                    throw new IllegalStateException(
+                            "Owning PdfPage was closed or invalidated before ProgressiveSession completed");
+                }
+                int code = JpdfiumLib.renderPageProgressiveContinue(rawPage, cancelFlag);
+                ProgressiveStatus status = ProgressiveStatus.fromCode(code);
+                if (status != ProgressiveStatus.TO_BE_CONTINUED) {
+                    // Terminal continue: the bridge already retired native
+                    // progressive state, so retire Java ownership only.
+                    closeInternal(Retirement.NATIVE_ALREADY_RETIRED);
+                }
+                return status;
+            }
+        }
+
+        /** Retire the session and release its native progressive context. */
+        @Override
+        public void close() {
+            closeInternal(Retirement.NATIVE_LIVE);
+        }
+
+        /**
+         * Retirement during page teardown: the owner is already marked closed,
+         * but its native page is still valid, so the explicit progressive
+         * close runs instead of depending on the native abandon backstop.
+         */
+        void closeForOwnerTeardown() {
+            closeInternal(Retirement.NATIVE_LIVE, true);
+        }
+
+        private void closeInternal(Retirement retirement) {
+            closeInternal(retirement, false);
+        }
+
+        private void closeInternal(Retirement retirement, boolean ownerClosing) {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            synchronized (owner) {
+                retireAll(retirement, ownerClosing);
+            }
+        }
+
+        /**
+         * The single terminal transition for every session ending: terminal
+         * start, terminal continue (via {@code close()}), explicit close, and
+         * owner teardown. Exactly once per session:
+         *
+         * <ul>
+         *   <li>native progressive state, if the bridge still holds one;</li>
+         *   <li>session registry lease;</li>
+         *   <li>buffer lease, strictly after native retirement, the native
+         *       target must stay mapped until PDFium is done with it;</li>
+         *   <li>cancel storage;</li>
+         *   <li>page active-state release and {@code activeSession} removal.</li>
+         * </ul>
+         *
+         * <p>Ordering matters for the buffer lease: native progressive state
+         * may still hold the target bitmap, so the lease is released strictly
+         * after the native close attempt, never before. When the native close
+         * itself fails, {@link PdfPage#close()} still runs its page-close
+         * abandon backstop before any remaining native borrower could outlive
+         * the arena.
+         *
+         * @param retirement    whether native progressive state still needs an
+         *                      explicit close
+         * @param ownerClosing  true when the owner page is already marked
+         *                      closed but still natively valid, so the explicit
+         *                      progressive close runs instead of depending on
+         *                      the native abandon backstop
+         */
+        private void retireAll(Retirement retirement, boolean ownerClosing) {
+            try {
+                // A stale owner already had its native page freed by the
+                // structural operation that invalidated it, so there is
+                // nothing left to close; every other case (session open,
+                // or owner teardown before pageClose) still has valid native
+                // page state and must be closed explicitly.
+                if (retirement == Retirement.NATIVE_LIVE
+                        && (ownerClosing || !owner.isClosed())
+                        && !owner.isStale()) {
+                    JpdfiumLib.renderPageProgressiveClose(rawPage);
+                }
+            } finally {
+                try {
+                    JpdfiumLib.releaseProgressiveSession();
+                } finally {
+                    try {
+                        if (bufferLease != null) {
+                            bufferLease.close();
+                        }
+                    } finally {
+                        try {
+                            cancelArena.close();
+                        } finally {
+                            try {
+                                owner.releaseProgressive();
+                            } finally {
+                                owner.clearSession(ProgressiveSession.this);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -144,7 +784,7 @@ public final class PdfPage implements AutoCloseable {
                         return "";
                     }
                 } catch (Throwable t) {
-                    stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                    NativeRuntime.rethrowFatal(t);
                     // Fall back to standard extraction
                 }
             }
@@ -166,7 +806,7 @@ public final class PdfPage implements AutoCloseable {
                 try {
                     TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
                 } catch (Throwable t) {
-                    stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                    NativeRuntime.rethrowFatal(t);
                 }
             }
         }
@@ -204,6 +844,7 @@ public final class PdfPage implements AutoCloseable {
     public void redactRegion(Rect rect, int argbColor) {
         ensureOpen();
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -218,11 +859,13 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     public void redactPattern(String regexPattern, int argbColor) {
         ensureOpen();
         JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -235,6 +878,7 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactPattern(handle, regexPattern, argbColor, true);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -245,58 +889,68 @@ public final class PdfPage implements AutoCloseable {
      * @param padding       extra padding in PDF points around each match
      * @param wholeWord     if true, only match whole words
      * @param useRegex      if true, treat each word as a regex pattern
-     * @param removeContent if true, strip underlying PDF objects
+     * @param removeContent must be true; content removal is mandatory and
+     *                       {@code false} is refused - see
+     *                       {@link #redactWords(String[], int, float, boolean, boolean, boolean)}
      */
     public void redactWords(String[] words, int argbColor, float padding,
                              boolean wholeWord, boolean useRegex, boolean removeContent) {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactWords(handle, words, argbColor, padding, wholeWord, useRegex, true);
+        ownerDoc.markContentModified();
     }
 
     /**
-     * True text redaction using the Object Fission Algorithm.
-     *
-     * <p>Unlike {@link #redactWords}, this method uses character-level precision
-     * to surgically remove only the targeted text from the PDF content stream.
-     * Partially overlapping text objects are split into prefix and suffix fragments
-     * that are repositioned using the original font, transformation matrix, and
-     * render mode - ensuring zero typographical degradation.
-     *
-     * <p>Key improvements:
-     * <ul>
-     *   <li><strong>No over-removal</strong> - only matched characters are destroyed</li>
-     *   <li><strong>Font-safe</strong> - reuses the original font handle (no subsetting issues)</li>
-     *   <li><strong>Reflow-proof</strong> - surviving text is pinned to absolute coordinates
-     *       via {@code FPDFText_GetCharOrigin}</li>
-     *   <li><strong>Single pass</strong> - all matches processed in one
-     *       {@code FPDFPage_GenerateContent} call</li>
-     *   <li><strong>Returns match count</strong> for statistics and validation</li>
-     * </ul>
+     * True text redaction: removes only matched characters from the content
+     * stream, splitting overlapping text objects so the rest keeps its
+     * position, font and render mode.
      *
      * @param words         list of words or regex patterns to redact
      * @param argbColor     fill color (0xAARRGGBB)
      * @param padding       extra padding in PDF points around each match
      * @param wholeWord     if true, only match at word boundaries
      * @param useRegex      if true, treat each word as a regex pattern
-     * @param removeContent if true, apply Object Fission; if false, visual overlay only
+     * @param removeContent must be true; content removal is mandatory and
+     *                       {@code false} is refused - see
+     *                       {@link #redactRegion(Rect, int, boolean)}
      * @param caseSensitive if true, match case-sensitively
-     * @return the total number of matches found and redacted on this page
+     * @return the total number of matches found and redacted on this page; a
+     *         match wrapped across lines or columns counts once, even though it
+     *         is removed box by box
      */
     public int redactWordsEx(String[] words, int argbColor, float padding,
                               boolean wholeWord, boolean useRegex, boolean removeContent,
                               boolean caseSensitive) {
         ensureOpen();
         requireContentRemoval(removeContent);
-        return JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
+        int removed = JpdfiumLib.redactWordsEx(handle, words, argbColor, padding,
                 wholeWord, useRegex, true, caseSensitive);
+        if (removed > 0) ownerDoc.markContentModified();
+        return removed;
+    }
+
+    public int redactWordsEx(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
+                              boolean wholeWord, boolean useRegex, boolean removeContent,
+                              boolean caseSensitive) {
+        ensureOpen();
+        requireContentRemoval(removeContent);
+        int removed = JpdfiumLib.redactWordsEx(handle, wordsPtrs, wordCount, argbColor, padding,
+                wholeWord, useRegex, true, caseSensitive);
+        if (removed > 0) ownerDoc.markContentModified();
+        return removed;
+    }
+
+    /** Non-positive DPI silently flipped transparency natively; reject it here. */
+    private static void requirePositiveDpi(int dpi) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
     }
 
     /**
      * The visual-only cover mode (removeContent=false) is removed from the
      * public API: painting over intact, extractable content is the banned
      * "looks redacted" leak class. Every redaction ends verified-complete or
-     * in a loud error - never in a cover.
+     * in a loud error - never in a painted cover.
      */
     private static void requireContentRemoval(boolean removeContent) {
         if (!removeContent) {
@@ -318,8 +972,10 @@ public final class PdfPage implements AutoCloseable {
      */
     public int markRedactRegion(Rect rect, int argbColor) {
         ensureOpen();
-        return JpdfiumLib.annotCreateRedact(handle, rect.x(), rect.y(),
+        int annotIndex = JpdfiumLib.annotCreateRedact(handle, rect.x(), rect.y(),
                 rect.width(), rect.height(), argbColor);
+        ownerDoc.markContentModified();
+        return annotIndex;
     }
 
     /**
@@ -332,14 +988,28 @@ public final class PdfPage implements AutoCloseable {
      * @param wholeWord     if true, only match whole words
      * @param useRegex      if true, treat each word as a regex pattern
      * @param caseSensitive if true, match case-sensitively
-     * @return the number of REDACT annotations created
+     * @return the number of REDACT annotations created; a match wrapped across
+     *         lines or columns creates one annotation per box, so it counts once
+     *         per box
      */
     public int markRedactWords(String[] words, int argbColor, float padding,
                                 boolean wholeWord, boolean useRegex,
                                 boolean caseSensitive) {
         ensureOpen();
-        return JpdfiumLib.redactMarkWords(handle, words, padding,
+        int created = JpdfiumLib.redactMarkWords(handle, words, padding,
                 wholeWord, useRegex, caseSensitive, argbColor);
+        ownerDoc.markContentModified();
+        return created;
+    }
+
+    public int markRedactWords(MemorySegment wordsPtrs, int wordCount, int argbColor, float padding,
+                                boolean wholeWord, boolean useRegex,
+                                boolean caseSensitive) {
+        ensureOpen();
+        int created = JpdfiumLib.redactMarkWords(handle, wordsPtrs, wordCount, padding,
+                wholeWord, useRegex, caseSensitive, argbColor);
+        ownerDoc.markContentModified();
+        return created;
     }
 
     /**
@@ -367,6 +1037,7 @@ public final class PdfPage implements AutoCloseable {
     public void unmarkRedaction(int annotIndex) {
         ensureOpen();
         JpdfiumLib.annotRemoveRedact(handle, annotIndex);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -375,6 +1046,7 @@ public final class PdfPage implements AutoCloseable {
     public void clearPendingRedactions() {
         ensureOpen();
         JpdfiumLib.annotClearRedacts(handle);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -385,14 +1057,21 @@ public final class PdfPage implements AutoCloseable {
      * removes the consumed annotations.  The document handle remains
      * valid - no reload required.
      *
+     * <p><strong>Removed:</strong> the visual-only mode ({@code removeContent=false})
+     * painted a cover rectangle over intact, extractable content - the classic
+     * "looks redacted" leak. It is refused with
+     * {@link IllegalArgumentException}; content removal is mandatory.
+     *
      * @param argbColor     fill color for the redaction rectangles
-     * @param removeContent if true, apply Object Fission to strip content;
-     *                      if false, paint visual overlay only
+     * @param removeContent must be true (content removal is mandatory)
      * @return the number of REDACT annotations that were committed
      */
     public int commitRedactions(int argbColor, boolean removeContent) {
         ensureOpen();
-        return JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        requireContentRemoval(removeContent);
+        int committed = JpdfiumLib.redactCommit(handle, argbColor, removeContent);
+        if (committed > 0) ownerDoc.markContentModified();
+        return committed;
     }
 
     /**
@@ -400,11 +1079,21 @@ public final class PdfPage implements AutoCloseable {
      *
      * <p><strong>Lifetime:</strong> zero-length view of native memory owned by this
      * {@code PdfPage}. Must not outlive {@link #close()}, must stay on the thread
-     * that owns this page, and every native call using it must hold
-     * {@code NativeGuard} (via the {@code *Bindings} or {@code JpdfiumLib} helpers).
+     * that owns this page, and every native call using it must run inside the
+     * PdfiumRuntime execution domain (via the {@code *Bindings} or
+     * {@code JpdfiumLib} helpers).
+     *
+     * <p><strong>Outside the execution-domain guarantee:</strong> like
+     * {@link PdfDocument#rawHandle()}, direct use bypasses the admission and
+     * ordering enforced for built-in operations. It keeps working, but the
+     * domain makes no promise about it.
+     *
+     * <p><strong>Edit tracking:</strong> taking the handle marks the owning document as
+     * modified, as {@link PdfDocument#rawHandle()} does.
      */
     public MemorySegment rawHandle() {
         ensureOpen();
+        ownerDoc.markContentModified();
         return rawPageSegment;
     }
 
@@ -412,9 +1101,28 @@ public final class PdfPage implements AutoCloseable {
      * Returns the raw FPDF_DOCUMENT MemorySegment from this page's parent document.
      *
      * <p><strong>Lifetime:</strong> same contract as {@link #rawHandle()}: invalid
-     * after this page is closed.
+     * after this page is closed. Taking it marks the owning document as modified.
      */
     public MemorySegment rawDocHandle() {
+        ensureOpen();
+        ownerDoc.markContentModified();
+        return rawDocSegment;
+    }
+
+    /**
+     * {@link #rawHandle()} for library-internal reads that cannot change the document.
+     * Unlike {@link #rawHandle()}, taking it does not mark the owning document as modified.
+     *
+     * <p>Do not write through the returned handle: such writes are invisible to
+     * {@link PdfDocument#isContentModified()}.
+     */
+    public MemorySegment rawHandleForRead() {
+        ensureOpen();
+        return rawPageSegment;
+    }
+
+    /** {@link #rawDocHandle()} for library reads that cannot change the document. */
+    MemorySegment rawDocHandleForRead() {
         ensureOpen();
         return rawDocSegment;
     }
@@ -423,28 +1131,28 @@ public final class PdfPage implements AutoCloseable {
      * List all annotations on this page.
      */
     public List<Annotation> annotations() {
-        return PdfAnnotations.list(rawHandle());
+        return PdfAnnotations.list(rawHandleForRead());
     }
 
     /**
      * List all hyperlinks on this page.
      */
     public List<PdfLink> links() {
-        return PdfLinks.list(rawDocHandle(), rawHandle());
+        return PdfLinks.list(rawDocHandleForRead(), rawHandleForRead());
     }
 
     /**
      * Get the structure tree (tagged structure) for this page.
      */
     public List<StructElement> structureTree() {
-        return PdfStructureTree.get(rawHandle());
+        return PdfStructureTree.get(rawHandleForRead());
     }
 
     /**
      * Get the decoded thumbnail image data for this page.
      */
     public Optional<byte[]> thumbnail() {
-        return PdfThumbnails.getDecoded(rawHandle());
+        return PdfThumbnails.getDecoded(rawHandleForRead());
     }
 
     /**
@@ -457,13 +1165,48 @@ public final class PdfPage implements AutoCloseable {
      * @return the thumbnail image, or empty if the page has no embedded thumbnail
      */
     public Optional<BufferedImage> thumbnailImage() {
-        return PdfThumbnails.getAsImage(rawHandle());
+        return PdfThumbnails.getAsImage(rawHandleForRead());
     }
 
     /** Flatten all annotations (including applied redactions) into page content. */
     public void flatten() {
         ensureOpen();
         JpdfiumLib.pageFlatten(handle);
+        ownerDoc.markContentModified();
+    }
+
+    /**
+     * Flatten this page using the specified mode with default DPI (150).
+     */
+    public void flatten(FlattenMode mode) {
+        flatten(mode, 150);
+    }
+
+    /**
+     * Flatten this page using the specified mode.
+     *
+     * <ul>
+     *   <li>{@link FlattenMode#ANNOTATIONS} - bakes annotations and form fields into the
+     *       page content stream. Text remains selectable.</li>
+     *   <li>{@link FlattenMode#FULL} - rasterizes the page into an image-based page
+     *       at the given DPI. Invalidates this {@link PdfPage} instance <strong>and
+     *       every other open page</strong> on the document, because the native
+     *       page is deleted and replaced; callers must reopen pages via
+     *       {@link PdfDocument#page(int)} for subsequent operations.</li>
+     * </ul>
+     */
+    public void flatten(FlattenMode mode, int dpi) {
+        ensureOpen();
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
+        switch (mode) {
+            case ANNOTATIONS -> flatten();
+            case FULL -> {
+                if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                close();
+                JpdfiumLib.pageToImage(docHandle, pageIndex, dpi);
+                ownerDoc.invalidateOpenPages();
+            }
+        }
     }
 
     /**
@@ -511,8 +1254,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setCropBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setCropBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -529,8 +1272,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setMediaBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setMediaBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -546,8 +1289,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setBleedBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setBleedBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -563,8 +1306,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setTrimBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setTrimBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -580,8 +1323,8 @@ public final class PdfPage implements AutoCloseable {
      */
     public void setArtBox(Rect box) {
         ensureOpen();
-        if (box == null) throw new IllegalArgumentException("box must not be null");
         PdfPageBoxes.setArtBox(rawPageSegment, box);
+        ownerDoc.markContentModified();
     }
 
     /**
@@ -599,7 +1342,7 @@ public final class PdfPage implements AutoCloseable {
                     return buf.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
-                stirling.software.jpdfium.panama.NativeRuntime.rethrowFatal(t);
+                NativeRuntime.rethrowFatal(t);
             }
         }
         return 1.0f;
@@ -669,23 +1412,91 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Returns the native page handle for use by internal library code.
-     * External callers should not use this; it bypasses the safety checks in this class.
+     * Returns the raw bridge page handle.
+     *
+     * <p><strong>Internal use only.</strong> This handle is an opaque token understood
+     * only by {@link JpdfiumLib} and its companions.
+     * External callers bypassing this method bypass all closed-page checks and
+     * thread-safety contracts enforced by this class.
+     *
+     * <p>Taking it marks the owning document as modified, as {@link #rawHandle()} does.
      */
     public long nativeHandle() {
         ensureOpen();
+        ownerDoc.markContentModified();
         return handle;
+    }
+
+    /**
+     * Returns true if this page has been closed or invalidated.
+     */
+    public boolean isClosed() {
+        return closed.get();
     }
 
     private void ensureOpen() {
         if (closed.get()) throw new IllegalStateException("PdfPage is already closed");
+        if (isStale()) {
+            throw new IllegalStateException(
+                    "PdfPage was invalidated by a structural document operation "
+                            + "(metadata/font strip or page rasterization) that freed native state; "
+                            + "reopen the page via PdfDocument.page(int)");
+        }
     }
 
+    /**
+     * Close this page handle and release native state. Idempotent; also retires
+     * any in-flight {@link ProgressiveSession}.
+     */
     @Override
     public void close() {
+        // Lifecycle: OPEN → teardown under this monitor → CLOSED.
         // compareAndSet, not check-then-set: a lost race here closes the same
-        // native page twice and corrupts the heap.
-        if (!closed.compareAndSet(false, true)) return;
-        JpdfiumLib.pageClose(handle);
+        // native page twice and corrupts the heap. Synchronized with
+        // ProgressiveSession step/close on this monitor so an in-flight
+        // continue cannot race native page cleanup (the native layer also
+        // abandons pending progressive state on page close as a backstop).
+        synchronized (this) {
+            if (!closed.compareAndSet(false, true)) return;
+            // Retire the active session first, while the native page is still
+            // valid, so its explicit progressive close runs instead of
+            // depending on the abandon backstop. A session failure is
+            // aggregated, never silently dropped, but native page retirement
+            // still proceeds.
+            ProgressiveSession session = activeSession.getAndSet(null);
+            Throwable sessionFailure = null;
+            if (session != null) {
+                try {
+                    session.closeForOwnerTeardown();
+                } catch (Throwable t) {
+                    sessionFailure = t;
+                }
+            }
+            try {
+                // jpdfium_page_close handles stale wrappers without touching freed
+                // PDFium state, and releases the DocCore reference held by this page.
+                // Skipping the call leaks the DocCore (replacement FPDF_DOCUMENT, byte
+                // buffer, loaded fonts) for the life of the process.
+                JpdfiumLib.pageClose(handle);
+            } catch (RuntimeException re) {
+                if (sessionFailure != null) {
+                    re.addSuppressed(sessionFailure);
+                }
+                throw re;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                if (sessionFailure != null) {
+                    t.addSuppressed(sessionFailure);
+                }
+                throw new JPDFiumException("page close failed", t);
+            }
+            if (sessionFailure != null) {
+                NativeRuntime.rethrowFatal(sessionFailure);
+                if (sessionFailure instanceof RuntimeException re) {
+                    throw re;
+                }
+                throw new JPDFiumException("progressive session close failed", sessionFailure);
+            }
+        }
     }
 }

@@ -72,6 +72,10 @@ option(JPDFIUM_BUILD_FUZZERS "Build libFuzzer fuzz targets" OFF)
 # Platform detection
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(JPDFIUM_OS "linux")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    set(JPDFIUM_OS "freebsd")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    set(JPDFIUM_OS "openbsd")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(JPDFIUM_OS "darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -191,7 +195,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_document.cpp
         bridge/src/jpdfium_render.cpp
         bridge/src/jpdfium_text.cpp
-        bridge/src/jpdfium_redact.cpp
+        bridge/src/jpdfium_redact.cpp bridge/src/jpdfium_redact_audit.cpp bridge/src/jpdfium_redact_fission.cpp bridge/src/jpdfium_redact_fonts.cpp bridge/src/jpdfium_redact_image.cpp bridge/src/jpdfium_redact_pattern.cpp bridge/src/jpdfium_redact_text.cpp
         bridge/src/jpdfium_advanced.cpp
         bridge/src/jpdfium_image.cpp
         bridge/src/jpdfium_repair.cpp
@@ -201,7 +205,8 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
-        bridge/src/jpdfium_openjpeg.cpp)
+        bridge/src/jpdfium_openjpeg.cpp
+        bridge/src/jpdfium_signature.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
         PRIVATE "${PDFIUM_INCLUDE_DIR}")
@@ -213,6 +218,27 @@ if(JPDFIUM_USE_PDFIUM)
     else()
         target_compile_options(jpdfium PRIVATE -Wall -Wextra -Wpedantic -Werror
                                -Wno-ignored-qualifiers)
+    endif()
+
+    # Size/perf: only JPDFIUM_EXPORT symbols leave the bridge, and the linker
+    # may drop bridge and static-dependency code the JVM never calls. PDFium's
+    # FPDF_* exports keep default visibility so the FFM bindings resolve them.
+    if(MSVC)
+        target_compile_options(jpdfium PRIVATE /Gy /Gw)
+        target_link_options(jpdfium PRIVATE /OPT:REF /OPT:ICF)
+    else()
+        target_compile_options(jpdfium PRIVATE -fvisibility=hidden
+                               -ffunction-sections -fdata-sections)
+        if(APPLE)
+            target_link_options(jpdfium PRIVATE "-Wl,-dead_strip" "-Wl,-x")
+        else()
+            target_link_options(jpdfium PRIVATE "-Wl,--gc-sections" "-Wl,--as-needed")
+        endif()
+    endif()
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _jpdfium_ipo_ok OUTPUT _jpdfium_ipo_msg)
+    if(_jpdfium_ipo_ok AND CMAKE_BUILD_TYPE STREQUAL "Release" AND NOT _jpdfium_san_flags)
+        set_property(TARGET jpdfium PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     endif()
 
     if(PDFIUM_LINK_MODE STREQUAL "static")
@@ -237,12 +263,15 @@ if(JPDFIUM_USE_PDFIUM)
             # format correctly. apt-install lld on the runner side.
             target_link_options(jpdfium PRIVATE "-fuse-ld=lld")
             target_link_options(jpdfium PRIVATE
+                "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.map"
+                "-Wl,--icf=safe"
                 "-Wl,--whole-archive" "${PDFIUM_LIB}" "-Wl,--no-whole-archive")
+            set_property(TARGET jpdfium APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bridge/jpdfium.map")
         endif()
         # PDFium static archives reference platform libs that we'd otherwise
         # get transitively via libpdfium.so's NEEDED entries.
         if(UNIX AND NOT APPLE)
-            target_link_libraries(jpdfium PRIVATE pthread dl m)
+            target_link_libraries(jpdfium PRIVATE pthread ${CMAKE_DL_LIBS} m)
         endif()
         if(APPLE)
             target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
@@ -319,8 +348,8 @@ if(JPDFIUM_USE_PDFIUM)
     endif()
     # Rust staticlibs don't carry their own platform system-lib dependencies -
     # the consuming target has to supply them.
-    if(JPDFIUM_OS STREQUAL "linux")
-        target_link_libraries(jpdfium PRIVATE dl pthread m)
+    if(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
+        target_link_libraries(jpdfium PRIVATE ${CMAKE_DL_LIBS} pthread m)
     elseif(APPLE)
         # CoreFoundation: iana-time-zone calls CFRelease / CFCopyTimeZone etc.
         # Security + SystemConfiguration: pulled by common TLS/network crates.
@@ -375,10 +404,14 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
-    # ICU4C (common only) - Unicode normalization (NFC/NFKC) and BiDi.
-    # Sentence segmentation lives in java.text.BreakIterator, so icu-i18n
-    # is deliberately not linked: it saves ~3 MB of bundled libs plus the
-    # brkitr data tables, with no native caller left for it.
+    # ICU4C - Unicode normalization and BiDi only (all in libicuuc). Sentence
+    # segmentation moved to java.text.BreakIterator, so the bridge references
+    # u_init, u_setDataDirectory and the ubidi_* entry points and nothing from
+    # libicui18n. Requesting the i18n library only added a NEEDED entry, which
+    # macOS kept (ld64 keeps unused dylibs) and the bundler then copied - about
+    # 2.6 MB per darwin bundle for no symbols. Linux and Windows already
+    # dropped it; with lld and MSVC the unused library never reaches the
+    # load commands.
     pkg_check_modules(ICU REQUIRED IMPORTED_TARGET icu-uc)
     target_link_libraries(jpdfium PRIVATE PkgConfig::ICU)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_ICU)
@@ -471,7 +504,7 @@ if(JPDFIUM_USE_PDFIUM)
     # must not demand them at its own link time (--no-undefined / -undefined,error
     # would fail). The sanitizer build is a test/fuzz configuration only; the
     # strict checks stay on for normal release builds.
-    if(JPDFIUM_OS STREQUAL "linux")
+    if(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
         if(NOT JPDFIUM_SANITIZE)
             target_link_options(jpdfium PRIVATE -Wl,--no-undefined)
         endif()
@@ -518,12 +551,49 @@ else()
             -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
             -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
         COMMENT "Generated native-libs.txt for stub")
+
+    # The loader fails closed when the manifest is absent, so the stub has to
+    # ship the same integrity manifest the real natives bundle does.
+    add_custom_command(TARGET jpdfium_stub POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${NATIVES_RESOURCES}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-sha256.cmake
+        COMMENT "Generated native-libs.sha256 for stub")
+
+    # Also stage into native/dist/<platform>, which is where the Gradle natives
+    # conventions read from. processResources lists the staged dir first with
+    # DuplicatesStrategy.EXCLUDE, so an empty staged manifest would otherwise
+    # shadow the generated one above and the loader would refuse to start.
+    add_custom_command(TARGET jpdfium_stub POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:jpdfium_stub>
+            ${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}/${JPDFIUM_LIB_NAME}${JPDFIUM_LIB_EXTENSION}
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-txt.cmake
+        COMMAND ${CMAKE_COMMAND}
+            -DNATIVES_DIR=${CMAKE_SOURCE_DIR}/dist/${JPDFIUM_PLATFORM}
+            -DLIB_SUFFIX=${JPDFIUM_LIB_EXTENSION}
+            -P ${CMAKE_SOURCE_DIR}/cmake/generate-native-libs-sha256.cmake
+        COMMENT "Staged stub ${JPDFIUM_PLATFORM} into native/dist for Gradle")
 endif()
 
 if(JPDFIUM_USE_PDFIUM)
     include(CheckSymbolExists)
     set(CMAKE_REQUIRED_INCLUDES "${PDFIUM_INCLUDE_DIR}")
-    check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    # A Skia prebuild drops lib/pdfium-use-skia next to the library. The
+    # header's FPDF_RenderPageSkia declaration is guarded by PDF_USE_SKIA,
+    # which only the PDFium build itself defines, so a header probe cannot
+    # detect a Skia build from the outside; keep it as a fallback for
+    # consumers that define PDF_USE_SKIA themselves.
+    if(EXISTS "${PDFIUM_LIB_DIR}/pdfium-use-skia")
+        set(JPDFIUM_HAS_SKIA TRUE)
+    else()
+        check_symbol_exists(FPDF_RenderPageSkia "fpdfview.h" JPDFIUM_HAS_SKIA)
+    endif()
     if(NOT JPDFIUM_HAS_SKIA)
         message(STATUS "Skia check: FPDF_RenderPageSkia not found (using standard AGG renderer backend)")
     else()
@@ -548,17 +618,81 @@ if(JPDFIUM_BUILD_TESTS)
         target_link_libraries(native_smoke PRIVATE jpdfium_stub)
     endif()
     add_test(NAME native_smoke COMMAND native_smoke)
+
+    # Handle-safety and writer harness: regressions for the execution-domain
+    # migration's native changes (handle validation, writer finalization).
+    # Runs inside the bridge with no JVM, so ASan/UBSan does not have to
+    # coexist with HotSpot's SIGSEGV handling.
+    add_executable(handle_safety bridge/tests/handle_safety.cpp)
+    target_include_directories(handle_safety PRIVATE bridge/include)
+    if(MSVC)
+        target_compile_options(handle_safety PRIVATE /W4 /WX)
+    else()
+        target_compile_options(handle_safety PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(handle_safety PRIVATE jpdfium)
+    else()
+        # The stub has no handle registries and answers with canned success
+        # values, so the harness skips its rejection assertions in this mode.
+        target_link_libraries(handle_safety PRIVATE jpdfium_stub)
+        target_compile_definitions(handle_safety PRIVATE JPDFIUM_STUB_BUILD=1)
+    endif()
+    if(MSVC)
+        # The harness writes scratch PDFs with fopen like the bridge itself
+        # does, so it needs the same CRT deprecation opt-out the library gets.
+        # /WX turns the otherwise-fatal C4996 into a build break on Windows.
+        target_compile_definitions(handle_safety PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+    endif()
+    add_test(NAME handle_safety COMMAND handle_safety)
+
+    # Prices the validation the registries add to every handle decode, so the
+    # correctness cost is a measured number rather than an assumption.
+    # Self-contained (local table + stdlib only): no bridge link needed, and
+    # it must run via CTest like handle_safety does.
+    add_executable(registry_cost bridge/tests/registry_cost.cpp)
+    target_include_directories(registry_cost PRIVATE bridge/include)
+    if(NOT MSVC)
+        target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME registry_cost COMMAND registry_cost)
+    # Test environment. ENVIRONMENT is a whole-property value, so every
+    # contributor has to append here: setting it twice silently drops the first
+    # assignment, which previously cost the component-build library path as soon
+    # as the UBSan options were added.
+    set(_jpdfium_test_env "")
     # Component PDFium builds: the sibling libpdfium.* lives in PDFIUM_LIB_DIR
     # and is only resolvable at test time via the library search path.
     if(JPDFIUM_USE_PDFIUM AND PDFIUM_LINK_MODE STREQUAL "component")
         if(JPDFIUM_OS STREQUAL "darwin")
-            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
+            set(_jpdfium_test_env
                 "DYLD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{DYLD_LIBRARY_PATH}")
-        elseif(JPDFIUM_OS STREQUAL "linux")
-            set_tests_properties(native_smoke PROPERTIES ENVIRONMENT
+        elseif(JPDFIUM_OS STREQUAL "linux" OR JPDFIUM_OS STREQUAL "freebsd" OR JPDFIUM_OS STREQUAL "openbsd")
+            set(_jpdfium_test_env
                 "LD_LIBRARY_PATH=${PDFIUM_LIB_DIR}:$ENV{LD_LIBRARY_PATH}")
         endif()
     endif()
+    # UBSan findings must fail the run rather than merely print, so a latent
+    # overflow in the writer's budget arithmetic cannot pass silently.
+    if(JPDFIUM_SANITIZE AND NOT MSVC)
+        string(FIND "${JPDFIUM_SANITIZE}" "undefined" _has_ubsan)
+        if(NOT _has_ubsan EQUAL -1)
+            set(_ubsan_env "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
+            if(_jpdfium_test_env STREQUAL "")
+                set(_jpdfium_test_env "${_ubsan_env}")
+            else()
+                set(_jpdfium_test_env "${_jpdfium_test_env};${_ubsan_env}")
+            endif()
+        endif()
+    endif()
+    if(NOT _jpdfium_test_env STREQUAL "")
+        set_tests_properties(native_smoke handle_safety PROPERTIES
+            ENVIRONMENT "${_jpdfium_test_env}")
+    endif()
+    # handle_safety reads a real PDF fixture by relative path, and CTest runs
+    # from the build directory, so the path must be anchored at the repo root.
+    set_tests_properties(handle_safety PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/..")
 endif()
 
 if(JPDFIUM_BUILD_FUZZERS)
@@ -567,8 +701,9 @@ if(JPDFIUM_BUILD_FUZZERS)
     endif()
     add_executable(jpdfium_fuzz bridge/fuzz/jpdfium_fuzz.cpp)
     target_include_directories(jpdfium_fuzz PRIVATE bridge/include)
-    target_compile_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address -fno-omit-frame-pointer -g)
-    target_link_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address)
+    target_compile_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address,undefined
+                           -fno-omit-frame-pointer -g)
+    target_link_options(jpdfium_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
     if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium_fuzz PRIVATE jpdfium)
         if(PDFIUM_LINK_MODE STREQUAL "component")
@@ -576,6 +711,20 @@ if(JPDFIUM_BUILD_FUZZERS)
         endif()
     else()
         target_link_libraries(jpdfium_fuzz PRIVATE jpdfium_stub)
+    endif()
+
+    add_executable(jpdfium_lifecycle_fuzz bridge/fuzz/jpdfium_lifecycle_fuzz.cpp)
+    target_include_directories(jpdfium_lifecycle_fuzz PRIVATE bridge/include)
+    target_compile_options(jpdfium_lifecycle_fuzz PRIVATE -fsanitize=fuzzer,address,undefined
+                           -fno-omit-frame-pointer -g)
+    target_link_options(jpdfium_lifecycle_fuzz PRIVATE -fsanitize=fuzzer,address,undefined)
+    if(JPDFIUM_USE_PDFIUM)
+        target_link_libraries(jpdfium_lifecycle_fuzz PRIVATE jpdfium)
+        if(PDFIUM_LINK_MODE STREQUAL "component")
+            target_link_options(jpdfium_lifecycle_fuzz PRIVATE "-Wl,-rpath,${PDFIUM_LIB_DIR}")
+        endif()
+    else()
+        target_link_libraries(jpdfium_lifecycle_fuzz PRIVATE jpdfium_stub)
     endif()
 endif()
 

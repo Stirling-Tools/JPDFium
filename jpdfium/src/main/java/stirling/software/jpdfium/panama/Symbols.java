@@ -55,7 +55,7 @@ public final class Symbols {
         }
         RESOLVED_SYMBOLS.add(name);
         MethodHandle handle = LINKER.downcallHandle(symbolOpt.get(), desc, options);
-        return NativeGuard.guard(handle);
+        return PdfiumRuntime.guarded(handle);
     }
 
     /**
@@ -73,7 +73,44 @@ public final class Symbols {
         }
         RESOLVED_SYMBOLS.add(name);
         MethodHandle handle = LINKER.downcallHandle(symbolOpt.get(), desc, options);
-        return NativeGuard.guard(handle);
+        return PdfiumRuntime.guarded(handle);
+    }
+
+    /**
+     * Create a downcall handle that does NOT enter the PDFium domain.
+     *
+     * <p>For native entry points proven independent of PDFium's process-wide
+     * mutable state (in-process QPDF structural operations, each creating its
+     * own {@code QPDF}/{@code QPDFWriter} instances with call-local FFM
+     * argument storage). PDFium entry points must keep using
+     * {@link #downcall} so the domain serialization guarantee is preserved.
+     *
+     * @throws UnsatisfiedLinkError if symbol is absent in FULL mode
+     */
+    public static MethodHandle downcallUnguarded(String name, FunctionDescriptor desc, Linker.Option... options) {
+        Optional<MemorySegment> symbolOpt = find(name);
+        if (symbolOpt.isEmpty()) {
+            MISSING_SYMBOLS.add(name);
+            if (NativeRuntime.isFull()) {
+                throw new UnsatisfiedLinkError("Missing required native symbol in FULL mode: " + name);
+            }
+            return null;
+        }
+        RESOLVED_SYMBOLS.add(name);
+        return LINKER.downcallHandle(symbolOpt.get(), desc, options);
+    }
+
+    /**
+     * Optional variant of {@link #downcallUnguarded}: returns {@code null} when
+     * the symbol is absent without recording or throwing, even in FULL mode.
+     */
+    public static MethodHandle downcallOptionalUnguarded(String name, FunctionDescriptor desc, Linker.Option... options) {
+        Optional<MemorySegment> symbolOpt = find(name);
+        if (symbolOpt.isEmpty()) {
+            return null;
+        }
+        RESOLVED_SYMBOLS.add(name);
+        return LINKER.downcallHandle(symbolOpt.get(), desc, options);
     }
 
     /**

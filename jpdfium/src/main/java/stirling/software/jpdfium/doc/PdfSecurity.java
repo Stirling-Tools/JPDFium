@@ -1,11 +1,13 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
@@ -84,6 +86,32 @@ public final class PdfSecurity {
         return QpdfLib.isEncryptSupported() && QpdfLib.isDecryptSupported();
     }
 
+    /** True when the bundled native library can copy existing password protection. */
+    public static boolean isCopyEncryptionSupported() {
+        return QpdfLib.isCopyEncryptionSupported();
+    }
+
+    /**
+     * Apply an encrypted source's protection to a processed, unencrypted PDF.
+     * Either source password is sufficient; both passwords, permissions and encryption settings
+     * are retained without needing to know the other password. An empty password is accepted when
+     * the source permits it. No password or PDF is sent to an external executable.
+     *
+     * <p>The output must differ from both inputs, including filesystem aliases. Failure leaves
+     * an existing destination unchanged and removes temporary output. This copies protection,
+     * not signatures or source content, and does not enforce modification permissions on behalf
+     * of the application. Reusing protection does not generate a fresh encryption key.
+     *
+     * @throws IllegalArgumentException for null arguments or a password containing NUL
+     * @throws JPDFiumException if the native API is unavailable, authentication fails, the source
+     *         is unencrypted, the input is encrypted, or the output cannot be safely published
+     */
+    public static void copyEncryption(Path input, Path output, Path source, String password) {
+        if (!QpdfLib.copyEncryptionToFile(input, output, source, password)) {
+            throw new JPDFiumException("PDF encryption copy is unavailable in this native bundle");
+        }
+    }
+
     /**
      * Encrypt a PDF file using AES-256 (PDF 2.0 / R6).
      *
@@ -110,12 +138,18 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void encrypt(Path input, Path output, String userPassword, String ownerPassword, int permissions, int keyLength) throws IOException {
+        if (QpdfLib.encryptToFile(input, output, userPassword, ownerPassword, permissions, keyLength)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] encBytes = encryptBytes(inBytes, userPassword, ownerPassword, permissions, keyLength);
         if (encBytes == null) {
             throw new JPDFiumException("PDF encryption failed");
         }
-        Files.write(output, encBytes);
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), encBytes);
+            tx.publish(null);
+        }
     }
 
     /**
@@ -154,12 +188,18 @@ public final class PdfSecurity {
      * @throws IOException on I/O error
      */
     public static void decrypt(Path input, Path output, String password) throws IOException {
+        if (QpdfLib.decryptToFile(input, output, password)) {
+            return;
+        }
         byte[] inBytes = Files.readAllBytes(input);
         byte[] decBytes = decryptBytes(inBytes, password);
         if (decBytes == null) {
             throw new JPDFiumException("PDF decryption failed");
         }
-        Files.write(output, decBytes);
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Files.write(tx.staging(), decBytes);
+            tx.publish(null);
+        }
     }
 
     /**
@@ -403,29 +443,29 @@ public final class PdfSecurity {
     private static int removeHiddenTextObjects(MemorySegment rawPage) {
         int count;
         try { count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage); }
-        catch (Throwable _) { return 0; }
+        catch (Throwable t) { NativeRuntime.rethrowFatal(t); return 0; }
 
         int removed = 0;
         for (int i = count - 1; i >= 0; i--) {
             MemorySegment obj;
             try { obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (obj.equals(MemorySegment.NULL)) continue;
 
             int type;
             try { type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (type != 1) continue; // TEXT only
 
             int renderMode;
             try { renderMode = (int) PageEditBindings.FPDFTextObj_GetTextRenderMode.invokeExact(obj); }
-            catch (Throwable _) { continue; }
+            catch (Throwable t) { NativeRuntime.rethrowFatal(t); continue; }
             if (renderMode == 3) { // invisible
                 try { int ok = (int) PageEditBindings.FPDFPage_RemoveObject.invokeExact(rawPage, obj);
             if (ok == 0) {
                 throw new JPDFiumException("FPDFPage_RemoveObject failed");
             } removed++; }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
         if (removed > 0) {

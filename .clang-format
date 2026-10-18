@@ -1,5 +1,5 @@
-# Enforce consistent C++ formatting without bikeshedding in review
 BasedOnStyle: Google
+Standard: Latest
 ColumnLimit: 100
 IndentWidth: 4
 TabWidth: 4
@@ -9,4 +9,14 @@ PointerAlignment: Left
 SortIncludes: true
 IncludeBlocks: Regroup
 AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
 KeepEmptyLinesAtTheStartOfBlocks: false
+FixNamespaceComments: true
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+SpacesInAngles: false
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignOperands: Align

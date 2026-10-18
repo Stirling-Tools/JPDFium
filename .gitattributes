@@ -1,6 +1,31 @@
 * text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Binary media and formats
 *.pdf binary
 *.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.tif binary
+*.tiff binary
+*.avif binary
+*.heic binary
+*.heif binary
+*.jxl binary
+*.ico binary
+
+# Native binaries and archives
 *.jar binary
-gradlew text eol=lf
-*.bat text eol=crlf
+*.so binary
+*.so.* binary
+*.dylib binary
+*.dll binary
+*.a binary
+*.lib binary
+*.tar* binary
+*.zip binary
+*.gz binary

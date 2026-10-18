@@ -54,6 +54,13 @@ public class S29_RenderOptions {
                 try (PdfPage page = doc.page(0)) {
                     float w = page.size().width();
                     float h = page.size().height();
+                    // A 72000pt monster page at 200dpi needs ~1.7GB per image;
+                    // skip pages no reasonable heap can render at these DPIs.
+                    long printPixels = (long) (w * 200 / 72) * (long) (h * 200 / 72);
+                    if (printPixels > 100_000_000L) {
+                        System.out.printf("  %s: SKIPPED (page too large for sample heap)%n", stem);
+                        continue;
+                    }
 
                     // Grayscale render
                     RenderOptions gray = RenderOptions.builder()

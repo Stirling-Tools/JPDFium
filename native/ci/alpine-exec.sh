@@ -5,10 +5,16 @@ set -euo pipefail
 PLATFORM="${1:?usage: alpine-exec.sh <platform> <step> [<step> ...]}"
 shift
 
-# eclipse-temurin:25-jdk-alpine = musl JDK on Alpine: the toolchain for the
+# eclipse-temurin:25-jdk-alpine-3.23 = musl JDK on Alpine: the toolchain for the
 # linux-musl-* targets. Pulls the matching-arch manifest on both x64 and arm64
 # runners (native, no QEMU).
-IMAGE="eclipse-temurin:25-jdk-alpine"
+#
+# The Alpine release is pinned deliberately: the floating 25-jdk-alpine tag now
+# tracks Alpine 3.24, whose python3 3.14 is refused by the gsutil 5.35 that
+# depot_tools downloads ("gsutil requires Python version 3.9-3.13"). That aborts
+# the GCS deps of gclient sync (bundled clang, rust toolchain) on every musl row.
+# Alpine 3.23 ships python3 3.12.15, which gsutil supports.
+IMAGE="eclipse-temurin:25-jdk-alpine-3.23"
 
 ENV_ARGS=()
 for var in GH_TOKEN GITHUB_REPOSITORY EMBEDPDF_PIN_SHA \

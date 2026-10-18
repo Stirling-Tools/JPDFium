@@ -73,7 +73,7 @@ run_cargo_build() {
     local tries=3 delay=15
     local i
     for i in $(seq 1 "$tries"); do
-        if cargo build --release "$@"; then
+        if cargo build --release --locked "$@"; then
             return 0
         fi
         if [ "$i" -lt "$tries" ]; then
@@ -96,7 +96,9 @@ cd "${RUST_DIR}"
 # ("found architecture arm64, required architecture x86_64") and leave the
 # jpdfium_rust_* symbols undefined.
 CROSS_TARGET=""
-if [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
+if [ "${TARGET_PLATFORM:-${JPDFIUM_TARGET_PLATFORM:-}}" = "freebsd-x64" ]; then
+    CROSS_TARGET="x86_64-unknown-freebsd"
+elif [ -n "${CMAKE_OSX_ARCHITECTURES:-}" ]; then
     case "$(uname -m)" in
         x86_64)        HOST_TRIPLE="x86_64-apple-darwin" ;;
         arm64|aarch64) HOST_TRIPLE="aarch64-apple-darwin" ;;
@@ -116,6 +118,12 @@ if [ -n "${CROSS_TARGET}" ]; then
     echo "Cross-compiling Rust staticlib for ${CROSS_TARGET}..."
     if command -v rustup >/dev/null 2>&1; then
         rustup target add "${CROSS_TARGET}"
+    fi
+    if [ "${CROSS_TARGET}" = "x86_64-unknown-freebsd" ]; then
+        FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-${SCRIPT_DIR}/freebsd-sysroot}"
+        export CC_x86_64_unknown_freebsd="clang"
+        export CFLAGS_x86_64_unknown_freebsd="--target=x86_64-unknown-freebsd14.0 --sysroot=${FREEBSD_SYSROOT}"
+        export AR_x86_64_unknown_freebsd="llvm-ar"
     fi
     run_cargo_build --target "${CROSS_TARGET}"
     # Cargo writes target-specific artifacts under target/<triple>/; the

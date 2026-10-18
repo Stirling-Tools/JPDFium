@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.panama.TextPageBindings;
@@ -106,7 +107,7 @@ public final class PdfColumnExtractor {
         }
 
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
@@ -121,7 +122,7 @@ public final class PdfColumnExtractor {
                 }
             } finally {
                 try { TextPageBindings.FPDFText_ClosePage.invokeExact(textPage); }
-                catch (Throwable _) {}
+                catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
         }
 

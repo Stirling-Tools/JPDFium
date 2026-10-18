@@ -14,9 +14,13 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.model.ProgressiveStatus;
+import stirling.software.jpdfium.model.RenderQuality;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -96,6 +100,26 @@ public class BenchmarkSuite {
         }
     }
 
+    @Benchmark
+    public int renderAt72DpiFast() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(pdfBytes.clone())) {
+            try (PdfPage page = doc.page(0)) {
+                var result = page.renderAt(72, RenderQuality.FAST);
+                return result.width() * result.height();
+            }
+        }
+    }
+
+    @Benchmark
+    public int renderAt72DpiScreen() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(pdfBytes.clone())) {
+            try (PdfPage page = doc.page(0)) {
+                var result = page.renderAt(72, RenderQuality.SCREEN);
+                return result.width() * result.height();
+            }
+        }
+    }
+
 
     @Benchmark
     public int renderAt150Dpi() throws Exception {
@@ -142,6 +166,10 @@ public class BenchmarkSuite {
     @State(Scope.Thread)
     public static class OpenDocState {
         public PdfDocument doc;
+        public Arena arena;
+        public MemorySegment targetBuffer;
+        public int width;
+        public int height;
 
         @Setup(Level.Trial)
         public void openDoc() throws Exception {
@@ -151,11 +179,46 @@ public class BenchmarkSuite {
                 bytes = Objects.requireNonNull(in).readAllBytes();
             }
             doc = PdfDocument.open(bytes);
+            arena = Arena.ofConfined();
+            try (PdfPage page = doc.page(0)) {
+                width = (int) page.size().width();
+                height = (int) page.size().height();
+                targetBuffer = arena.allocate((long) width * height * 4);
+            }
         }
 
         @TearDown(Level.Trial)
         public void closeDoc() throws Exception {
+            arena.close();
             doc.close();
+        }
+    }
+
+    @Benchmark
+    public int renderIntoZeroAllocFast(OpenDocState state) throws Exception {
+        try (PdfPage page = state.doc.page(0)) {
+            page.renderInto(state.targetBuffer, state.width, state.height, RenderQuality.FAST);
+            return state.width * state.height;
+        }
+    }
+
+    @Benchmark
+    public int renderIntoZeroAllocPrint(OpenDocState state) throws Exception {
+        try (PdfPage page = state.doc.page(0)) {
+            page.renderInto(state.targetBuffer, state.width, state.height, RenderQuality.PRINT);
+            return state.width * state.height;
+        }
+    }
+
+    @Benchmark
+    public int renderProgressiveComplete(OpenDocState state) throws Exception {
+        try (PdfPage page = state.doc.page(0);
+             var session = page.startProgressiveRender(state.targetBuffer, state.width, state.height, RenderQuality.FAST)) {
+            var status = session.step();
+            while (status == ProgressiveStatus.TO_BE_CONTINUED) {
+                status = session.step();
+            }
+            return status.code();
         }
     }
 

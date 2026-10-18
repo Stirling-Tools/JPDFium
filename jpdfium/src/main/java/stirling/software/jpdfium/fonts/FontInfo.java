@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.fonts;
 
+import java.util.Locale;
 import java.util.List;
 
 /**
@@ -15,7 +16,7 @@ public record FontInfo(String name, String type, boolean embedded) {
      * Check if this is a standard 14 PDF font (always available, never needs embedding).
      */
     public boolean isStandard14() {
-        return STANDARD_14.stream().anyMatch(s -> name.toLowerCase().contains(s.toLowerCase()));
+        return STANDARD_14.stream().anyMatch(s -> name.toLowerCase(Locale.ROOT).contains(s.toLowerCase(Locale.ROOT)));
     }
 
     /** The 14 standard PDF fonts guaranteed to be available in all PDF viewers. */
