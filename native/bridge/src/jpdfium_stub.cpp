@@ -78,9 +78,13 @@ static FilePtr safe_fopen_write(const char* path) {
 // predictable sibling name must never truncate through a planted symlink.
 static FilePtr safe_fopen_exclusive(const char* path) {
 #if defined(_WIN32)
+    // _O_BINARY is required: the CRT default is text mode and _fdopen's "wb"
+    // does not switch an already-open descriptor, so every LF written gained a
+    // CR and every offset after the first stream newline shifted.
     int fd = -1;
-    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT, _SH_DENYRW,
-                   _S_IREAD | _S_IWRITE) != 0) {
+    if (::_sopen_s(&fd, path,
+                   _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY,
+                   _SH_DENYRW, _S_IREAD | _S_IWRITE) != 0) {
         return FilePtr(nullptr);
     }
     FILE* f = ::_fdopen(fd, "wb");
