@@ -1,0 +1,74 @@
+# Sentence-segmentation parity corpus for PR #90 (native ICU BreakIterator -> java.text.BreakIterator).
+#
+# Format: <id>\t<text> - one case per line. Escapes: \\n \\r \\t \\\\ \\uXXXX (Java style).
+# The corpus is consumed by two readers:
+#   * tools/icu-sentence-golden/icu_sentence_golden.cpp (regenerates the goldens with ICU)
+#   * jpdfium/src/test/java/stirling/software/jpdfium/redact/pii/SentenceSegmentationParityTest.java
+# Comments (# at line start) and blank lines are ignored.
+en-basic	The report was filed on 12 March 2024 in London. Ms. Clarke met Dr. Owusu at 9 a.m. They reviewed the file.
+en-abbrev-initials	Ms. A. B. Clarke wrote to Dr. J. R. R. Tolkien about it. He replied the next day.
+en-abbrev-common	See e.g. Fig. 3, i.e. the third chart, etc. Then continue reading.
+en-us-army	The U.S. Army moved north. The U.S. government followed suit. Then it rained.
+en-numbers	Version 1.2.3 shipped on 1.1.2023 at 9.30 p.m. sharp. It cost $1.2M.
+en-list-numbered	1. First item. 2. Second item. 3. Third item with a longer description.
+en-list-parens	(1) Alpha. (2) Beta. (3) Gamma.
+en-ellipsis	Wait... what happened? He paused\u2026 then continued. Done.
+en-quotes	He said "Stop." Then he left. She asked, "Why?" and waited.
+en-excl-repeats	Amazing!!! Really?! Yes. Truly...
+en-decimals	Pi is 3.14 approximately. E is 2.718. Both are irrational.
+en-email-phone	Contact alice.clarke@example.co.uk or +44 20 7946 0958 today. Mention ref INV-2024-000123.
+en-ip-url	Visit https://example.com/a.b or 192.168.0.1 tonight. Log the visit.
+en-no-terminal	This sentence never ends
+en-multi-space	First.    Second.  Third.
+en-newline-embedded	First line ends here.\nSecond line continues. Third one follows.
+en-colon-semicolon	Options: alpha; beta; gamma. Rules: one, two. Done.
+en-long-nopunct	This sentence has no terminator at all and keeps running across the line without any punctuation mark so the segmenter cannot rely on sentence ending characters here at all and must simply return the whole text as a single unit of work for the pipeline to operate on safely and predictably
+en-accents	Caf\u00e9 M\u00fcller paid \u20ac1,200 in Z\u00fcrich. The na\u00efve r\u00e9sum\u00e9 followed. Voil\u00e0.
+en-combining	e\u0301 plus a\u0300 marks. Diacritics combine. Fine.
+de-german	Die Lieferung erfolgte am 3. Mai 2024 in Z\u00fcrich; danach folgte die Pr\u00fcfung. Frau Dr. M\u00fcller stimmte zu.
+fr-french	Le dossier a \u00e9t\u00e9 trait\u00e9 par M. Dupont, 12 rue de la Paix. Il a r\u00e9pondu: \u00abBonjour!\u00bb puis est parti.
+es-spanish	El Sr. Garc\u00eda lleg\u00f3 a las 9 a. m. \u00bfQu\u00e9 pas\u00f3 despu\u00e9s? Nada.
+ar-arabic	\u0648\u0635\u0644 \u0627\u0644\u0633\u064a\u062f \u0623\u062d\u0645\u062f \u0625\u0644\u0649 \u0627\u0644\u0645\u0643\u062a\u0628 \u0641\u064a \u0627\u0644\u062a\u0627\u0633\u0639\u0629. \u062b\u0645 \u063a\u0627\u062f\u0631 \u0628\u0639\u062f \u0633\u0627\u0639\u0629. \u0634\u0643\u0631\u0627.
+he-hebrew	\u05de\u05e8 \u05db\u05d4\u05df \u05d4\u05d2\u05d9\u05e2 \u05d1\u05e9\u05e2\u05d4 \u05ea\u05e9\u05e2. \u05d4\u05d5\u05d0 \u05e2\u05d6\u05d1 \u05de\u05d0\u05d5\u05d7\u05e8 \u05d9\u05d5\u05ea\u05e8. \u05ea\u05d5\u05d3\u05d4.
+ru-cyrillic	\u0413-\u043d \u0418\u0432\u0430\u043d\u043e\u0432 \u043f\u0440\u0438\u0448\u0451\u043b \u0432 9 \u0443\u0442\u0440\u0430. \u041e\u043d \u0443\u0448\u0451\u043b \u043f\u043e\u0437\u0436\u0435. \u0421\u043f\u0430\u0441\u0438\u0431\u043e.
+zh-chinese	\u8fd9\u662f\u7b2c\u4e00\u53e5\u8bdd\u3002\u8fd9\u662f\u7b2c\u4e8c\u53e5\u8bdd\uff01\u7b2c\u4e09\u53e5\u8bdd\uff1f\u6700\u540e\u4e00\u53e5\u6ca1\u6709\u6807\u70b9
+zh-quotes	\u4ed6\u8bf4\uff1a\u300c\u4f60\u597d\u3002\u300d\u7136\u540e\u79bb\u5f00\u4e86\u3002\u5979\u53c8\u95ee\uff1a\u300e\u4e3a\u4ec0\u4e48\uff1f\u300f
+ja-japanese	\u3053\u308c\u306f\u6700\u521d\u306e\u6587\u3067\u3059\u3002\u3053\u308c\u306f\u4e8c\u756a\u76ee\u3067\u3059\uff01\u4e09\u756a\u76ee\u3067\u3059\u304b\uff1f\u300c\u5f15\u7528\u300d\u3082\u542b\u307f\u307e\u3059\u3002
+ja-halfwidth	\u534a\u89d2\u30b9\u30da\u30fc\u30b9 \u3068 \u53e5\u70b9\u3002\u6b21\u306f\uff01\u3053\u308c\u3067\uff1f\u7d42\u308f\u308a.
+th-thai	\u0e04\u0e38\u0e13\u0e2a\u0e21\u0e1a\u0e31\u0e15\u0e34 \u0e19\u0e35\u0e49 \u0e14\u0e35\u0e21\u0e32\u0e01 \u0e04\u0e23\u0e31\u0e1a \u0e23\u0e32\u0e04\u0e32 \u0e2a\u0e39\u0e07 \u0e44\u0e1b \u0e2b\u0e19\u0e48\u0e2d\u0e22 \u0e04\u0e23\u0e31\u0e1a \u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35
+th-thai-punct	\u0e20\u0e32\u0e29\u0e32\u0e44\u0e17\u0e22 \u0e44\u0e21\u0e48\u0e21\u0e35 \u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e2b\u0e21\u0e32\u0e22 \u0e21\u0e2b\u0e31\u0e1e\u0e20\u0e32\u0e04 \u0e08\u0e1a \u0e1b\u0e23\u0e30\u0e42\u0e22\u0e04. \u0e41\u0e15\u0e48 \u0e43\u0e0a\u0e49 \u0e0a\u0e48\u0e2d\u0e07\u0e27\u0e48\u0e32\u0e07 \u0e1a\u0e48\u0e2d\u0e22 \u0e04\u0e23\u0e31\u0e49\u0e07
+lo-lao	\u0eaa\u0eb0\u0e9a\u0eb2\u0e8d\u0e94\u0eb5 \u0e97\u0ec8\u0eb2\u0e99 \u0e82\u0ec9\u0ead\u0e8d \u0e94\u0eb5 \u0e82\u0ead\u0e9a\u0ec3\u0e88 \u0eab\u0ebc\u0eb2\u0e8d
+km-khmer	\u179f\u17bd\u179f\u17d2\u178f\u17b8 \u179b\u17c4\u1780 \u1781\u17d2\u1789\u17bb\u17c6 \u179f\u17bb\u1781\u179f\u1794\u17d2\u1794\u17b6\u1799 \u17a2\u179a\u1782\u17bb\u178e \u1785\u17d2\u179a\u17be\u1793
+my-myanmar	\u1019\u1004\u103a\u1039\u1002\u101c\u102c\u1015\u102b \u1001\u1004\u103a\u1017\u103b\u102c \u1000\u103b\u103d\u1014\u103a\u1010\u1031\u102c\u103a \u1000\u1031\u102c\u1004\u103a\u1038\u1015\u102b\u1010\u101a\u103a \u1000\u103b\u1031\u1038\u1007\u1030\u1038\u1010\u1004\u103a\u1015\u102b\u1010\u101a\u103a
+emoji-basic	Hello \ud83d\udc4b\ud83c\udffb there. How are you \ud83d\ude00 today? Great!
+emoji-zwj	Family \ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 and flag \ud83c\udded\ud83c\uddfa here. Next line follows.
+emoji-astral	\ud835\udd18\ud835\udd2b\ud835\udd26\ud835\udd24\ud835\udd30\ud835\udd31\ud835\udd2c math letters. \ud83d\ude01\ud83d\ude01\ud83d\ude01 bold too. Done.
+cjk-mixed	Invoice \u53d1\u7968 no. 42\u3002Total \u5408\u8ba1 100 \u5143\u3002Thanks \u8c22\u8c22\u3002
+mixed-scripts	Alpha \u03b1 beta \u03b2. \u0413\u0430\u043c\u043c\u0430 \u03b3 delta \u03b4. \u05e9\u05dc\u05d5\u05dd world.
+pii-sentence-target	Ms. Petrovna lives at 12 Main St. Her email is anna.p@example.org. Call +1 555 0100 tomorrow.
+single-letter-list	A. B. C. D. E. F. G. H. I. J.
+trailing-space	First sentence. Second sentence.   
+single-char	A
+one-word-period	Yes.
+quotes-unicode	She said \u201cStop.\u201d Then left. He asked \u2018Why?\u2019 and went.
+nbsp-separator	First\u00a0sentence. Second sentence.
+zero-width	Soft\u200bhyphen? Yes. Zero\u200dwidth joiner. Done.
+percent-currency	Growth was 12.5% in 2024. Costs fell \u20ac1,200. Net +3%.
+url-trailing-dot	See example.com. Then read example.org. Done.
+semicolon-run	It was late; very late; almost midnight. Nobody cared.
+crlf-text	First line ends.\r\nSecond line starts. Third ends.
+tab-separated	Tabs\tbetween\twords. Then normal text. Done.
+paren-nested	He paid (about $5 (maybe more)) later. She agreed.
+en-list-numbered-pronoun	1. First item. 2. The client asked for it. 3. She agreed at once. 4. Their reply came later.
+en-list-parens-pronoun	(1) Alpha for him. (2) Beta for her. (3) Gamma for them.
+en-abbrev-pronoun	Dr. Smith visited Ms. Jones. She thanked him. They left together.
+ja-latin-pronoun	\u3053\u308c\u306f\u6587\u3067\u3059\u3002She said hello. \u6b21\u306e\u6587\u3067\u3059\u3002They replied quickly.
+list-marker-short	1. A. 2. B. 3. C.
+list-marker-paren-short	(1) A. (2) B.
+list-marker-paren-nopunct	Item 2. is fine
+decimal-negative	The value is 42.5 units. Done.
+single-letter-list-short	A. B. C.
+abbrev-negative	See Fig. 3 now. Then stop.
+paren-negative	Invoice (2) is late.
+filename-negative	Stop. 2.cpp is a file name.
+cjk-marker-short	\u7b2c\u4e00\u3002 1. A. \u7b2c\u4e8c\u3002 2. B.
