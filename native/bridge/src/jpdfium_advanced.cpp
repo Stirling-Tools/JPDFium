@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <set>
 #include <string>
@@ -30,11 +31,20 @@ struct Pcre2Pattern {
     pcre2_match_data* match_data = nullptr;
     pcre2_match_context* match_ctx = nullptr;
     pcre2_jit_stack* jit_stack = nullptr;
+
+    // The match data, match context and JIT stack above are reused by every
+    // call on this handle. PdfiumRuntime.execute() enforces calling context,
+    // not mutual exclusion, so two threads can hold the same handle: the lock
+    // keeps that from corrupting the ovector or the shared JIT stack. It is
+    // uncontended in single-threaded use.
+    std::mutex match_mutex;
 };
 
-// Same ReDoS budget as the redact engine (jpdfium_redact.cpp): match work
-// is capped, and JIT matching gets a dedicated bounded stack instead of the
-// 32 KiB machine-stack default.
+// Same ReDoS budget as the redact engine (jpdfium_redact_pattern.cpp): match
+// work is capped, and JIT matching gets a dedicated bounded stack instead of
+// the 32 KiB machine-stack default. JPDFIUM_PCRE2_MATCH_LIMIT and
+// JPDFIUM_PCRE2_DEPTH_LIMIT raise or lower the caps per deployment; an
+// unparsable value keeps the default rather than removing the cap.
 static constexpr uint32_t kPcre2MatchLimit = 1'000'000u;
 static constexpr uint32_t kPcre2DepthLimit = 1'000u;
 
@@ -70,8 +80,8 @@ int32_t jpdfium_pcre2_compile(const char* pattern, uint32_t flags, int64_t* hand
             pcre2_code_free(code);
             return JPDFIUM_ERR_NATIVE;
         }
-        pcre2_set_match_limit(mctx, kPcre2MatchLimit);
-        pcre2_set_depth_limit(mctx, kPcre2DepthLimit);
+        pcre2_set_match_limit(mctx, envUint32("JPDFIUM_PCRE2_MATCH_LIMIT", kPcre2MatchLimit));
+        pcre2_set_depth_limit(mctx, envUint32("JPDFIUM_PCRE2_DEPTH_LIMIT", kPcre2DepthLimit));
         // Dedicated JIT stack (32 KiB initial, 512 KiB max); owned by the pattern.
         // Every native call runs under the global NativeGuard lock, so sharing one
         // stack across this pattern's sequential matches is safe.
@@ -107,6 +117,7 @@ int32_t jpdfium_pcre2_match_all(int64_t pattern_handle, const char* text, char**
         if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return JPDFIUM_ERR_INVALID;
         if (!pw->code) return JPDFIUM_ERR_INVALID;
 
+        std::lock_guard<std::mutex> handleLock(pw->match_mutex);
         PCRE2_SIZE subject_len = strlen(text);
         std::string json = "[";
         bool first = true;
@@ -178,6 +189,9 @@ void jpdfium_pcre2_free(int64_t pattern_handle) noexcept {
     auto* pw = reinterpret_cast<Pcre2Pattern*>(pattern_handle);
     if (!pw || !Pcre2HandleRegistry::instance().contains(pw)) return;
     Pcre2HandleRegistry::instance().remove(pw);
+    // A match already in flight on this handle must finish before its buffers
+    // go away; afterwards the handle is rejected by the registry check above.
+    std::lock_guard<std::mutex> handleLock(pw->match_mutex);
     if (pw->jit_stack) pcre2_jit_stack_free(pw->jit_stack);
     if (pw->match_ctx) pcre2_match_context_free(pw->match_ctx);
     if (pw->match_data) pcre2_match_data_free(pw->match_data);

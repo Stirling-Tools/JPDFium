@@ -60,17 +60,24 @@ struct Pcre2Pattern {
     pcre2_match_context* mctx = nullptr;
     pcre2_jit_stack* jst = nullptr;
     bool ownsCode = true;
+    // Set when `jst` is shared with a cached pattern (CachedPcre2Pattern owns
+    // the stack and this lock): concurrent matches that reuse the cached stack
+    // serialise on it instead of corrupting the JIT stack. Per-call match data
+    // and context stay private.
+    std::mutex* shared_stack_mutex = nullptr;
 
     Pcre2Pattern() = default;
     Pcre2Pattern(const Pcre2Pattern&) = delete;
     Pcre2Pattern& operator=(const Pcre2Pattern&) = delete;
     Pcre2Pattern(Pcre2Pattern&& o) noexcept
-        : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst), ownsCode(o.ownsCode) {
+        : code(o.code), md(o.md), mctx(o.mctx), jst(o.jst), ownsCode(o.ownsCode),
+          shared_stack_mutex(o.shared_stack_mutex) {
         o.code = nullptr;
         o.md = nullptr;
         o.mctx = nullptr;
         o.jst = nullptr;
         o.ownsCode = false;
+        o.shared_stack_mutex = nullptr;
     }
     ~Pcre2Pattern() {
         if (mctx) pcre2_match_context_free(mctx);
@@ -90,6 +97,8 @@ struct CachedPcre2Pattern {
     std::string canonicalKey;
     std::vector<pcre2_code*> codes;
     pcre2_jit_stack* jst = nullptr;
+    // Guards `jst`: it is shared by every match that runs on this cached entry.
+    std::mutex stack_mutex;
 
     ~CachedPcre2Pattern() {
         if (jst) pcre2_jit_stack_free(jst);
@@ -174,10 +183,15 @@ class ScopedCoverPage {
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 int32_t logicalMatchCount(const std::vector<TextMatch>& matches);
-void collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
+// Both return false when the regex engine aborted mid-scan (match or depth
+// limit, JIT stack exhaustion, invalid UTF). The partial match list must then
+// be discarded: reporting it as a complete result would silently leave targets
+// unredacted. Callers surface JPDFIUM_ERR_NATIVE (pre-mutation scan) or
+// JPDFIUM_ERR_REDACT_INCOMPLETE (audit after mutation).
+bool collectPcre2Matches(FPDF_TEXTPAGE textPage, const std::u32string& text,
                          const std::vector<int>& idxMap, const Pcre2Pattern& pc, float padding,
                          std::vector<TextMatch>& out);
-void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
+bool scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wtext,
                       const std::vector<int>& idxMap, const char** words, int32_t wordCount,
                       bool wholeWord, bool caseSensitive, bool useRegex, float padding,
                       std::vector<TextMatch>& matches,

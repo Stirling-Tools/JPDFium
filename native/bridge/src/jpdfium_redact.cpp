@@ -278,7 +278,13 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // Collect matches with character-level indices
         std::vector<TextMatch> matches;
 #ifdef JPDFIUM_HAS_PCRE2
-        collectPcre2Matches(tp, wtext, idxMap, pc, 0.0f, matches);
+        if (!collectPcre2Matches(tp, wtext, idxMap, pc, 0.0f, matches)) {
+            // The engine aborted (limit, JIT stack, invalid UTF). The match list
+            // is partial, and a partial list means targets that would survive the
+            // redaction, so fail loudly instead of redacting what was found.
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_NATIVE;
+        }
 #else
         (void)wtext;
 #endif
@@ -412,7 +418,17 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // Padding 0: the audit re-matches the RAW pattern (the pre-redaction
         // padded bboxes were only for cover painting / geometric rules).
 #ifdef JPDFIUM_HAS_PCRE2
-        collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
+        if (!collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining)) {
+            // The audit cannot prove the pattern is gone, and the page has
+            // already been mutated: same contract as a surviving match.
+            FPDFText_ClosePage(audit);
+            if (epdfOk) {
+                markRedactionIncomplete(pw, appliedRects);
+            } else {
+                markRedactionIncomplete(pw, matches);
+            }
+            return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        }
 #endif
         std::u32string actualFp = survivingFingerprint(wtext2, idxMap2, {});
         FPDFText_ClosePage(audit);
@@ -494,9 +510,14 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             if (words[wi] && pw->core) pw->core->addRedactLiteral(words[wi]);
         }
 #ifdef JPDFIUM_HAS_PCRE2
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
-                         caseSensitive != 0, useRegex != 0, padding, matches, &compiledPatterns,
-                         rejectedPatterns, compiledCount);
+        if (!scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+                              caseSensitive != 0, useRegex != 0, padding, matches,
+                              &compiledPatterns, rejectedPatterns, compiledCount)) {
+            // Aborted scan: the match list is partial, so the caller would act on
+            // an incomplete result. Nothing has been mutated yet at this point.
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_NATIVE;
+        }
 #endif
         if (matchCount) *matchCount = logicalMatchCount(matches);
 
@@ -665,7 +686,15 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
         std::vector<TextMatch>& remaining = t_redactScratch.auditRemaining;
         for (const auto& pc : compiledPatterns) {
             remaining.clear();
-            collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining);
+            if (!collectPcre2Matches(audit, wtext2, idxMap2, pc, 0.0f, remaining)) {
+                FPDFText_ClosePage(audit);
+                if (epdfOk) {
+                    markRedactionIncomplete(pw, appliedRects);
+                } else {
+                    markRedactionIncomplete(pw, matches);
+                }
+                return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            }
             if (!remaining.empty()) {
                 FPDFText_ClosePage(audit);
                 if (epdfOk) {
@@ -854,9 +883,14 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
 #ifdef JPDFIUM_HAS_PCRE2
         int rejectedPatterns = 0;
         int compiledCount = 0;
-        scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
-                         caseSensitive != 0, useRegex != 0, padding, matches, nullptr,
-                         rejectedPatterns, compiledCount);
+        if (!scanPagePatterns(pw->core.get(), tp, wtext, idxMap, words, wordCount, wholeWord != 0,
+                              caseSensitive != 0, useRegex != 0, padding, matches, nullptr,
+                              rejectedPatterns, compiledCount)) {
+            // A truncated match list would mark only part of the targets, and the
+            // caller applies the annotations later.
+            FPDFText_ClosePage(tp);
+            return JPDFIUM_ERR_NATIVE;
+        }
 #endif
         alignMatchesToGraphemes(tp, unicodeSeq, matches);
 #ifdef JPDFIUM_HAS_HARFBUZZ
