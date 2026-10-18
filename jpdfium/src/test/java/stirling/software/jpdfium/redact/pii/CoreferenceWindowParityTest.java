@@ -13,28 +13,10 @@ import java.util.TreeSet;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Consumer-level parity: what the coreference window actually redacts must not
- * depend on which segmenter produced the sentence units.
- *
- * <p>{@link EntityRedactor} redacts whole sentences that sit within
- * {@link EntityRedactor#DEFAULT_COREFERENCE_WINDOW} sentences of an entity
- * mention and contain one of {@link EntityRedactor#defaultCoreferencePronouns()}.
- * A coarser unit therefore widens the redacted region, and a unit that swallows
- * the entity's own sentence suppresses the expansion entirely. This test replays
- * that decision for the ICU reference boundaries and for
- * {@link EntityRedactor#splitSentences(String)} over the whole corpus, probing
- * an entity at every sentence start, every sentence midpoint and the final
- * character, and requires the flagged sentence texts to be identical.
- */
+/** The sentences the coreference window flags must not depend on the segmenter. */
 class CoreferenceWindowParityTest {
 
-    /**
-     * Probe mismatches that are accepted, per corpus case. The list-marker cases
-     * that used to differ (numbered and parenthesised lists) are fixed by the
-     * boundary restoration in {@code splitSentences}; everything else must be
-     * identical for every probe.
-     */
+    /** Accepted probe mismatches per case; empty because the list-marker gap was fixed. */
     private static final Map<String, Integer> ALLOWED_MISMATCHES = Map.of();
 
     @Test

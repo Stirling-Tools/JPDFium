@@ -19,12 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Structural guarantees of {@link EntityRedactor#splitSentences(String)}, the
- * pure-Java replacement for the native ICU segmenter.
- *
- * <p>Pure Java: no native library is loaded, so these run everywhere.
- */
+/** Structural guarantees of {@link EntityRedactor#splitSentences(String)}; pure Java, no natives. */
 class SentenceSegmentationTest {
 
     // ---------------------------------------------------------------- ranges
@@ -104,9 +99,7 @@ class SentenceSegmentationTest {
 
     @Test
     void restoresBoundariesAfterNumberedListMarkers() {
-        // Expected values are the ICU reference boundaries for these corpus
-        // entries (sentence-goldens.tsv), i.e. what the dropped native segmenter
-        // produced, including the marker-only units it kept separate.
+        // Expected values are the ICU boundaries from sentence-goldens.tsv.
         assertBoundaries("1. A. 2. B. 3. C.", 0, 3, 6, 9, 12, 15, 17);
         assertBoundaries("(1) A. (2) B.", 0, 7, 13);
         assertBoundaries("1. First item. 2. Second item. 3. Third item with a longer description.",
@@ -122,7 +115,7 @@ class SentenceSegmentationTest {
 
     @Test
     void doesNotInventListBoundariesWithoutARealMarker() {
-        // Verified against the ICU goldens: none of these produce a break there.
+        // Verified against the ICU goldens.
         assertBoundaries("Item 2. is fine", 0, 15);
         assertBoundaries("The value is 42.5 units. Done.", 0, 25, 30);
         assertBoundaries("See Fig. 3 now. Then stop.", 0, 16, 26);

@@ -302,36 +302,16 @@ public final class EntityRedactor implements AutoCloseable {
     }
 
     /**
-     * Boundaries {@code java.text.BreakIterator} drops around numbered list
-     * markers.
-     *
-     * <p>The JDK's sentence rules keep a marker attached to the preceding
-     * sentence ("First item. 2. Second item." parses as one sentence, "Stop.
-     * 2.cpp is a file name." stays one sentence, and a parenthesised list is a
-     * single unit) where the ICU rules the bridge used broke after each marker.
-     * The coreference window redacts whole sentences, so the coarser units both
-     * widen redaction regions and, when the merged unit also contains the
-     * entity's own sentence, suppress coreference expansion entirely.
-     *
-     * <p>A marker is a terminator plus whitespace followed by either a
-     * parenthesised number, a number with a closing period or parenthesis (also
-     * when a letter follows the period, as in {@code 2.cpp}), so the pattern
-     * cannot fire inside a decimal fraction ("42.5") or an ordinal inside a
-     * sentence ("Totals were 3. 4 items remain.").
+     * Boundaries the JDK drops around numbered list markers ("First item. 2. Second
+     * item.", "(2) Beta.", "2.cpp") that ICU broke after. The window redacts whole
+     * sentences, so the coarser units widened redactions and could suppress the
+     * coreference expansion. Cannot fire inside "42.5" or "Totals were 3. 4 items".
      */
     private static final Pattern RESTORED_LIST_BOUNDARY = Pattern.compile(
             "[.!?\u2026\u3002\uff01\uff1f]+[\\s\u00a0]+"
                     + "(?=(?:\\(\\d{1,3}\\)\\s|\\d{1,3}[.)](?:\\s|[^\\d\\s])))");
 
-    /**
-     * Split text into sentence ranges. Offsets are char indices into
-     * {@code text}, matching what the coreference window expects.
-     *
-     * <p>{@code java.text.BreakIterator} with {@link Locale#ROOT} replaces the
-     * native ICU segmenter this pipeline used before; the corpus in
-     * {@code src/test/resources/pii/sentence-corpus.tsv} records where the two
-     * rule sets agree and the two cases where they differ.
-     */
+    /** Sentence ranges as char indices into {@code text} (JDK rules + list marker repair). */
     static List<Sentence> splitSentences(String text) {
         if (text == null || text.isEmpty()) return List.of();
         BreakIterator sentences = BreakIterator.getSentenceInstance(Locale.ROOT);
