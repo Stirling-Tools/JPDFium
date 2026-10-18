@@ -1,8 +1,7 @@
 pluginManagement {
     repositories {
-        // Maven Central first: Gradle pins an artifact to the repository that
-        // served its metadata, so a portal-first list has no jar fallback when
-        // the Gradle Plugin Portal is degraded.
+        // Central first: the plugin portal proxies Central and throttles shared
+        // runner IPs, so a 429 there would otherwise fail plugin resolution.
         mavenCentral()
         gradlePluginPortal()
         google()

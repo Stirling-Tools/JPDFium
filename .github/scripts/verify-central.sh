@@ -68,10 +68,17 @@ fi
 
 fetch() {
   local path="$1" out="${2:-/dev/null}"
+  # Central and the Central Portal rate-limit shared runner IPs (HTTP 429) and
+  # drop connections mid-download; retry those instead of marking the artifact
+  # missing and failing the whole verification.
   if [ -n "$PORTAL_TOKEN" ]; then
-    curl -fsSL -H "Authorization: ${PORTAL_TOKEN}" -o "$out" "${REPO_URL}/${path}"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 \
+      --max-time 120 --connect-timeout 30 \
+      -H "Authorization: ${PORTAL_TOKEN}" -o "$out" "${REPO_URL}/${path}"
   else
-    curl -fsSL -o "$out" "${REPO_URL}/${path}"
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 \
+      --max-time 120 --connect-timeout 30 \
+      -o "$out" "${REPO_URL}/${path}"
   fi
 }
 
