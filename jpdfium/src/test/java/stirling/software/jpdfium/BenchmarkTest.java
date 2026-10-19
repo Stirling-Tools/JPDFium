@@ -145,7 +145,6 @@ class BenchmarkTest {
 
         composition("issue6961 p0", heavy, 0);
         run("toSvg issue6961 p0 (gradients)", () -> PdfToSvg.toSvg(heavy, 0));
-        run("toSvgExact issue6961 p0 (hayro)", () -> PdfToSvg.toSvgExact(heavy, 0));
 
         byte[] narrative =
                 fixture("redact/23_Narrative of the Life of Frederick Douglass, An Am.pdf");
