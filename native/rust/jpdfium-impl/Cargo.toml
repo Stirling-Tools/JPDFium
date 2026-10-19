@@ -24,5 +24,3 @@ usvg_v47 = { package = "usvg", version = "0.47", default-features = false, featu
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 krilla = "0.8.2"
 krilla-svg = "0.8.1"
-# Exact PDF -> SVG backend (glyph outlines, full shading/mask handling).
-hayro-svg = "0.8.0"

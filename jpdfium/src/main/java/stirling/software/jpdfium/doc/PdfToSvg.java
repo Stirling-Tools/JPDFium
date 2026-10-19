@@ -16,8 +16,6 @@ import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
 
 import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
@@ -98,43 +96,6 @@ public final class PdfToSvg {
         public Options outlineText(boolean value) {
             this.outlineText = value;
             return this;
-        }
-    }
-
-    /** Whether this native build contains the hayro exact backend. */
-    public static boolean isExactAvailable() {
-        return JpdfiumLib.isPdfToSvgAvailable();
-    }
-
-    /**
-     * Export one page with the hayro exact backend. This preserves shading,
-     * patterns, masks and form XObjects more faithfully than the Java walker,
-     * but converts text to glyph outlines.
-     */
-    public static String toSvgExact(byte[] pdf, int pageIndex) {
-        return new String(toSvgExactBytes(pdf, pageIndex), StandardCharsets.UTF_8);
-    }
-
-    /** Byte-returning form of {@link #toSvgExact(byte[], int)}. */
-    public static byte[] toSvgExactBytes(byte[] pdf, int pageIndex) {
-        if (pdf == null || pdf.length == 0) {
-            throw new IllegalArgumentException("pdf must not be empty");
-        }
-        if (pageIndex < 0) {
-            throw new IllegalArgumentException("page index must be >= 0");
-        }
-        return JpdfiumLib.pdfToSvg(pdf, pageIndex);
-    }
-
-    /** Export one page of a PDF file with the hayro exact backend. */
-    public static String toSvgExact(Path path, int pageIndex) {
-        if (path == null) {
-            throw new IllegalArgumentException("path must not be null");
-        }
-        try {
-            return toSvgExact(java.nio.file.Files.readAllBytes(path), pageIndex);
-        } catch (IOException e) {
-            throw new UncheckedIOException("could not read " + path, e);
         }
     }
 
