@@ -1076,6 +1076,42 @@ public final class JpdfiumLib {
         }
     }
 
+    /** Whether this native build contains the hayro exact PDF-to-SVG backend. */
+    public static boolean isPdfToSvgAvailable() {
+        if (!isSvgToPdfAvailable()) {
+            return false;
+        }
+        try {
+            return JpdfiumH.jpdfium_rust_pdf_to_svg$address() != null;
+        } catch (LinkageError | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Convert one PDF page to SVG with the hayro exact backend. Text is emitted
+     * as glyph outlines; use the Java exporter when selectable text is required.
+     */
+    public static byte[] pdfToSvg(byte[] pdf, int pageIndex) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cPdf = arena.allocateFrom(JAVA_BYTE, pdf);
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_rust_pdf_to_svg(cPdf, pdf.length, pageIndex,
+                        ADDR_SCRATCH, LONG_SCRATCH), "pdfToSvg");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "pdfToSvg", false);
+                if (ptr == null || len <= 0) {
+                    throw new JPDFiumException("pdfToSvg returned no buffer");
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
     /**
      * Extracts the page's shading definitions as a compact text payload, so a
      * PDF-to-SVG exporter can emit real {@code <linearGradient>} / {@code <radialGradient>}
@@ -1089,6 +1125,35 @@ public final class JpdfiumLib {
                         ADDR_SCRATCH, LONG_SCRATCH), "pageGradients");
                 MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
                 long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0), "pageGradients", false);
+                if (ptr == null || len <= 0) {
+                    return null;
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
+    /**
+     * Byte-backed batch variant of {@link #pageGradients(byte[], int)}: parse the
+     * document once and return {@code #PAGE}-marked sections for the selected
+     * pages. A {@code null} or empty {@code pageIndices} selects all pages.
+     */
+    public static byte[] pageGradientsPages(byte[] pdf, int[] pageIndices) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cPdf = arena.allocateFrom(JAVA_BYTE, pdf);
+            int count = pageIndices == null ? 0 : pageIndices.length;
+            MemorySegment cPages = count == 0 ? MemorySegment.NULL
+                    : arena.allocateFrom(JAVA_INT, pageIndices);
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_page_gradients_pages(cPdf, pdf.length, cPages, count,
+                        ADDR_SCRATCH, LONG_SCRATCH), "pageGradientsPages");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0),
+                        "pageGradientsPages", false);
                 if (ptr == null || len <= 0) {
                     return null;
                 }

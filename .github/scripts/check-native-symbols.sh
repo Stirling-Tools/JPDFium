@@ -29,7 +29,9 @@ EXPECTED=(
   jpdfium_repair_pdf
   jpdfium_brotli_decode
   jpdfium_rust_svg_to_pdf
+  jpdfium_rust_pdf_to_svg
   jpdfium_page_gradients
+  jpdfium_page_gradients_pages
   jpdfium_page_gradients_file
   jpdfium_qpdf_stamp_page
 )

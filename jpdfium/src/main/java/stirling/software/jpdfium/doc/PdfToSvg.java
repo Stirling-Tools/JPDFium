@@ -8,6 +8,7 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.ShapedGlyph;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PathBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.text.PageText;
@@ -15,6 +16,8 @@ import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
 
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
@@ -37,6 +40,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * can as native SVG elements, covering the rest with clipped raster patches.
  */
 public final class PdfToSvg {
+
+    /** Upper bound on a single multi-page SVG request. */
+    private static final int MAX_EXPORT_PAGES = 10_000;
 
     private PdfToSvg() {}
 
@@ -92,6 +98,43 @@ public final class PdfToSvg {
         public Options outlineText(boolean value) {
             this.outlineText = value;
             return this;
+        }
+    }
+
+    /** Whether this native build contains the hayro exact backend. */
+    public static boolean isExactAvailable() {
+        return JpdfiumLib.isPdfToSvgAvailable();
+    }
+
+    /**
+     * Export one page with the hayro exact backend. This preserves shading,
+     * patterns, masks and form XObjects more faithfully than the Java walker,
+     * but converts text to glyph outlines.
+     */
+    public static String toSvgExact(byte[] pdf, int pageIndex) {
+        return new String(toSvgExactBytes(pdf, pageIndex), StandardCharsets.UTF_8);
+    }
+
+    /** Byte-returning form of {@link #toSvgExact(byte[], int)}. */
+    public static byte[] toSvgExactBytes(byte[] pdf, int pageIndex) {
+        if (pdf == null || pdf.length == 0) {
+            throw new IllegalArgumentException("pdf must not be empty");
+        }
+        if (pageIndex < 0) {
+            throw new IllegalArgumentException("page index must be >= 0");
+        }
+        return JpdfiumLib.pdfToSvg(pdf, pageIndex);
+    }
+
+    /** Export one page of a PDF file with the hayro exact backend. */
+    public static String toSvgExact(Path path, int pageIndex) {
+        if (path == null) {
+            throw new IllegalArgumentException("path must not be null");
+        }
+        try {
+            return toSvgExact(java.nio.file.Files.readAllBytes(path), pageIndex);
+        } catch (IOException e) {
+            throw new UncheckedIOException("could not read " + path, e);
         }
     }
 
@@ -157,6 +200,9 @@ public final class PdfToSvg {
         if (pageIndices == null || pageIndices.length == 0) {
             throw new IllegalArgumentException("at least one page index is required");
         }
+        if (pageIndices.length > MAX_EXPORT_PAGES) {
+            throw new IllegalArgumentException("too many pages requested: " + pageIndices.length);
+        }
         Options opts = options != null ? options : new Options();
         try (PdfDocument doc = PdfDocument.open(path)) {
             return document(doc, Shadings.ofFile(path, pageIndices), opts, pageIndices);
@@ -186,9 +232,12 @@ public final class PdfToSvg {
         if (pageIndices == null || pageIndices.length == 0) {
             throw new IllegalArgumentException("at least one page index is required");
         }
+        if (pageIndices.length > MAX_EXPORT_PAGES) {
+            throw new IllegalArgumentException("too many pages requested: " + pageIndices.length);
+        }
         Options opts = options != null ? options : new Options();
         try (PdfDocument doc = PdfDocument.open(pdf)) {
-            return document(doc, Shadings.ofBytes(pdf), opts, pageIndices);
+            return document(doc, Shadings.ofBytes(pdf, pageIndices), opts, pageIndices);
         }
     }
 
@@ -276,6 +325,7 @@ public final class PdfToSvg {
         try {
             objects = PdfPageObjects.list(rawPage);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             objects = List.of();
         }
         try {
@@ -283,6 +333,7 @@ public final class PdfToSvg {
                     ? PdfImageExtractor.extract(doc.rawHandleForRead(), rawPage, pageIndex)
                     : List.of();
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             images = List.of();
         }
 
@@ -320,12 +371,14 @@ public final class PdfToSvg {
                     }
                 }
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 // One malformed object must not abort the page: fall back to a raster patch when
                 // enabled so the content is still visible.
                 if (options.rasterFallback) {
                     try {
                         emitRasterPatch(group, patch, obj);
                     } catch (Throwable ignored) {
+                        NativeRuntime.rethrowFatal(ignored);
                         // nothing else we can do for this object
                     }
                 }
@@ -339,6 +392,7 @@ public final class PdfToSvg {
                     emitText(group, doc, pageIndex, objects);
                 }
             } catch (Throwable ignored) {
+                NativeRuntime.rethrowFatal(ignored);
                 // text is optional; geometry already emitted
             }
         }
@@ -368,12 +422,27 @@ public final class PdfToSvg {
             return pdf == null || pdf.length == 0 ? NONE : new Shadings(pdf, null);
         }
 
+        /** Parse the in-memory PDF once for every requested page. */
+        static Shadings ofBytes(byte[] pdf, int[] pageIndices) {
+            if (pdf == null || pdf.length == 0) {
+                return NONE;
+            }
+            try {
+                return new Shadings(null,
+                        Gradient.parseAll(JpdfiumLib.pageGradientsPages(pdf, pageIndices)));
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return NONE;
+            }
+        }
+
         /** Read all requested pages from the file in a single native parse. */
         static Shadings ofFile(Path path, int[] pageIndices) {
             try {
                 return new Shadings(null,
                         Gradient.parseAll(JpdfiumLib.pageGradientsFile(path, pageIndices)));
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 return NONE;
             }
         }
@@ -387,6 +456,7 @@ public final class PdfToSvg {
             try {
                 return Gradient.parse(JpdfiumLib.pageGradients(pdf, pageIndex));
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 return new Gradient.Records();
             }
         }
@@ -484,12 +554,14 @@ public final class PdfToSvg {
                 try {
                     png = page.renderToBytes(options.fallbackDpi, ImageFormat.PNG);
                 } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
                     png = null;
                 }
                 if (png != null) {
                     try {
                         image = PdfImageIO.read(png);
                     } catch (Throwable ignored) {
+                        NativeRuntime.rethrowFatal(ignored);
                         image = null;
                     }
                 }
@@ -579,6 +651,7 @@ public final class PdfToSvg {
             }
             return data;
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return List.of();
         }
     }
@@ -659,6 +732,7 @@ public final class PdfToSvg {
                 }
             }
         } catch (Throwable ignored) {
+            NativeRuntime.rethrowFatal(ignored);
             // keep fill+stroke defaults
         }
 
@@ -871,6 +945,7 @@ public final class PdfToSvg {
                 }
             }
         } catch (Throwable ignored) {
+            NativeRuntime.rethrowFatal(ignored);
             // stroke detail is optional
         }
     }
@@ -891,6 +966,7 @@ public final class PdfToSvg {
             return buildPathData(count,
                     i -> (MemorySegment) PathBindings.FPDFPath_GetPathSegment.invokeExact(path, i));
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
     }
@@ -905,6 +981,7 @@ public final class PdfToSvg {
             return buildPathData(count, i -> (MemorySegment) PathBindings.FPDFClipPath_GetPathSegment
                     .invokeExact(clip, pathIndex, i));
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
     }
@@ -962,6 +1039,7 @@ public final class PdfToSvg {
             }
             flushCurve(d, pending, pendingPoints);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
         return d.toString();
@@ -989,6 +1067,7 @@ public final class PdfToSvg {
         try {
             count = (int) PathBindings.FPDFFormObj_CountObjects.invokeExact(form);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return;
         }
         for (int i = 0; i < count; i++) {
@@ -996,6 +1075,7 @@ public final class PdfToSvg {
             try {
                 child = (MemorySegment) PathBindings.FPDFFormObj_GetObject.invokeExact(form, (long) i);
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 return;
             }
             if (child == null || child.equals(MemorySegment.NULL)) {
@@ -1006,6 +1086,7 @@ public final class PdfToSvg {
                 type = (int) stirling.software.jpdfium.panama.PageEditBindings.FPDFPageObj_GetType
                         .invokeExact(child);
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 continue;
             }
             if (type == 2) {
@@ -1084,6 +1165,7 @@ public final class PdfToSvg {
                     false, fillR, fillG, fillB, fillA, strokeR, strokeG, strokeB, strokeA,
                     strokeWidth, List.of(), child);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }
@@ -1108,6 +1190,7 @@ public final class PdfToSvg {
                 png = PdfImageIO.writeToBytes(image, "png");
             }
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             // fall through: a raw JPEG can still be embedded verbatim
         }
         String mime = "png";
@@ -1250,6 +1333,7 @@ public final class PdfToSvg {
         try {
             textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             textPage = MemorySegment.NULL;
         }
         if (textPage == null || textPage.equals(MemorySegment.NULL)) {
@@ -1292,6 +1376,7 @@ public final class PdfToSvg {
             try {
                 TextPageBindings.FPDFText_ClosePage.invokeExact(textPage);
             } catch (Throwable ignored) {
+                NativeRuntime.rethrowFatal(ignored);
                 // best-effort close
             }
         }
@@ -1340,6 +1425,7 @@ public final class PdfToSvg {
         try {
             glyphs = FontLib.shapeText(program, runText, size);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
         if (glyphs == null || glyphs.isEmpty()) {
@@ -1366,6 +1452,7 @@ public final class PdfToSvg {
         try {
             glyph = (MemorySegment) PathBindings.FPDFFont_GetGlyphPath.invokeExact(font, glyphId, size);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
         if (glyph == null || glyph.equals(MemorySegment.NULL)) {
@@ -1375,6 +1462,7 @@ public final class PdfToSvg {
         try {
             count = (int) PathBindings.FPDFGlyphPath_CountGlyphSegments.invokeExact(glyph);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return "";
         }
         if (count <= 0) {
@@ -1403,6 +1491,7 @@ public final class PdfToSvg {
             }
             return buffer.asSlice(0, len).toArray(JAVA_BYTE);
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             return null;
         }
     }
@@ -1419,6 +1508,7 @@ public final class PdfToSvg {
                     return (MemorySegment) PathBindings.FPDFTextObj_GetFont
                             .invokeExact(obj.rawHandle());
                 } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
                     return null;
                 }
             }
@@ -1435,6 +1525,7 @@ public final class PdfToSvg {
                 return new float[] {x.get(JAVA_FLOAT, 0), y.get(JAVA_FLOAT, 0)};
             }
         } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
             // fall through
         }
         return null;
@@ -1451,16 +1542,56 @@ public final class PdfToSvg {
         return String.format(Locale.ROOT, "%02x", v);
     }
 
-    /** Compact fixed-point number: no exponent, trailing zeros trimmed. */
+    /**
+     * Compact fixed-point number: three decimals, no exponent, trailing zeros
+     * trimmed. This deliberately avoids {@link String#format} on the hot path.
+     */
     private static String num(float value) {
         if (!Float.isFinite(value)) {
             return "0";
         }
-        String s = String.format(Locale.ROOT, "%.3f", value);
-        while (s.contains(".") && (s.endsWith("0") || s.endsWith("."))) {
-            s = s.substring(0, s.length() - 1);
+        double abs = Math.abs((double) value);
+        if (abs >= 1.0e9) {
+            // Coordinates never reach this range in practice; keep the fallback
+            // correct for callers that pass arbitrary values.
+            String formatted = String.format(Locale.ROOT, "%.3f", value);
+            int dot = formatted.indexOf('.');
+            if (dot < 0) {
+                return formatted;
+            }
+            int end = formatted.length();
+            while (end > dot + 1 && formatted.charAt(end - 1) == '0') {
+                end--;
+            }
+            if (end == dot + 1) {
+                end = dot;
+            }
+            return formatted.substring(0, end);
         }
-        return s.isEmpty() || "-".equals(s) ? "0" : s;
+        long scaled = Math.round(abs * 1000.0);
+        if (scaled == 0) {
+            return "0";
+        }
+        StringBuilder out = new StringBuilder(12);
+        if (value < 0) {
+            out.append('-');
+        }
+        out.append(scaled / 1000);
+        int fraction = (int) (scaled % 1000);
+        if (fraction != 0) {
+            out.append('.');
+            if (fraction < 100) {
+                out.append('0');
+            }
+            if (fraction < 10) {
+                out.append('0');
+            }
+            out.append(fraction);
+            while (out.charAt(out.length() - 1) == '0') {
+                out.setLength(out.length() - 1);
+            }
+        }
+        return out.toString();
     }
 
     private static String escape(String value) {

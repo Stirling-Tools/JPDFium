@@ -39,6 +39,18 @@ const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
 
+/// Never let a panic unwind across the C ABI. The JVM must see an error code,
+/// not a process abort.
+fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(code) => code,
+        Err(_) => JPDFIUM_ERR_GENERIC,
+    }
+}
+
+/// Hard ceiling for one generated SVG document.
+const MAX_SVG_BYTES: usize = 256 * 1024 * 1024;
+
 /// Allocate a buffer with libc::malloc and copy `data` into it.
 /// Returns null if malloc fails or data is empty.
 unsafe fn malloc_copy(data: &[u8]) -> *mut u8 {
@@ -688,6 +700,10 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_rgba(
 
 /// Render an SVG document to a standalone PDF (krilla + krilla-svg), parsed with
 /// the same hardened options as the raster path. Free with jpdfium_rust_free.
+///
+/// # Safety
+/// `svg` must be readable for `svg_len` bytes. `out_ptr` and `out_len` must be
+/// writable; the returned buffer is owned by the caller.
 #[no_mangle]
 pub unsafe extern "C" fn jpdfium_rust_svg_to_pdf(
     svg: *const u8,
@@ -706,56 +722,59 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_pdf(
     if svg.is_null() || svg_len == 0 {
         return JPDFIUM_ERR_GENERIC;
     }
-    let data = slice::from_raw_parts(svg, svg_len);
+    ffi_guard(|| {
+        let data = slice::from_raw_parts(svg, svg_len);
 
-    // Untrusted SVG: allow only inline data: images. krilla-svg 0.8 still
-    // consumes usvg 0.47, so this path has its own hardened parse and fontdb.
-    let mut options = usvg_v47::Options::default();
-    options.fontdb = system_fontdb_v47();
-    options.image_href_resolver = usvg_v47::ImageHrefResolver {
-        resolve_data: usvg_v47::ImageHrefResolver::default_data_resolver(),
-        resolve_string: Box::new(|_, _| None),
-    };
-    let tree = match usvg_v47::Tree::from_data(data, &options) {
-        Ok(tree) => tree,
-        Err(_) => return JPDFIUM_ERR_GENERIC,
-    };
+        // Untrusted SVG: allow only inline data: images. krilla-svg 0.8 still
+        // consumes usvg 0.47, so this path has its own hardened parse and fontdb.
+        let mut options = usvg_v47::Options::default();
+        options.fontdb = system_fontdb_v47();
+        options.image_href_resolver = usvg_v47::ImageHrefResolver {
+            resolve_data: usvg_v47::ImageHrefResolver::default_data_resolver(),
+            resolve_string: Box::new(|_, _| None),
+        };
+        let tree = match usvg_v47::Tree::from_data(data, &options) {
+            Ok(tree) => tree,
+            Err(_) => return JPDFIUM_ERR_GENERIC,
+        };
 
-    let size = tree.size();
-    let (natural_w, natural_h) = (size.width(), size.height());
-    if !(natural_w.is_finite() && natural_h.is_finite()) || natural_w <= 0.0 || natural_h <= 0.0 {
-        return JPDFIUM_ERR_GENERIC;
-    }
-    let scale = if width > 0 && height > 0 {
-        (width as f32 / natural_w).min(height as f32 / natural_h)
-    } else {
-        1.0
-    };
-    let page_w = natural_w * scale;
-    let page_h = natural_h * scale;
-    // Untrusted input sets the page size: cap it so a crafted SVG cannot ask
-    // for a preposterous MediaBox.
-    const MAX_POINTS: f32 = 16384.0;
-    if !(page_w.is_finite() && page_h.is_finite())
-        || page_w <= 0.0
-        || page_h <= 0.0
-        || page_w > MAX_POINTS
-        || page_h > MAX_POINTS
-    {
-        return JPDFIUM_ERR_GENERIC;
-    }
+        let size = tree.size();
+        let (natural_w, natural_h) = (size.width(), size.height());
+        if !(natural_w.is_finite() && natural_h.is_finite()) || natural_w <= 0.0 || natural_h <= 0.0
+        {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        let scale = if width > 0 && height > 0 {
+            (width as f32 / natural_w).min(height as f32 / natural_h)
+        } else {
+            1.0
+        };
+        let page_w = natural_w * scale;
+        let page_h = natural_h * scale;
+        // Untrusted input sets the page size: cap it so a crafted SVG cannot ask
+        // for a preposterous MediaBox.
+        const MAX_POINTS: f32 = 16384.0;
+        if !(page_w.is_finite() && page_h.is_finite())
+            || page_w <= 0.0
+            || page_h <= 0.0
+            || page_w > MAX_POINTS
+            || page_h > MAX_POINTS
+        {
+            return JPDFIUM_ERR_GENERIC;
+        }
 
-    let pdf = match svg_to_pdf_krilla(&tree, page_w, page_h, embed_text != 0) {
-        Some(bytes) => bytes,
-        None => return JPDFIUM_ERR_GENERIC,
-    };
-    let ptr = malloc_copy(&pdf);
-    if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
-    }
-    *out_ptr = ptr;
-    *out_len = pdf.len() as i64;
-    JPDFIUM_OK
+        let pdf = match svg_to_pdf_krilla(&tree, page_w, page_h, embed_text != 0) {
+            Some(bytes) => bytes,
+            None => return JPDFIUM_ERR_GENERIC,
+        };
+        let ptr = malloc_copy(&pdf);
+        if ptr.is_null() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *out_ptr = ptr;
+        *out_len = pdf.len() as i64;
+        JPDFIUM_OK
+    })
 }
 
 /// Draw a parsed SVG onto a fresh krilla page and serialize it to PDF bytes.
@@ -782,8 +801,68 @@ fn svg_to_pdf_krilla(
     document.finish().ok()
 }
 
+/// Convert one PDF page to SVG with hayro's interpreter. This is the exact
+/// backend: it covers shadings, patterns, masks and form XObjects, and emits
+/// glyph outlines rather than selectable text. Free with jpdfium_rust_free.
+///
+/// # Safety
+/// `pdf` must be readable for `pdf_len` bytes. `out_ptr` and `out_len` must be
+/// writable; the returned buffer is owned by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_pdf_to_svg(
+    pdf: *const u8,
+    pdf_len: usize,
+    page_index: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if pdf.is_null() || pdf_len == 0 || page_index < 0 {
+        return JPDFIUM_ERR_INVALID;
+    }
+    ffi_guard(|| {
+        let data = slice::from_raw_parts(pdf, pdf_len);
+        let document = match hayro_svg::hayro_syntax::Pdf::new(data.to_vec()) {
+            Ok(document) => document,
+            Err(_) => return JPDFIUM_ERR_GENERIC,
+        };
+        let pages = document.pages();
+        let index = page_index as usize;
+        let Some(page) = pages.get(index) else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        let cache = hayro_svg::RenderCache::new();
+        let settings = hayro_svg::hayro_interpret::InterpreterSettings::default();
+        let svg = hayro_svg::convert(
+            page,
+            &cache,
+            &settings,
+            &hayro_svg::SvgRenderSettings::default(),
+        );
+        let bytes = svg.as_bytes();
+        if bytes.is_empty() || bytes.len() > MAX_SVG_BYTES {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        let ptr = malloc_copy(bytes);
+        if ptr.is_null() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *out_ptr = ptr;
+        *out_len = bytes.len() as i64;
+        JPDFIUM_OK
+    })
+}
+
 /// Extract a page's shading patterns as gradient definitions for the PDF -> SVG
 /// exporter. Free with jpdfium_rust_free.
+///
+/// # Safety
+/// `input` must be readable for `input_len` bytes. `out_ptr` and `out_len` must
+/// be writable; the returned buffer is owned by the caller.
 #[no_mangle]
 pub unsafe extern "C" fn jpdfium_page_gradients(
     input: *const u8,
@@ -800,19 +879,21 @@ pub unsafe extern "C" fn jpdfium_page_gradients(
     if input.is_null() || input_len == 0 || page_index < 0 {
         return JPDFIUM_ERR_GENERIC;
     }
-    let data = slice::from_raw_parts(input, input_len);
-    let payload = match gradients::page_gradients(data, page_index) {
-        Some(payload) => payload,
-        // No shadings on this page is a normal, expected outcome.
-        None => return JPDFIUM_OK,
-    };
-    let ptr = malloc_copy(&payload);
-    if ptr.is_null() {
-        return JPDFIUM_ERR_GENERIC;
-    }
-    *out_ptr = ptr;
-    *out_len = payload.len() as i64;
-    JPDFIUM_OK
+    ffi_guard(|| {
+        let data = slice::from_raw_parts(input, input_len);
+        let payload = match gradients::page_gradients(data, page_index) {
+            Some(payload) => payload,
+            // No shadings on this page is a normal, expected outcome.
+            None => return JPDFIUM_OK,
+        };
+        let ptr = malloc_copy(&payload);
+        if ptr.is_null() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *out_ptr = ptr;
+        *out_len = payload.len() as i64;
+        JPDFIUM_OK
+    })
 }
 
 /// Extract the shadings of several pages from a PDF file on disk, parsing the
@@ -839,29 +920,76 @@ pub unsafe extern "C" fn jpdfium_page_gradients_file(
     if path.is_null() {
         return JPDFIUM_ERR_INVALID;
     }
-    let Ok(path) = CStr::from_ptr(path).to_str() else {
-        return JPDFIUM_ERR_INVALID;
-    };
-    let selection = if pages.is_null() || page_count <= 0 {
-        None
-    } else {
-        Some(slice::from_raw_parts(pages, page_count as usize))
-    };
-    let Ok(file) = std::fs::File::open(path) else {
-        return JPDFIUM_ERR_GENERIC;
-    };
-    // A document without shadings is a normal, expected outcome.
-    let payload = match gradients::page_gradients_reader(std::io::BufReader::new(file), selection) {
-        Some(payload) => payload,
-        None => return JPDFIUM_OK,
-    };
-    let ptr = malloc_copy(&payload);
-    if ptr.is_null() {
+    ffi_guard(|| {
+        let Ok(path) = CStr::from_ptr(path).to_str() else {
+            return JPDFIUM_ERR_INVALID;
+        };
+        let selection = if pages.is_null() || page_count <= 0 {
+            None
+        } else {
+            Some(slice::from_raw_parts(pages, page_count as usize))
+        };
+        let Ok(file) = std::fs::File::open(path) else {
+            return JPDFIUM_ERR_GENERIC;
+        };
+        // A document without shadings is a normal, expected outcome.
+        let payload =
+            match gradients::page_gradients_reader(std::io::BufReader::new(file), selection) {
+                Some(payload) => payload,
+                None => return JPDFIUM_OK,
+            };
+        let ptr = malloc_copy(&payload);
+        if ptr.is_null() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *out_ptr = ptr;
+        *out_len = payload.len() as i64;
+        JPDFIUM_OK
+    })
+}
+
+/// Byte-backed twin of `jpdfium_page_gradients_file`: parse the in-memory PDF
+/// once and return `#PAGE`-marked sections for the selected pages. A null
+/// `pages` pointer or a non-positive count selects every page.
+///
+/// # Safety
+/// `pages` must point to `page_count` i32 values, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_page_gradients_pages(
+    pdf: *const u8,
+    pdf_len: usize,
+    pages: *const i32,
+    page_count: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
         return JPDFIUM_ERR_GENERIC;
     }
-    *out_ptr = ptr;
-    *out_len = payload.len() as i64;
-    JPDFIUM_OK
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+    if pdf.is_null() || pdf_len == 0 {
+        return JPDFIUM_ERR_INVALID;
+    }
+    ffi_guard(|| {
+        let data = slice::from_raw_parts(pdf, pdf_len);
+        let selection = if pages.is_null() || page_count <= 0 {
+            None
+        } else {
+            Some(slice::from_raw_parts(pages, page_count as usize))
+        };
+        let payload = match gradients::page_gradients_reader(Cursor::new(data), selection) {
+            Some(payload) => payload,
+            None => return JPDFIUM_OK,
+        };
+        let ptr = malloc_copy(&payload);
+        if ptr.is_null() {
+            return JPDFIUM_ERR_GENERIC;
+        }
+        *out_ptr = ptr;
+        *out_len = payload.len() as i64;
+        JPDFIUM_OK
+    })
 }
 
 /// Free a buffer previously allocated by any jpdfium_rust_* function.
