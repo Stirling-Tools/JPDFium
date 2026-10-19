@@ -8,7 +8,7 @@ if ! command -v readelf >/dev/null 2>&1; then
     exit 0
 fi
 
-CORE_RE='^(libc|libc\.musl|libm|libdl|libpthread|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux|^ld-musl|^ld-elf'
+CORE_RE='^(libc|libc\.musl[^.]*|libm|libdl|libpthread|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux|^ld-musl|^ld-elf'
 
 failures=0
 lib_count=0
