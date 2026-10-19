@@ -93,7 +93,9 @@ public final class PdfOverlay {
 
     /**
      * True when native vector page stamping is available (the qpdf-backed natives are loaded).
-     * <p>Unlike {@link #isSupported()}, stamping is a qpdf feature, so the stub natives report it as
+     *
+     * <p>Unlike {@link #isSupported()}, stamping is a qpdf feature, so the stub
+     * natives report it as unavailable.
      */
     public static boolean isStampingSupported() {
         return QpdfLib.isStampSupported();

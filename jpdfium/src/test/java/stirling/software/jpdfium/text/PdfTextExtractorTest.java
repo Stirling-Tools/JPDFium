@@ -47,6 +47,25 @@ class PdfTextExtractorTest {
     }
 
     @Test
+    void parseCharOriginUsesBaselineNotGlyphBottom() {
+        String json = "[{\"i\":0,\"u\":65,\"ox\":12.5,\"oy\":30.0,\"x\":10.0,\"y\":20.0,"
+                + "\"w\":8.0,\"h\":12.0,\"font\":\"Arial\",\"size\":12.0}]";
+        TextChar ch = PdfTextExtractor.parseCharsJson(json).getFirst();
+        assertEquals(12.5f, ch.originX(), 0.01f);
+        assertEquals(30.0f, ch.originY(), 0.01f);
+        assertEquals(20.0f, ch.y(), 0.01f);
+    }
+
+    @Test
+    void legacyCharJsonFallsBackToTheGlyphBoxOrigin() {
+        String json = "[{\"i\":0,\"u\":65,\"x\":10.0,\"y\":20.0,\"w\":8.0,\"h\":12.0,"
+                + "\"font\":\"Arial\",\"size\":12.0}]";
+        TextChar ch = PdfTextExtractor.parseCharsJson(json).getFirst();
+        assertEquals(10.0f, ch.originX(), 0.01f);
+        assertEquals(20.0f, ch.originY(), 0.01f);
+    }
+
+    @Test
     void parseWhitespaceAndNewline() {
         TextChar space = new TextChar(0, 32, 0, 0, 5, 12, "Arial", 12);
         assertTrue(space.isWhitespace());

@@ -102,6 +102,8 @@ public final class PdfTextExtractor {
             float width = 0;
             float height = 0;
             float fontSize = 0;
+            float originX = Float.NaN;
+            float originY = Float.NaN;
             String fontName = "";
             boolean complete = false;
             try {
@@ -155,12 +157,27 @@ public final class PdfTextExtractor {
                             case 'w' -> width = parseFloatFast(json, valueStart, valueEnd);
                             case 'h' -> height = parseFloatFast(json, valueStart, valueEnd);
                             case 's' -> fontSize = parseFloatFast(json, valueStart, valueEnd);
+                            case 'o' -> {
+                                // ox/oy carry the baseline origin; tolerate older
+                                // native payloads that only have the glyph box.
+                                int second = cursor + 2 < keyEnd ? json.charAt(cursor + 2) : 0;
+                                if (second == 'x') {
+                                    originX = parseFloatFast(json, valueStart, valueEnd);
+                                } else if (second == 'y') {
+                                    originY = parseFloatFast(json, valueStart, valueEnd);
+                                }
+                            }
                             default -> {}
                         }
                         cursor = valueEnd;
                     }
                 }
-                if (complete) characters.add(new TextChar(index, unicode, x, y, width, height, fontName, fontSize));
+                if (complete) {
+                    if (!Float.isFinite(originX)) originX = x;
+                    if (!Float.isFinite(originY)) originY = y;
+                    characters.add(new TextChar(index, unicode, x, y, width, height, fontName,
+                            fontSize, originX, originY));
+                }
             } catch (NumberFormatException _) {
                 // Skip malformed entries
             }

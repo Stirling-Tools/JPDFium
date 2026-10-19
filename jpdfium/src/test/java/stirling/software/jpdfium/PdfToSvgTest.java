@@ -28,6 +28,12 @@ class PdfToSvgTest {
             </svg>
             """;
 
+    private static final String BLUE_SVG = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20">
+              <rect x="0" y="0" width="40" height="20" fill="#0000ff"/>
+            </svg>
+            """;
+
     private static final String VECTOR_SVG = """
             <svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">
               <defs>
@@ -257,5 +263,38 @@ class PdfToSvgTest {
         // One native parse must place every page's records on the matching viewport.
         assertEquals(PdfToSvg.toSvgDocument(pdf, 0, 1), PdfToSvg.toSvgDocument(merged, 0, 1));
         assertEquals(PdfToSvg.toSvgDocument(pdf, 1), PdfToSvg.toSvgDocument(merged, 1));
+    }
+
+    @Test
+    void multiPageDocumentPlacesPagesOnTheCanvas(@TempDir Path dir) throws Exception {
+        Path red = dir.resolve("red.pdf");
+        Path blue = dir.resolve("blue.pdf");
+        Files.write(red, vectorPdf(SIMPLE_SVG));
+        Files.write(blue, vectorPdf(BLUE_SVG));
+        Path merged = dir.resolve("merged.pdf");
+        PdfMerge.mergeFilesToFile(java.util.List.of(red, blue), merged);
+
+        String svg = PdfToSvg.toSvgDocument(merged, 0, 1);
+        // 20pt page + 8pt gap + 20pt page.
+        BufferedImage image = SvgConverter.toBufferedImage(
+                svg.getBytes(StandardCharsets.UTF_8), 40, 48);
+        int top = image.getRGB(20, 10);
+        int bottom = image.getRGB(20, 38);
+        assertTrue((top >> 16 & 0xFF) > 200 && (top >> 8 & 0xFF) < 60,
+                "page 0 must be visible at the top: " + Integer.toHexString(top));
+        assertTrue((bottom & 0xFF) > 200 && (bottom >> 16 & 0xFF) < 60,
+                "page 1 must be visible below page 0: " + Integer.toHexString(bottom));
+    }
+
+    @Test
+    void textRunsKeepTheBaselineAndStayTogether() {
+        String svg = """
+                <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+                  <text x="20" y="60" font-family="Helvetica" font-size="14">PAGE_TEXT</text>
+                </svg>
+                """;
+        String exported = PdfToSvg.toSvg(vectorPdf(svg), 0);
+        assertTrue(exported.contains(">PAGE_TEXT<"),
+                "underscore must not split the text run: " + exported);
     }
 }

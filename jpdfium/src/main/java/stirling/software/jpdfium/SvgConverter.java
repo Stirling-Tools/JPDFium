@@ -13,6 +13,9 @@ import java.util.List;
 /**
  * SVG conversion backed by the Rust {@code resvg} rasterizer and the Rust
  * {@code krilla} + {@code krilla-svg} vector writer.
+ *
+ * <p>Raster conversion produces an image page, while vector conversion keeps
+ * paths, text and shading as PDF content.
  */
 public final class SvgConverter {
 
@@ -74,7 +77,9 @@ public final class SvgConverter {
 
     /**
      * Convert an SVG to a one-page PDF that keeps its content vector.
-     * <p>Nothing is rasterized, so the page stays sharp at any zoom and its text
+     *
+     * <p>Nothing is rasterized, so the page stays sharp at any zoom and its
+     * text remains selectable.
      */
     public static PdfDocument toPdf(byte[] svg) {
         return toVectorPdf(svg, 0, 0, true);
@@ -88,6 +93,7 @@ public final class SvgConverter {
     /**
      * Convert an SVG to a one-page vector PDF scaled to fit the given box,
      * preserving the aspect ratio. Pass 0 for either dimension to use the
+     * natural size.
      */
     public static PdfDocument toVectorPdf(byte[] svg, int width, int height) {
         return toVectorPdf(svg, width, height, true);
@@ -95,7 +101,12 @@ public final class SvgConverter {
 
     /**
      * Convert an SVG to a one-page vector PDF scaled to fit the given box.
+     *
      * @param svg       SVG bytes
+     * @param width     target box width in points, or 0 for natural
+     * @param height    target box height in points, or 0 for natural
+     * @param embedText true to embed text and keep it selectable, false to
+     *                  outline it
      */
     public static PdfDocument toVectorPdf(byte[] svg, int width, int height, boolean embedText) {
         return PdfDocument.open(JpdfiumLib.svgToPdfBytes(svg, width, height, embedText));
@@ -113,7 +124,9 @@ public final class SvgConverter {
 
     /**
      * Rasterize and embed as a new one-page PDF document.
+     *
      * <p>The raster page follows {@link ImageToPdfOptions} (page size, margin,
+     * background and image placement).
      */
     public static PdfDocument toRasterPdf(byte[] svg, int width, int height, ImageToPdfOptions options) {
         RenderResult result = toRgba(svg, width, height);
@@ -126,7 +139,9 @@ public final class SvgConverter {
 
     /**
      * Rasterize and embed as a new one-page PDF document.
+     *
      * @deprecated {@link ImageToPdfOptions} only describe raster embedding. Use
+     *             {@link #toRasterPdf(byte[], ImageToPdfOptions)}.
      */
     @Deprecated
     public static PdfDocument toPdf(byte[] svg, ImageToPdfOptions options) {
@@ -135,7 +150,9 @@ public final class SvgConverter {
 
     /**
      * Rasterize and embed as a new one-page PDF document.
+     *
      * @deprecated {@link ImageToPdfOptions} only describe raster embedding. Use
+     *             {@link #toRasterPdf(byte[], int, int, ImageToPdfOptions)}.
      */
     @Deprecated
     public static PdfDocument toPdf(byte[] svg, int width, int height, ImageToPdfOptions options) {
@@ -144,7 +161,9 @@ public final class SvgConverter {
 
     /**
      * True when SVG overlay stamping is available (the qpdf-backed natives are loaded).
-     * <p>Overlay stamping needs native object-graph surgery, so the stub natives report it as
+     *
+     * <p>Overlay stamping needs native object-graph surgery, so the stub natives
+     * report it as unavailable.
      */
     public static boolean isOverlaySupported() {
         return PdfOverlay.isStampingSupported();
@@ -152,7 +171,10 @@ public final class SvgConverter {
 
     /**
      * Stamp an SVG onto a page of an existing PDF as vector content.
-     * <p>This is the Batik-free replacement for rendering an SVG through a graphics bridge and
+     *
+     * <p>This is the Batik-free replacement for rendering an SVG through a
+     * graphics bridge and rasterizing it: the SVG becomes a PDF page and is
+     * stamped as a form XObject.
      */
     public static byte[] overlayOnPdf(byte[] pdfBytes, byte[] svg, int pageIndex, float x, float y,
             float scale) {
