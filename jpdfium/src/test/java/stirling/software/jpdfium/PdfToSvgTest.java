@@ -164,13 +164,24 @@ class PdfToSvgTest {
         assertTrue(mean < 25, "outlined text must still resemble the page");
     }
 
+    private static int overWhite(int argb) {
+        int alpha = (argb >>> 24) & 0xff;
+        int r = (argb >> 16) & 0xff;
+        int g = (argb >> 8) & 0xff;
+        int b = argb & 0xff;
+        r = (r * alpha + 255 * (255 - alpha)) / 255;
+        g = (g * alpha + 255 * (255 - alpha)) / 255;
+        b = (b * alpha + 255 * (255 - alpha)) / 255;
+        return 0xff000000 | (r << 16) | (g << 8) | b;
+    }
+
     private static double meanDiff(BufferedImage a, BufferedImage b, int width, int height) {
         double total = 0;
         int samples = 0;
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int p = a.getRGB(x, y);
-                int q = b.getRGB(x, y);
+                int p = overWhite(a.getRGB(x, y));
+                int q = overWhite(b.getRGB(x, y));
                 total += Math.abs(((p >> 16) & 0xff) - ((q >> 16) & 0xff));
                 total += Math.abs(((p >> 8) & 0xff) - ((q >> 8) & 0xff));
                 total += Math.abs((p & 0xff) - (q & 0xff));
@@ -263,6 +274,51 @@ class PdfToSvgTest {
         // One native parse must place every page's records on the matching viewport.
         assertEquals(PdfToSvg.toSvgDocument(pdf, 0, 1), PdfToSvg.toSvgDocument(merged, 0, 1));
         assertEquals(PdfToSvg.toSvgDocument(pdf, 1), PdfToSvg.toSvgDocument(merged, 1));
+    }
+
+    @Test
+    void exactBackendRendersShadingAndFormContent() {
+        byte[] pdf = vectorPdf(VECTOR_SVG);
+        assertTrue(PdfToSvg.isExactAvailable(), "hayro backend must be compiled in");
+        String svg = PdfToSvg.toSvgExact(pdf, 0);
+
+        assertTrue(svg.contains("<svg"), "exact export must be an SVG document");
+        assertTrue(svg.contains("Gradient") || svg.contains("<pattern"),
+                "shading must survive the exact backend: " + svg);
+
+        BufferedImage reference;
+        int width = 200;
+        int height = 120;
+        try (PdfDocument doc = PdfDocument.open(pdf);
+                PdfPage page = doc.page(0)) {
+            reference = page.renderImage(72);
+        }
+        BufferedImage rendered = SvgConverter.toBufferedImage(
+                svg.getBytes(StandardCharsets.UTF_8), width, height);
+        double mean = meanDiff(reference, rendered, width, height);
+        System.out.printf("hayro exact fidelity: mean abs diff %.3f/255%n", mean);
+        assertTrue(mean < 15, "exact backend must resemble the rendered page, diff " + mean);
+    }
+
+    @Test
+    void exactBackendHandlesComplexFormAndShadingPage() throws Exception {
+        byte[] pdf = resource("/pdfs/repair/pdfjs-issue6961.pdf");
+        String svg = PdfToSvg.toSvgExact(pdf, 0);
+
+        BufferedImage reference;
+        int width;
+        int height;
+        try (PdfDocument doc = PdfDocument.open(pdf);
+                PdfPage page = doc.page(0)) {
+            width = (int) page.size().width();
+            height = (int) page.size().height();
+            reference = page.renderImage(72);
+        }
+        BufferedImage rendered = SvgConverter.toBufferedImage(
+                svg.getBytes(StandardCharsets.UTF_8), width, height);
+        double mean = meanDiff(reference, rendered, width, height);
+        System.out.printf("hayro complex-page fidelity: mean abs diff %.3f/255%n", mean);
+        assertTrue(mean < 25, "exact backend must handle forms/shading, diff " + mean);
     }
 
     @Test

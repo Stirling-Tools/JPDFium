@@ -7183,6 +7183,135 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_rust_pdf_to_svg {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_rust_pdf_to_svg");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_pdf_to_svg(const uint8_t *pdf, int64_t pdf_len, int32_t page_index, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_rust_pdf_to_svg$descriptor() {
+        return jpdfium_rust_pdf_to_svg.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_pdf_to_svg(const uint8_t *pdf, int64_t pdf_len, int32_t page_index, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static MethodHandle jpdfium_rust_pdf_to_svg$handle() {
+        return jpdfium_rust_pdf_to_svg.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_pdf_to_svg(const uint8_t *pdf, int64_t pdf_len, int32_t page_index, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static MemorySegment jpdfium_rust_pdf_to_svg$address() {
+        return jpdfium_rust_pdf_to_svg.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_rust_pdf_to_svg(const uint8_t *pdf, int64_t pdf_len, int32_t page_index, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static int jpdfium_rust_pdf_to_svg(MemorySegment pdf, long pdf_len, int page_index, MemorySegment out_ptr, MemorySegment out_len) {
+        var mh$ = jpdfium_rust_pdf_to_svg.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_rust_pdf_to_svg", pdf, pdf_len, page_index, out_ptr, out_len);
+            }
+            return (int)mh$.invokeExact(pdf, pdf_len, page_index, out_ptr, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_page_gradients_pages {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_page_gradients_pages");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_gradients_pages(const uint8_t *pdf, int64_t pdf_len, const int32_t *pages, int32_t page_count, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_page_gradients_pages$descriptor() {
+        return jpdfium_page_gradients_pages.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_gradients_pages(const uint8_t *pdf, int64_t pdf_len, const int32_t *pages, int32_t page_count, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static MethodHandle jpdfium_page_gradients_pages$handle() {
+        return jpdfium_page_gradients_pages.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_gradients_pages(const uint8_t *pdf, int64_t pdf_len, const int32_t *pages, int32_t page_count, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static MemorySegment jpdfium_page_gradients_pages$address() {
+        return jpdfium_page_gradients_pages.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_page_gradients_pages(const uint8_t *pdf, int64_t pdf_len, const int32_t *pages, int32_t page_count, uint8_t **out_ptr, int64_t *out_len)
+     * }
+     */
+    public static int jpdfium_page_gradients_pages(MemorySegment pdf, long pdf_len, MemorySegment pages, int page_count, MemorySegment out_ptr, MemorySegment out_len) {
+        var mh$ = jpdfium_page_gradients_pages.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_page_gradients_pages", pdf, pdf_len, pages, page_count, out_ptr, out_len);
+            }
+            return (int)mh$.invokeExact(pdf, pdf_len, pages, page_count, out_ptr, out_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+            throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_rust_free {
         public static final FunctionDescriptor DESC = FunctionDescriptor.ofVoid(
             JpdfiumH.C_POINTER
