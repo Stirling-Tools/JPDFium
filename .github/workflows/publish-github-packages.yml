@@ -305,6 +305,21 @@ jobs:
               fi
               exit 0
             fi
+            # freebsd base.txz carries no third-party headers or pkg-config files.
+            # HarfBuzz/ICU/qpdf/pugixml and freetype2's own Requires.private are
+            # absent, so the cross build cannot configure; skip the leg like a
+            # missing prebuild instead of failing the publish.
+            if [ "$TARGET_PLATFORM" = "freebsd-x64" ]; then
+              SYSROOT="${FREEBSD_SYSROOT:-$PWD/native/freebsd-sysroot}"
+              if ! PKG_CONFIG_DIR='' \
+                   PKG_CONFIG_LIBDIR="$SYSROOT/usr/libdata/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/local/libdata/pkgconfig" \
+                   pkg-config --exists \
+                     libpcre2-8 libpcre2-32 harfbuzz harfbuzz-subset icu-uc libqpdf pugixml 2>/dev/null; then
+                echo "freebsd_missing=true" >> "$GITHUB_OUTPUT"
+                echo "freebsd cross dependencies are missing from $SYSROOT; skipping freebsd natives"
+                exit 0
+              fi
+            fi
           fi
           bash native/fetch-prebuilt-pdfium.sh "$TARGET_PLATFORM"
 

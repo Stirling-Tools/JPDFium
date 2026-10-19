@@ -123,7 +123,22 @@ if [ -n "${CROSS_TARGET}" ]; then
         FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-${SCRIPT_DIR}/freebsd-sysroot}"
         export CC_x86_64_unknown_freebsd="clang"
         export CFLAGS_x86_64_unknown_freebsd="--target=x86_64-unknown-freebsd14.0 --sysroot=${FREEBSD_SYSROOT}"
-        export AR_x86_64_unknown_freebsd="llvm-ar"
+        # cc-rs looks AR up by name on PATH and hard fails when it is absent.
+        # GH runners ship llvm-ar versioned only (llvm-ar-18, ...); binutils
+        # ar archives the FreeBSD ELF objects fine. Resolve an absolute tool
+        # path here so C deps (libdeflate) build on hosts with either layout.
+        CROSS_AR=""
+        for candidate in llvm-ar llvm-ar-21 llvm-ar-20 llvm-ar-19 llvm-ar-18 llvm-ar-17 llvm-ar-16 ar; do
+            if command -v "${candidate}" >/dev/null 2>&1; then
+                CROSS_AR="$(command -v "${candidate}")"
+                break
+            fi
+        done
+        if [ -z "${CROSS_AR}" ]; then
+            echo "ERROR: no archiver (llvm-ar or ar) found for the FreeBSD cross build" >&2
+            exit 1
+        fi
+        export AR_x86_64_unknown_freebsd="${CROSS_AR}"
     fi
     run_cargo_build --target "${CROSS_TARGET}"
     # Cargo writes target-specific artifacts under target/<triple>/; the

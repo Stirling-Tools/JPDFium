@@ -69,6 +69,20 @@ Both were public in 1.2.0, so they are deliberate source and binary breaks like
 the one above, and `.github/workflows/compatibility.yml` excludes each class by
 name from the japicmp gate.
 
+- Four `MethodHandle` constants in the otherwise surviving Panama binding
+  holders, because the new PDFium pin no longer exports the native symbols they
+  mirrored: `EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction` (the fork
+  replaced it with `EPDFPage_ApplyRedactions`),
+  `EmbedPdfDocumentBindings.EPDF_GetPageRotationByIndex` (renamed to
+  `EPDF_GetPageRotateByIndex`, which reports rotation through an out parameter),
+  and the dead `EmbedPdfAnnotationBindings.EPDFAnnot_SetRectangleDifferences`
+  and `EmbedPdfDocumentBindings.EPDF_GetPageSizeByIndexNormalized` bindings,
+  which nothing called. Retargeting those fields at the surviving symbols would
+  only ship handles that fail at invoke time, so dropping them is the deliberate
+  break; each is excluded individually in
+  `.github/workflows/compatibility.yml`, and every other member of the two
+  binding classes keeps its signature.
+
 ## [1.2.0] - 2026-10-11
 
 A large architectural release. Parts of the calling, lifetime, and save paths
