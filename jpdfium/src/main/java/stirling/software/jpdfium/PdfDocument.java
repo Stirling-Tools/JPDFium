@@ -1266,11 +1266,17 @@ public final class PdfDocument implements AutoCloseable {
      */
     public int getPageRotation(int pageIndex) {
         ensureOpen();
-        MethodHandle getRot = EmbedPdfDocumentBindings.EPDF_GetPageRotationByIndex;
+        MethodHandle getRot = EmbedPdfDocumentBindings.EPDF_GetPageRotateByIndex;
         if (getRot != null) {
-            try {
-                int rot = (int) getRot.invokeExact(rawDocSegment, pageIndex);
-                if (rot >= 0) return rot;
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment rotSeg = arena.allocate(ValueLayout.JAVA_INT);
+                int ok = (int) getRot.invokeExact(rawDocSegment, pageIndex, rotSeg);
+                if (ok != 0) {
+                    // The native returns /Rotate as written: normalize it and treat
+                    // non-multiples of 90 as unusable so the fallback below applies.
+                    int rot = ((rotSeg.get(ValueLayout.JAVA_INT, 0) % 360) + 360) % 360;
+                    if (rot % 90 == 0) return rot;
+                }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
             }

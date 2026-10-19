@@ -173,8 +173,10 @@ public final class PdfAnnotationBuilder {
 
             if (opacity >= 0) {
                 try {
-                    @SuppressWarnings("unused")
-                    int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
+                    float opacityNorm = Math.clamp(opacity, 0, 255) / 255.0f;
+                    if ((int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacityNorm) == 0) {
+                        NativeRuntime.rethrowFatal(new JPDFiumException("EPDFAnnot_SetOpacity failed"));
+                    }
                 } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
             }
             if (!Float.isNaN(rotation)) {
