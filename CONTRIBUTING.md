@@ -9,7 +9,7 @@ Thank you for contributing to JPDFium. This guide covers local setup, architectu
 - Java 25 JDK (Temurin, Oracle, or OpenJDK) with Foreign Function and Memory API support.
 - C++23 compiler (`clang++`, `g++`, or MSVC 2022+).
 - CMake 3.20 or newer.
-- Rust toolchain (`cargo` and `rustc` 1.80+) for the native Rust acceleration crate.
+- Rust toolchain (`cargo` and `rustc` 1.92+) for the native Rust acceleration crate.
 - Optional: `libvips` development headers for `jpdfium-vips`.
 
 ### Quick Tryout (Stub Mode)
