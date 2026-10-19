@@ -705,6 +705,25 @@ jobs:
           DIST="native/dist/vips-${{ matrix.platform }}"
           rm -rf "$DIST" && mkdir -p "$DIST"
           tar -xf "/tmp/vips-pinned/$ASSET" -C "$DIST"
+          if [[ "${{ matrix.platform }}" == darwin-* ]]; then
+            # The pinned vips prebuild embeds a PDFium snapshot from an older
+            # native/pdfium.version. Both bundles use the same install names for
+            # PDFium's component dylibs, and dyld resolves dependencies by
+            # install name, so in one JVM (jpdfium + vips) the older vips copy
+            # binds against the jpdfium component set and fails on missing
+            # symbols. Replace the vips bundle's PDFium set with the core
+            # natives built for this pin; the stable FPDF API vips uses is
+            # unchanged. Rebuild the vips prebuild to drop this substitution.
+            CORE_NATIVES="native/dist/${{ matrix.platform }}"
+            cp "$CORE_NATIVES"/libpdfium.dylib \
+               "$CORE_NATIVES"/libbase_allocator*.dylib \
+               "$CORE_NATIVES"/libchrome_zlib.dylib \
+               "$CORE_NATIVES"/libicuuc.dylib \
+               "$CORE_NATIVES"/libskia.dylib \
+               "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
+               "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
+               "$DIST/"
+          fi
           # Same gates as the source path: denylist, lean layout, size budget.
           bash native/check-bundle-lean.sh "$DIST" "vips-${{ matrix.platform }}"
           bash native/check-bundle-size.sh "$DIST" "vips-${{ matrix.platform }}"
