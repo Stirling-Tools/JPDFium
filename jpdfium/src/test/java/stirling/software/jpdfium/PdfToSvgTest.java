@@ -164,13 +164,24 @@ class PdfToSvgTest {
         assertTrue(mean < 25, "outlined text must still resemble the page");
     }
 
+    private static int overWhite(int argb) {
+        int alpha = (argb >>> 24) & 0xff;
+        int r = (argb >> 16) & 0xff;
+        int g = (argb >> 8) & 0xff;
+        int b = argb & 0xff;
+        r = (r * alpha + 255 * (255 - alpha)) / 255;
+        g = (g * alpha + 255 * (255 - alpha)) / 255;
+        b = (b * alpha + 255 * (255 - alpha)) / 255;
+        return 0xff000000 | (r << 16) | (g << 8) | b;
+    }
+
     private static double meanDiff(BufferedImage a, BufferedImage b, int width, int height) {
         double total = 0;
         int samples = 0;
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int p = a.getRGB(x, y);
-                int q = b.getRGB(x, y);
+                int p = overWhite(a.getRGB(x, y));
+                int q = overWhite(b.getRGB(x, y));
                 total += Math.abs(((p >> 16) & 0xff) - ((q >> 16) & 0xff));
                 total += Math.abs(((p >> 8) & 0xff) - ((q >> 8) & 0xff));
                 total += Math.abs((p & 0xff) - (q & 0xff));

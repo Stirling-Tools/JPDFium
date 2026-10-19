@@ -1352,6 +1352,11 @@ int32_t jpdfium_page_gradients(const uint8_t*, int64_t, int32_t, uint8_t** out_p
     return fail_native_bytes(out_ptr, out_len);
 }
 
+int32_t jpdfium_page_gradients_pages(const uint8_t*, int64_t, const int32_t*, int32_t,
+                                     uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
 int32_t jpdfium_page_gradients_file(const char*, const int32_t*, int32_t, uint8_t** out_ptr,
                                     int64_t* out_len) {
     return fail_native_bytes(out_ptr, out_len);

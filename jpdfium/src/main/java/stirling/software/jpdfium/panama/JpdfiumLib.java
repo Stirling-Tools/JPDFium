@@ -1102,6 +1102,35 @@ public final class JpdfiumLib {
     }
 
     /**
+     * Byte-backed batch variant of {@link #pageGradients(byte[], int)}: parse the
+     * document once and return {@code #PAGE}-marked sections for the selected
+     * pages. A {@code null} or empty {@code pageIndices} selects all pages.
+     */
+    public static byte[] pageGradientsPages(byte[] pdf, int[] pageIndices) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cPdf = arena.allocateFrom(JAVA_BYTE, pdf);
+            int count = pageIndices == null ? 0 : pageIndices.length;
+            MemorySegment cPages = count == 0 ? MemorySegment.NULL
+                    : arena.allocateFrom(JAVA_INT, pageIndices);
+            return PdfiumRuntime.execute(() -> {
+                check(JpdfiumH.jpdfium_page_gradients_pages(cPdf, pdf.length, cPages, count,
+                        ADDR_SCRATCH, LONG_SCRATCH), "pageGradientsPages");
+                MemorySegment ptr = ADDR_SCRATCH.get(ADDRESS, 0);
+                long len = checkNativeBuffer(ptr, LONG_SCRATCH.get(JAVA_LONG, 0),
+                        "pageGradientsPages", false);
+                if (ptr == null || len <= 0) {
+                    return null;
+                }
+                try {
+                    return ptr.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_rust_free(ptr);
+                }
+            });
+        }
+    }
+
+    /**
      * File-backed variant of {@link #pageGradients(byte[], int)} that reads the document
      * from disk and parses it once for every requested page. A {@code null} or empty
      * {@code pageIndices} selects all pages; the payload marks each section with

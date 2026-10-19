@@ -113,6 +113,12 @@ JPDFIUM_EXPORT int32_t jpdfium_page_gradients(const uint8_t* input, int64_t inpu
                                               int32_t page_index, uint8_t** out_ptr,
                                               int64_t* out_len);
 
+// Byte-backed batch gradient extraction: parse once, emit one "#PAGE" section
+// per selected page with shadings.
+JPDFIUM_EXPORT int32_t jpdfium_page_gradients_pages(const uint8_t* pdf, int64_t pdf_len,
+                                                    const int32_t* pages, int32_t page_count,
+                                                    uint8_t** out_ptr, int64_t* out_len);
+
 // Extract the shading patterns of one or more pages from a PDF file on disk,
 // parsing the document once. `pages` holds zero-based page indices; a null
 // pointer or a count of zero selects every page. The payload carries one

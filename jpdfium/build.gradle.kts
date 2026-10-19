@@ -242,6 +242,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_svg_to_rgba",
     "jpdfium_rust_svg_to_pdf",
     "jpdfium_page_gradients",
+    "jpdfium_page_gradients_pages",
     "jpdfium_page_gradients_file",
     "jpdfium_rust_free",
     // QPDF in-process functions

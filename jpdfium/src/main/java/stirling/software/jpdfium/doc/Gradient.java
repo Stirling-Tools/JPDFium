@@ -153,7 +153,8 @@ final class Gradient {
         boolean extendEnd = false;
         float[] coords = null;
         float[] quad = null;
-        List<Float> pending = new ArrayList<>();
+        float[] pending = new float[64];
+        int pendingCount = 0;
         for (String line : text.split("\n")) {
             String trimmed = line.trim();
             if (trimmed.isEmpty()) {
@@ -161,8 +162,9 @@ final class Gradient {
             }
             String[] tokens = trimmed.split("\\s+");
             if (tokens[0].equals("G") && tokens.length >= 19) {
-                if (coords != null && quad != null && pending.size() >= 8) {
-                    list.add(build(list.size(), kind, extendStart, extendEnd, coords, quad, pending));
+                if (coords != null && quad != null && pendingCount >= 8) {
+                    list.add(build(list.size(), kind, extendStart, extendEnd, coords, quad,
+                            pending, pendingCount));
                 }
                 kind = parseInt(tokens[1], 0);
                 extendStart = parseInt(tokens[2], 0) != 0;
@@ -175,12 +177,16 @@ final class Gradient {
                 for (int i = 0; i < 8; i++) {
                     quad[i] = parseFloat(tokens[10 + i]);
                 }
-                pending = new ArrayList<>();
+                pending = new float[64];
+                pendingCount = 0;
             } else if (tokens[0].equals("S") && tokens.length >= 4 && coords != null) {
-                pending.add(parseFloat(tokens[1]));
-                pending.add(parseFloat(tokens[2]));
-                pending.add(parseFloat(tokens[3]));
-                pending.add(parseFloat(tokens[4]));
+                if (pendingCount + 4 > pending.length) {
+                    pending = java.util.Arrays.copyOf(pending, pending.length * 2);
+                }
+                pending[pendingCount++] = parseFloat(tokens[1]);
+                pending[pendingCount++] = parseFloat(tokens[2]);
+                pending[pendingCount++] = parseFloat(tokens[3]);
+                pending[pendingCount++] = parseFloat(tokens[4]);
             } else if (tokens[0].equals("P") && tokens.length >= 7) {
                 float[] bbox = new float[4];
                 for (int i = 0; i < 4; i++) {
@@ -190,19 +196,17 @@ final class Gradient {
                         tokens[6].equals("-") ? null : tokens[6]));
             }
         }
-        if (coords != null && quad != null && pending.size() >= 8) {
-            list.add(build(list.size(), kind, extendStart, extendEnd, coords, quad, pending));
+        if (coords != null && quad != null && pendingCount >= 8) {
+            list.add(build(list.size(), kind, extendStart, extendEnd, coords, quad, pending,
+                    pendingCount));
         }
         return records;
     }
 
     private static Gradient build(int index, int kind, boolean extendStart, boolean extendEnd,
-            float[] coords, float[] quad, List<Float> stops) {
-        float[] flat = new float[stops.size()];
-        for (int i = 0; i < flat.length; i++) {
-            flat[i] = stops.get(i);
-        }
-        return new Gradient(index, kind, extendStart, extendEnd, coords, quad, flat);
+            float[] coords, float[] quad, float[] stops, int count) {
+        return new Gradient(index, kind, extendStart, extendEnd, coords, quad,
+                java.util.Arrays.copyOf(stops, count));
     }
 
     private static int parseInt(String token, int fallback) {
