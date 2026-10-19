@@ -959,8 +959,11 @@ void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matc
             hbCache[reinterpret_cast<uintptr_t>(f)] = {nullptr, nullptr};
             return nullptr;
         }
+        // DUPLICATE, not READONLY: HarfBuzz keeps the bytes, and fontData dies
+        // with this function - a reading blob against freed memory crashed the
+        // shaping path on Windows.
         hb_blob_t* blob = hb_blob_create(reinterpret_cast<const char*>(fontData.data()),
-                                         static_cast<unsigned>(actual), HB_MEMORY_MODE_READONLY,
+                                         static_cast<unsigned>(actual), HB_MEMORY_MODE_DUPLICATE,
                                          nullptr, nullptr);
         if (!blob) return nullptr;
         hb_face_t* face = hb_face_create(blob, 0);

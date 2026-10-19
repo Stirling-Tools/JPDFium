@@ -41,8 +41,12 @@ namespace {
 // and every failure here fails the save closed via JPDFIUM_ERR_IO.
 FILE* safe_fopen_write(const char* path) {
 #if defined(_WIN32)
+    // _O_BINARY is required: the CRT default is text mode, and _fdopen's "wb"
+    // does not switch an already-open descriptor, so every LF in the PDF got a
+    // CR inserted. That shifted every offset past the first stream newline, so
+    // readers mis-resolved objects and content streams came back empty.
     int fd = -1;
-    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT, _SH_DENYRW,
+    if (::_sopen_s(&fd, path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_NOINHERIT | _O_BINARY, _SH_DENYRW,
                    _S_IREAD | _S_IWRITE) != 0) {
         return nullptr;
     }

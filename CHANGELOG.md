@@ -22,6 +22,16 @@ publishing workflows, not library releases, so they are not listed here.
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
 
+### Fixed
+
+- Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
+  it font bytes it had marked read-only from a buffer that died with the function,
+  so shaping read freed memory. HarfBuzz now owns a copy of the font data.
+- Native file saves on Windows wrote every LF as CRLF because the staging file
+  was opened without `_O_BINARY`. The shifted offsets made PDFium's own reader
+  mis-resolve objects and reload page content as empty; every file-based save
+  overload was affected.
+
 ### Changed
 
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
