@@ -361,9 +361,18 @@ public final class QpdfLib {
         }
     }
 
-    /** True when the native page-stamping downcall resolved (qpdf build). */
+    /** True when the real qpdf-backed natives expose page stamping. */
     public static boolean isStampSupported() {
-        return JpdfiumH.jpdfium_qpdf_stamp_page$address() != null;
+        if (!NativeRuntime.isFull()) {
+            // The stub exports the symbol but deliberately returns -1; it is
+            // not a working implementation.
+            return false;
+        }
+        try {
+            return JpdfiumH.jpdfium_qpdf_stamp_page$address() != null;
+        } catch (LinkageError | RuntimeException e) {
+            return false;
+        }
     }
 
     /**

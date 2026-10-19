@@ -261,7 +261,7 @@ public final class PdfToSvg {
         try (PdfPage page = doc.page(pageIndex)) {
             body(doc, shadings, page, pageIndex, options, body);
         }
-        return "<svg x=\"0\" y=\"" + num(-height - offsetY) + "\" width=\"" + num(width) + "\" height=\""
+        return "<svg x=\"0\" y=\"" + num(offsetY) + "\" width=\"" + num(width) + "\" height=\""
                 + num(height) + "\" viewBox=\"0 0 " + num(width) + ' ' + num(height) + "\">\n" + body
                 + "</svg>\n";
     }
@@ -551,7 +551,9 @@ public final class PdfToSvg {
 
     /**
      * Read the object's clip geometry as SVG path-data strings, one per clip subpath.
-     * <p>PDFium reports {@code FPDFClipPath_CountPaths == -1} when an object has no clip and
+     *
+     * <p>PDFium reports {@code FPDFClipPath_CountPaths == -1} when an object has
+     * no clip, which is treated as an empty list.
      */
     private static List<String> objectClips(PageObject obj) {
         MemorySegment raw = obj.rawHandle();
@@ -582,8 +584,9 @@ public final class PdfToSvg {
     }
 
     /**
-     * Wrap content in one nested {@code <g clip-path>} per clip path. Sibling paths inside a single
-     * {@code <clipPath>} would be unioned by SVG, so nesting each level is what reproduces the PDF's
+     * Wrap content in one nested {@code <g clip-path>} per clip path. Sibling
+     * paths inside a single {@code <clipPath>} would be unioned by SVG, so
+     * nesting each level is what reproduces the PDF's intersection.
      */
     private static void wrapClipPaths(StringBuilder out, Patch patch, List<String> clipData,
             CharSequence content) {
@@ -907,8 +910,9 @@ public final class PdfToSvg {
     }
 
     /**
-     * Render a segment list as SVG path data. Points are mapped through {@code (x*scale + tx,
-     * y*scale + ty)} so the same code serves object paths (identity) and glyph outlines (scaled from
+     * Render a segment list as SVG path data. Points are mapped through
+     * {@code (x*scale + tx, y*scale + ty)} so the same code serves object paths
+     * (identity) and glyph outlines (scaled from font units).
      */
     private static String buildPathData(int count, SegmentSource source, float scale, float tx,
             float ty) {
@@ -1005,9 +1009,24 @@ public final class PdfToSvg {
                 continue;
             }
             if (type == 2) {
-                PageObject childObj = readChildPath(child, i);
+                PageObject childObj = readChildObject(child, i, PageObjectType.PATH);
                 if (childObj != null) {
                     emitPath(out, childObj, patch);
+                }
+            } else if (type == 3 || type == 4) {
+                // Form XObject images are not part of the page-level image
+                // extraction, and form shading objects have no vector mapping
+                // here. Cover the child with the page raster when allowed; text
+                // inside forms is emitted separately by the text extractor.
+                if (type == 3 && !patch.options.includeImages) {
+                    continue;
+                }
+                if (patch.options.rasterFallback) {
+                    PageObject childObj =
+                            readChildObject(child, i, PageObjectType.fromCode(type));
+                    if (childObj != null) {
+                        emitRasterPatch(out, patch, childObj);
+                    }
                 }
             } else if (type == 5) {
                 emitForm(out, child, depth + 1, patch);
@@ -1015,8 +1034,8 @@ public final class PdfToSvg {
         }
     }
 
-    /** Minimal page-object view of a form child path, so the shared path emitter can be reused. */
-    private static PageObject readChildPath(MemorySegment child, int index) {
+    /** Minimal page-object view of a form child, so the shared path/raster emitters can run. */
+    private static PageObject readChildObject(MemorySegment child, int index, PageObjectType type) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment r = arena.allocate(JAVA_INT);
             MemorySegment g = arena.allocate(JAVA_INT);
@@ -1061,7 +1080,7 @@ public final class PdfToSvg {
                         right.get(JAVA_FLOAT, 0) - l.get(JAVA_FLOAT, 0),
                         top.get(JAVA_FLOAT, 0) - btm.get(JAVA_FLOAT, 0));
             }
-            return new PageObject(index, PageObjectType.PATH, bounds, new float[] {1, 0, 0, 1, 0, 0},
+            return new PageObject(index, type, bounds, new float[] {1, 0, 0, 1, 0, 0},
                     false, fillR, fillG, fillB, fillA, strokeR, strokeG, strokeB, strokeA,
                     strokeWidth, List.of(), child);
         } catch (Throwable t) {
@@ -1143,8 +1162,11 @@ public final class PdfToSvg {
     // ---------------------------------------------------------------- text
 
     /**
-     * Emit text as one {@code <text>} element per run of characters sharing font, size and baseline.
-     * <p>{@link TextChar#y()} is the bottom edge of the glyph box in PDF points, so it is used as
+     * Emit text as one {@code <text>} element per run of characters sharing
+     * font, size and baseline.
+     *
+     * <p>{@link TextChar#originY()} is the baseline, so it is used directly as
+     * the SVG {@code y}; the glyph box's lower edge would shift descenders.
      */
     private static void emitText(StringBuilder out, PdfDocument doc, int pageIndex,
             List<PageObject> objects) {
@@ -1159,20 +1181,24 @@ public final class PdfToSvg {
             }
             String font = first.fontName();
             float size = first.fontSize();
-            float baseline = first.y();
+            float baseline = first.originY();
+            float runBaseline = baseline;
+            float previousX = first.originX();
             int end = start;
             StringBuilder run = new StringBuilder();
             while (end < chars.size()) {
                 TextChar c = chars.get(end);
-                if (c.isNewline() || !sameRun(first, c, font, size, baseline)) {
+                if (c.isNewline() || !sameRun(c, font, size, baseline, previousX)) {
                     break;
                 }
                 run.append(c.toText());
+                runBaseline = Math.max(runBaseline, c.originY());
+                previousX = c.originX();
                 end++;
             }
             if (run.length() > 0) {
-                out.append("<text x=\"").append(num(first.x())).append("\" y=\"")
-                        .append(num(baseline)).append("\" font-family=\"")
+                out.append("<text x=\"").append(num(first.originX())).append("\" y=\"")
+                        .append(num(runBaseline)).append("\" font-family=\"")
                         .append(escape(font == null ? "sans-serif" : font)).append("\" font-size=\"")
                         .append(num(size)).append("\" fill=\"")
                         .append(textColor(objects, first)).append("\">")
@@ -1182,11 +1208,18 @@ public final class PdfToSvg {
         }
     }
 
-    private static boolean sameRun(TextChar first, TextChar c, String font, float size,
-            float baseline) {
-        return c.fontName() != null && c.fontName().equals(font) && Math.abs(c.fontSize() - size) < 0.01f
-                && Math.abs(c.y() - baseline) < 0.5f
-                && Math.abs(c.x() - first.x()) < 10000f;
+    private static boolean sameRun(TextChar c, String font, float size,
+            float baseline, float previousX) {
+        if (c.fontName() == null || !c.fontName().equals(font)
+                || Math.abs(c.fontSize() - size) >= 0.01f
+                || Math.abs(c.originY() - baseline) >= Math.max(0.5f, size * 0.2f)) {
+            return false;
+        }
+        // A column jump or a backwards origin means a new run even when the
+        // font and baseline match; wide inter-word spaces stay in the run.
+        float em = Math.max(size, 1f);
+        float advance = c.originX() - previousX;
+        return advance <= em * 2.5f && advance >= -em * 0.5f;
     }
 
     private static String textColor(List<PageObject> objects, TextChar c) {
@@ -1204,8 +1237,10 @@ public final class PdfToSvg {
     }
 
     /**
-     * Text as vector glyph outlines. Each run is shaped with HarfBuzz through {@link FontLib} and
-     * the per-glyph contours are read from PDFium's {@code FPDFFont_GetGlyphPath}. Runs that cannot
+     * Text as vector glyph outlines. Each run is shaped with HarfBuzz through
+     * {@link FontLib} and the per-glyph contours are read from PDFium's
+     * {@code FPDFFont_GetGlyphPath}. Runs that cannot be shaped or outlined
+     * fall back to a plain {@code <text>} element.
      */
     private static void emitTextOutlines(StringBuilder out, PdfDocument doc, int pageIndex,
             MemorySegment rawPage, List<PageObject> objects) {
@@ -1232,20 +1267,24 @@ public final class PdfToSvg {
                 }
                 String font = first.fontName();
                 float size = first.fontSize();
-                float baseline = first.y();
+                float baseline = first.originY();
+                float runBaseline = baseline;
+                float previousX = first.originX();
                 int end = start;
                 StringBuilder run = new StringBuilder();
                 while (end < chars.size()) {
                     TextChar c = chars.get(end);
-                    if (c.isNewline() || !sameRun(first, c, font, size, baseline)) {
+                    if (c.isNewline() || !sameRun(c, font, size, baseline, previousX)) {
                         break;
                     }
                     run.append(c.toText());
+                    runBaseline = Math.max(runBaseline, c.originY());
+                    previousX = c.originX();
                     end++;
                 }
                 if (run.length() > 0) {
                     emitTextRunOutline(out, objects, fontPrograms, textPage, run.toString(), first,
-                            chars.get(end - 1), size);
+                            chars.get(end - 1), size, runBaseline);
                 }
                 start = end > start ? end : start + 1;
             }
@@ -1260,11 +1299,11 @@ public final class PdfToSvg {
 
     private static void emitTextRunOutline(StringBuilder out, List<PageObject> objects,
             Map<Long, byte[]> fontPrograms, MemorySegment textPage, String runText, TextChar first,
-            TextChar last, float size) {
+            TextChar last, float size, float baseline) {
         String data = outlineRunData(objects, fontPrograms, textPage, runText, first, last, size);
         if (data.isEmpty()) {
-            out.append("<text x=\"").append(num(first.x())).append("\" y=\"")
-                    .append(num(first.y())).append("\" font-family=\"")
+            out.append("<text x=\"").append(num(first.originX())).append("\" y=\"")
+                    .append(num(baseline)).append("\" font-family=\"")
                     .append(escape(first.fontName() == null ? "sans-serif" : first.fontName()))
                     .append("\" font-size=\"").append(num(size)).append("\" fill=\"")
                     .append(textColor(objects, first)).append("\">")

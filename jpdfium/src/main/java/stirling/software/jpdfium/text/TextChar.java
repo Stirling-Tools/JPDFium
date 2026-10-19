@@ -12,6 +12,8 @@ package stirling.software.jpdfium.text;
  * @param height    character height in PDF points
  * @param fontName  name of the font
  * @param fontSize  font size in PDF points
+ * @param originX   text-space origin x (the pen position) in PDF points
+ * @param originY   text-space origin y (the baseline) in PDF points
  */
 public record TextChar(
         int index,
@@ -21,8 +23,19 @@ public record TextChar(
         float width,
         float height,
         String fontName,
-        float fontSize
+        float fontSize,
+        float originX,
+        float originY
 ) {
+    /**
+     * Compatibility constructor for callers that only have the glyph box. The
+     * box's lower edge is used as the origin, which is the historical behaviour.
+     */
+    public TextChar(int index, int unicode, float x, float y, float width, float height,
+            String fontName, float fontSize) {
+        this(index, unicode, x, y, width, height, fontName, fontSize, x, y);
+    }
+
     /** Return the character as a Java char (may lose data for supplementary codepoints). */
     public char toChar() {
         return (char) unicode;

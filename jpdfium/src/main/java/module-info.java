@@ -31,6 +31,11 @@ module stirling.software.jpdfium {
 
     uses ImageCodec;
 
+    // Classpath users find this through META-INF/services; named modules need
+    // an explicit provider declaration for ImageIO's ServiceLoader scan.
+    provides javax.imageio.spi.ImageReaderSpi
+            with stirling.software.jpdfium.spi.SvgImageReaderSpi;
+
     // Standard library requirements
     requires transitive java.desktop;      // java.awt.image.BufferedImage surfaces in the public API
     requires java.net.http;     // java.net.http.HttpClient for link validation

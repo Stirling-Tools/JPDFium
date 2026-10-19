@@ -1841,6 +1841,13 @@
           "jint",
           "jfloat"
         ]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": [
+          "void*",
+          "jlong"
+        ]
       }
     ],
     "upcalls": [

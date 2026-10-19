@@ -95,6 +95,16 @@ fn usvg_options() -> usvg::Options<'static> {
     options
 }
 
+fn usvg_options_v47() -> usvg_v47::Options<'static> {
+    let mut options = usvg_v47::Options::default();
+    options.fontdb = super::system_fontdb_v47();
+    options.image_href_resolver = usvg_v47::ImageHrefResolver {
+        resolve_data: usvg_v47::ImageHrefResolver::default_data_resolver(),
+        resolve_string: Box::new(|_, _| None),
+    };
+    options
+}
+
 fn small_svg() -> Vec<u8> {
     concat!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">"##,
@@ -210,7 +220,7 @@ fn bench_all() {
     );
     report("usvg parse (small)", &stats, calls, bytes);
 
-    let heavy_tree = usvg::Tree::from_data(&heavy, &usvg_options()).unwrap();
+    let heavy_tree = usvg_v47::Tree::from_data(&heavy, &usvg_options_v47()).unwrap();
     let (stats, calls, bytes) = measure(
         || super::svg_to_pdf_krilla(&heavy_tree, 800.0, 600.0, true).map_or(0, |v| v.len()),
         3,

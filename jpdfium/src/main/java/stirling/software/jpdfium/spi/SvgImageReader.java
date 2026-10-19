@@ -29,6 +29,7 @@ public final class SvgImageReader extends ImageReader {
 
     private byte[] bytes;
     private RenderResult rendered;
+    private boolean inputRejected;
 
     SvgImageReader(SvgImageReaderSpi spi) {
         super(spi);
@@ -74,13 +75,14 @@ public final class SvgImageReader extends ImageReader {
         BufferedImage result = applySubsampling(source, param);
         BufferedImage destination = param == null ? null : param.getDestination();
         if (destination != null) {
-            if (destination.getWidth() < result.getWidth()
-                    || destination.getHeight() < result.getHeight()) {
+            java.awt.Point offset = param.getDestinationOffset();
+            if (destination.getWidth() < offset.x + result.getWidth()
+                    || destination.getHeight() < offset.y + result.getHeight()) {
                 throw new IOException("supplied destination image is too small");
             }
             java.awt.Graphics2D g = destination.createGraphics();
             try {
-                g.drawImage(result, 0, 0, null);
+                g.drawImage(result, offset.x, offset.y, null);
             } finally {
                 g.dispose();
             }
@@ -108,6 +110,7 @@ public final class SvgImageReader extends ImageReader {
     @Override
     public void setInput(Object input, boolean seekForwardOnly, boolean ignoreMetadata) {
         bytes = toBytes(input);
+        inputRejected = input != null && bytes == null;
         rendered = null;
     }
 
@@ -115,6 +118,7 @@ public final class SvgImageReader extends ImageReader {
     public void reset() {
         bytes = null;
         rendered = null;
+        inputRejected = false;
     }
 
     @Override
@@ -135,8 +139,11 @@ public final class SvgImageReader extends ImageReader {
         return rendered;
     }
 
-    private void checkInput() {
+    private void checkInput() throws IOException {
         if (bytes == null) {
+            if (inputRejected) {
+                throw new IOException("SVG input is larger than " + MAX_BYTES + " bytes or unreadable");
+            }
             throw new IllegalStateException("no input set; call setInput first");
         }
     }

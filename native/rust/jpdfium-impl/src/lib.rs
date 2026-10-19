@@ -95,6 +95,22 @@ fn system_fontdb() -> std::sync::Arc<usvg::fontdb::Database> {
     .clone()
 }
 
+/// The same font discovery for krilla-svg's usvg 0.47 tree.
+///
+/// usvg 0.47 and 0.48 depend on different fontdb majors, so the two trees
+/// cannot share one `Database` value. Loading the system fonts once per tree is
+/// still cheap compared with parsing the SVG itself.
+fn system_fontdb_v47() -> std::sync::Arc<usvg_v47::fontdb::Database> {
+    static DB: std::sync::OnceLock<std::sync::Arc<usvg_v47::fontdb::Database>> =
+        std::sync::OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = usvg_v47::fontdb::Database::new();
+        db.load_system_fonts();
+        std::sync::Arc::new(db)
+    })
+    .clone()
+}
+
 /// Compress a PDF using lopdf + zopfli for superior FlateDecode streams.
 ///
 /// Pipeline:
@@ -700,15 +716,15 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_pdf(
     }
     let data = slice::from_raw_parts(svg, svg_len);
 
-    // Untrusted SVG: allow only inline data: images, and share the read-only
-    // system font database with the rasterizer (one fontdb generation now).
-    let mut options = usvg::Options::default();
-    options.fontdb = system_fontdb();
-    options.image_href_resolver = usvg::ImageHrefResolver {
-        resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+    // Untrusted SVG: allow only inline data: images. krilla-svg 0.8 still
+    // consumes usvg 0.47, so this path has its own hardened parse and fontdb.
+    let mut options = usvg_v47::Options::default();
+    options.fontdb = system_fontdb_v47();
+    options.image_href_resolver = usvg_v47::ImageHrefResolver {
+        resolve_data: usvg_v47::ImageHrefResolver::default_data_resolver(),
         resolve_string: Box::new(|_, _| None),
     };
-    let tree = match usvg::Tree::from_data(data, &options) {
+    let tree = match usvg_v47::Tree::from_data(data, &options) {
         Ok(tree) => tree,
         Err(_) => return JPDFIUM_ERR_GENERIC,
     };
@@ -752,7 +768,7 @@ pub unsafe extern "C" fn jpdfium_rust_svg_to_pdf(
 
 /// Draw a parsed SVG onto a fresh krilla page and serialize it to PDF bytes.
 fn svg_to_pdf_krilla(
-    tree: &usvg::Tree,
+    tree: &usvg_v47::Tree,
     page_w: f32,
     page_h: f32,
     embed_text: bool,

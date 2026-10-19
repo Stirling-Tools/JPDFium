@@ -4,7 +4,9 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Minimal SVG content sniffing shared by the {@link javax.imageio} reader SPI.
+ *
  * <p>{@code ImageIO} probes the reader stack with the raw leading bytes, so this
+ * check must work on a truncated prefix.
  */
 final class SvgImageFormat {
 
@@ -12,7 +14,7 @@ final class SvgImageFormat {
 
     /**
      * True when {@code prefix} starts with an SVG root element, tolerating a
-     * UTF-8/UTF-16 byte-order mark, the XML declaration, comments and a doctype.
+     * UTF-8 byte-order mark, the XML declaration, comments and a doctype.
      */
     static boolean looksLikeSvg(byte[] prefix) {
         if (prefix == null || prefix.length == 0) {

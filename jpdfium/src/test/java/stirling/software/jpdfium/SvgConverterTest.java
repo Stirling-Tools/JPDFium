@@ -111,7 +111,10 @@ class SvgConverterTest {
     @Test
     void vectorPdfSizeIsIndependentOfScale() {
         byte[] svg = VECTOR_SVG.getBytes(StandardCharsets.UTF_8);
-        int natural = SvgConverter.toVectorPdf(svg).sourceBytes().length;
+        int natural;
+        try (PdfDocument original = SvgConverter.toVectorPdf(svg)) {
+            natural = original.sourceBytes().length;
+        }
         try (PdfDocument large = SvgConverter.toVectorPdf(svg, 800, 480)) {
             int scaled = large.sourceBytes().length;
             assertTrue(

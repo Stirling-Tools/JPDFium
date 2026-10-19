@@ -28,6 +28,10 @@ EXPECTED=(
   jpdfium_font_fix_tounicode
   jpdfium_repair_pdf
   jpdfium_brotli_decode
+  jpdfium_rust_svg_to_pdf
+  jpdfium_page_gradients
+  jpdfium_page_gradients_file
+  jpdfium_qpdf_stamp_page
 )
 MISSING=0
 symbol_exported() {
