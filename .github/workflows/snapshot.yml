@@ -372,6 +372,21 @@ jobs:
               fi
               exit 0
             fi
+            if [ "$TARGET_PLATFORM" = "freebsd-x64" ]; then
+              # base.txz carries no third-party headers or pkg-config files.
+              # Until the sysroot gains harfbuzz/ICU/qpdf/pugixml, the bridge
+              # cannot link, so skip the leg like a missing prebuild instead of
+              # failing it (freebsd is experimental and previously skipped).
+              SYSROOT="${FREEBSD_SYSROOT:-$PWD/native/freebsd-sysroot}"
+              if ! PKG_CONFIG_DIR= \
+                   PKG_CONFIG_LIBDIR="$SYSROOT/usr/libdata/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/local/libdata/pkgconfig" \
+                   pkg-config --exists \
+                     libpcre2-8 libpcre2-32 harfbuzz harfbuzz-subset icu-uc libqpdf pugixml 2>/dev/null; then
+                echo "freebsd_missing=true" >> "$GITHUB_OUTPUT"
+                echo "freebsd cross dependencies are missing from $SYSROOT; skipping freebsd natives"
+                exit 0
+              fi
+            fi
           fi
           bash native/fetch-prebuilt-pdfium.sh "$TARGET_PLATFORM"
 
@@ -398,11 +413,11 @@ jobs:
           echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the musl natives build + smoke resumes."
           echo "The glibc/darwin/windows legs are unaffected."
 
-      - name: Skip freebsd natives (missing freebsd PDFium prebuild)
+      - name: Skip freebsd natives (prebuild or cross dependencies unavailable)
         if: matrix.platform == 'freebsd-x64' && steps.fetch.outputs.freebsd_missing == 'true'
         run: |
-          echo "::warning::freebsd-x64 natives skipped: pdfium-freebsd-x64.tar.gz is not in the pinned PDFium prebuild release yet."
-          echo "Run the 'Prebuild PDFium' workflow to produce it; once that is green the freebsd natives build resumes."
+          echo "::warning::freebsd-x64 natives skipped: the pinned PDFium prebuild or the FreeBSD cross dependencies (harfbuzz, ICU, qpdf, pugixml) are unavailable."
+          echo "The FreeBSD base sysroot ships no third-party headers or pkg-config files; provide them in the sysroot before this leg can build."
 
       - name: Build qpdf with native crypto (Linux + macOS)
         if: matrix.libc != 'musl' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))

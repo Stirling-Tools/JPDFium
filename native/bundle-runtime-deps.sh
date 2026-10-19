@@ -15,7 +15,7 @@ bundle_linux() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
     [ -f "$bridge" ] || { echo "no libjpdfium.so found to bundle"; return 0; }
 
-    local skip_regex='^(linux-vdso|libc|libc\.musl|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux|^ld-musl'
+    local skip_regex='^(linux-vdso|libc|libc\.musl[^.]*|libm|libdl|libpthread|libgcc_s|libresolv|librt|libstdc\+\+)\.so|^ld-linux|^ld-musl'
 
     local queue=("$bridge")
     while [ "${#queue[@]}" -gt 0 ]; do

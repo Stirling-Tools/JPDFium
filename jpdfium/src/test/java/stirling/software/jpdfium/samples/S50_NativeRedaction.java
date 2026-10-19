@@ -19,7 +19,7 @@ import java.util.List;
  *
  * <p>Demonstrates the EmbedPDF fork's native redaction API:
  * creating redact annotations with overlay text, then applying them
- * via {@code EPDFAnnot_ApplyRedaction} / {@code EPDFPage_ApplyRedactions}.
+ * via {@code EPDFPage_ApplyRedactions}.
  *
  * <p>The fork's native redaction handles shading objects, JBIG2 images,
  * transparent PNGs, and Form XObjects. For even more advanced redaction
