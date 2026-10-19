@@ -48,9 +48,6 @@ fn ffi_guard(f: impl FnOnce() -> i32) -> i32 {
     }
 }
 
-/// Hard ceiling for one generated SVG document.
-const MAX_SVG_BYTES: usize = 256 * 1024 * 1024;
-
 /// Allocate a buffer with libc::malloc and copy `data` into it.
 /// Returns null if malloc fails or data is empty.
 unsafe fn malloc_copy(data: &[u8]) -> *mut u8 {
@@ -799,62 +796,6 @@ fn svg_to_pdf_krilla(
     surface.finish();
     page.finish();
     document.finish().ok()
-}
-
-/// Convert one PDF page to SVG with hayro's interpreter. This is the exact
-/// backend: it covers shadings, patterns, masks and form XObjects, and emits
-/// glyph outlines rather than selectable text. Free with jpdfium_rust_free.
-///
-/// # Safety
-/// `pdf` must be readable for `pdf_len` bytes. `out_ptr` and `out_len` must be
-/// writable; the returned buffer is owned by the caller.
-#[no_mangle]
-pub unsafe extern "C" fn jpdfium_rust_pdf_to_svg(
-    pdf: *const u8,
-    pdf_len: usize,
-    page_index: i32,
-    out_ptr: *mut *mut u8,
-    out_len: *mut i64,
-) -> i32 {
-    if out_ptr.is_null() || out_len.is_null() {
-        return JPDFIUM_ERR_GENERIC;
-    }
-    *out_ptr = std::ptr::null_mut();
-    *out_len = 0;
-    if pdf.is_null() || pdf_len == 0 || page_index < 0 {
-        return JPDFIUM_ERR_INVALID;
-    }
-    ffi_guard(|| {
-        let data = slice::from_raw_parts(pdf, pdf_len);
-        let document = match hayro_svg::hayro_syntax::Pdf::new(data.to_vec()) {
-            Ok(document) => document,
-            Err(_) => return JPDFIUM_ERR_GENERIC,
-        };
-        let pages = document.pages();
-        let index = page_index as usize;
-        let Some(page) = pages.get(index) else {
-            return JPDFIUM_ERR_INVALID;
-        };
-        let cache = hayro_svg::RenderCache::new();
-        let settings = hayro_svg::hayro_interpret::InterpreterSettings::default();
-        let svg = hayro_svg::convert(
-            page,
-            &cache,
-            &settings,
-            &hayro_svg::SvgRenderSettings::default(),
-        );
-        let bytes = svg.as_bytes();
-        if bytes.is_empty() || bytes.len() > MAX_SVG_BYTES {
-            return JPDFIUM_ERR_GENERIC;
-        }
-        let ptr = malloc_copy(bytes);
-        if ptr.is_null() {
-            return JPDFIUM_ERR_GENERIC;
-        }
-        *out_ptr = ptr;
-        *out_len = bytes.len() as i64;
-        JPDFIUM_OK
-    })
 }
 
 /// Extract a page's shading patterns as gradient definitions for the PDF -> SVG

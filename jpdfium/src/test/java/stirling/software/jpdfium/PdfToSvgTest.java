@@ -277,51 +277,6 @@ class PdfToSvgTest {
     }
 
     @Test
-    void exactBackendRendersShadingAndFormContent() {
-        byte[] pdf = vectorPdf(VECTOR_SVG);
-        assertTrue(PdfToSvg.isExactAvailable(), "hayro backend must be compiled in");
-        String svg = PdfToSvg.toSvgExact(pdf, 0);
-
-        assertTrue(svg.contains("<svg"), "exact export must be an SVG document");
-        assertTrue(svg.contains("Gradient") || svg.contains("<pattern"),
-                "shading must survive the exact backend: " + svg);
-
-        BufferedImage reference;
-        int width = 200;
-        int height = 120;
-        try (PdfDocument doc = PdfDocument.open(pdf);
-                PdfPage page = doc.page(0)) {
-            reference = page.renderImage(72);
-        }
-        BufferedImage rendered = SvgConverter.toBufferedImage(
-                svg.getBytes(StandardCharsets.UTF_8), width, height);
-        double mean = meanDiff(reference, rendered, width, height);
-        System.out.printf("hayro exact fidelity: mean abs diff %.3f/255%n", mean);
-        assertTrue(mean < 15, "exact backend must resemble the rendered page, diff " + mean);
-    }
-
-    @Test
-    void exactBackendHandlesComplexFormAndShadingPage() throws Exception {
-        byte[] pdf = resource("/pdfs/repair/pdfjs-issue6961.pdf");
-        String svg = PdfToSvg.toSvgExact(pdf, 0);
-
-        BufferedImage reference;
-        int width;
-        int height;
-        try (PdfDocument doc = PdfDocument.open(pdf);
-                PdfPage page = doc.page(0)) {
-            width = (int) page.size().width();
-            height = (int) page.size().height();
-            reference = page.renderImage(72);
-        }
-        BufferedImage rendered = SvgConverter.toBufferedImage(
-                svg.getBytes(StandardCharsets.UTF_8), width, height);
-        double mean = meanDiff(reference, rendered, width, height);
-        System.out.printf("hayro complex-page fidelity: mean abs diff %.3f/255%n", mean);
-        assertTrue(mean < 25, "exact backend must handle forms/shading, diff " + mean);
-    }
-
-    @Test
     void multiPageDocumentPlacesPagesOnTheCanvas(@TempDir Path dir) throws Exception {
         Path red = dir.resolve("red.pdf");
         Path blue = dir.resolve("blue.pdf");

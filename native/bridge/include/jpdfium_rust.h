@@ -107,11 +107,6 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_svg_to_pdf(const uint8_t* svg, int64_t svg_l
                                                int32_t height, int32_t embed_text,
                                                uint8_t** out_ptr, int64_t* out_len);
 
-// Convert one PDF page to SVG with hayro (exact backend; text is outlined).
-JPDFIUM_EXPORT int32_t jpdfium_rust_pdf_to_svg(const uint8_t* pdf, int64_t pdf_len,
-                                               int32_t page_index, uint8_t** out_ptr,
-                                               int64_t* out_len);
-
 // Extract a page's shading patterns as gradient definitions for the PDF -> SVG
 // exporter.
 JPDFIUM_EXPORT int32_t jpdfium_page_gradients(const uint8_t* input, int64_t input_len,
