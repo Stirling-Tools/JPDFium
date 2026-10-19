@@ -22,7 +22,7 @@ use fast_image_resize as fir;
 use fir::images::Image as FirImage;
 use flate2::read::ZlibDecoder;
 use lopdf::Document;
-use zopfli::{Format, Options, compress as zopfli_compress};
+use zopfli::{compress as zopfli_compress, Format, Options};
 
 mod gradients;
 
@@ -38,7 +38,6 @@ const JPDFIUM_ERR_INVALID: i32 = -1;
 const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
-
 
 /// Allocate a buffer with libc::malloc and copy `data` into it.
 /// Returns null if malloc fails or data is empty.
@@ -81,7 +80,6 @@ fn zopfli_compress_zlib(input: &[u8], iterations: u32) -> Option<Vec<u8>> {
         _ => None,
     }
 }
-
 
 /// Shared system-font database for SVG text rendering (loaded lazily once).
 fn system_fontdb() -> std::sync::Arc<usvg::fontdb::Database> {
@@ -155,10 +153,7 @@ pub unsafe extern "C" fn jpdfium_rust_compress_pdf(
     }
 }
 
-fn compress_pdf_impl(
-    input: &[u8],
-    iterations: u32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut doc = Document::load_from(Cursor::new(input))?;
 
     // lopdf's decompress() uses flate2 internally for all FlateDecode streams.
@@ -193,10 +188,9 @@ fn compress_pdf_impl(
                 stream.content = compressed;
                 // Ensure the Filter entry is set correctly (flate2-decoded
                 // streams had their Filter removed by doc.decompress()).
-                stream.dict.set(
-                    "Filter",
-                    lopdf::Object::Name(b"FlateDecode".to_vec()),
-                );
+                stream
+                    .dict
+                    .set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
             } else if still_filtered {
                 // flate2 decoded the stream but zopfli didn't help: store the
                 // decoded bytes re-compressed with the default FlateDecode so
@@ -211,7 +205,6 @@ fn compress_pdf_impl(
     doc.save_to(&mut Cursor::new(&mut output))?;
     Ok(output)
 }
-
 
 /// Repair a PDF using lopdf's tolerant XRef parser.
 ///
@@ -260,7 +253,6 @@ fn repair_lopdf_impl(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>
     doc.save_to(&mut Cursor::new(&mut output))?;
     Ok(output)
 }
-
 
 /// Resize raw interleaved pixel data using SIMD-accelerated Lanczos3 resampling.
 ///
@@ -342,8 +334,7 @@ fn resize_pixels_impl(
 
     // from_slice_u8 requires &mut [u8]; clone so we own the data.
     let mut src_buf = src.to_vec();
-    let src_image =
-        FirImage::from_slice_u8(src_w, src_h, &mut src_buf, pixel_type)?;
+    let src_image = FirImage::from_slice_u8(src_w, src_h, &mut src_buf, pixel_type)?;
     let mut dst_image = FirImage::new(dst_w, dst_h, pixel_type);
 
     let mut resizer = fir::Resizer::new();
@@ -353,7 +344,6 @@ fn resize_pixels_impl(
 
     Ok(dst_image.into_vec())
 }
-
 
 /// Unpack raw samples into opaque ARGB u32s. Formats: 1=gray8, 2=rgb24, 3=cmyk32, 4=bgr24, 5=bgrx/bgra.
 ///
@@ -413,7 +403,11 @@ unsafe fn rgb_row_to_argb(row: *const u8, d: &mut [u32], bgr: bool) {
         while x + 16 <= n {
             // vld3q_u8 de-interleaves the RGB triples into three byte planes.
             let rgb = unsafe { vld3q_u8(row.add(x * 3)) };
-            let (r, g, b) = if bgr { (rgb.2, rgb.1, rgb.0) } else { (rgb.0, rgb.1, rgb.2) };
+            let (r, g, b) = if bgr {
+                (rgb.2, rgb.1, rgb.0)
+            } else {
+                (rgb.0, rgb.1, rgb.2)
+            };
             // ARGB bytes in memory are b, g, r, alpha on little-endian hosts.
             unsafe { vst4q_u8(out.add(x * 4), uint8x16x4_t(b, g, r, alpha)) };
             x += 16;
@@ -519,7 +513,6 @@ pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
     JPDFIUM_OK
 }
 
-
 /// Optimise a standalone PNG byte stream using oxipng (lossless).
 ///
 /// Useful for PNG images extracted from a PDF (e.g. via jpdfium_render_page or
@@ -563,11 +556,10 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
             *out_len = optimized.len() as i64;
             JPDFIUM_OK
         }
-        Ok(_) => JPDFIUM_ERR_GENERIC, // already optimal
+        Ok(_) => JPDFIUM_ERR_GENERIC,  // already optimal
         Err(_) => JPDFIUM_ERR_GENERIC, // not a valid PNG
     }
 }
-
 
 /// Whether this library was built with the Rust-powered features (always 1
 /// here; the C++ stub bridge answers 0 so callers can probe capability).

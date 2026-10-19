@@ -39,7 +39,10 @@ unsafe impl GlobalAlloc for Counting {
 static GLOBAL: Counting = Counting;
 
 fn counters() -> (usize, usize) {
-    (ALLOC_CALLS.load(Ordering::Relaxed), ALLOC_BYTES.load(Ordering::Relaxed))
+    (
+        ALLOC_CALLS.load(Ordering::Relaxed),
+        ALLOC_BYTES.load(Ordering::Relaxed),
+    )
 }
 
 struct Stats {
@@ -141,7 +144,9 @@ fn heavy_svg(shapes: usize) -> Vec<u8> {
             y + 5
         ));
     }
-    svg.push_str("<text x=\"20\" y=\"590\" font-family=\"Helvetica\" font-size=\"14\">bench</text>");
+    svg.push_str(
+        "<text x=\"20\" y=\"590\" font-family=\"Helvetica\" font-size=\"14\">bench</text>",
+    );
     svg.push_str("</svg>");
     svg.into_bytes()
 }
@@ -195,7 +200,11 @@ fn bench_all() {
     let iters = 30;
     let small = small_svg();
     let heavy = heavy_svg(300);
-    println!("\n--- fixtures: small {} B, heavy {} B ---", small.len(), heavy.len());
+    println!(
+        "\n--- fixtures: small {} B, heavy {} B ---",
+        small.len(),
+        heavy.len()
+    );
 
     // Parse-only vs render-only separates usvg from krilla.
     let (stats, calls, bytes) = measure(
@@ -246,13 +255,7 @@ fn bench_all() {
                 let mut ptr: *mut u8 = std::ptr::null_mut();
                 let mut len: i64 = 0;
                 let rc = unsafe {
-                    super::jpdfium_page_gradients(
-                        pdf.as_ptr(),
-                        pdf.len(),
-                        0,
-                        &mut ptr,
-                        &mut len,
-                    )
+                    super::jpdfium_page_gradients(pdf.as_ptr(), pdf.len(), 0, &mut ptr, &mut len)
                 };
                 assert_eq!(rc, 0);
                 let n = len as usize;

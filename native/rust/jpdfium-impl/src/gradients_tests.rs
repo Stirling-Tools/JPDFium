@@ -1,6 +1,9 @@
 use std::io::Cursor;
 
-use lopdf::{Dictionary, Document, Object, Stream, dictionary, content::{Content, Operation}};
+use lopdf::{
+    content::{Content, Operation},
+    dictionary, Dictionary, Document, Object, Stream,
+};
 
 /// Minimal doc with one page whose resources carry an axial shading pattern,
 /// mirroring how krilla writes an SVG linear gradient: objectBoundingBox baked
@@ -42,7 +45,17 @@ fn gradient_pdf() -> Vec<u8> {
             Operation::new("re", vec![10.into(), 10.into(), 80.into(), 50.into()]),
             Operation::new("W", vec![]),
             Operation::new("n", vec![]),
-            Operation::new("cm", vec![1.into(), 0.into(), 0.into(), (-1).into(), 0.into(), 120.into()]),
+            Operation::new(
+                "cm",
+                vec![
+                    1.into(),
+                    0.into(),
+                    0.into(),
+                    (-1).into(),
+                    0.into(),
+                    120.into(),
+                ],
+            ),
             Operation::new("cs", vec![Object::Name(b"Pattern".to_vec())]),
             Operation::new("scn", vec![Object::Name(b"p0".to_vec())]),
             Operation::new("re", vec![10.into(), 10.into(), 80.into(), 50.into()]),
@@ -103,19 +116,34 @@ fn extracts_axial_shading_as_stops() {
     // objectBoundingBox-style matrix coincides with the object's own bounds.
     assert_eq!(
         &header[10..18],
-        ["10.0000", "110.0000", "90.0000", "110.0000", "90.0000", "60.0000", "10.0000", "60.0000"],
+        [
+            "10.0000", "110.0000", "90.0000", "110.0000", "90.0000", "60.0000", "10.0000",
+            "60.0000"
+        ],
         "unit square maps onto the painted object's bounds"
     );
     let stops: Vec<&str> = text.lines().filter(|l| l.starts_with("S ")).collect();
     assert_eq!(stops.len(), 32);
-    let first: Vec<f32> =
-        stops[0].split_whitespace().skip(1).map(|v| v.parse().unwrap()).collect();
-    let last: Vec<f32> =
-        stops[31].split_whitespace().skip(1).map(|v| v.parse().unwrap()).collect();
+    let first: Vec<f32> = stops[0]
+        .split_whitespace()
+        .skip(1)
+        .map(|v| v.parse().unwrap())
+        .collect();
+    let last: Vec<f32> = stops[31]
+        .split_whitespace()
+        .skip(1)
+        .map(|v| v.parse().unwrap())
+        .collect();
     assert!((first[0] - 0.0).abs() < 1e-4, "t=0 offset");
-    assert!((first[1] - 0.2).abs() < 1e-3 && (first[2] - 0.4).abs() < 1e-3, "C0 colour");
+    assert!(
+        (first[1] - 0.2).abs() < 1e-3 && (first[2] - 0.4).abs() < 1e-3,
+        "C0 colour"
+    );
     assert!((last[0] - 1.0).abs() < 1e-4, "t=1 offset");
-    assert!((last[1] - 1.0).abs() < 1e-3 && (last[2] - 0.8).abs() < 1e-3, "C1 colour");
+    assert!(
+        (last[1] - 1.0).abs() < 1e-3 && (last[2] - 0.8).abs() < 1e-3,
+        "C1 colour"
+    );
 }
 
 #[test]
@@ -133,11 +161,14 @@ fn page_without_shadings_returns_none() {
         "Contents" => content_id,
     };
     let page_id = doc.add_object(page);
-    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {
-        "Type" => Object::Name(b"Pages".to_vec()),
-        "Kids" => vec![page_id.into()],
-        "Count" => 1,
-    }));
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => Object::Name(b"Pages".to_vec()),
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }),
+    );
     let catalog_id = doc.add_object(dictionary! {
         "Type" => Object::Name(b"Catalog".to_vec()),
         "Pages" => pages_id,
@@ -204,11 +235,14 @@ fn records_a_non_normal_blend_mode() {
         "Resources" => resources_id,
         "Contents" => content_id,
     });
-    doc.objects.insert(pages_id, Object::Dictionary(dictionary! {
-        "Type" => Object::Name(b"Pages".to_vec()),
-        "Kids" => vec![page_id.into()],
-        "Count" => 1,
-    }));
+    doc.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => Object::Name(b"Pages".to_vec()),
+            "Kids" => vec![page_id.into()],
+            "Count" => 1,
+        }),
+    );
     let catalog_id = doc.add_object(dictionary! {
         "Type" => Object::Name(b"Catalog".to_vec()),
         "Pages" => pages_id,
@@ -224,7 +258,11 @@ fn records_a_non_normal_blend_mode() {
         .find(|l| l.starts_with("P "))
         .expect("a paint record for the pattern-filled rectangle");
     let tokens: Vec<&str> = paint.split_whitespace().collect();
-    assert_eq!(&tokens[1..5], ["10.0000", "10.0000", "50.0000", "40.0000"], "device bbox");
+    assert_eq!(
+        &tokens[1..5],
+        ["10.0000", "10.0000", "50.0000", "40.0000"],
+        "device bbox"
+    );
     assert_eq!(tokens[5], "0", "gradient index");
     assert_eq!(tokens[6], "Multiply", "blend mode");
 }
