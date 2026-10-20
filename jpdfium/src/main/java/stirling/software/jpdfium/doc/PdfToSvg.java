@@ -302,29 +302,28 @@ public final class PdfToSvg {
 
         // PDF page space is bottom-left origin; SVG is top-left. One flip at the root keeps every
         // emitted coordinate in PDF numbers.
-        StringBuilder group = new StringBuilder(4096);
-        group.append("<g transform=\"translate(0 ").append(num(h)).append(") scale(1 -1)\">\n");
+        StringBuilder bodyOut = new StringBuilder(4096);
         for (PageObject obj : objects) {
             try {
                 switch (obj.type()) {
-                    case PATH -> emitPathClipped(group, obj, patch);
+                    case PATH -> emitPathClipped(bodyOut, obj, patch);
                     case IMAGE -> {
                         if (options.includeImages) {
-                            StringBuilder content = new StringBuilder(256);
-                            emitImage(content, obj, images);
-                            emitClipped(group, obj, patch, content);
+                            StringBuilder imageContent = new StringBuilder(256);
+                            emitImage(imageContent, obj, images);
+                            emitClipped(bodyOut, obj, patch, imageContent);
                         }
                     }
                     case FORM -> {
                         if (options.includeForms) {
-                            StringBuilder content = new StringBuilder(512);
-                            emitForm(content, obj.rawHandle(), 0, patch);
-                            emitClipped(group, obj, patch, content);
+                            StringBuilder formContent = new StringBuilder(512);
+                            emitForm(formContent, obj.rawHandle(), 0, patch);
+                            emitClipped(bodyOut, obj, patch, formContent);
                         }
                     }
                     case SHADING -> {
                         if (options.rasterFallback) {
-                            emitRasterPatch(group, patch, obj);
+                            emitRasterPatch(bodyOut, patch, obj);
                         }
                     }
                     default -> {
@@ -337,7 +336,7 @@ public final class PdfToSvg {
                 // enabled so the content is still visible.
                 if (options.rasterFallback) {
                     try {
-                        emitRasterPatch(group, patch, obj);
+                        emitRasterPatch(bodyOut, patch, obj);
                     } catch (Throwable ignored) {
                         NativeRuntime.rethrowFatal(ignored);
                         // nothing else we can do for this object
@@ -348,14 +347,65 @@ public final class PdfToSvg {
         if (options.includeText) {
             try {
                 if (options.outlineText) {
-                    emitTextOutlines(group, doc, pageIndex, rawPage, objects);
+                    emitTextOutlines(bodyOut, doc, pageIndex, rawPage, objects);
                 } else {
-                    emitText(group, doc, pageIndex, objects);
+                    emitText(bodyOut, doc, pageIndex, objects);
                 }
             } catch (Throwable ignored) {
                 NativeRuntime.rethrowFatal(ignored);
                 // text is optional; geometry already emitted
             }
+        }
+        // If any object needed the page raster, paint it once as an underlay. Per-object
+        // clipped copies can lose content when a PDF clip/transform is not representable;
+        // the underlay guarantees the page still matches PDFium.
+        StringBuilder group = new StringBuilder(bodyOut.length() + 512);
+        group.append("<g transform=\"translate(0 ").append(num(h)).append(") scale(1 -1)\">\n");
+        if (patch.rasterUsed()) {
+            String ref = patch.rasterRef();
+            if (ref != null) {
+                group.append("<g transform=\"translate(0 ").append(num(h))
+                        .append(") scale(1 -1)\"><use href=\"#").append(ref)
+                        .append("\"/></g>\n");
+            }
+        }
+        int rotation = 0;
+        try {
+            rotation = PdfPageEditor.getRotation(rawPage);
+        } catch (Throwable ignored) {
+            NativeRuntime.rethrowFatal(ignored);
+        }
+        float cropX = 0f;
+        float cropY = 0f;
+        try {
+            var crop = page.getCropBox();
+            if (crop.isPresent()) {
+                cropX = crop.get().x();
+                cropY = crop.get().y();
+            }
+        } catch (Throwable ignored) {
+            NativeRuntime.rethrowFatal(ignored);
+        }
+        String cropTransform = (Math.abs(cropX) > 0.01f || Math.abs(cropY) > 0.01f)
+                ? "translate(" + num(-cropX) + " " + num(-cropY) + ") " : "";
+        if (rotation != 0) {
+            // PDFium reports object coordinates in the unrotated page space while size()
+            // already returns the displayed (rotated) dimensions.
+            float unrotatedW = (rotation == 1 || rotation == 3) ? h : w;
+            float unrotatedH = (rotation == 1 || rotation == 3) ? w : h;
+            String matrix = switch (rotation) {
+                case 1 -> "matrix(0 1 -1 0 0 " + num(unrotatedH) + ")";
+                case 2 -> "matrix(-1 0 0 -1 " + num(unrotatedW) + " " + num(unrotatedH) + ")";
+                case 3 -> "matrix(0 -1 1 0 " + num(unrotatedW) + " 0)";
+                default -> "";
+            };
+            group.append("<g transform=\"").append(cropTransform).append(matrix).append("\">\n")
+                    .append(bodyOut).append("</g>\n");
+        } else if (!cropTransform.isEmpty()) {
+            group.append("<g transform=\"").append(cropTransform).append("\">\n")
+                    .append(bodyOut).append("</g>\n");
+        } else {
+            group.append(bodyOut);
         }
         group.append("</g>\n");
         // Gradient definitions must precede the group that references them.
@@ -447,6 +497,7 @@ public final class PdfToSvg {
         private BufferedImage image;
         private boolean loaded;
         private String rasterRef;
+        private boolean rasterUsed;
         private int clipId;
 
         Patch(PdfPage page, Options options, int pageIndex, Gradient.Records shadings,
@@ -551,6 +602,10 @@ public final class PdfToSvg {
                     || Math.abs(bl - obj.fillB()) > tolerance;
         }
 
+        boolean rasterUsed() {
+            return rasterUsed;
+        }
+
         int nextClipId() {
             return clipId++;
         }
@@ -571,6 +626,7 @@ public final class PdfToSvg {
                         .append("\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,")
                         .append(Base64.getEncoder().encodeToString(bytes)).append("\"/>\n");
                 rasterRef = id;
+                rasterUsed = true;
             }
             return rasterRef;
         }
@@ -1225,24 +1281,21 @@ public final class PdfToSvg {
             }
             String font = first.fontName();
             float size = first.fontSize();
-            float baseline = first.originY();
-            float runBaseline = baseline;
-            float previousX = first.originX();
+            TextChar previous = first;
             int end = start;
             StringBuilder run = new StringBuilder();
             while (end < chars.size()) {
                 TextChar c = chars.get(end);
-                if (c.isNewline() || !sameRun(c, font, size, baseline, previousX)) {
+                if (c.isNewline() || !sameRun(c, first, previous)) {
                     break;
                 }
                 run.append(c.toText());
-                runBaseline = Math.max(runBaseline, c.originY());
-                previousX = c.originX();
+                previous = c;
                 end++;
             }
             if (run.length() > 0) {
-                out.append("<text x=\"").append(num(first.originX())).append("\" y=\"")
-                        .append(num(runBaseline)).append("\" font-family=\"")
+                out.append("<text x=\"0\" y=\"0\" transform=\"")
+                        .append(textTransform(first)).append("\" font-family=\"")
                         .append(escape(font == null ? "sans-serif" : font)).append("\" font-size=\"")
                         .append(num(size)).append("\" fill=\"")
                         .append(textColor(objects, first)).append("\">")
@@ -1252,18 +1305,43 @@ public final class PdfToSvg {
         }
     }
 
-    private static boolean sameRun(TextChar c, String font, float size,
-            float baseline, float previousX) {
-        if (c.fontName() == null || !c.fontName().equals(font)
-                || Math.abs(c.fontSize() - size) >= 0.01f
-                || Math.abs(c.originY() - baseline) >= Math.max(0.5f, size * 0.2f)) {
+    private static boolean sameRun(TextChar c, TextChar first, TextChar previous) {
+        if (c.fontName() == null || !c.fontName().equals(first.fontName())
+                || Math.abs(c.fontSize() - first.fontSize()) >= 0.01f
+                || !sameMatrix(c, first)) {
             return false;
         }
-        // A column jump or a backwards origin means a new run even when the
-        // font and baseline match; wide inter-word spaces stay in the run.
-        float em = Math.max(size, 1f);
-        float advance = c.originX() - previousX;
-        return advance <= em * 2.5f && advance >= -em * 0.5f;
+        // Measure the advance along the text direction instead of assuming a
+        // horizontal baseline; this keeps rotated and scaled runs together.
+        float dx = c.originX() - previous.originX();
+        float dy = c.originY() - previous.originY();
+        float a = first.matrixA();
+        float b = first.matrixB();
+        float direction = (float) Math.hypot(a, b);
+        if (direction < 1e-4f) {
+            return false;
+        }
+        float advance = (dx * a + dy * b) / direction;
+        float perpendicular = Math.abs(-dx * b + dy * a) / direction;
+        float em = Math.max(first.fontSize(), 1f);
+        return advance <= em * 2.5f && advance >= -em * 0.5f
+                && perpendicular <= Math.max(0.5f, em * 0.2f);
+    }
+
+    private static boolean sameMatrix(TextChar a, TextChar b) {
+        return Math.abs(a.matrixA() - b.matrixA()) < 1e-3f
+                && Math.abs(a.matrixB() - b.matrixB()) < 1e-3f
+                && Math.abs(a.matrixC() - b.matrixC()) < 1e-3f
+                && Math.abs(a.matrixD() - b.matrixD()) < 1e-3f;
+    }
+
+    private static String textTransform(TextChar c) {
+        // SVG glyphs are y-down while PDF text matrices are y-up. Cancel the
+        // glyph-axis flip so the root page flip (translate/scale) leaves text
+        // upright instead of mirrored.
+        return "matrix(" + num(c.matrixA()) + " " + num(c.matrixB()) + " "
+                + num(-c.matrixC()) + " " + num(-c.matrixD()) + " "
+                + num(c.originX()) + " " + num(c.originY()) + ")";
     }
 
     private static String textColor(List<PageObject> objects, TextChar c) {
@@ -1312,24 +1390,21 @@ public final class PdfToSvg {
                 }
                 String font = first.fontName();
                 float size = first.fontSize();
-                float baseline = first.originY();
-                float runBaseline = baseline;
-                float previousX = first.originX();
+                TextChar previous = first;
                 int end = start;
                 StringBuilder run = new StringBuilder();
                 while (end < chars.size()) {
                     TextChar c = chars.get(end);
-                    if (c.isNewline() || !sameRun(c, font, size, baseline, previousX)) {
+                    if (c.isNewline() || !sameRun(c, first, previous)) {
                         break;
                     }
                     run.append(c.toText());
-                    runBaseline = Math.max(runBaseline, c.originY());
-                    previousX = c.originX();
+                    previous = c;
                     end++;
                 }
                 if (run.length() > 0) {
                     emitTextRunOutline(out, objects, fontPrograms, textPage, run.toString(), first,
-                            chars.get(end - 1), size, runBaseline);
+                            chars.get(end - 1), size);
                 }
                 start = end > start ? end : start + 1;
             }
@@ -1345,11 +1420,12 @@ public final class PdfToSvg {
 
     private static void emitTextRunOutline(StringBuilder out, List<PageObject> objects,
             Map<Long, byte[]> fontPrograms, MemorySegment textPage, String runText, TextChar first,
-            TextChar last, float size, float baseline) {
-        String data = outlineRunData(objects, fontPrograms, textPage, runText, first, last, size);
+            TextChar last, float size) {
+        String data = first.hasTextTransform() ? ""
+                : outlineRunData(objects, fontPrograms, textPage, runText, first, last, size);
         if (data.isEmpty()) {
-            out.append("<text x=\"").append(num(first.originX())).append("\" y=\"")
-                    .append(num(baseline)).append("\" font-family=\"")
+            out.append("<text x=\"0\" y=\"0\" transform=\"")
+                    .append(textTransform(first)).append("\" font-family=\"")
                     .append(escape(first.fontName() == null ? "sans-serif" : first.fontName()))
                     .append("\" font-size=\"").append(num(size)).append("\" fill=\"")
                     .append(textColor(objects, first)).append("\">")

@@ -14,6 +14,12 @@ package stirling.software.jpdfium.text;
  * @param fontSize  font size in PDF points
  * @param originX   text-space origin x (the pen position) in PDF points
  * @param originY   text-space origin y (the baseline) in PDF points
+ * @param matrixA   effective text matrix a (x scale / rotation)
+ * @param matrixB   effective text matrix b
+ * @param matrixC   effective text matrix c
+ * @param matrixD   effective text matrix d (y scale / rotation)
+ * @param matrixE   effective text matrix e (glyph origin x)
+ * @param matrixF   effective text matrix f (glyph origin y)
  */
 public record TextChar(
         int index,
@@ -25,15 +31,34 @@ public record TextChar(
         String fontName,
         float fontSize,
         float originX,
-        float originY
+        float originY,
+        float matrixA,
+        float matrixB,
+        float matrixC,
+        float matrixD,
+        float matrixE,
+        float matrixF
 ) {
-    /**
-     * Compatibility constructor for callers that only have the glyph box. The
-     * box's lower edge is used as the origin, which is the historical behaviour.
-     */
+    /** Compatibility constructor for callers that only have the glyph box. */
     public TextChar(int index, int unicode, float x, float y, float width, float height,
             String fontName, float fontSize) {
         this(index, unicode, x, y, width, height, fontName, fontSize, x, y);
+    }
+
+    /**
+     * Compatibility constructor for callers that have the baseline origin but
+     * no text matrix. The matrix is the identity translated to that origin.
+     */
+    public TextChar(int index, int unicode, float x, float y, float width, float height,
+            String fontName, float fontSize, float originX, float originY) {
+        this(index, unicode, x, y, width, height, fontName, fontSize, originX, originY,
+                1f, 0f, 0f, 1f, originX, originY);
+    }
+
+    /** True when the glyph is not drawn on a plain horizontal baseline. */
+    public boolean hasTextTransform() {
+        return Math.abs(matrixB) > 1e-4f || Math.abs(matrixC) > 1e-4f
+                || Math.abs(matrixA - 1f) > 1e-4f || Math.abs(matrixD - 1f) > 1e-4f;
     }
 
     /** Return the character as a Java char (may lose data for supplementary codepoints). */

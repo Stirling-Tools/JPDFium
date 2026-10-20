@@ -171,6 +171,11 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
             float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
 
+            FS_MATRIX matrix{};
+            if (!FPDFText_GetMatrix(tp.get(), i, &matrix)) {
+                matrix = FS_MATRIX{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+            }
+
             if (!first) os << ',';
             first = false;
             os << "{\"i\":" << i << ",\"u\":" << uni << ",\"x\":" << l << ",\"y\":" << b
@@ -179,7 +184,9 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
                 if (c == '"' || c == '\\') os << '\\';
                 os << c;
             }
-            os << "\",\"size\":" << size << '}';
+            os << "\",\"size\":" << size << ",\"a\":" << matrix.a << ",\"b\":" << matrix.b
+               << ",\"c\":" << matrix.c << ",\"d\":" << matrix.d << ",\"e\":" << matrix.e
+               << ",\"f\":" << matrix.f << '}';
         }
         os << ']';
 

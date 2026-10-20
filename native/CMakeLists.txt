@@ -277,14 +277,16 @@ if(JPDFIUM_USE_PDFIUM)
         if(UNIX AND NOT APPLE)
             target_link_libraries(jpdfium PRIVATE pthread ${CMAKE_DL_LIBS} m)
         endif()
-        if(APPLE)
-            target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
-                                                  "-framework CoreGraphics"
-                                                  "-framework CoreText"
-                                                  "-framework AppKit")
-        endif()
     else()
         target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
+    endif()
+    # Static HarfBuzz/PDFium archives reference CoreText/CoreGraphics even in
+    # component mode, so these frameworks must be linked after the archives.
+    if(APPLE)
+        target_link_libraries(jpdfium PRIVATE "-framework CoreFoundation"
+                                              "-framework CoreGraphics"
+                                              "-framework CoreText"
+                                              "-framework AppKit")
     endif()
 
     find_program(CARGO_CMD cargo)
@@ -406,6 +408,12 @@ if(JPDFIUM_USE_PDFIUM)
     # HarfBuzz - text shaping + hb-subset for font subsetting
     pkg_check_modules(HARFBUZZ REQUIRED IMPORTED_TARGET harfbuzz harfbuzz-subset)
     target_link_libraries(jpdfium PRIVATE PkgConfig::HARFBUZZ)
+    # Homebrew can expose a static HarfBuzz with Graphite2 support; the
+    # transitive Graphite2 archive is not carried by pkg-config.
+    find_library(GRAPHITE2_LIBRARY NAMES graphite2)
+    if(GRAPHITE2_LIBRARY)
+        target_link_libraries(jpdfium PRIVATE "${GRAPHITE2_LIBRARY}")
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_HARFBUZZ)
 
     # ICU4C - Unicode normalization, BiDi, sentence segmentation. All of those

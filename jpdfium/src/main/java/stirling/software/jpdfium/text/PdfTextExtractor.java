@@ -104,6 +104,12 @@ public final class PdfTextExtractor {
             float fontSize = 0;
             float originX = Float.NaN;
             float originY = Float.NaN;
+            float matrixA = 1f;
+            float matrixB = 0f;
+            float matrixC = 0f;
+            float matrixD = 1f;
+            float matrixE = Float.NaN;
+            float matrixF = Float.NaN;
             String fontName = "";
             boolean complete = false;
             try {
@@ -124,6 +130,7 @@ public final class PdfTextExtractor {
                     int colon = json.indexOf(':', keyEnd + 1);
                     if (colon < 0) break;
                     char keyInitial = json.charAt(cursor + 1);
+                    int keyLength = keyEnd - cursor - 1;
                     int valueStart = colon + 1;
                     while (valueStart < jsonLength && Character.isWhitespace(json.charAt(valueStart))) valueStart++;
                     if (valueStart >= jsonLength) break;
@@ -157,6 +164,16 @@ public final class PdfTextExtractor {
                             case 'w' -> width = parseFloatFast(json, valueStart, valueEnd);
                             case 'h' -> height = parseFloatFast(json, valueStart, valueEnd);
                             case 's' -> fontSize = parseFloatFast(json, valueStart, valueEnd);
+                            case 'a' -> matrixA = parseFloatFast(json, valueStart, valueEnd);
+                            case 'b' -> matrixB = parseFloatFast(json, valueStart, valueEnd);
+                            case 'c' -> matrixC = parseFloatFast(json, valueStart, valueEnd);
+                            case 'd' -> matrixD = parseFloatFast(json, valueStart, valueEnd);
+                            case 'e' -> matrixE = parseFloatFast(json, valueStart, valueEnd);
+                            case 'f' -> {
+                                if (keyLength == 1) {
+                                    matrixF = parseFloatFast(json, valueStart, valueEnd);
+                                }
+                            }
                             case 'o' -> {
                                 // ox/oy carry the baseline origin; tolerate older
                                 // native payloads that only have the glyph box.
@@ -175,8 +192,11 @@ public final class PdfTextExtractor {
                 if (complete) {
                     if (!Float.isFinite(originX)) originX = x;
                     if (!Float.isFinite(originY)) originY = y;
+                    if (!Float.isFinite(matrixE)) matrixE = originX;
+                    if (!Float.isFinite(matrixF)) matrixF = originY;
                     characters.add(new TextChar(index, unicode, x, y, width, height, fontName,
-                            fontSize, originX, originY));
+                            fontSize, originX, originY, matrixA, matrixB, matrixC, matrixD,
+                            matrixE, matrixF));
                 }
             } catch (NumberFormatException _) {
                 // Skip malformed entries
@@ -216,14 +236,17 @@ public final class PdfTextExtractor {
             if (dot < 0) {
                 return (float) parseIntFast(s, start, end);
             }
-            int intPart = parseIntFast(s, start, dot);
+            boolean negative = start < end && s.charAt(start) == '-';
+            int numberStart = negative ? start + 1 : start;
+            int intPart = parseIntFast(s, numberStart, dot);
             int fracPart = parseIntFast(s, dot + 1, end);
             int fracDigits = end - (dot + 1);
             float frac = fracPart;
             for (int i = 0; i < fracDigits; i++) {
                 frac /= 10.0f;
             }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
+            float value = intPart + frac;
+            return negative ? -value : value;
         } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
             try {
                 return Float.parseFloat(s.substring(start, end));
