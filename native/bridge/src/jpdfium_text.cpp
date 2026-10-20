@@ -171,6 +171,7 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             FPDFText_GetFontInfo(tp.get(), i, fontbuf, sizeof(fontbuf), nullptr);
             float size = static_cast<float>(FPDFText_GetFontSize(tp.get(), i));
 
+            FPDF_PAGEOBJECT textObject = FPDFText_GetTextObject(tp.get(), i);
             FS_MATRIX matrix{};
             if (!FPDFText_GetMatrix(tp.get(), i, &matrix)) {
                 matrix = FS_MATRIX{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
@@ -186,7 +187,8 @@ int32_t jpdfium_text_get_chars(int64_t page, char** json) {
             }
             os << "\",\"size\":" << size << ",\"a\":" << matrix.a << ",\"b\":" << matrix.b
                << ",\"c\":" << matrix.c << ",\"d\":" << matrix.d << ",\"e\":" << matrix.e
-               << ",\"f\":" << matrix.f << '}';
+               << ",\"f\":" << matrix.f << ",\"obj\":"
+               << reinterpret_cast<uintptr_t>(textObject) << '}';
         }
         os << ']';
 

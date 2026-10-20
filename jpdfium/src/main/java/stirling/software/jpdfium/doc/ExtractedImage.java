@@ -7,6 +7,7 @@ import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.model.ImageFormat;
 
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,15 +46,19 @@ public record ExtractedImage(
                 img.getRaster().setDataElements(0, 0, width, height, decodedBytes);
             }
         } else {
+            // Fill the raster's int[] directly; per-pixel setRGB would cross the
+            // Java2D native boundary and allocate a DataBuffer element per pixel.
+            int[] pixels = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
             int stride = width * 4;
+            int out = 0;
             for (int y = 0; y < height && y * stride + stride <= decodedBytes.length; y++) {
-                for (int x = 0; x < width; x++) {
-                    int off = y * stride + x * 4;
+                int off = y * stride;
+                for (int x = 0; x < width; x++, off += 4, out++) {
                     int b = decodedBytes[off] & 0xFF;
                     int g = decodedBytes[off + 1] & 0xFF;
                     int r = decodedBytes[off + 2] & 0xFF;
-                    int a = (off + 3 < decodedBytes.length) ? (decodedBytes[off + 3] & 0xFF) : 255;
-                    img.setRGB(x, y, (a << 24) | (r << 16) | (g << 8) | b);
+                    int a = decodedBytes[off + 3] & 0xFF;
+                    pixels[out] = (a << 24) | (r << 16) | (g << 8) | b;
                 }
             }
         }

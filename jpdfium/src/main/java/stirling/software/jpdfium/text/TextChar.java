@@ -20,6 +20,7 @@ package stirling.software.jpdfium.text;
  * @param matrixD   effective text matrix d (y scale / rotation)
  * @param matrixE   effective text matrix e (glyph origin x)
  * @param matrixF   effective text matrix f (glyph origin y)
+ * @param textObjectId native PDFium text object identity, or 0 when unavailable
  */
 public record TextChar(
         int index,
@@ -37,7 +38,8 @@ public record TextChar(
         float matrixC,
         float matrixD,
         float matrixE,
-        float matrixF
+        float matrixF,
+        long textObjectId
 ) {
     /** Compatibility constructor for callers that only have the glyph box. */
     public TextChar(int index, int unicode, float x, float y, float width, float height,
@@ -52,7 +54,7 @@ public record TextChar(
     public TextChar(int index, int unicode, float x, float y, float width, float height,
             String fontName, float fontSize, float originX, float originY) {
         this(index, unicode, x, y, width, height, fontName, fontSize, originX, originY,
-                1f, 0f, 0f, 1f, originX, originY);
+                1f, 0f, 0f, 1f, originX, originY, 0L);
     }
 
     /** True when the glyph is not drawn on a plain horizontal baseline. */

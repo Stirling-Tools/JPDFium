@@ -50,6 +50,16 @@ public final class PdfTextExtractor {
     }
 
     /**
+     * Extract only the character stream. This skips line/word construction for
+     * callers such as the SVG exporter that only need glyph runs.
+     */
+    public static List<TextChar> extractChars(PdfDocument doc, int pageIndex) {
+        try (PdfPage page = doc.page(pageIndex)) {
+            return parseCharsJson(page.extractTextJson());
+        }
+    }
+
+    /**
      * Extract structured text from all pages.
      *
      * @param doc open PDF document
@@ -110,6 +120,7 @@ public final class PdfTextExtractor {
             float matrixD = 1f;
             float matrixE = Float.NaN;
             float matrixF = Float.NaN;
+            long textObjectId = 0L;
             String fontName = "";
             boolean complete = false;
             try {
@@ -175,12 +186,14 @@ public final class PdfTextExtractor {
                                 }
                             }
                             case 'o' -> {
-                                // ox/oy carry the baseline origin; tolerate older
-                                // native payloads that only have the glyph box.
-                                int second = cursor + 2 < keyEnd ? json.charAt(cursor + 2) : 0;
-                                if (second == 'x') {
+                                // ox/oy carry the baseline origin; obj is the PDFium
+                                // text-object identity used to group runs.
+                                int second = cursor + 1 < keyEnd ? json.charAt(cursor + 1) : 0;
+                                if (keyLength == 3 && second == 'b') {
+                                    textObjectId = Long.parseLong(json, valueStart, valueEnd, 10);
+                                } else if (keyLength == 2 && second == 'x') {
                                     originX = parseFloatFast(json, valueStart, valueEnd);
-                                } else if (second == 'y') {
+                                } else if (keyLength == 2 && second == 'y') {
                                     originY = parseFloatFast(json, valueStart, valueEnd);
                                 }
                             }
@@ -196,7 +209,7 @@ public final class PdfTextExtractor {
                     if (!Float.isFinite(matrixF)) matrixF = originY;
                     characters.add(new TextChar(index, unicode, x, y, width, height, fontName,
                             fontSize, originX, originY, matrixA, matrixB, matrixC, matrixD,
-                            matrixE, matrixF));
+                            matrixE, matrixF, textObjectId));
                 }
             } catch (NumberFormatException _) {
                 // Skip malformed entries
