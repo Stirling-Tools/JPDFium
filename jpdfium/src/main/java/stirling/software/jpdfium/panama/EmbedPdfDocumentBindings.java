@@ -3,6 +3,7 @@ package stirling.software.jpdfium.panama;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.invoke.MethodHandle;
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_FLOAT;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -64,25 +65,23 @@ public final class EmbedPdfDocumentBindings {
     public static final MethodHandle EPDF_IsOwnerUnlocked = downcallCritical("EPDF_IsOwnerUnlocked",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Get page rotation by index without loading the page (0/90/180/270, or -1 on error). */
-    public static final MethodHandle EPDF_GetPageRotationByIndex = downcallCritical("EPDF_GetPageRotationByIndex",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
-
-    /** Get original (non-rotated) page size without loading the page. */
-    public static final MethodHandle EPDF_GetPageSizeByIndexNormalized = downcall("EPDF_GetPageSizeByIndexNormalized",
+    /** Get the page's /Rotate at the given index without loading the page; returns -1 on error. */
+    public static final MethodHandle EPDF_GetPageRotateByIndex = downcallCritical("EPDF_GetPageRotateByIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
 
     /** Load a page with rotation normalized to 0 degrees. */
     public static final MethodHandle EPDF_LoadPageNormalized = downcall("EPDF_LoadPageNormalized",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 
-    /** Render a single annotation to a bitmap. */
+    /** Render a single annotation to a bitmap. The 5th argument is the appearance
+     * state name (FPDF_BYTESTRING), as selected via EPDFAnnot_GetAppearanceStateName. */
     public static final MethodHandle EPDF_RenderAnnotBitmap = downcall("EPDF_RenderAnnotBitmap",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
 
-    /** Render annotation without AP rotation applied. */
+    /** Render annotation without AP rotation applied. Extra arguments over
+     * EPDF_RenderAnnotBitmap are the turn (degrees) and turn box before the matrix. */
     public static final MethodHandle EPDF_RenderAnnotBitmapUnrotated = downcall("EPDF_RenderAnnotBitmapUnrotated",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_INT));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_FLOAT, ADDRESS, ADDRESS, JAVA_INT));
 
     // Extended Page Box & Identity APIs (EmbedPDF)
 

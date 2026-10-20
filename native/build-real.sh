@@ -48,6 +48,21 @@ fi
 
 if [ "${TARGET_PLATFORM:-${JPDFIUM_TARGET_PLATFORM:-}}" = "freebsd-x64" ]; then
     FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-${SCRIPT_DIR}/freebsd-sysroot}"
+    # CMake derives the archiver from the Clang toolchain prefix ("llvm-ar"),
+    # which GH runners only ship versioned (llvm-ar-18, ...). Resolve a tool
+    # that exists; binutils ar/ranlib archive FreeBSD ELF objects fine.
+    CROSS_AR=""
+    for candidate in llvm-ar llvm-ar-21 llvm-ar-20 llvm-ar-19 llvm-ar-18 llvm-ar-17 llvm-ar-16 ar; do
+        if command -v "${candidate}" >/dev/null 2>&1; then CROSS_AR="$(command -v "${candidate}")"; break; fi
+    done
+    CROSS_RANLIB=""
+    for candidate in llvm-ranlib llvm-ranlib-21 llvm-ranlib-20 llvm-ranlib-19 llvm-ranlib-18 llvm-ranlib-17 llvm-ranlib-16 ranlib; do
+        if command -v "${candidate}" >/dev/null 2>&1; then CROSS_RANLIB="$(command -v "${candidate}")"; break; fi
+    done
+    if [ -z "${CROSS_AR}" ]; then
+        echo "ERROR: no archiver (llvm-ar or ar) found for the FreeBSD cross build" >&2
+        exit 1
+    fi
     CMAKE_ARGS+=(
         -DCMAKE_SYSTEM_NAME=FreeBSD
         -DCMAKE_SYSTEM_VERSION=14
@@ -57,6 +72,7 @@ if [ "${TARGET_PLATFORM:-${JPDFIUM_TARGET_PLATFORM:-}}" = "freebsd-x64" ]; then
         -DCMAKE_CXX_COMPILER=clang++
         -DCMAKE_C_COMPILER_TARGET=x86_64-unknown-freebsd14.0
         -DCMAKE_CXX_COMPILER_TARGET=x86_64-unknown-freebsd14.0
+        -DCMAKE_AR="${CROSS_AR}"
         -DJPDFIUM_TARGET_PLATFORM=freebsd-x64
         -DCMAKE_FIND_ROOT_PATH="${FREEBSD_SYSROOT}"
         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER
@@ -64,6 +80,9 @@ if [ "${TARGET_PLATFORM:-${JPDFIUM_TARGET_PLATFORM:-}}" = "freebsd-x64" ]; then
         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
         -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
     )
+    if [ -n "${CROSS_RANLIB}" ]; then
+        CMAKE_ARGS+=(-DCMAKE_RANLIB="${CROSS_RANLIB}")
+    fi
     export PKG_CONFIG_DIR=""
     export PKG_CONFIG_LIBDIR="${FREEBSD_SYSROOT}/usr/libdata/pkgconfig:${FREEBSD_SYSROOT}/usr/lib/pkgconfig"
     export PKG_CONFIG_SYSROOT_DIR="${FREEBSD_SYSROOT}"

@@ -211,7 +211,11 @@ if(JPDFIUM_USE_PDFIUM)
         find_library(PDFIUM_LIB
             NAMES pdfium embedpdf
             PATHS "${PDFIUM_LIB_DIR}"
-            NO_DEFAULT_PATH)
+            NO_DEFAULT_PATH
+            # FreeBSD cross builds set CMAKE_FIND_ROOT_PATH to the target
+            # sysroot; without this the prebuilt PDFium directory is searched
+            # as <sysroot>/<host path> and never found.
+            NO_CMAKE_FIND_ROOT_PATH)
         if(NOT PDFIUM_LIB)
             message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
         endif()

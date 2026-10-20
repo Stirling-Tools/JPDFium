@@ -343,6 +343,21 @@ jobs:
               fi
               exit 0
             fi
+            # freebsd base.txz carries no third-party headers or pkg-config files.
+            # HarfBuzz/ICU/qpdf/pugixml and freetype2's own Requires.private are
+            # absent, so the cross build cannot configure; skip the leg like a
+            # missing prebuild instead of failing the release.
+            if [ "$TARGET_PLATFORM" = "freebsd-x64" ]; then
+              SYSROOT="${FREEBSD_SYSROOT:-$PWD/native/freebsd-sysroot}"
+              if ! PKG_CONFIG_DIR='' \
+                   PKG_CONFIG_LIBDIR="$SYSROOT/usr/libdata/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/local/libdata/pkgconfig" \
+                   pkg-config --exists \
+                     libpcre2-8 libpcre2-32 harfbuzz harfbuzz-subset icu-uc libqpdf pugixml 2>/dev/null; then
+                echo "freebsd_missing=true" >> "$GITHUB_OUTPUT"
+                echo "freebsd cross dependencies are missing from $SYSROOT; skipping freebsd natives"
+                exit 0
+              fi
+            fi
           fi
           bash native/fetch-prebuilt-pdfium.sh "$TARGET_PLATFORM"
 
@@ -695,6 +710,25 @@ jobs:
           DIST="native/dist/vips-${{ matrix.platform }}"
           rm -rf "$DIST" && mkdir -p "$DIST"
           tar -xf "/tmp/vips-pinned/$ASSET" -C "$DIST"
+          if [[ "${{ matrix.platform }}" == darwin-* ]]; then
+            # The pinned vips prebuild embeds a PDFium snapshot from an older
+            # native/pdfium.version. Both bundles use the same install names for
+            # PDFium's component dylibs, and dyld resolves dependencies by
+            # install name, so in one JVM (jpdfium + vips) the older vips copy
+            # binds against the jpdfium component set and fails on missing
+            # symbols. Replace the vips bundle's PDFium set with the core
+            # natives built for this pin; the stable FPDF API vips uses is
+            # unchanged. Rebuild the vips prebuild to drop this substitution.
+            CORE_NATIVES="native/dist/${{ matrix.platform }}"
+            cp "$CORE_NATIVES"/libpdfium.dylib \
+               "$CORE_NATIVES"/libbase_allocator*.dylib \
+               "$CORE_NATIVES"/libchrome_zlib.dylib \
+               "$CORE_NATIVES"/libicuuc.dylib \
+               "$CORE_NATIVES"/libskia.dylib \
+               "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
+               "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
+               "$DIST/"
+          fi
           # Same gates as the source path: denylist, lean layout, size budget.
           bash native/check-bundle-lean.sh "$DIST" "vips-${{ matrix.platform }}"
           bash native/check-bundle-size.sh "$DIST" "vips-${{ matrix.platform }}"

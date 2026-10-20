@@ -380,7 +380,7 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
                 FPDFAnnot_SetRect(annot, &rect);
 
                 uint32_t rem = 0;
-                FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
+                FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
                 if (!ok) {
                     int idx = FPDFPage_GetAnnotIndex(pw->page, annot);
                     if (idx >= 0) FPDFPage_RemoveAnnot(pw->page, idx);

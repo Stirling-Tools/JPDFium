@@ -2,6 +2,7 @@
 
 #include <fpdf_edit.h>
 #include <fpdf_formfill.h>
+#include <fpdf_ppo.h>
 #include <fpdfview.h>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 
@@ -690,31 +692,34 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
 
         page.reset();  // done with the source page before restructuring the document
 
-        // Replacement page is created at pageIndex + 1; the original stays at
-        // pageIndex until the replacement is fully generated, so any failure
+        // Generate the replacement page in a scratch document, then import it.
+        // FPDFPage_GenerateContent walks the WHOLE destination page tree
+        // (CPDF_PageContentGenerator::UpdateResourcesDict -> IsPageResourceShared)
+        // and the pinned prebuilt's CPDF_Page constructor CHECKs that every
+        // enumerated page dict is a page-tree leaf. A malformed document whose
+        // flat page map exposes a branch dict therefore traps inside the
+        // destination. The scratch document has a well-formed page tree, and
+        // FPDF_ImportPages copies the finished page (generated content stream
+        // and image resource) into the destination at pageIndex + 1. The
+        // original stays at pageIndex until the import succeeds, so any failure
         // here leaves the document exactly as it was.
-        //
-        // Rollback: closing the replacement handle must happen BEFORE deleting
-        // the page object, which is the order FPDFPage_New requires. The guard
-        // exists so an exception mid-way performs the same ordered cleanup as
-        // the explicit failure branches below.
-        UniquePage newPage(FPDFPage_New(dw->core->doc, pageIndex + 1, w_pt, h_pt));
-        if (!newPage) return JPDFIUM_ERR_NATIVE;
-
-        struct ReplacementPageRollback {
-            DocWrapper* dw;
-            int index;
-            UniquePage* page;
-            ~ReplacementPageRollback() {
-                if (!page) return;
-                (*page).reset();                        // close the loaded page
-                FPDFPage_Delete(dw->core->doc, index);  // then delete the page
+        struct DocumentCloser {
+            void operator()(FPDF_DOCUMENT document) const noexcept {
+                if (document) FPDF_CloseDocument(document);
             }
-        } rollback{dw, pageIndex + 1, &newPage};
+        };
+        std::unique_ptr<std::remove_pointer_t<FPDF_DOCUMENT>, DocumentCloser> scratch(
+            FPDF_CreateNewDocument());
+        if (!scratch) return JPDFIUM_ERR_NATIVE;
+
+        // The replacement page and its document-bound image object live in the
+        // scratch document until the import moves them across.
+        UniquePage newPage(FPDFPage_New(scratch.get(), 0, w_pt, h_pt));
+        if (!newPage) return JPDFIUM_ERR_NATIVE;
 
         // Own the image object until it is inserted; the page takes ownership at
         // FPDFPage_InsertObject.
-        UniquePageObject imgObj(FPDFPageObj_NewImageObj(dw->core->doc));
+        UniquePageObject imgObj(FPDFPageObj_NewImageObj(scratch.get()));
         if (!imgObj) return JPDFIUM_ERR_NATIVE;
 
         // SetBitmap copies the pixels into the object, so the bitmap is no longer
@@ -730,12 +735,18 @@ int32_t jpdfium_page_to_image(int64_t docHandle, int32_t pageIndex, int32_t dpi)
         // NOLINTNEXTLINE(bugprone-unused-return-value)
         (void)imgObj.release();
         if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
-
-        // Commit: close the replacement page handle, then delete the ORIGINAL
-        // page at pageIndex (the replacement now occupies that slot).
         newPage.reset();
+
+        // Import the finished page next to the original. On failure the
+        // destination is untouched and the scratch document is closed.
+        if (!FPDF_ImportPages(dw->core->doc, scratch.get(), "1", pageIndex + 1)) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+        scratch.reset();
+
+        // Commit: delete the ORIGINAL page at pageIndex (the imported page now
+        // occupies that slot).
         FPDFPage_Delete(dw->core->doc, pageIndex);
-        rollback.page = nullptr;
         ++dw->core->generation;
         return JPDFIUM_OK;
 

@@ -22,6 +22,16 @@ publishing workflows, not library releases, so they are not listed here.
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
 
+### Fixed
+
+- Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
+  it font bytes it had marked read-only from a buffer that died with the function,
+  so shaping read freed memory. HarfBuzz now owns a copy of the font data.
+- Native file saves on Windows wrote every LF as CRLF because the staging file
+  was opened without `_O_BINARY`. The shifted offsets made PDFium's own reader
+  mis-resolve objects and reload page content as empty; every file-based save
+  overload was affected.
+
 ### Changed
 
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
@@ -79,6 +89,20 @@ publishing workflows, not library releases, so they are not listed here.
 Both were public in 1.2.0, so they are deliberate source and binary breaks like
 the one above, and `.github/workflows/compatibility.yml` excludes each class by
 name from the japicmp gate.
+
+- Four `MethodHandle` constants in the otherwise surviving Panama binding
+  holders, because the new PDFium pin no longer exports the native symbols they
+  mirrored: `EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction` (the fork
+  replaced it with `EPDFPage_ApplyRedactions`),
+  `EmbedPdfDocumentBindings.EPDF_GetPageRotationByIndex` (renamed to
+  `EPDF_GetPageRotateByIndex`, which reports rotation through an out parameter),
+  and the dead `EmbedPdfAnnotationBindings.EPDFAnnot_SetRectangleDifferences`
+  and `EmbedPdfDocumentBindings.EPDF_GetPageSizeByIndexNormalized` bindings,
+  which nothing called. Retargeting those fields at the surviving symbols would
+  only ship handles that fail at invoke time, so dropping them is the deliberate
+  break; each is excluded individually in
+  `.github/workflows/compatibility.yml`, and every other member of the two
+  binding classes keeps its signature.
 
 ## [1.2.0] - 2026-10-11
 

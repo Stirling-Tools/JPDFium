@@ -32,7 +32,6 @@
     EPDFAction_LoadModel;
     EPDFAction_NodeHasJavaScript;
     EPDFAnnot_AddMeasure;
-    EPDFAnnot_ApplyRedaction;
     EPDFAnnot_ClearBorderEffect;
     EPDFAnnot_ClearColor;
     EPDFAnnot_ClearEmbedMetadata;
@@ -418,7 +417,7 @@
     EPDF_GetMetaKeyName;
     EPDF_GetMetaTrapped;
     EPDF_GetPageBoxByIndex;
-    EPDF_GetPageRotationByIndex;
+    EPDF_GetPageRotateByIndex;
     EPDF_GetPageSizeByIndexNormalized;
     EPDF_GetPageUserUnitByIndex;
     EPDF_HasMetaText;
