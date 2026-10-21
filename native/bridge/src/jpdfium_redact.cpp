@@ -309,7 +309,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             for (int ci : m.charIndices) redactSet[ci] = 1;
         std::u32string expectedFp = survivingFingerprint(wtext, idxMap, redactSet);
 
-        // Best case scenario: Wrap EmbedPDF core engine (EPDFAnnot_ApplyRedaction)
+        // Best case scenario: Wrap EmbedPDF core engine (EPDFPage_ApplyRedactions)
         // High-fidelity native in-place redaction via EmbedPDF core engine.
         std::vector<TextMatch> sortedMatches = matches;
         std::sort(sortedMatches.begin(), sortedMatches.end(),
@@ -337,7 +337,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             FPDFAnnot_SetRect(annot, &rect);
 
             uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
+            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
             FPDFPage_CloseAnnot(annot);
             if (!ok) {
                 epdfOk = false;
@@ -388,7 +388,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
                 }
             }
         } else {
-            // Fallback: Object Fission engine if EPDFAnnot_ApplyRedaction is unavailable
+            // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
             int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
             FPDFText_ClosePage(tp);
             tp = nullptr;
@@ -595,7 +595,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             FPDFAnnot_SetRect(annot, &rect);
 
             uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, annot, &rem);
+            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
             FPDFPage_CloseAnnot(annot);
             if (!ok) {
                 epdfOk = false;
@@ -996,7 +996,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         bool epdfOk = true;
         for (auto& item : redactAnnots) {
             uint32_t rem = 0;
-            FPDF_BOOL ok = EPDFAnnot_ApplyRedaction(pw->page, item.annot, &rem);
+            FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &item.annot, 1, &rem);
             FPDFPage_CloseAnnot(item.annot);
             if (!ok) {
                 epdfOk = false;

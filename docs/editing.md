@@ -31,6 +31,8 @@ Rasterization invalidates pages you opened beforehand; reopen them afterwards. S
 
 A whole-document `FULL` pass holds the process-wide PDFium domain for the whole document, so every other operation waits for it to finish; use `flattenPage(index, FlattenMode.FULL, dpi)` for interactive work. Repeated `FULL` passes over one document also keep growing the process footprint (roughly 0.5 GB per pass for 100 A4 pages at 150 DPI), so flatten a document once.
 
+Rasterizing a page leaves one scratch bitmap attached to the open document for reuse by later passes, up to 32 MiB; larger frames are released immediately. The retained frame is freed when the document is closed, so bound the number of documents held open at once if resident memory matters.
+
 `PdfSelectiveFlatten` flattens by annotation type rather than all at once. Note that it removes the targeted annotations and regenerates page content without baking their appearance streams, so the removed elements no longer appear. Use it when you intend to drop them, not to preserve their look.
 
 ## Redaction

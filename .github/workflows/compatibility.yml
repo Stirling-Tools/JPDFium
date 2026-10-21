@@ -93,6 +93,19 @@ jobs:
           # break rather than one the gate should catch; it is recorded under
           # "Removed" in CHANGELOG.md so consumers can see it. Remove entries
           # from this list as soon as the baseline no longer contains the class.
+          #
+          # Member-level breakage (pin-driven only, excluded individually): the
+          # PDFium pin beyond 20260921 removed or reshaped four native symbols
+          # that the panama binding holders mirrored as public MethodHandle
+          # constants — EPDFAnnot_ApplyRedaction (replaced by
+          # EPDFPage_ApplyRedactions), EPDF_GetPageRotationByIndex (renamed to
+          # EPDF_GetPageRotateByIndex with an out parameter), and the dead
+          # EPDFAnnot_SetRectangleDifferences and EPDF_GetPageSizeByIndexNormalized
+          # bindings. Retaining those constants would only ship handles that can
+          # never resolve against the pinned library, so the four fields are
+          # accepted as deliberate member-level breaks, excluded here
+          # individually and listed under "Removed" in CHANGELOG.md. Every other
+          # member of both binding classes is still compared.
           java -jar /tmp/japicmp.jar \
             --old "$BASE_JAR" \
             --new "$CURR_JAR" \
@@ -101,6 +114,10 @@ jobs:
             --exclude "stirling.software.jpdfium.panama.NativeGuard" \
             --exclude "stirling.software.jpdfium.doc.PdfAConverter" \
             --exclude "stirling.software.jpdfium.text.edit.TextEditor" \
+            --exclude "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings#EPDFAnnot_SetRectangleDifferences" \
+            --exclude "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings#EPDFAnnot_ApplyRedaction" \
+            --exclude "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings#EPDF_GetPageSizeByIndexNormalized" \
+            --exclude "stirling.software.jpdfium.panama.EmbedPdfDocumentBindings#EPDF_GetPageRotationByIndex" \
             --error-on-binary-incompatibility \
             --error-on-source-incompatibility \
             > /tmp/japicmp-report.txt 2>&1

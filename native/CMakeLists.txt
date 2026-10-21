@@ -183,7 +183,11 @@ if(JPDFIUM_USE_PDFIUM)
         find_library(PDFIUM_LIB
             NAMES pdfium embedpdf
             PATHS "${PDFIUM_LIB_DIR}"
-            NO_DEFAULT_PATH)
+            NO_DEFAULT_PATH
+            # FreeBSD cross builds set CMAKE_FIND_ROOT_PATH to the target
+            # sysroot; without this the prebuilt PDFium directory is searched
+            # as <sysroot>/<host path> and never found.
+            NO_CMAKE_FIND_ROOT_PATH)
         if(NOT PDFIUM_LIB)
             message(FATAL_ERROR "Could not find libpdfium in ${PDFIUM_LIB_DIR}")
         endif()
@@ -285,15 +289,6 @@ if(JPDFIUM_USE_PDFIUM)
 
     # Optional TurboJPEG: powers the FULL flatten DCT embed. Without it the
     # bridge falls back to the raw bitmap embed.
-    find_path(TURBOJPEG_INCLUDE turbojpeg.h HINTS /opt/homebrew/include /usr/local/include)
-    find_library(TURBOJPEG_LIB NAMES turbojpeg libturbojpeg)
-    if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
-        target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
-        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
-        target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
-    endif()
-
-    # Optional TurboJPEG: the FULL flatten DCT embed uses it when present.
     find_path(TURBOJPEG_INCLUDE turbojpeg.h HINTS /opt/homebrew/include /usr/local/include)
     find_library(TURBOJPEG_LIB NAMES turbojpeg libturbojpeg)
     if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)

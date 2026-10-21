@@ -2,6 +2,7 @@
 
 #include <fpdf_edit.h>
 #include <fpdf_formfill.h>
+#include <fpdf_ppo.h>
 #include <fpdfview.h>
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -689,12 +691,12 @@ bool embedJpeg(FPDF_PAGEOBJECT imageObject, FPDF_BITMAP bmp, int quality) {
 }
 #endif  // JPDFIUM_HAS_TURBOJPEG
 
-// Renders `page` (geometry in `target`) into the caller-owned `bmp` and adds an image page of that
-// bitmap at `insertAt`, leaving the original page in place. `bmp` is filled white first: a page
-// does not paint its own background, and a reused bitmap may still hold the previous page's
-// pixels. `page` is closed before the page tree is restructured; `out` owns the new page.
+// Renders `page` (geometry in `target`) into the caller-owned `bmp` and imports a finished image
+// page of that bitmap at `insertAt`, leaving the original page in place. `bmp` is filled white
+// first: a page does not paint its own background, and a reused bitmap may still hold the previous
+// page's pixels. `page` is closed before the page tree is restructured.
 int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& page,
-                                 FPDF_BITMAP bmp, const RasterTarget& target, UniquePage* out) {
+                                 FPDF_BITMAP bmp, const RasterTarget& target) {
     try {
         const double w_pt = target.w_pt;
         const double h_pt = target.h_pt;
@@ -717,30 +719,34 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
 
         page.reset();  // done with the source page before restructuring the document
 
-        // The replacement is created at insertAt while the original stays in place, so a
-        // failure here - or a whole pass that rolls back - leaves the document as it was.
-        //
-        // Rollback: closing the replacement handle must happen BEFORE deleting
-        // the page object, which is the order FPDFPage_New requires. The guard
-        // exists so an exception mid-way performs the same ordered cleanup as
-        // the explicit failure branches below.
-        UniquePage newPage(FPDFPage_New(dw->core->doc, insertAt, w_pt, h_pt));
-        if (!newPage) return JPDFIUM_ERR_NATIVE;
-
-        struct ReplacementPageRollback {
-            DocWrapper* dw;
-            int index;
-            UniquePage* page;
-            ~ReplacementPageRollback() {
-                if (!page) return;
-                (*page).reset();                        // close the loaded page
-                FPDFPage_Delete(dw->core->doc, index);  // then delete the page
+        // Generate the replacement page in a scratch document, then import it.
+        // FPDFPage_GenerateContent walks the WHOLE destination page tree
+        // (CPDF_PageContentGenerator::UpdateResourcesDict -> IsPageResourceShared)
+        // and the pinned prebuilt's CPDF_Page constructor CHECKs that every
+        // enumerated page dict is a page-tree leaf. A malformed document whose
+        // flat page map exposes a branch dict therefore traps inside the
+        // destination. The scratch document has a well-formed page tree, and
+        // FPDF_ImportPages copies the finished page (generated content stream
+        // and image resource) into the destination at insertAt. The original
+        // pages stay in place until the import succeeds, so any failure here
+        // leaves the document exactly as it was.
+        struct DocumentCloser {
+            void operator()(FPDF_DOCUMENT document) const noexcept {
+                if (document) FPDF_CloseDocument(document);
             }
-        } rollback{dw, insertAt, &newPage};
+        };
+        std::unique_ptr<std::remove_pointer_t<FPDF_DOCUMENT>, DocumentCloser> scratch(
+            FPDF_CreateNewDocument());
+        if (!scratch) return JPDFIUM_ERR_NATIVE;
+
+        // The replacement page and its document-bound image object live in the
+        // scratch document until the import moves them across.
+        UniquePage newPage(FPDFPage_New(scratch.get(), 0, w_pt, h_pt));
+        if (!newPage) return JPDFIUM_ERR_NATIVE;
 
         // Own the image object until it is inserted; the page takes ownership at
         // FPDFPage_InsertObject.
-        UniquePageObject imgObj(FPDFPageObj_NewImageObj(dw->core->doc));
+        UniquePageObject imgObj(FPDFPageObj_NewImageObj(scratch.get()));
         if (!imgObj) return JPDFIUM_ERR_NATIVE;
 
         // SetBitmap copies the pixels into the object, so the bitmap is no longer
@@ -769,11 +775,18 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
 
         FPDFPage_InsertObject(newPage.get(), imgObj.get());
         imgObj.release();  // the page owns it now
+        if (!FPDFPage_GenerateContent(newPage.get())) return JPDFIUM_ERR_NATIVE;
+        // A generated replacement page must carry the image object; PDFium drops
+        // an image it cannot stream, so never import a content-less page.
+        if (FPDFPage_CountObjects(newPage.get()) < 1) return JPDFIUM_ERR_NATIVE;
+        newPage.reset();
 
-        // Hand the replacement to the caller, which decides when the original page is
-        // dropped; the guard must not undo a page the caller now owns.
-        rollback.page = nullptr;
-        *out = std::move(newPage);
+        // Import the finished page at insertAt. On failure the destination is
+        // untouched and the scratch document is closed.
+        if (!FPDF_ImportPages(dw->core->doc, scratch.get(), "1", insertAt)) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+        scratch.reset();
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -781,31 +794,13 @@ int32_t prepare_replacement_page(DocWrapper* dw, int32_t insertAt, UniquePage& p
     }
 }
 
-// Generates the content stream of a prepared replacement page. A page that comes out without
-// its image object is refused: PDFium drops an image it cannot stream and reports success.
-int32_t generate_replacement_page(FPDF_PAGE page) {
-    if (!FPDFPage_GenerateContent(page)) return JPDFIUM_ERR_NATIVE;
-    // A generated replacement page must carry the image object; PDFium drops
-    // an image it cannot stream, so never commit a content-less page.
-    if (FPDFPage_CountObjects(page) < 1) return JPDFIUM_ERR_NATIVE;
-    return JPDFIUM_OK;
-}
-
-// Replaces the page at `pageIndex` in place, generating the replacement before the original is
-// dropped so a failure here leaves the document exactly as it was.
+// Replaces the page at `pageIndex` in place, importing the finished replacement before the
+// original is dropped so a failure here leaves the document exactly as it was.
 int32_t rasterize_page_into(DocWrapper* dw, int32_t pageIndex, UniquePage& page, FPDF_BITMAP bmp,
                             const RasterTarget& target) {
     try {
-        UniquePage replacement(nullptr);
-        int32_t rc = prepare_replacement_page(dw, pageIndex + 1, page, bmp, target, &replacement);
+        const int32_t rc = prepare_replacement_page(dw, pageIndex + 1, page, bmp, target);
         if (rc != JPDFIUM_OK) return rc;
-
-        rc = generate_replacement_page(replacement.get());
-        replacement.reset();  // close the handle before the page object is dropped
-        if (rc != JPDFIUM_OK) {
-            FPDFPage_Delete(dw->core->doc, pageIndex + 1);
-            return rc;
-        }
 
         // Commit: the replacement now occupies the slot the original is leaving.
         FPDFPage_Delete(dw->core->doc, pageIndex);
@@ -848,7 +843,6 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
     // Until the originals are dropped the pass can still be undone, so a failure
     // before that point returns the plain error instead of CONTENT_MUTATED.
     bool committed = false;
-    std::vector<UniquePage> replacements;
     try {
         DocWrapper* dw = decodeDoc(docHandle);
         if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
@@ -866,21 +860,18 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
 
         const int count = FPDF_GetPageCount(core.doc);
 
-        // Replacements are appended, so the originals keep their indices while every
-        // page is prepared and the pass can still be rolled back completely.
-        struct PreparedPages {
+        // Replacements are appended, so the originals keep their indices while
+        // every page is prepared and the pass can still be rolled back completely.
+        struct AppendedPages {
             DocWrapper* dw;
             int base;
-            std::vector<UniquePage>& pages;
+            int count;
             bool* committed;
-            ~PreparedPages() {
-                for (size_t i = pages.size(); i-- > 0;) {
-                    if (!pages[i]) continue;
-                    pages[i].reset();
-                    if (!*committed) FPDFPage_Delete(dw->core->doc, base + static_cast<int>(i));
-                }
+            ~AppendedPages() {
+                if (*committed) return;
+                for (int i = count; i-- > 0;) FPDFPage_Delete(dw->core->doc, base + i);
             }
-        } prepared{dw, count, replacements, &committed};
+        } appended{dw, count, 0, &committed};
 
         for (int i = 0; i < count; ++i) {
             UniquePage page(FPDF_LoadPage(core.doc, i));
@@ -891,30 +882,19 @@ int32_t jpdfium_doc_flatten_to_images(int64_t docHandle, int32_t dpi) noexcept {
             // share one frame, so a pass never holds two page-size bitmaps.
             FPDF_BITMAP frame = core.rasterFrame.acquire(target->w_px, target->h_px);
             if (!frame) return JPDFIUM_ERR_NATIVE;
-            UniquePage replacement(nullptr);
-            const int32_t rc = prepare_replacement_page(dw, FPDF_GetPageCount(core.doc), page,
-                                                        frame, *target, &replacement);
+            const int32_t rc =
+                prepare_replacement_page(dw, FPDF_GetPageCount(core.doc), page, frame, *target);
             if (rc != JPDFIUM_OK) return rc;
-            replacements.push_back(std::move(replacement));
+            ++appended.count;
         }
 
-        // Drop every original before generating: the content generator walks the whole
-        // document per call, so generating first costs milliseconds per page. Past this
-        // point the replaced pages can no longer be restored.
+        // Every replacement is generated and imported, so the pass is now
+        // committed. Drop the originals; the replacements shift down into their
+        // slots. Past this point the document can no longer be restored.
         for (int i = count - 1; i >= 0; --i) FPDFPage_Delete(core.doc, i);
         committed = true;
-        for (size_t i = 0; i < replacements.size(); ++i) ++core.generation;
-
-        // Generate every replacement, keeping the first failure: the document is already
-        // replaced, so the caller must discard it, but every other page stays complete.
-        int32_t first_error = JPDFIUM_OK;
-        for (UniquePage& replacement : replacements) {
-            if (generate_replacement_page(replacement.get()) != JPDFIUM_OK &&
-                first_error == JPDFIUM_OK) {
-                first_error = JPDFIUM_ERR_CONTENT_MUTATED;
-            }
-        }
-        return first_error;
+        for (int i = 0; i < count; ++i) ++core.generation;
+        return JPDFIUM_OK;
     } catch (...) {
         return committed ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
     }
