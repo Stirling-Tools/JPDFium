@@ -882,6 +882,8 @@ jobs:
     needs: [build-natives, build-vips-natives, cli-binaries]
     runs-on: ubuntu-latest
     environment: maven
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -1061,8 +1063,9 @@ jobs:
         run: bash .github/scripts/upload-to-r2.sh staged
 
       - name: Summary
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
         run: |
-          VERSION=$(ls staged/com/stirling/jpdfium)
           curl -fsSI "https://maven.stirlingpdf.com/com/stirling/jpdfium/$VERSION/jpdfium-$VERSION.pom" >/dev/null
           echo "### Released com.stirling:*:$VERSION to https://maven.stirlingpdf.com" >> $GITHUB_STEP_SUMMARY
 
