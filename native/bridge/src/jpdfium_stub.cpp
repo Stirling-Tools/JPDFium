@@ -901,6 +901,14 @@ int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_flatten_to_images(int64_t, int32_t) noexcept {
+    return JPDFIUM_OK;
+}
+
 int32_t jpdfium_text_get_char_positions(int64_t page, char** json) {
     g_page_text[page] = STUB_TEXT;
     JsonBuf j(STUB_TEXT.size() * 4);

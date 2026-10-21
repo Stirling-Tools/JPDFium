@@ -195,6 +195,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
     "jpdfium_redact_words_ex", "jpdfium_crop_remove_content",
     "jpdfium_page_flatten", "jpdfium_page_to_image",
+    "jpdfium_doc_flatten_annotations", "jpdfium_doc_flatten_to_images",
     // Advanced Pattern Engine (PCRE2 JIT)
     "jpdfium_pcre2_compile", "jpdfium_pcre2_match_all", "jpdfium_pcre2_free",
     "jpdfium_luhn_validate",
@@ -512,6 +513,8 @@ tasks.register<Test>("nativeSmokeTest") {
     systemProperty("jpdfium.smoke", "true")
     filter {
         includeTestsMatching("*NativeSmokeTest")
+        // Flatten assertions need real PDFium: the stub-based :test task skips them.
+        includeTestsMatching("*FlattenApiTest")
         includeTestsMatching("*PdfEncryptionCopyTest")
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")

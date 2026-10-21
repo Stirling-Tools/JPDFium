@@ -83,6 +83,8 @@ class LifecycleTest {
             doc.convertPageToImage(0, 72);
             assertThrows(IllegalStateException.class, () -> page.renderAt(72));
             assertDoesNotThrow(page::close);
+            assertTrue(doc.isContentModified(),
+                    "a raster replacement must flag the document as edited");
             try (PdfPage fresh = doc.page(0)) {
                 assertDoesNotThrow(fresh::size);
             }
