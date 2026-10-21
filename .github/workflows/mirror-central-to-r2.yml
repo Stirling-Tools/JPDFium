@@ -1,0 +1,91 @@
+name: Copy a Central release to maven.stirlingpdf.com
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version already on Maven Central to copy (e.g. 1.1.6)'
+        required: true
+  push:
+    branches: [publish-to-r2]
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    name: Copy ${{ inputs.version || '1.1.6' }} from Central
+    runs-on: ubuntu-latest
+    environment: maven
+    concurrency:
+      group: stirling-maven
+      cancel-in-progress: false
+    env:
+      VERSION: ${{ inputs.version || '1.1.6' }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - name: Download every JPDFium module at this version from Central
+        shell: bash
+        run: |
+          CENTRAL=https://repo1.maven.org/maven2/com/stirling
+          get() { curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --max-time 300 "$@"; }
+          modules=$(get "$CENTRAL/" | grep -o 'href="jpdfium[^"/]*/' | cut -d'"' -f2 | tr -d /)
+          for m in $modules; do
+            listing=$(curl -fsSL --retry 5 --retry-delay 5 "$CENTRAL/$m/$VERSION/" 2>/dev/null) || continue
+            for f in $(echo "$listing" | grep -o 'href="[^"]*"' | cut -d'"' -f2 | grep -v '^\.\./'); do
+              get --create-dirs -o "central-repo/com/stirling/$m/$VERSION/$f" "$CENTRAL/$m/$VERSION/$f"
+            done
+            echo "$m: $(ls "central-repo/com/stirling/$m/$VERSION" | wc -l) files"
+          done
+          [ -d central-repo ] || { echo "ERROR: $VERSION is not on Central"; exit 1; }
+
+      - name: Check every file against Central's sha1
+        shell: bash
+        run: |
+          bad=0
+          while IFS= read -r sum; do
+            file="${sum%.sha1}"
+            [ -f "$file" ] || continue
+            [ "$(sha1sum "$file" | cut -d' ' -f1)" = "$(tr -d ' \n' < "$sum")" ] || { echo "MISMATCH $file"; bad=1; }
+          done < <(find central-repo -name '*.sha1')
+          exit "$bad"
+
+      - name: Upload to the Stirling Maven repo
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: s3://${{ vars.R2_BUCKET || 'stirling-maven' }}
+        run: bash .github/scripts/upload-to-r2.sh central-repo
+
+  verify:
+    name: Verify maven.stirlingpdf.com (${{ matrix.platform }})
+    needs: copy
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64,     runner: ubuntu-latest    }
+          - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
+          - { platform: darwin-x64,    runner: macos-15-intel   }
+          - { platform: darwin-arm64,  runner: macos-14         }
+          - { platform: windows-x64,   runner: windows-latest   }
+          - { platform: windows-arm64, runner: windows-11-arm   }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+        with:
+          distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
+          java-version: '25'
+
+      - name: Verify every artifact and run the smoke
+        shell: bash
+        env:
+          MODE: r2
+          VERSION: ${{ inputs.version || '1.1.6' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: bash .github/scripts/verify-central.sh
