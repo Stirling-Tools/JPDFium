@@ -29,9 +29,9 @@ import stirling.software.jpdfium.exception.NativeLoadException;
  * <p>Off by default. When {@code -Djpdfium.native.download=true} is set and
  * the classpath has no natives jar for the current platform, the matching
  * {@code com.stirling:jpdfium-natives-<platform>:<version>} jar is fetched
- * from Maven Central (or {@code -Djpdfium.native.repo=...}), cached under the
- * native cache root for offline reuse, and loaded through the same
- * checksum-verified extraction path as a bundled jar.
+ * from https://maven.stirlingpdf.com (or {@code -Djpdfium.native.repo=...}),
+ * cached under the native cache root for offline reuse, and loaded through
+ * the same checksum-verified extraction path as a bundled jar.
  *
  * <p>Trust model: TLS authenticates the repository (plain http is refused
  * except for loopback test servers), and every extracted file is still
@@ -48,7 +48,7 @@ final class NativeDownloader {
     static final String ENABLE_PROPERTY = "jpdfium.native.download";
     static final String VERSION_PROPERTY = "jpdfium.native.version";
     static final String REPO_PROPERTY = "jpdfium.native.repo";
-    static final String DEFAULT_REPO = "https://repo1.maven.org/maven2";
+    static final String DEFAULT_REPO = "https://maven.stirlingpdf.com";
     static final String GROUP_PATH = "com/stirling";
     static final String VERSION_RESOURCE = "jpdfium-version.properties";
 

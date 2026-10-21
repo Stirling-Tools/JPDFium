@@ -327,3 +327,24 @@ tasks.register("publishAllToCentralPortal") {
     dependsOn(subprojects.filter { it.plugins.hasPlugin("maven-publish") }.map { "${it.path}:publishAllPublicationsToCentralPortalRepository" })
     finalizedBy("finalizePortalDeployment")
 }
+
+// Release layout for https://maven.stirlingpdf.com; release.yml uploads it with
+// .github/scripts/upload-to-r2.sh.
+val r2StagingDir = layout.buildDirectory.dir("r2-repo")
+
+subprojects {
+    plugins.withId("maven-publish") {
+        extensions.configure<PublishingExtension> {
+            repositories.maven {
+                name = "r2Staging"
+                url = uri(r2StagingDir)
+            }
+        }
+    }
+}
+
+tasks.register("publishAllToR2Staging") {
+    group = "publishing"
+    description = "Publish all modules into build/r2-repo for upload to the Stirling Maven repo"
+    dependsOn(subprojects.map { sub -> sub.tasks.matching { it.name == "publishAllPublicationsToR2StagingRepository" } })
+}

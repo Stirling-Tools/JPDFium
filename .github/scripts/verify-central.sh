@@ -2,10 +2,11 @@
 # Verifies the JPDFium artifact set, then runs a smoke against it.
 #   MODE=staging  Central Portal validated-deployment downloads (before release)
 #   MODE=released repo1.maven.org (after the deployment is released)
+#   MODE=r2       the Stirling Maven repo at R2_REPO_URL (staging prefix or root)
 # Called by release.yml with VERSION and PLATFORM in the environment.
 set -euo pipefail
 
-MODE="${MODE:?MODE must be staging or released}"
+MODE="${MODE:?MODE must be staging, released or r2}"
 VERSION="${VERSION:?VERSION is required}"
 PLATFORM="${PLATFORM:?PLATFORM is required}"
 GROUP_PATH="com/stirling"
@@ -19,6 +20,11 @@ case "$MODE" in
     ;;
   released)
     REPO_URL="https://repo1.maven.org/maven2"
+    PORTAL_TOKEN=""
+    ;;
+  r2)
+    REPO_URL="${R2_REPO_URL:-https://maven.stirlingpdf.com}"
+    REPO_URL="${REPO_URL%/}"
     PORTAL_TOKEN=""
     ;;
   *)
@@ -160,14 +166,20 @@ repositories {
     if (System.getenv("VERIFY_STAGING") == "true") {
         maven {
             url = uri(System.getenv("VERIFY_REPO_URL") + "/")
-            credentials(HttpHeaderCredentials::class) {
-                name = "Authorization"
-                value = System.getenv("VERIFY_TOKEN")
+            if (!System.getenv("VERIFY_TOKEN").isNullOrEmpty()) {
+                credentials(HttpHeaderCredentials::class) {
+                    name = "Authorization"
+                    value = System.getenv("VERIFY_TOKEN")
+                }
+                authentication { create<HttpHeaderAuthentication>("header") }
             }
-            authentication { create<HttpHeaderAuthentication>("header") }
         }
     }
-    mavenCentral()
+    mavenCentral {
+        if (System.getenv("VERIFY_STAGING") == "true") {
+            content { excludeGroup("com.stirling") }
+        }
+    }
 }
 
 dependencies {
@@ -249,7 +261,7 @@ if [ "$VIPS_SUPPORTED" != "1" ]; then
   export VERIFY_VIPS=false
 fi
 
-if [ "$MODE" = "staging" ]; then
+if [ "$MODE" = "staging" ] || [ "$MODE" = "r2" ]; then
   export VERIFY_STAGING=true
   export VERIFY_REPO_URL="$REPO_URL"
   export VERIFY_TOKEN="$PORTAL_TOKEN"

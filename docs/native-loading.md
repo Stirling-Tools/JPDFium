@@ -8,9 +8,9 @@ Packaging depends on your deployment model; see [deployment.md](deployment.md). 
 
 ## Downloading at runtime
 
-As an alternative to bundling, JPDFium can download the matching native artifact from Maven Central the first time it runs and reuse the cached copy afterwards.
+As an alternative to bundling, JPDFium can download the matching native artifact from https://maven.stirlingpdf.com the first time it runs and reuse the cached copy afterwards.
 
-This is disabled by default. Enable it only when network access to Maven Central is acceptable at runtime:
+This is disabled by default. Enable it only when network access to maven.stirlingpdf.com is acceptable at runtime:
 
 ```bash
 java -Djpdfium.native.download=true --enable-native-access=ALL-UNNAMED -jar app.jar

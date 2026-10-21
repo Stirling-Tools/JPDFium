@@ -1,6 +1,6 @@
 # Installation
 
-JPDFium publishes to Maven Central under the `com.stirling` group. The current release is **1.2.0**.
+JPDFium publishes to https://maven.stirlingpdf.com under the `com.stirling` group. Releases up to 1.2.0 are also on Maven Central. The current release is **1.2.0**.
 
 ## Requirements
 
@@ -26,6 +26,13 @@ Java 25 is the version JPDFium is built and tested against. Earlier releases are
 Windows x64. Substitute the native module for your platform from the table below.
 
 ```kotlin
+repositories {
+    maven("https://maven.stirlingpdf.com") {
+        content { includeGroup("com.stirling") }
+    }
+    mavenCentral()
+}
+
 dependencies {
     implementation(platform("com.stirling:jpdfium-bom:1.2.0"))
     implementation("com.stirling:jpdfium")
@@ -38,6 +45,13 @@ dependencies {
 Windows x64.
 
 ```xml
+<repositories>
+    <repository>
+        <id>stirling</id>
+        <url>https://maven.stirlingpdf.com</url>
+    </repository>
+</repositories>
+
 <dependencyManagement>
     <dependencies>
         <dependency>
