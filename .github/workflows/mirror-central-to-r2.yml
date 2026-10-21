@@ -6,22 +6,20 @@ on:
       version:
         description: 'Version already on Maven Central to copy (e.g. 1.1.6)'
         required: true
-  push:
-    branches: [publish-to-r2]
 
 permissions:
   contents: read
 
 jobs:
   copy:
-    name: Copy ${{ inputs.version || '1.1.6' }} from Central
+    name: Copy ${{ inputs.version }} from Central
     runs-on: ubuntu-latest
     environment: maven
     concurrency:
       group: stirling-maven
       cancel-in-progress: false
     env:
-      VERSION: ${{ inputs.version || '1.1.6' }}
+      VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -86,6 +84,6 @@ jobs:
         shell: bash
         env:
           MODE: r2
-          VERSION: ${{ inputs.version || '1.1.6' }}
+          VERSION: ${{ inputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: bash .github/scripts/verify-central.sh
