@@ -11,7 +11,8 @@ below ships in 1.3.0. Every incompatible change is listed here under "Removed"
 or "Changed", and [compatibility.md](docs/compatibility.md) states the policy in
 full.
 
-This file covers library releases on Maven Central (the `v*.*.*` tags).
+This file covers library releases (the `v*.*.*` tags), published to
+https://maven.stirlingpdf.com; releases up to 1.2.0 are also on Maven Central.
 Infrastructure tags such as `pdfium-*` and `vips-*` are prebuild inputs for the
 publishing workflows, not library releases, so they are not listed here.
 
@@ -33,6 +34,11 @@ publishing workflows, not library releases, so they are not listed here.
   overload was affected.
 
 ### Changed
+
+- Releases publish to https://maven.stirlingpdf.com instead of Maven Central.
+  Add `maven("https://maven.stirlingpdf.com")` to your repositories; 1.1.6 and
+  1.2.0 are there too. Runtime native downloads (`jpdfium.native.download`) now
+  default to this repository.
 
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
