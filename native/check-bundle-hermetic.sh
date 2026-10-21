@@ -2,13 +2,19 @@
 # Verifies all ELF DT_NEEDED dependencies are present in the bundle or are standard core system libraries.
 set -euo pipefail
 
-DIST_DIR="${1:?usage: check-bundle-hermetic.sh <dist-dir>}"
+DIST_DIR="${1:?usage: check-bundle-hermetic.sh <dist-dir> [platform]}"
+PLATFORM="${2:-}"
 
 if ! command -v readelf >/dev/null 2>&1; then
     exit 0
 fi
 
 CORE_RE='^(libc|libc\.musl[^.]*|libm|libdl|libpthread|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|libstdc\+\+|librt|libresolv|libutil|linux-vdso)\.so|^ld-linux|^ld-musl|^ld-elf'
+case "$PLATFORM" in
+    freebsd-*|vips-freebsd-*|openbsd-*)
+        CORE_RE='^(libc|libm|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|librt|libutil|libmd|libcrypt|libssp)\.so|^ld-elf'
+        ;;
+esac
 
 failures=0
 lib_count=0
@@ -20,7 +26,7 @@ for f in "$DIST_DIR"/lib*.so*; do
     while IFS= read -r dep; do
         [ -z "$dep" ] && continue
         [ -e "$DIST_DIR/$dep" ] && continue
-        if echo "$dep" | grep -qE "$CORE_RE"; then
+        if echo "$dep" | grep -E "$CORE_RE" >/dev/null; then
             continue
         fi
         echo "FAIL: $f depends on '$dep' which is neither bundled nor a core system lib" >&2

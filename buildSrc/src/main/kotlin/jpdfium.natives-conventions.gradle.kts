@@ -35,6 +35,36 @@ val stagedPlatformDir = stagedRoot.map { it.dir("natives/$platform") } // real f
 val stagedLicensesDir = stagedRoot.map { it.dir("licenses") }
 val licensesDir = rootProject.layout.projectDirectory.dir("native/licenses")
 
+// A natives jar only needs the notices for the libraries it actually ships.
+// The old blanket copy put libvips/libheif/OpenEXR/LibRaw notices in the core
+// jar (and PDFium/qpdf notices in the vips jar), which is pure duplication.
+// Keep the lists conservative: anything a bundle may load at runtime stays.
+val coreLicenses = listOf(
+    "ABSEIL-APACHE-2.0.txt", "BROTLI-MIT.txt", "BZIP2.txt", "FONTCONFIG.txt",
+    "FREETYPE.txt", "HARFBUZZ.txt", "ICU.txt", "LIBEXPAT-MIT.txt",
+    "LIBJPEG-TURBO.txt", "LIBPNG.txt", "LIBUNIBREAK-ZLIB.txt", "NOTICE.txt",
+    "PCRE2-BSD-3.txt", "PDFIUM-BSD-3.txt", "PUGIXML-MIT.txt",
+    "QPDF-APACHE-2.0.txt", "ZLIB.txt"
+)
+val vipsLicenses = listOf(
+    "AOM-BSD-2.txt", "BROTLI-MIT.txt", "DAV1D-BSD-2.txt", "DAV1D-ISC.txt",
+    "GETTEXT-LGPL-2.1.txt",
+    "GLIB-LGPL-2.1.txt", "HIGHWAY-APACHE-2.0.txt", "KVAZAAR-BSD-3.txt",
+    "LCMS2-MIT.txt", "LIBDE265-LGPL-3.0.txt", "LIBDEFLATE-MIT.txt",
+    "LIBEXIF-LGPL-2.1.txt", "LIBEXPAT-MIT.txt", "LIBFFI-MIT.txt",
+    "LIBHEIF-LGPL-3.0.txt", "LIBICONV-LGPL-2.1.txt", "LIBINOTIFY-MIT.txt",
+    "LIBJPEG-TURBO.txt", "LIBJXL-BSD-3.txt", "LIBLZMA-0BSD.txt",
+    "LIBNSGIF-MIT.txt", "LIBPNG.txt", "LIBSELINUX-PUBLIC-DOMAIN.txt",
+    "LIBSPNG-BSD-2.txt", "LIBTIFF.txt", "LIBVIPS-LGPL-2.1.txt",
+    "LIBWEBP-BSD-3.txt", "NOTICE.txt",
+    "OPENJPEG-BSD-2.txt", "PCRE2-BSD-3.txt", "UTIL-LINUX-LGPL-2.1.txt",
+    "ZLIB.txt", "ZSTD-BSD-3.txt"
+)
+val bundledLicenses = when {
+    platform.startsWith("vips-") -> vipsLicenses
+    else -> coreLicenses
+}
+
 val stageNatives = tasks.register<Copy>("stageNatives") {
     description = "Copy pre-built native libraries and license notices into the jar resource tree"
     group = "build"
@@ -48,6 +78,7 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
         into("natives/$platform")
     }
     from(licensesDir) {
+        include(bundledLicenses)
         into("licenses")
     }
     into(stagedRoot)
@@ -101,7 +132,11 @@ val writeNativeManifest = tasks.register("writeNativeManifest") {
 }
 
 sourceSets.named("main") {
-    resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
+    // native/dist is the only source of truth: CMake still drops a legacy
+    // copy of the PDFium component libs into src/main/resources, and mixing
+    // that with the stripped/bundled dist set could publish unstripped or
+    // already-deduped-away libraries. Stub builds stage into native/dist too.
+    resources.setSrcDirs(listOf(stagedRoot))
 }
 
 // Resource-only jars, so the module name would otherwise be derived from the
@@ -125,16 +160,24 @@ tasks.named("processResources") {
 // matrix NOTE). Publishing its natives jar anyway would resolve for
 // consumers while containing no binaries, so skip those publications with
 // a loud warning instead of failing the whole release.
-tasks.matching { it.name.startsWith("publish") && it.name.endsWith("Repository") }.configureEach {
+tasks.matching {
+    it.name.startsWith("publish") &&
+        (it.name.endsWith("Repository") || it.name.contains("MavenLocal"))
+}.configureEach {
     onlyIf("natives bundle present, skipped otherwise (see release.yml matrix NOTE)") {
-        val ok = stagedPlatformDir.get().asFile.listFiles()?.isNotEmpty() == true
+        val nativePattern = Regex(""".*\.(so|dylib|dll)(\..*)?$""")
+        val ok = stagedPlatformDir.get().asFile.listFiles()
+            ?.any { it.isFile && nativePattern.matches(it.name) } == true
         if (!ok) logger.warn("Skipping ${it.name}: no staged natives for $platform")
         ok
     }
 }
 
-tasks.named("sourcesJar") {
+tasks.named<Jar>("sourcesJar") {
     dependsOn(writeNativeManifest)
+    eachFile {
+        if (relativePath.pathString.startsWith("natives/")) exclude()
+    }
 }
 tasks.named("javadocJar") {
     dependsOn(writeNativeManifest)

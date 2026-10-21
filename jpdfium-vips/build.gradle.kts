@@ -1,3 +1,6 @@
+import java.nio.file.Files
+import java.nio.file.Path
+
 plugins {
     id("jpdfium.library-conventions")
 }
@@ -22,10 +25,28 @@ publishing {
 }
 
 // The vips natives platform for tests: -Pjpdfium.testVipsNatives=vips-<platform>,
-// defaulting to the same platform as -Pjpdfium.testNatives (used by jpdfium's
-// runtimeOnly natives dependency).
-val testVipsNatives = (findProperty("jpdfium.testVipsNatives") as String?)
-    ?: "vips-${findProperty("jpdfium.testNatives") ?: "linux-x64"}"
+// defaulting to the same host platform as -Pjpdfium.testNatives.
+val hostPlatform = run {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = System.getProperty("os.arch").lowercase()
+    val isArm = arch == "aarch64" || arch == "arm64"
+    when {
+        os.contains("mac") || os.contains("darwin") -> if (isArm) "darwin-arm64" else "darwin-x64"
+        os.contains("freebsd") -> if (isArm) "freebsd-arm64" else "freebsd-x64"
+        os.contains("win") -> if (isArm) "windows-arm64" else "windows-x64"
+        else -> {
+            val musl = Files.exists(Path.of("/lib/ld-musl-${if (isArm) "aarch64" else "x86_64"}.so.1"))
+            when {
+                musl && isArm -> "linux-musl-arm64"
+                musl -> "linux-musl-x64"
+                isArm -> "linux-arm64"
+                else -> "linux-x64"
+            }
+        }
+    }
+}
+val testNatives = (findProperty("jpdfium.testNatives") ?: hostPlatform).toString()
+val testVipsNatives = (findProperty("jpdfium.testVipsNatives") ?: "vips-$testNatives").toString()
 
 // The vips tests read a sample PDF from the classpath. jpdfium leaves its
 // GraalVM smoke fixtures out of the published jar, so this module carries its own
@@ -38,6 +59,9 @@ dependencies {
     // the other vips tests) exercise the exact bundled libvips being shipped.
     // Resolved lazily by Gradle; a no-op when the dist dir is empty (tests then
     // fall back to a system libvips or skip).
+    findProject(":jpdfium-natives:jpdfium-natives-$testNatives")?.let {
+        testRuntimeOnly(it)
+    }
     findProject(":jpdfium-natives:jpdfium-natives-$testVipsNatives")?.let {
         testRuntimeOnly(it)
     }

@@ -73,32 +73,9 @@ jobs:
           echo "short=${sha:0:7}" >> "$GITHUB_OUTPUT"
           echo "tag=vips-$(date -u +%Y%m%d)-${sha:0:7}" >> "$GITHUB_OUTPUT"
 
-  # Cross-build the trimmed ICU data on Linux (used by the macOS wrap step)
-  # before the matrix so the macOS jobs can download it. Mirrors the snapshot
-  # workflow's prep-windows-icu job; saves ~10 MB per macOS tarball.
-  prep-icu:
+  build:
     needs: [marker, resolve-sha]
     if: always() && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
-      - name: Install ICU tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential icu-devtools libicu-dev \
-            mingw-w64 binutils-mingw-w64 curl unzip
-      - name: Cross-build trimmed ICU data
-        run: bash native/build-minimal-icu-windows.sh
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: icu-data-trimmed
-          path: native/dist/icu-data/icudt*l.dat
-          if-no-files-found: error
-          retention-days: 1
-
-  build:
-    needs: [resolve-sha, prep-icu]
-    if: always() && needs.prep-icu.result == 'success' && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
     permissions:
       contents: read
     strategy:
@@ -115,6 +92,8 @@ jobs:
           - { platform: darwin-arm64,  runner: macos-14,          os: darwin }
           - { platform: windows-x64,   runner: windows-2022,      os: windows, triplet: x64-windows }
           - { platform: windows-arm64, runner: windows-11-arm,    os: windows, triplet: arm64-windows }
+          # FreeBSD has no GitHub-hosted runner; build natively inside a VM.
+          - { platform: freebsd-x64,   runner: ubuntu-latest,     os: freebsd }
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -196,7 +175,8 @@ jobs:
           path: |
             kvazaar-prefix
             heif-prefix
-          key: kvazaar-heif-${{ matrix.platform }}-${{ hashFiles('native/vips-build.env') }}
+            aom-prefix
+          key: kvazaar-heif-${{ matrix.platform }}-${{ hashFiles('native/vips-build.env', '.github/workflows/prebuild-vips.yml') }}
 
       - name: Build kvazaar + libheif (BSD HEVC encoder for HEIC)
         if: matrix.os == 'windows'
@@ -218,14 +198,63 @@ jobs:
           VCPKG_ROOT="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
           KVAZAAR_PREFIX="$(cygpath -m "$PWD/kvazaar-prefix")"
           HEIF_PREFIX="$(cygpath -m "$PWD/heif-prefix")"
+          AOM_PREFIX="$(cygpath -m "$PWD/aom-prefix")"
           VIPS_PREFIX="$(cygpath -m "$PWD/vips-prefix")"
-          if [ -f "$KVAZAAR_PREFIX/bin/kvazaar.dll" ] && [ -f "$HEIF_PREFIX/bin/heif.dll" ]; then
-            echo "kvazaar and libheif restored from cache; skipping build."
+          NEED_AOM=0
+          [ "$ARCH" = x64 ] && NEED_AOM=1
+          if [ -f "$KVAZAAR_PREFIX/bin/kvazaar.dll" ] && [ -f "$HEIF_PREFIX/bin/heif.dll" ] && { [ "$NEED_AOM" = 0 ] || [ -f "$AOM_PREFIX/bin/aom.dll" ]; }; then
+            echo "kvazaar, libheif and minimal AOM restored from cache; skipping build."
             mkdir -p "$VIPS_PREFIX/bin"
             cp "$HEIF_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
             cp "$KVAZAAR_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
+            [ "$NEED_AOM" = 1 ] && cp "$AOM_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
             echo "PKG_CONFIG_PATH=$KVAZAAR_PREFIX/lib/pkgconfig;$HEIF_PREFIX/lib/pkgconfig;$VCPKG_ROOT/installed/$TRIPLET/lib/pkgconfig" >> "$GITHUB_ENV"
             exit 0
+          fi
+
+          AOM_FLAGS=()
+          if [ "$NEED_AOM" = 1 ]; then
+            # vcpkg's x64 AOM is ~10 MB; its arm64 build is already minimal.
+            curl -fsSL --retry 3 --retry-delay 3 \
+              "https://storage.googleapis.com/aom-releases/libaom-${AOM_VERSION#v}.tar.gz" \
+              -o aom.tar.gz
+            tar xzf aom.tar.gz
+            # AOM_TARGET_CPU=generic disables all x86 SIMD (SSE2/AVX2), which
+            # makes AVIF encoding many times slower. Build the real target and
+            # let AOM's runtime CPU detection choose the fastest implementation.
+            if ! command -v nasm >/dev/null 2>&1; then
+              choco install nasm -y --no-progress
+              export PATH="/c/Program Files/NASM:$PATH"
+            fi
+            if ! command -v perl >/dev/null 2>&1; then
+              choco install strawberryperl -y --no-progress
+              export PATH="/c/Strawberry/perl/bin:$PATH"
+            fi
+            case "$ARCH" in
+              x64)   AOM_CPU=x86_64 ;;
+              arm64) AOM_CPU=arm64 ;;
+              *) echo "ERROR: unsupported AOM arch $ARCH" >&2; exit 1 ;;
+            esac
+            # High-bit-depth AVIF encoding is intentionally disabled for size.
+            cmake -S "libaom-${AOM_VERSION#v}" -B aom-build -A "$ARCH" \
+              -DCMAKE_BUILD_TYPE=MinSizeRel \
+              -DAOM_TARGET_CPU="$AOM_CPU" \
+              -DCMAKE_INSTALL_PREFIX="$AOM_PREFIX" \
+              -DBUILD_SHARED_LIBS=ON \
+              -DENABLE_TESTS=0 -DENABLE_EXAMPLES=0 -DENABLE_TOOLS=0 \
+              -DENABLE_APPS=0 -DENABLE_DOCS=0 \
+              -DCONFIG_TUNE_VMAF=0 \
+              -DCONFIG_WEBM_IO=0 -DCONFIG_LIBYUV=0 -DCONFIG_INSPECTION=0 \
+              -DCONFIG_AV1_DECODER=0 \
+              -DCONFIG_AV1_HIGHBITDEPTH="${JPDFIUM_AOM_HIGHBITDEPTH:-0}" \
+              -DCONFIG_ENTROPY_STATS=0 -DCONFIG_INTERNAL_STATS=0
+            cmake --build aom-build --config MinSizeRel --parallel
+            cmake --install aom-build --config MinSizeRel
+            AOM_FLAGS=(-DAOM_INCLUDE_DIR="$AOM_PREFIX/include" -DAOM_LIBRARY="$AOM_PREFIX/lib/aom.lib")
+            AOM_CONFIG_DIR="$(cygpath -m "$AOM_PREFIX/lib/cmake/AOM")"
+            if [ -f "$AOM_CONFIG_DIR/aom-config.cmake" ]; then
+              AOM_FLAGS+=(-DAOM_DIR="$AOM_CONFIG_DIR")
+            fi
           fi
 
           curl -fsSL --retry 3 --retry-delay 3 \
@@ -261,14 +290,22 @@ jobs:
             -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
             -DCMAKE_INSTALL_PREFIX="$HEIF_PREFIX" \
             -DBUILD_SHARED_LIBS=ON -DBUILD_TESTING=OFF -DWITH_EXAMPLES=OFF \
+            -DENABLE_PLUGIN_LOADING=OFF \
             -DWITH_X265=OFF -DWITH_KVAZAAR=ON \
             -DWITH_LIBDE265=ON \
-            -DWITH_AOM_ENCODER=ON -DWITH_AOM_DECODER=ON \
+            -DWITH_AOM_ENCODER=ON -DWITH_AOM_DECODER=OFF \
+            -DWITH_DAV1D=ON \
+            "${AOM_FLAGS[@]}" \
             -DWITH_JPEG_ENCODER=ON -DWITH_JPEG_DECODER=ON \
             -DWITH_OpenJPEG_ENCODER=ON -DWITH_OpenJPEG_DECODER=ON \
             -DWITH_HEADER_COMPRESSION=ON -DWITH_UNCOMPRESSED_CODEC=OFF \
             -DKVAZAAR_INCLUDE_DIR="$(cygpath -m "$KVAZAAR_PREFIX/include")" \
             -DKVAZAAR_LIBRARY="$(cygpath -m "$KVAZAAR_PREFIX/lib/kvazaar.lib")"
+          DAV1D_LIB="$(sed -n 's/^DAV1D_LIBRARY:[^=]*=//p' heif-build/CMakeCache.txt)"
+          if [ -z "$DAV1D_LIB" ] || [[ "$DAV1D_LIB" == *NOTFOUND ]]; then
+            echo "ERROR: libheif did not find dav1d; refusing to build without an AV1 decoder" >&2
+            exit 1
+          fi
           cmake --build heif-build --config Release --parallel
           cmake --install heif-build --config Release
 
@@ -277,9 +314,38 @@ jobs:
           mkdir -p "$VIPS_PREFIX/bin"
           cp "$HEIF_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
           cp "$KVAZAAR_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
+          cp "$AOM_PREFIX"/bin/*.dll "$VIPS_PREFIX/bin/" 2>/dev/null || true
           # Prepend our libheif (and the kvazaar .pc it requires) so the vips
           # meson build picks them over vcpkg's.
           echo "PKG_CONFIG_PATH=$KVAZAAR_PREFIX/lib/pkgconfig;$HEIF_PREFIX/lib/pkgconfig;$VCPKG_ROOT/installed/$TRIPLET/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build vips on FreeBSD
+        if: matrix.os == 'freebsd'
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        with:
+          release: '14.3'
+          usesh: true
+          prepare: |
+            pkg bootstrap -y || true
+            pkg install -y bash git python3
+          run: |
+            set -euo pipefail
+            set -a; . native/vips-build.env; set +a
+            export JPDFIUM_REQUIRE_SOURCE_VIPS=1
+            bash native/build-vips-full-codecs.sh
+            bash native/build-vips.sh freebsd-x64
+            DIST="$PWD/native/dist/vips-freebsd-x64"
+            export LD_LIBRARY_PATH="$DIST"
+            vips --version
+            vips black out.png 64 64
+            vips jpegsave out.png out.jpg
+            vips webpsave out.png out.webp
+            vips heifsave out.png out.heic
+            vips heifsave out.png out.avif
+            vips jxlsave out.png out.jxl
+            vips jp2ksave out.png out.jp2
+            vips tiffsave out.png out.tif
+            vipsheader out.png out.jpg out.webp out.heic out.avif out.jxl out.jp2 out.tif
 
       # musl / Alpine: the whole build runs inside a matching-arch Alpine
       # container via native/ci/musl.sh (apk deps + component musl PDFium +
@@ -293,15 +359,8 @@ jobs:
         run: bash native/ci/alpine-exec.sh ${{ matrix.platform }} vips
 
       # Linux + macOS: build the full-codec libvips from source with the
-      # system deps (the script installs them), linking the pinned component
-      # PDFium for pdfload. darwin-x64 is a native Intel runner.
-      - name: Fetch prebuilt PDFium (vips pdfload)
-        if: matrix.libc != 'musl' && (matrix.os == 'linux' || matrix.os == 'darwin')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
-
+      # system deps (the script installs them). darwin-x64 is a native Intel
+      # runner. PDF rendering is not part of libvips here.
       - name: x86_64 brew bootstrap (darwin-x64)
         if: matrix.platform == 'darwin-x64'
         env:
@@ -347,28 +406,6 @@ jobs:
           else
             bash native/build-vips-full-codecs.sh
           fi
-
-      - name: Trim ICU data for the bundle (Linux)
-        # The vips bundle links PDFium, whose full ICU data file (~30 MB) would
-        # dominate the tarball. Pre-stage the trimmed carrier so the bundler's
-        # swap replaces it (same trick the core natives use).
-        if: matrix.os == 'linux' && matrix.libc != 'musl'
-        run: JPDFIUM_TARGET_PLATFORM=${{ matrix.platform }} bash native/build-minimal-icu.sh
-
-      - name: Download trimmed ICU data (macOS)
-        if: matrix.os == 'darwin'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
-        with:
-          name: icu-data-trimmed
-          path: native/dist/icu-data/
-
-      - name: Trim ICU data for the bundle (macOS)
-        # Wraps the trimmed .dat into libicudata.<MAJ>.dylib via a clang
-        # .incbin stub; the bundler then swaps PDFium's full 33 MB copy.
-        if: matrix.os == 'darwin'
-        env:
-          CMAKE_OSX_ARCHITECTURES: ${{ matrix.platform == 'darwin-x64' && 'x86_64' || 'arm64' }}
-        run: bash native/build-minimal-icu-macos.sh
 
       - name: Stage + bundle vips (Linux + macOS)
         if: matrix.libc != 'musl' && (matrix.os == 'linux' || matrix.os == 'darwin')
@@ -507,6 +544,7 @@ jobs:
           DIST="native/dist/vips-${{ matrix.platform }}"
           bash native/check-bundle-lean.sh "$DIST" "vips-${{ matrix.platform }}"
           bash native/check-bundle-size.sh "$DIST" "vips-${{ matrix.platform }}"
+          bash native/check-vips-codecs.sh "$DIST" "vips-${{ matrix.platform }}"
           # xz: ~25% smaller than gzip for these libraries; the consumer
           # fetch extracts with tar -xf (auto-detect).
           tar -cJf "vips-${{ matrix.platform }}.tar.gz" -C "$DIST" .
@@ -543,7 +581,7 @@ jobs:
       - name: Verify all platform assets are present
         run: |
           set -euo pipefail
-          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64; do
+          for p in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64 freebsd-x64; do
             test -f "dist/vips-$p.tar.gz" || { echo "MISSING: vips-$p.tar.gz" >&2; exit 1; }
           done
           # musl is experimental: warn, never block.

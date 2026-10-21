@@ -1,134 +1,66 @@
 JPDFium Native Libraries - Third-Party Notices and Licenses
 ===========================================================
 
-This distribution bundles binary forms of the following open-source projects:
+The platform-specific jpdfium-natives-* jars bundle the core PDF engine. The
+optional jpdfium-natives-vips-* jars bundle libvips and its image codecs. A
+jar contains only the notices for the libraries it actually ships; the full
+license texts live beside this file.
 
-1. PDFium
-   - Copyright (c) 2014 PDFium Authors. All rights reserved.
-   - License: BSD 3-Clause License (see PDFIUM-BSD-3.txt)
+Core natives (PDFium + JPDFium bridge)
+--------------------------------------
+1. PDFium - BSD 3-Clause (PDFIUM-BSD-3.txt)
+2. Abseil - Apache License 2.0 (ABSEIL-APACHE-2.0.txt)
+3. QPDF - Apache License 2.0 (QPDF-APACHE-2.0.txt)
+4. PCRE2 - BSD 3-Clause (PCRE2-BSD-3.txt)
+5. FreeType - FreeType License / GPLv2 (FREETYPE.txt)
+6. HarfBuzz - MIT (HARFBUZZ.txt)
+7. ICU - Unicode/ICU License (ICU.txt)
+8. pugixml - MIT (PUGIXML-MIT.txt)
+9. libunibreak - zlib License (LIBUNIBREAK-ZLIB.txt)
+10. libjpeg-turbo - IJG / BSD-style / zlib (LIBJPEG-TURBO.txt)
+11. libpng - libpng License (LIBPNG.txt)
+12. zlib - zlib License (ZLIB.txt)
+13. Brotli - MIT (BROTLI-MIT.txt)
+14. Expat - MIT (LIBEXPAT-MIT.txt)
+15. fontconfig - fontconfig License (FONTCONFIG.txt)
+16. bzip2 - bzip2 License (BZIP2.txt)
+17. Rust bridge dependencies (lopdf, oxipng, zopfli, flate2,
+    fast_image_resize, resvg/usvg/tiny-skia/fontdb/harfrust and support
+    crates) - Apache-2.0 OR MIT, with BSD-3-Clause for tiny-skia. The
+    Apache-2.0 text is in ABSEIL-APACHE-2.0.txt, MIT in HARFBUZZ.txt, and
+    BSD-3-Clause in PDFIUM-BSD-3.txt.
 
-2. QPDF
-   - Copyright (c) 2005-2024 Jay Berkenbilt
-   - License: Apache License 2.0 (see QPDF-APACHE-2.0.txt)
-
-3. libvips
-   - Copyright (c) 1991-2024 The libvips Open Source Project
-   - License: GNU Lesser General Public License v2.1 or later (see LIBVIPS-LGPL-2.1.txt)
-
-4. GLib / GObject
-   - Copyright (c) 1995-2024 GLib Team
-   - License: GNU Lesser General Public License v2.1 or later (see GLIB-LGPL-2.1.txt)
-
-5. libheif
-   - Copyright (c) 2017-2024 struktur AG
-   - License: GNU Lesser General Public License v3.0 or later (see LIBHEIF-LGPL-3.0.txt)
-
-6. libjxl (JPEG XL reference implementation)
-   - Copyright (c) 2019-2024 JPEG XL Project Authors
-   - License: BSD 3-Clause License (see LIBJXL-BSD-3.txt)
-
-7. libwebp
-   - Copyright (c) 2010 Google Inc.
-   - License: BSD 3-Clause License (see LIBWEBP-BSD-3.txt)
-
-8. libjpeg-turbo
-   - Copyright (c) 2009-2024 D. R. Commander. All rights reserved.
-   - License: Custom (IJG / BSD-style / zlib) (see LIBJPEG-TURBO.txt)
-
-9. libpng
-   - Copyright (c) 1995-2024 The PNG Reference Library Authors.
-   - License: libpng License (see LIBPNG.txt)
-
-10. libtiff
-    - Copyright (c) 1988-1997 Sam Leffler, 1991-1997 Silicon Graphics, Inc.
-    - License: libtiff License (see LIBTIFF.txt)
-
-11. FreeType
-    - Copyright (c) 1996-2024 David Turner, Robert Wilhelm, and Werner Lemberg.
-    - License: FreeType License / FTL (see FREETYPE.txt)
-
-12. HarfBuzz
-    - Copyright (c) 2010-2024 HarfBuzz Authors.
-    - License: MIT/Old MIT License (see HARFBUZZ.txt)
-
-13. Little CMS (lcms2)
-    - Copyright (c) 1998-2024 Marti Maria Saguer
-    - License: MIT License (see LCMS2-MIT.txt)
-
-14. ICU (International Components for Unicode)
-    - Copyright (c) 1991-2024 Unicode, Inc.
-    - License: Unicode License / ICU License (see ICU.txt)
-
-15. zlib
-    - Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler
-    - License: zlib License (see ZLIB.txt)
-
-16. zstd
-    - Copyright (c) Meta Platforms, Inc. and affiliates.
-    - License: BSD 3-Clause License (see ZSTD-BSD-3.txt)
-
-17. libde265 (H.265/HEVC decoder, used for HEIC decoding)
-    - Copyright (c) struktur AG
-    - License: GNU Lesser General Public License v3.0 or later (see LIBDE265-LGPL-3.0.txt)
-
-18. Kvazaar (H.265/HEVC encoder, used for HEIC encoding on Linux/macOS/Windows)
-    - Copyright (c) 2021 Tampere University, ITU/ISO/IEC, project contributors
-    - License: BSD 3-Clause License (see KVAZAAR-BSD-3.txt)
-
-19. OpenJPEG (JPEG 2000 codec, used for JPEG2000-in-HEIF)
-    - Copyright (c) 2002-2014 Universite catholique de Louvain (UCL),
-      Professor Benoit Macq and contributors
-    - License: BSD 2-Clause License (see OPENJPEG-BSD-2.txt)
-
-20. ImageMagick / MagickCore (loader/saver for formats without a native
-    loader; enabled on macOS/Windows where ImageMagick 7 is available)
-    - Copyright (c) 1999-2024 ImageMagick Studio LLC
-    - License: ImageMagick License (see IMAGEMAGICK.txt)
-
-21. librsvg (SVG loader)
-    - Copyright (c) 2000-2024 librsvg contributors
-    - License: GNU Lesser General Public License v2.1 or later
-      (see LIBRSVG-LGPL-2.1.txt)
-
-22. Pango / Cairo (text and vector backends used by librsvg)
-    - Copyright (c) 1999-2024 the Pango and Cairo authors
-    - License: GNU Lesser General Public License v2.1 or later
-      (see LIBRSVG-LGPL-2.1.txt)
-
-23. fontconfig (font discovery for the text/vector backends)
-    - Copyright (c) 2000-2024 Keith Packard and fontconfig contributors
-    - License: fontconfig License, MIT-style (see FONTCONFIG.txt)
-
-24. OpenEXR (EXR loader; dropped from default bundle)
-    - Copyright (c) 2006-2024 Contributors to the OpenEXR Project
-    - License: BSD 3-Clause License (see OPENEXR-BSD-3.txt)
-
-25. libraw (RAW camera loader; dropped from default bundle)
-    - Copyright (c) 2008-2024 LibRaw LLC
-    - License: GNU Lesser General Public License v2.1 or CDDL 1.0
-      (see LIBRAW-LGPL-2.1.txt)
-
-26. libspng (PNG loader)
-    - Copyright (c) 2018-2026 Randy <randy408@protonmail.com>
-    - License: BSD 2-Clause License (see LIBSPNG-BSD-2.txt)
-
-27. Google Highway (SIMD kernels used by libvips)
-    - Copyright (c) 2021 Google LLC
-    - License: Apache License 2.0 (see HIGHWAY-APACHE-2.0.txt)
-
-28. libnsgif (GIF loader, vendored by libvips)
-    - Copyright (c) 2004-2024 NetSurf contributors
-    - License: MIT License (see LIBNSGIF-MIT.txt)
-
-29. SVG rasterization (resvg, usvg, tiny-skia, fontdb, harfrust, rustybuzz,
-    ttf-parser, skrifa, read-fonts, svgtypes, kurbo and their support crates)
-    - Copyright (c) the resvg/usvg/tiny-skia contributors
-    - License: Apache-2.0 OR MIT (resvg/usvg/svgtypes/skrifa/read-fonts/...),
-      BSD-3-Clause (tiny-skia), MIT (fontdb, harfrust, ...). The Apache-2.0
-      text is in HIGHWAY-APACHE-2.0.txt, MIT in HARFBUZZ.txt, BSD-3-Clause
-      in PDFIUM-BSD-3.txt.
-
-30. libvmaf (only when the macOS aom source build falls back to brew's aom)
-    - Copyright (c) Netflix, Inc. and contributors
-    - License: BSD-2-Clause Plus Patent (full text in
-      LIBVMAF-BSD-2-CLAUSE-PATENT.txt)
+Optional vips natives (libvips + codecs)
+----------------------------------------
+1. libvips - LGPL-2.1-or-later (LIBVIPS-LGPL-2.1.txt)
+2. GLib / GObject / GIO / GModule - LGPL-2.1-or-later (GLIB-LGPL-2.1.txt)
+3. libheif - LGPL-3.0-or-later (LIBHEIF-LGPL-3.0.txt)
+4. libde265 - LGPL-3.0-or-later (LIBDE265-LGPL-3.0.txt)
+5. libaom - BSD 2-Clause (AOM-BSD-2.txt)
+6. libjxl - BSD 3-Clause (LIBJXL-BSD-3.txt)
+7. libwebp - BSD 3-Clause (LIBWEBP-BSD-3.txt)
+8. libjpeg-turbo - IJG / BSD-style / zlib (LIBJPEG-TURBO.txt)
+9. libpng - libpng License (LIBPNG.txt)
+10. libtiff - libtiff License (LIBTIFF.txt)
+11. Little CMS 2 - MIT (LCMS2-MIT.txt)
+12. zstd - BSD 3-Clause (ZSTD-BSD-3.txt)
+13. Kvazaar - BSD 3-Clause (KVAZAAR-BSD-3.txt)
+14. OpenJPEG - BSD 2-Clause (OPENJPEG-BSD-2.txt)
+15. libspng - BSD 2-Clause (LIBSPNG-BSD-2.txt)
+16. Google Highway - Apache License 2.0 (HIGHWAY-APACHE-2.0.txt)
+17. libnsgif - MIT (LIBNSGIF-MIT.txt)
+18. libexif - LGPL-2.1-or-later (LIBEXIF-LGPL-2.1.txt)
+19. Expat - MIT (LIBEXPAT-MIT.txt)
+20. libffi - MIT (LIBFFI-MIT.txt)
+21. gettext / libintl - LGPL-2.1-or-later (GETTEXT-LGPL-2.1.txt)
+22. util-linux / libmount - LGPL-2.1-or-later
+    (UTIL-LINUX-LGPL-2.1.txt)
+23. Brotli - MIT (BROTLI-MIT.txt)
+24. PCRE2 - BSD 3-Clause (PCRE2-BSD-3.txt)
+25. zlib - zlib License (ZLIB.txt)
+26. libiconv - LGPL-2.1-or-later (LIBICONV-LGPL-2.1.txt)
+27. liblzma / XZ Utils - 0BSD (LIBLZMA-0BSD.txt)
+28. libdeflate - MIT (LIBDEFLATE-MIT.txt)
+29. libselinux - Public Domain (LIBSELINUX-PUBLIC-DOMAIN.txt)
+30. libinotify - MIT (LIBINOTIFY-MIT.txt)
+31. dav1d - BSD 2-Clause and ISC (DAV1D-BSD-2.txt, DAV1D-ISC.txt)
