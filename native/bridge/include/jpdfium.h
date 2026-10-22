@@ -460,6 +460,18 @@ JPDFIUM_EXPORT int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, in
 // The nuclear option for metadata-clean redaction.
 JPDFIUM_EXPORT int32_t jpdfium_metadata_strip_all(int64_t doc);
 
+// Replace the catalog XMP metadata stream with the supplied XML packet.
+// A NULL buffer with xmp_len == 0 removes /Metadata. A negative xmp_len, or a
+// NULL buffer with xmp_len > 0, returns JPDFIUM_ERR_INVALID. The document is
+// rewritten through QPDF. Object streams and cross-reference streams are
+// regenerated when the PDF version is 1.5 or later.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t* xmp, int32_t xmp_len);
+
+// Copy the catalog XMP metadata packet into *xmp. The caller owns the buffer
+// and must free it with jpdfium_free_buffer. Returns JPDFIUM_ERR_NOT_FOUND when
+// the catalog has no /Metadata stream.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t** xmp, int32_t* xmp_len);
+
 // Strip embedded font resources from all pages using qpdf resource dictionary manipulation.
 // Removes /Font from each page's /Resources dict and garbage-collects orphaned font streams.
 // Returns the number of font entries removed via *fonts_removed.

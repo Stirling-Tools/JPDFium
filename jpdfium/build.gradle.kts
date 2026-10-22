@@ -210,6 +210,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_redact_glyph_aware",
     // XMP Metadata Redaction
     "jpdfium_xmp_redact_patterns", "jpdfium_metadata_strip", "jpdfium_metadata_strip_all",
+    "jpdfium_metadata_set_xmp", "jpdfium_metadata_get_xmp",
     // ICU4C Text Processing
     "jpdfium_icu_normalize_nfc", "jpdfium_icu_break_sentences", "jpdfium_icu_bidi_reorder",
     // Annotation-Based Redaction (Mark → Commit pattern)

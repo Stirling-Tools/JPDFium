@@ -142,6 +142,35 @@ Permissions are a raw PDFium bitmask with no named constants in the Java API. `P
 
 To encrypt a document that is already open, `PdfEncryption.setEncryption` applies AES-256 to the in-memory handle. It must be called before saving, and the encryption takes effect during the save.
 
+## Metadata
+
+`PdfDocument.metadata()` reads the standard /Info entries and custom keys.
+`PdfMetadata.of(document)` exposes typed getters, `custom()`, `trapped()`, and
+the catalog XMP packet through `xmp()`.
+
+`document.editMetadata()` returns a `PdfMetadataEditor` that writes standard
+fields, custom keys, /Trapped, and the XMP packet:
+
+```java
+try (PdfDocument document = PdfDocument.open(input)) {
+    document.editMetadata()
+            .title("Quarterly report")
+            .author("Finance")
+            .custom("Department", "Finance")
+            .xmp(xmpPacket)
+            .apply();
+    document.save(output);
+}
+```
+
+`applyAndSave(output)` combines both calls. A null value removes an /Info entry,
+`removeCustom` removes a custom key, and `removeXmp` removes the catalog packet.
+Custom keys must be non-reserved PDF name tokens.
+
+Setting XMP rewrites the document through QPDF, so object-stream,
+cross-reference-stream, and compressed-content PDFs are accepted. The rewrite
+invalidates existing signatures. Apply metadata before encryption.
+
 ## Digital signatures
 
 Signatures are read-only. JPDFium can enumerate them, read their metadata, and compute a digest over the bytes each signature covers.

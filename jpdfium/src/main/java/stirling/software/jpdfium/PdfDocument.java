@@ -9,6 +9,7 @@ import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfMetadataEditor;
 import stirling.software.jpdfium.doc.PdfNamedPages;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
@@ -68,6 +69,8 @@ import java.util.function.ObjIntConsumer;
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
 public final class PdfDocument implements AutoCloseable {
+
+    private static final MetadataTag[] METADATA_TAGS = MetadataTag.values();
 
     private final long handle;
     private volatile MemorySegment rawDocSegment;
@@ -1443,15 +1446,34 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
+     * Get a specific metadata value by /Info dictionary key, including custom keys.
+     * Standard keys remain case-insensitive.
      */
     public Optional<String> metadata(String tag) {
-        for (MetadataTag metadataTag : MetadataTag.values()) {
+        if (tag == null) return Optional.empty();
+        for (MetadataTag metadataTag : METADATA_TAGS) {
             if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
                 return PdfMetadata.of(rawHandleForRead()).get(metadataTag);
             }
         }
-        return Optional.empty();
+        return PdfMetadata.of(rawHandleForRead()).get(tag);
+    }
+
+    /**
+     * Starts a metadata edit for this document.
+     *
+     * <pre>{@code
+     * doc.editMetadata()
+     *     .title("Quarterly report")
+     *     .author("Finance")
+     *     .custom("Department", "Finance")
+     *     .apply();
+     * doc.save(output);
+     * }</pre>
+     */
+    public PdfMetadataEditor editMetadata() {
+        ensureOpen();
+        return PdfMetadataEditor.on(this);
     }
 
     /**
@@ -1632,6 +1654,18 @@ public final class PdfDocument implements AutoCloseable {
     public long nativeHandle() {
         ensureOpen();
         markContentModified();
+        return handle;
+    }
+
+    /**
+     * Returns the bridge document handle for library-internal reads that cannot
+     * change the document.
+     *
+     * <p><strong>Internal use only.</strong> Unlike {@link #nativeHandle()}, this
+     * does not mark the document as modified.
+     */
+    public long nativeHandleForRead() {
+        ensureOpen();
         return handle;
     }
 

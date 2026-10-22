@@ -19,6 +19,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `PdfMetadataEditor`, reachable through `PdfDocument.editMetadata()`, for
+  writing standard /Info fields, custom keys, /Trapped, and the catalog XMP
+  packet. `PdfMetadata` now reads custom keys, /Trapped, and XMP. The new EPDF
+  metadata bindings back the /Info writes; XMP replacement uses the in-process
+  QPDF writer.
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
 

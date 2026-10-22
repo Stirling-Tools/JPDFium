@@ -4616,6 +4616,130 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_metadata_set_xmp {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_set_xmp");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t *xmp, int32_t xmp_len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_metadata_set_xmp$descriptor() {
+        return jpdfium_metadata_set_xmp.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t *xmp, int32_t xmp_len)
+     * }
+     */
+    public static MethodHandle jpdfium_metadata_set_xmp$handle() {
+        return jpdfium_metadata_set_xmp.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t *xmp, int32_t xmp_len)
+     * }
+     */
+    public static MemorySegment jpdfium_metadata_set_xmp$address() {
+        return jpdfium_metadata_set_xmp.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t *xmp, int32_t xmp_len)
+     * }
+     */
+    public static int jpdfium_metadata_set_xmp(long doc, MemorySegment xmp, int xmp_len) {
+        var mh$ = jpdfium_metadata_set_xmp.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_metadata_set_xmp", doc, xmp, xmp_len);
+            }
+            return (int)mh$.invokeExact(doc, xmp, xmp_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_metadata_get_xmp {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_get_xmp");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t **xmp, int32_t *xmp_len)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_metadata_get_xmp$descriptor() {
+        return jpdfium_metadata_get_xmp.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t **xmp, int32_t *xmp_len)
+     * }
+     */
+    public static MethodHandle jpdfium_metadata_get_xmp$handle() {
+        return jpdfium_metadata_get_xmp.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t **xmp, int32_t *xmp_len)
+     * }
+     */
+    public static MemorySegment jpdfium_metadata_get_xmp$address() {
+        return jpdfium_metadata_get_xmp.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t **xmp, int32_t *xmp_len)
+     * }
+     */
+    public static int jpdfium_metadata_get_xmp(long doc, MemorySegment xmp, MemorySegment xmp_len) {
+        var mh$ = jpdfium_metadata_get_xmp.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_metadata_get_xmp", doc, xmp, xmp_len);
+            }
+            return (int)mh$.invokeExact(doc, xmp, xmp_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_icu_normalize_nfc {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

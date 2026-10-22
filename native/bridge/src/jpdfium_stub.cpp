@@ -1125,6 +1125,16 @@ int32_t jpdfium_metadata_strip_all(int64_t) {
     return JPDFIUM_OK;
 }
 
+int32_t jpdfium_metadata_set_xmp(int64_t, const uint8_t*, int32_t) {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_metadata_get_xmp(int64_t, uint8_t** xmp, int32_t* xmp_len) {
+    if (xmp) *xmp = nullptr;
+    if (xmp_len) *xmp_len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
 int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {
     if (fonts_removed) *fonts_removed = 0;
     return JPDFIUM_OK;

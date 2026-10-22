@@ -834,6 +834,27 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     return result;
 }
 
+// Write a QPDF document with object streams when the PDF version supports them.
+// PDFium's own save expands object streams, so a metadata rewrite that only used
+// qpdf_write() would grow a compressed source substantially.
+static std::vector<uint8_t> qpdf_write_compressed(QPDF& pdf) {
+    QPDFWriter writer(pdf);
+    writer.setOutputMemory();
+    writer.setLinearization(false);
+    writer.setCompressStreams(true);
+    int major = 0;
+    int minor = 0;
+    if (sscanf(pdf.getPDFVersion().c_str(), "%d.%d", &major, &minor) == 2 &&
+        (major > 1 || (major == 1 && minor >= 5))) {
+        writer.setObjectStreamMode(qpdf_o_generate);
+    }
+    writer.write();
+    std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
+    std::vector<uint8_t> result(buf->getSize());
+    memcpy(result.data(), buf->getBuffer(), buf->getSize());
+    return result;
+}
+
 // Replace the FPDF_DOCUMENT inside a DocWrapper with a document loaded from new
 // bytes. The DocWrapper pointer itself is unchanged, so the Java-side handle
 // remains valid.
@@ -945,6 +966,80 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
         if (root.hasKey("/MarkInfo")) root.removeKey("/MarkInfo");
 
         return docwrapper_reload(w, qpdf_write(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t* xmp, int32_t xmp_len) {
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+    if (xmp_len < 0 || (xmp_len > 0 && !xmp)) return JPDFIUM_ERR_INVALID;
+
+    std::vector<uint8_t> pdfBytes;
+    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("set_xmp", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size());
+
+        QPDFObjectHandle root = pdf.getRoot();
+        if (xmp_len > 0) {
+            auto buf = std::make_shared<Buffer>(static_cast<size_t>(xmp_len));
+            memcpy(buf->getBuffer(), xmp, static_cast<size_t>(xmp_len));
+            QPDFObjectHandle metadata = QPDFObjectHandle::newStream(&pdf, buf);
+            metadata.getDict().replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
+            metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
+            root.replaceKey("/Metadata", metadata);
+        } else {
+            if (root.hasKey("/Metadata")) root.removeKey("/Metadata");
+            QPDFObjectHandle trailer = pdf.getTrailer();
+            if (trailer.hasKey("/Metadata")) trailer.removeKey("/Metadata");
+        }
+
+        return docwrapper_reload(w, qpdf_write_compressed(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t** xmp, int32_t* xmp_len) {
+    if (!xmp || !xmp_len) return JPDFIUM_ERR_INVALID;
+    *xmp = nullptr;
+    *xmp_len = 0;
+
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+
+    std::vector<uint8_t> pdfBytes;
+    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("get_xmp", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size());
+
+        QPDFObjectHandle root = pdf.getRoot();
+        if (!root.hasKey("/Metadata")) return JPDFIUM_ERR_NOT_FOUND;
+        QPDFObjectHandle metadata = root.getKey("/Metadata");
+        if (!metadata.isStream()) return JPDFIUM_ERR_NOT_FOUND;
+
+        std::shared_ptr<Buffer> data = metadata.getStreamData(qpdf_dl_generalized);
+        if (!data || data->getSize() == 0) return JPDFIUM_ERR_NOT_FOUND;
+        if (data->getSize() > static_cast<size_t>(INT32_MAX)) return JPDFIUM_ERR_TOO_LARGE;
+
+        auto size = static_cast<int32_t>(data->getSize());
+        auto* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
+        if (!copy) return JPDFIUM_ERR_NATIVE;
+        memcpy(copy, data->getBuffer(), static_cast<size_t>(size));
+        *xmp = copy;
+        *xmp_len = size;
+        return JPDFIUM_OK;
     } catch (std::exception&) {
         return JPDFIUM_ERR_NATIVE;
     }
