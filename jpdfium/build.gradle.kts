@@ -450,7 +450,7 @@ tasks.register<Test>("integrationTest") {
     System.getProperties().forEach { k, v ->
         val key = k.toString()
         if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")
-            || key.startsWith("jpdfium.pdfx")) {
+            || key.startsWith("jpdfium.pdfx") || key.startsWith("jpdfium.test.")) {
             systemProperty(key, v.toString())
         }
     }

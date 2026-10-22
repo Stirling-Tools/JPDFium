@@ -133,10 +133,10 @@ public final class ColorBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle GET_FILL_ICC = downcallOptional(
             "FPDFPageObj_GetFillColorIccProfile",
-            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+            FunctionDescriptor.of(NativeLayouts.C_ULONG, ADDRESS, ADDRESS, NativeLayouts.C_ULONG));
     private static final MethodHandle GET_STROKE_ICC = downcallOptional(
             "FPDFPageObj_GetStrokeColorIccProfile",
-            FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
+            FunctionDescriptor.of(NativeLayouts.C_ULONG, ADDRESS, ADDRESS, NativeLayouts.C_ULONG));
 
     private static volatile int capabilities = -1;
 
@@ -261,10 +261,15 @@ public final class ColorBindings {
     private static byte[] iccProfile(MethodHandle handle, MemorySegment obj) {
         if (handle == null || obj == null) return null;
         try (Arena arena = Arena.ofConfined()) {
-            long needed = (long) handle.invokeExact(obj, MemorySegment.NULL, 0L);
+            long needed = NativeLayouts.C_ULONG_IS_64_BIT
+                    ? (long) handle.invokeExact(obj, MemorySegment.NULL, 0L)
+                    : Integer.toUnsignedLong(
+                            (int) handle.invokeExact(obj, MemorySegment.NULL, 0));
             if (needed <= 0 || needed > Integer.MAX_VALUE) return null;
             MemorySegment buf = arena.allocate(JAVA_BYTE, needed);
-            long got = (long) handle.invokeExact(obj, buf, needed);
+            long got = NativeLayouts.C_ULONG_IS_64_BIT
+                    ? (long) handle.invokeExact(obj, buf, needed)
+                    : Integer.toUnsignedLong((int) handle.invokeExact(obj, buf, (int) needed));
             if (got != needed) return null;
             return buf.toArray(JAVA_BYTE);
         } catch (Throwable t) {

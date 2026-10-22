@@ -15,7 +15,6 @@ Guides for installing, deploying, configuring, and using JPDFium.
 | [Rendering](rendering.md) | Renderers, DPI, color and transparency, rotation, render limits |
 | [Images](images.md) | `PdfImageIO`, supported formats, the libvips codec, extraction and conversion |
 | [Editing](editing.md) | Flattening, redaction, encryption, signatures, save semantics |
-| [DeviceCMYK colour pipeline](color-pipeline.md) | CMYK conversion, forms, output intents, Ghent gate and roadmap |
 | [Concurrency](concurrency.md) | Thread rules, serialization, structural invalidation, cancellation |
 | [Compatibility](compatibility.md) | Support matrix, artifact availability, limitations |
 | [Troubleshooting](troubleshooting.md) | Symptoms, causes, and corrective actions |

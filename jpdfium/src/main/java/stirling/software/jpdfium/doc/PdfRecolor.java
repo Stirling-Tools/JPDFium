@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.util.Objects;
 import java.util.Set;
 
 import stirling.software.jpdfium.PdfDocument;
@@ -65,10 +66,26 @@ public final class PdfRecolor {
                 .build());
     }
 
+    /** True when this native build can distinguish process colours from CMYK and spot colours. */
+    public static boolean isSupported() {
+        return ColorBindings.colorSpaceAvailable();
+    }
+
+    private static void requireSupported() {
+        if (!isSupported()) {
+            throw new JPDFiumException("PdfRecolor requires the JPDFium colour-space probe;"
+                    + " this PDFium build cannot distinguish DeviceRGB from CMYK/spot colours");
+        }
+    }
+
     /** Apply the given recolour options to every page. */
     public static int apply(PdfDocument doc, RecolorOptions options) {
+        Objects.requireNonNull(doc, "doc");
+        Objects.requireNonNull(options, "options");
+        requireSupported();
         int total = 0;
-        for (int i = 0; i < doc.pageCount(); i++) {
+        int pages = doc.pageCount();
+        for (int i = 0; i < pages; i++) {
             try (PdfPage page = doc.page(i)) {
                 total += recolorPage(page.rawHandle(), options);
             }
@@ -78,9 +95,14 @@ public final class PdfRecolor {
 
     /** Apply the given recolour options to specific pages. */
     public static int apply(PdfDocument doc, RecolorOptions options, Set<Integer> pageIndices) {
+        Objects.requireNonNull(doc, "doc");
+        Objects.requireNonNull(options, "options");
+        Objects.requireNonNull(pageIndices, "pageIndices");
+        requireSupported();
         int total = 0;
+        int pages = doc.pageCount();
         for (int i : pageIndices) {
-            if (i >= 0 && i < doc.pageCount()) {
+            if (i >= 0 && i < pages) {
                 try (PdfPage page = doc.page(i)) {
                     total += recolorPage(page.rawHandle(), options);
                 }
@@ -95,7 +117,7 @@ public final class PdfRecolor {
             count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            return 0;
+            throw new JPDFiumException("FPDFPage_CountObjects failed", t);
         }
         if (count <= 0) return 0;
 
@@ -108,7 +130,6 @@ public final class PdfRecolor {
             MemorySegment b = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment a = arena.allocate(ValueLayout.JAVA_INT);
             int[] mapped = new int[3];
-            int[] cmykProbe = new int[5];
 
             for (int i = 0; i < count; i++) {
                 MemorySegment obj;
@@ -116,7 +137,7 @@ public final class PdfRecolor {
                     obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    continue;
+                    throw new JPDFiumException("FPDFPage_GetObject failed", t);
                 }
                 if (obj.equals(MemorySegment.NULL)) continue;
 
@@ -125,13 +146,13 @@ public final class PdfRecolor {
                     type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    continue;
+                    throw new JPDFiumException("FPDFPageObj_GetType failed", t);
                 }
                 // 1 = TEXT, 2 = PATH. Images and form XObjects (5) are skipped.
                 if (type != 1 && type != 2) continue;
 
-                boolean objChanged = recolorOne(obj, options, r, g, b, a, mapped, cmykProbe, true);
-                if (recolorOne(obj, options, r, g, b, a, mapped, cmykProbe, false)) {
+                boolean objChanged = recolorOne(obj, options, r, g, b, a, mapped, true);
+                if (recolorOne(obj, options, r, g, b, a, mapped, false)) {
                     objChanged = true;
                 }
                 if (objChanged) {
@@ -142,15 +163,15 @@ public final class PdfRecolor {
         }
 
         if (dirty) {
+            int ok;
             try {
-                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-                if (ok == 0) {
-                    throw new JPDFiumException("FPDFPage_GenerateContent failed");
-                }
-            } catch (JPDFiumException e) {
-                throw e;
+                ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
+            }
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
             }
         }
         return changed;
@@ -158,19 +179,15 @@ public final class PdfRecolor {
 
     private static boolean recolorOne(MemorySegment obj, RecolorOptions options,
                                       MemorySegment r, MemorySegment g, MemorySegment b, MemorySegment a,
-                                      int[] mapped, int[] cmykProbe, boolean fill) {
+                                      int[] mapped, boolean fill) {
         try {
             // Only gray/RGB can be rebuilt from the RGB getter.
             int sourceSpace = fill
                     ? ColorBindings.fillColorSpace(obj)
                     : ColorBindings.strokeColorSpace(obj);
-            if (sourceSpace >= 0) {
-                if (sourceSpace != ColorBindings.COLORSPACE_DEVICEGRAY
-                        && sourceSpace != ColorBindings.COLORSPACE_DEVICERGB) {
-                    return false;
-                }
-            } else if (fill ? ColorBindings.getFillColorCmyk(obj, cmykProbe)
-                    : ColorBindings.getStrokeColorCmyk(obj, cmykProbe)) {
+            if (sourceSpace < 0) return false;
+            if (sourceSpace != ColorBindings.COLORSPACE_DEVICEGRAY
+                    && sourceSpace != ColorBindings.COLORSPACE_DEVICERGB) {
                 return false;
             }
             int ok = fill
@@ -193,7 +210,7 @@ public final class PdfRecolor {
             return setOk != 0;
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            return false;
+            throw new JPDFiumException("Recolour downcall failed", t);
         }
     }
 
@@ -230,15 +247,12 @@ public final class PdfRecolor {
 
         /** Fill {@code out} with the remapped RGB; false when the colour stays as it is. */
         boolean map(int r, int g, int b, int[] out) {
-            switch (mode) {
-                case INVERT:
-                    return invert(r, g, b, out);
-                case TINT:
-                    return tint(r, g, b, out);
-                case HIGH_CONTRAST:
-                default:
-                    return contrast(r, g, b, out);
-            }
+            boolean mapped = switch (mode) {
+                case INVERT -> invert(r, g, b, out);
+                case TINT -> tint(r, g, b, out);
+                case HIGH_CONTRAST -> contrast(r, g, b, out);
+            };
+            return mapped && (out[0] != r || out[1] != g || out[2] != b);
         }
 
         private boolean invert(int r, int g, int b, int[] out) {
@@ -287,7 +301,7 @@ public final class PdfRecolor {
 
         private static int stretch(int v, double factor) {
             double centred = 128.0d + (v - 128.0d) * factor;
-            return Math.clamp((int) Math.round(centred), 0, 255);
+            return Math.clamp(Math.round(centred), 0, 255);
         }
 
         public static Builder builder() { return new Builder(); }
@@ -304,7 +318,7 @@ public final class PdfRecolor {
 
             private Builder() {}
 
-            public Builder mode(Mode m) { this.mode = m; return this; }
+            public Builder mode(Mode m) { this.mode = Objects.requireNonNull(m, "mode"); return this; }
 
             /** Tint target colour, components 0-255. */
             public Builder tintColor(int r, int g, int b) {
@@ -318,7 +332,13 @@ public final class PdfRecolor {
             public Builder strength(int s) { this.strength = Math.clamp(s, 0, 100); return this; }
 
             /** Contrast multiplier for {@link Mode#HIGH_CONTRAST} (1.0 = no-op). */
-            public Builder contrastFactor(double f) { this.contrastFactor = f; return this; }
+            public Builder contrastFactor(double f) {
+                if (!Double.isFinite(f) || f < 0) {
+                    throw new IllegalArgumentException("contrastFactor must be finite and >= 0");
+                }
+                this.contrastFactor = f;
+                return this;
+            }
 
             /** Luminance threshold 0-255; setting it enables black/white binarisation. */
             public Builder threshold(int t) { this.threshold = Math.clamp(t, 0, 255); return this; }
