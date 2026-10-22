@@ -128,6 +128,8 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     jvmArgs("--enable-native-access=ALL-UNNAMED", "-XX:+UnlockExperimentalVMOptions", "-XX:-UseJVMCICompiler", "-Xmx2g")
     maxHeapSize = "2g"
+    // Test-only image fixtures must not initialise AppKit on macOS runners.
+    systemProperty("java.awt.headless", "true")
     systemProperties(System.getProperties().mapKeys { it.key.toString() }.filterKeys {
         it.startsWith("jpdfium.") || it.startsWith("vipsffm.")
     })
