@@ -132,3 +132,8 @@ This distribution bundles binary forms of the following open-source projects:
     - Copyright (c) Netflix, Inc. and contributors
     - License: BSD-2-Clause Plus Patent (full text in
       LIBVMAF-BSD-2-CLAUSE-PATENT.txt)
+
+31. jpeg-encoder (CMYK JPEG encoder in the Rust helper)
+    - Copyright (c) 2019-2024 the jpeg-encoder contributors
+    - License: MIT OR Apache-2.0 (Apache-2.0 text in HIGHWAY-APACHE-2.0.txt,
+      MIT in HARFBUZZ.txt)

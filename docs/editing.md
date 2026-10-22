@@ -177,6 +177,141 @@ Whether an existing signature remains valid across a save is not determined by J
 
 `SaveOptions` exposes `maxOutputBytes` and `verifyReopen`. There are no flags for encryption, PDF version, linearization, or signature handling.
 
+## Color conversion
+
+`PdfColorConverter` rewrites page-object fill and stroke colors in place.
+
+```java
+PdfColorConverter.toGrayscale(doc);   // luminance preserving
+PdfColorConverter.toRgb(doc);         // rewrite everything as DeviceRGB
+```
+
+Grayscale and DeviceRGB always work because PDFium exposes RGB setters directly.
+DeviceCMYK and image conversion depend on how the native library was built, so probe
+first. Each probe returns `false` when the loaded library lacks the required support,
+and the corresponding conversion raises `JPDFiumException` rather than silently
+producing the wrong colorspace:
+
+| Probe | Meaning |
+|---|---|
+| `PdfColorConverter.supportsColorSpace(ColorSpace.CMYK)` | PDFium exposes the CMYK setters, the source colour-space probe **and** the raw-component/ICC-profile probes |
+| `PdfColorConverter.supportsFormConversion()` | form XObject children can be edited and written back |
+| `PdfColorConverter.supportsImageConversion()` | the CMYK JPEG encoder is compiled in |
+| `PdfOutputIntent.isSupported()` | QPDF is available for catalog editing |
+
+```java
+PdfColorConverter.ColorConvertOptions opts = PdfColorConverter.ColorConvertOptions.builder()
+        .targetColorSpace(PdfColorConverter.ColorSpace.CMYK)
+        .iccProfile(cmykProfileBytes)   // optional; null = naive black generation
+        .convertForms(true)             // recurse into form XObjects when supported
+        .jpegQuality(90)
+        .strictImages(true)
+        .build();
+int converted = PdfColorConverter.convert(doc, opts);
+```
+
+With a CMYK target, already-DeviceCMYK objects keep their exact ink values.
+DeviceGray is also preserved: it is already a valid process colour (K) and
+converting it forces a page-content rebuild that can shift text and spot-colour
+artwork. By default ICCBased, Separation, DeviceN, Indexed and pattern colours
+are left untouched: rewriting them through the RGB getter would flatten spot
+colours and destroy overprint semantics. DeviceRGB text/path objects are
+converted.
+
+Opt in with `convertSpecialColors(true)` to convert ICCBased/Cal/Lab/Indexed colours;
+ICCBased fills use their embedded source ICC profile when one is available. Spots stay
+preserved unless `convertSpotColors(true)` is also set, in which case their tint
+transform is used and the spot name/overprint intent is lost. Patterns are never
+flattened.
+
+Text and path colors become DeviceCMYK `k`/`K` operators only when the PDFium build
+carries the JPDFium color patch (`FPDFPageObj_SetFillColorCMYK`,
+`FPDFPageObj_GetFillColorSpace`, `FPDFFormObj_MarkDirty`). Without it, convert images
+only:
+
+```java
+int images = PdfColorConverter.convertImagesToCmyk(doc, 90);   // -1 when unavailable
+```
+
+Form XObjects are recursed into when `supportsFormConversion()` is true; shared forms
+are visited once per document and their content stream is marked dirty before the page
+is regenerated. On stock PDFium the traversal APIs exist but the dirty marker does not,
+so form content is skipped rather than silently lost.
+
+DeviceRGB image XObjects whose source stream is DCT/JPEG are decoded, converted
+to CMYK and re-encoded as 4-component JPEGs. Plain Flate sources (line art,
+screenshots, QR codes) are left untouched by default; call
+`convertLosslessImages(true)` to opt into converting them too. DeviceGray and
+already-DeviceCMYK images are preserved; grayscale is already K-only and valid
+in PDF/X. Images whose rendered alpha is not fully opaque are skipped, because
+the public PDFium API cannot preserve the mask when the image stream is
+replaced. On a patched build with form conversion, images inside form XObjects
+are visited too. The image dictionary keys `/OC`, `/Intent`, `/Interpolate`,
+`/Name`, `/Metadata` and `/Alternates` are preserved when the JPEG
+stream is replaced.
+
+For print-accurate CMYK, attach an ICC output intent and pass the same profile to the
+converter. The profile is sampled into one 33x33x33 RGB-to-CMYK lookup table that is
+shared by vectors and images, so an sRGB fill and an sRGB image pixel with the same
+components receive the same ink values. Without a profile, both fall back to
+profile-free naive black generation (`c=255-r, m=255-g, y=255-b; k=min(c,m,y)`).
+
+```java
+byte[] icc = Files.readAllBytes(Path.of("CoatedFOGRA39.icc"));
+doc = PdfOutputIntent.apply(doc, icc, PdfOutputIntent.Spec.pdfx("FOGRA39", "Coated FOGRA39"));
+```
+
+`PdfOutputIntent.apply` returns a new document; the original is left open. The native
+path rewrites the whole file with QPDF, merges `/OutputIntents` (replacing intents with
+the same `/S` while preserving unrelated intents such as a PDF/A `GTS_PDFA1` entry) and
+preserves the original stream encoding. It does not change the PDF header or XMP
+metadata; use `PdfOutputIntent.applyPdfxMetadata` or `PdfXConverter` for the PDF/X
+version header and `GTS_PDFXVersion` tags. It is not a metadata-only incremental update:
+validate rendering after changing the print condition.
+
+For PDF/X-3/-4 metadata application, use `PdfXConverter`. It runs the CMYK colour and
+image conversion, then writes a GTS_PDFX output intent and both XMP version tags. The
+same ICC profile is used as the vector and image conversion target:
+
+```java
+PdfXOptions pdfx = PdfXOptions.builder()
+        .standard(PdfXStandard.PDF_X_4)
+        .useCompactCmyk()   // bundled 5.2 KB generic fallback
+        .build();
+
+// Or supply a print-condition profile explicitly:
+PdfXOptions explicit = PdfXOptions.builder()
+        .standard(PdfXStandard.PDF_X_4)
+        .outputIntentProfile(cmykProfileBytes)
+        .conditionIdentifier("FOGRA39")
+        .info("Coated FOGRA39")
+        .build();
+try (PdfDocument out = PdfXConverter.applyMetadata(doc, pdfx)) {
+    out.save(target);
+}
+```
+
+This is metadata application, not certification: PDF/X-1a flattening, PDF/X-6/PDF 2.0
+rules, transparency checks, font embedding, trim/trap/ID requirements and a full
+preflight report are not implemented. Run veraPDF or Acrobat preflight before making a
+compliance claim.
+
+`PdfRecolor` rewrites the colors of existing vector objects, which raster
+contrast/brightness adjustment (see `PdfColorAdjuster`) cannot do:
+
+```java
+PdfRecolor.invert(doc);                // dark mode; near-white fills are preserved
+PdfRecolor.tint(doc, 0, 0, 128, 50);   // toward navy, 50% strength
+PdfRecolor.highContrast(doc, 1.5);
+PdfRecolor.binarize(doc, 128);
+```
+
+With the JPDFium colour-space probe, only DeviceRGB/DeviceGray fills and strokes are
+touched. DeviceCMYK, ICC, Separation, DeviceN, Indexed and pattern colors are skipped.
+On stock PDFium the probe is absent, so the legacy fallback still skips DeviceCMYK and
+may rewrite other spaces through sRGB; recolour print files only on a patched native.
+Content inside form XObjects is not recursed into.
+
 ## What is not supported
 
 | Capability | Status |

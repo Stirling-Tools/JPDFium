@@ -1343,6 +1343,11 @@ int32_t jpdfium_rust_svg_to_rgba(const uint8_t*, int64_t, int32_t width, int32_t
     return *out_ptr ? 0 : JPDFIUM_ERR_NATIVE;
 }
 
+int32_t jpdfium_rust_encode_cmyk_jpeg(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                      uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
 void jpdfium_rust_free(uint8_t* p) {
     std::free(p);
 }
@@ -1665,6 +1670,52 @@ int32_t jpdfium_doc_add_image_page(int64_t doc_handle, const uint8_t*, int64_t, 
     if (it == g_docs.end()) return JPDFIUM_ERR_INVALID;
     it->second.pageCount++;
     return JPDFIUM_OK;
+}
+
+// DeviceCMYK colour conversion: no PDFium/ICC/QPDF support in the stub, so the
+// capability word is empty and every entry point reports "not available".
+uint32_t jpdfium_color_capabilities(void) JPDFIUM_NOEXCEPT {
+    return 0u;
+}
+
+int32_t jpdfium_color_samples_to_cmyk_jpeg(const uint8_t*, int64_t, int32_t, int32_t, int32_t,
+                                           int32_t, int32_t, uint8_t** out_ptr, int64_t* out_len) {
+    return fail_native_bytes(out_ptr, out_len);
+}
+
+int32_t jpdfium_color_page_images_to_cmyk(int64_t, int32_t, int32_t, int32_t,
+                                          int64_t* out_converted) {
+    if (out_converted) *out_converted = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t, int32_t, int32_t, int32_t, const uint8_t*,
+                                             int32_t, int64_t* out_converted) {
+    if (out_converted) *out_converted = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_color_output_intent_bytes(const uint8_t*, int64_t, const uint8_t*, int64_t,
+                                          const char*, const char*, const char*, uint8_t** output,
+                                          int64_t* output_len) {
+    return fail_native_bytes(output, output_len);
+}
+
+int32_t jpdfium_color_output_intent_file(const char*, const char*, const uint8_t*, int64_t,
+                                         const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_color_pdfx_bytes(const uint8_t*, int64_t, const uint8_t*, int64_t, const char*,
+                                 const char*, const char*, const char*, uint8_t** output,
+                                 int64_t* output_len) {
+    (void)fail_native_bytes(output, output_len);
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_color_pdfx_file(const char*, const char*, const uint8_t*, int64_t, const char*,
+                                const char*, const char*, const char*) {
+    return JPDFIUM_ERR_NOT_FOUND;
 }
 
 int32_t jpdfium_import_n_pages_to_one(void*, float, float, int32_t, int32_t, uint8_t** output,

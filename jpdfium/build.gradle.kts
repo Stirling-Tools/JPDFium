@@ -446,10 +446,11 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.integration", "true")
-    // Forward -Djpdfium.bench.* / -Djpdfium.compress.* from the invocation.
+    // Forward bench/compress/PDF-X test knobs from the invocation.
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")) {
+        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")
+            || key.startsWith("jpdfium.pdfx")) {
             systemProperty(key, v.toString())
         }
     }
@@ -475,7 +476,9 @@ tasks.register<Test>("corpusTest") {
     // Forward corpus shard selection (used by the sharded CI job).
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.corpus.")) systemProperty(key, v.toString())
+        if (key.startsWith("jpdfium.corpus.") || key.startsWith("jpdfium.pdfx")) {
+            systemProperty(key, v.toString())
+        }
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = System.getProperty("jpdfium.bench.xmx", "4g")

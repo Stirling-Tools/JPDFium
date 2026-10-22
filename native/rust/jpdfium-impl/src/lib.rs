@@ -16,11 +16,19 @@
 use std::io::{Cursor, Read};
 use std::slice;
 
+use std::cell::RefCell;
+
+thread_local! {
+    /// Reused encoding buffer. JPEG output is copied into a libc allocation
+    /// for the C ABI, but the scratch Vec keeps its capacity between images.
+    static CMYK_JPEG_BUFFER: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
 use fast_image_resize as fir;
 use fir::images::Image as FirImage;
 use flate2::read::ZlibDecoder;
 use lopdf::Document;
-use zopfli::{Format, Options, compress as zopfli_compress};
+use zopfli::{compress as zopfli_compress, Format, Options};
 
 // Return codes matching jpdfium.h / jpdfium_rust.h
 const JPDFIUM_OK: i32 = 0;
@@ -28,7 +36,6 @@ const JPDFIUM_ERR_INVALID: i32 = -1;
 const JPDFIUM_ERR_GENERIC: i32 = -1;
 const JPDFIUM_REPAIR_FIXED: i32 = 1;
 const JPDFIUM_REPAIR_FAILED: i32 = -1;
-
 
 /// Allocate a buffer with libc::malloc and copy `data` into it.
 /// Returns null if malloc fails or data is empty.
@@ -71,7 +78,6 @@ fn zopfli_compress_zlib(input: &[u8], iterations: u32) -> Option<Vec<u8>> {
         _ => None,
     }
 }
-
 
 /// Shared system-font database for SVG text rendering (loaded lazily once).
 fn system_fontdb() -> std::sync::Arc<usvg::fontdb::Database> {
@@ -129,10 +135,7 @@ pub unsafe extern "C" fn jpdfium_rust_compress_pdf(
     }
 }
 
-fn compress_pdf_impl(
-    input: &[u8],
-    iterations: u32,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+fn compress_pdf_impl(input: &[u8], iterations: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut doc = Document::load_from(Cursor::new(input))?;
 
     // lopdf's decompress() uses flate2 internally for all FlateDecode streams.
@@ -167,10 +170,9 @@ fn compress_pdf_impl(
                 stream.content = compressed;
                 // Ensure the Filter entry is set correctly (flate2-decoded
                 // streams had their Filter removed by doc.decompress()).
-                stream.dict.set(
-                    "Filter",
-                    lopdf::Object::Name(b"FlateDecode".to_vec()),
-                );
+                stream
+                    .dict
+                    .set("Filter", lopdf::Object::Name(b"FlateDecode".to_vec()));
             } else if still_filtered {
                 // flate2 decoded the stream but zopfli didn't help: store the
                 // decoded bytes re-compressed with the default FlateDecode so
@@ -185,7 +187,6 @@ fn compress_pdf_impl(
     doc.save_to(&mut Cursor::new(&mut output))?;
     Ok(output)
 }
-
 
 /// Repair a PDF using lopdf's tolerant XRef parser.
 ///
@@ -234,7 +235,6 @@ fn repair_lopdf_impl(input: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>
     doc.save_to(&mut Cursor::new(&mut output))?;
     Ok(output)
 }
-
 
 /// Resize raw interleaved pixel data using SIMD-accelerated Lanczos3 resampling.
 ///
@@ -316,8 +316,7 @@ fn resize_pixels_impl(
 
     // from_slice_u8 requires &mut [u8]; clone so we own the data.
     let mut src_buf = src.to_vec();
-    let src_image =
-        FirImage::from_slice_u8(src_w, src_h, &mut src_buf, pixel_type)?;
+    let src_image = FirImage::from_slice_u8(src_w, src_h, &mut src_buf, pixel_type)?;
     let mut dst_image = FirImage::new(dst_w, dst_h, pixel_type);
 
     let mut resizer = fir::Resizer::new();
@@ -327,7 +326,6 @@ fn resize_pixels_impl(
 
     Ok(dst_image.into_vec())
 }
-
 
 /// Unpack raw samples into opaque ARGB u32s. Formats: 1=gray8, 2=rgb24, 3=cmyk32, 4=bgr24, 5=bgrx/bgra.
 ///
@@ -441,7 +439,6 @@ pub unsafe extern "C" fn jpdfium_rust_unpack_pixels(
     JPDFIUM_OK
 }
 
-
 /// Optimise a standalone PNG byte stream using oxipng (lossless).
 ///
 /// Useful for PNG images extracted from a PDF (e.g. via jpdfium_render_page or
@@ -485,11 +482,105 @@ pub unsafe extern "C" fn jpdfium_rust_compress_png(
             *out_len = optimized.len() as i64;
             JPDFIUM_OK
         }
-        Ok(_) => JPDFIUM_ERR_GENERIC, // already optimal
+        Ok(_) => JPDFIUM_ERR_GENERIC,  // already optimal
         Err(_) => JPDFIUM_ERR_GENERIC, // not a valid PNG
     }
 }
 
+/// Encode 4-component DeviceCMYK sample data as a CMYK JPEG byte stream.
+///
+/// `cmyk` must point to `cmyk_len` bytes holding `width * height * 4` samples
+/// in standard DeviceCMYK order, one byte per channel, where 0 means no ink.
+/// The encoder writes an Adobe APP14 marker with transform=0 and stores the
+/// samples inverted (255 - value), matching the `/Decode [1 0 1 0 1 0 1 0]`
+/// entry PDFium attaches when it re-embeds a 4-component JPEG - so the values
+/// round-trip through PDFium's image pipeline back to the intended ink levels.
+///
+/// Returns 0 and fills out_ptr/out_len on success. The output is allocated
+/// with libc::malloc and must be freed with jpdfium_rust_free.
+///
+/// # Safety
+/// `cmyk` must point to `cmyk_len` readable bytes; the out pointers must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn jpdfium_rust_encode_cmyk_jpeg(
+    cmyk: *const u8,
+    cmyk_len: i64,
+    width: i32,
+    height: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if out_ptr.is_null() || out_len.is_null() {
+        return JPDFIUM_ERR_INVALID;
+    }
+    *out_ptr = std::ptr::null_mut();
+    *out_len = 0;
+
+    // Contain a panic so it cannot unwind across the C ABI boundary.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_cmyk_jpeg(cmyk, cmyk_len, width, height, quality, out_ptr, out_len)
+    }))
+    .unwrap_or(JPDFIUM_ERR_GENERIC)
+}
+
+/// Encoding body, separated so the exported wrapper can contain panics.
+///
+/// # Safety
+/// `cmyk` must point to `cmyk_len` readable bytes; the out pointers must be valid.
+unsafe fn encode_cmyk_jpeg(
+    cmyk: *const u8,
+    cmyk_len: i64,
+    width: i32,
+    height: i32,
+    quality: i32,
+    out_ptr: *mut *mut u8,
+    out_len: *mut i64,
+) -> i32 {
+    if cmyk.is_null() || width <= 0 || height <= 0 || width > 65535 || height > 65535 {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let needed = width as usize * height as usize * 4;
+    if cmyk_len < 0 || needed > cmyk_len as usize {
+        return JPDFIUM_ERR_INVALID;
+    }
+
+    let data = slice::from_raw_parts(cmyk, needed);
+    let quality = quality.clamp(1, 100) as u8;
+
+    let mut buffer = CMYK_JPEG_BUFFER.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    buffer.clear();
+    let encoder = jpeg_encoder::Encoder::new(&mut buffer, quality);
+    let encoded = encoder
+        .encode(
+            data,
+            width as u16,
+            height as u16,
+            jpeg_encoder::ColorType::Cmyk,
+        )
+        .is_ok();
+    if !encoded || buffer.is_empty() {
+        CMYK_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
+        return JPDFIUM_ERR_GENERIC;
+    }
+
+    let ptr = malloc_copy(&buffer);
+    let len = buffer.len();
+    let capacity = buffer.capacity();
+    if capacity > 16 * 1024 * 1024 {
+        // A single huge JPEG must not pin its capacity to a long-lived worker.
+        CMYK_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = Vec::new());
+    } else {
+        CMYK_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = buffer);
+    }
+    if ptr.is_null() {
+        return JPDFIUM_ERR_GENERIC;
+    }
+    *out_ptr = ptr;
+    *out_len = len as i64;
+    JPDFIUM_OK
+}
 
 /// Whether this library was built with the Rust-powered features (always 1
 /// here; the C++ stub bridge answers 0 so callers can probe capability).
