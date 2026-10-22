@@ -38,7 +38,7 @@ class FlattenVisualCorpusTest {
     private static final double ANNOTATION_MAE = 1.0d;
     private static final double FORM_MAE = 2.0d;
     private static final double RASTER_MAE = 1.0d;
-    private static final double ANNOTATION_TILE_MAE = 80.0d;
+    private static final double ANNOTATION_TILE_MAE = 62.0d;
     private static final List<String> ANNOTATION_FIXTURES = List.of(
             "pdfjs_annotation-highlight.pdf",
             "pdfjs_annotation-ink-without-appearance.pdf",
