@@ -1122,6 +1122,46 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_doc_save_working_to_file {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_save_working_to_file");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    public static FunctionDescriptor jpdfium_doc_save_working_to_file$descriptor() {
+        return jpdfium_doc_save_working_to_file.DESC;
+    }
+
+    public static MethodHandle jpdfium_doc_save_working_to_file$handle() {
+        return jpdfium_doc_save_working_to_file.HANDLE;
+    }
+
+    public static MemorySegment jpdfium_doc_save_working_to_file$address() {
+        return jpdfium_doc_save_working_to_file.ADDR;
+    }
+
+    public static int jpdfium_doc_save_working_to_file(long doc, MemorySegment path, long max_bytes, MemorySegment out_bytes) {
+        var mh$ = jpdfium_doc_save_working_to_file.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_save_working_to_file", doc, path, max_bytes, out_bytes);
+            }
+            return (int)mh$.invokeExact(doc, path, max_bytes, out_bytes);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_doc_save_incremental_to_file {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -4734,6 +4774,46 @@ public class JpdfiumH extends JpdfiumH$shared {
                 traceDowncall("jpdfium_metadata_set_xmp", doc, xmp, xmp_len);
             }
             return (int)mh$.invokeExact(doc, xmp, xmp_len);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_metadata_set_xmp_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_metadata_set_xmp_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    public static FunctionDescriptor jpdfium_metadata_set_xmp_ex$descriptor() {
+        return jpdfium_metadata_set_xmp_ex.DESC;
+    }
+
+    public static MethodHandle jpdfium_metadata_set_xmp_ex$handle() {
+        return jpdfium_metadata_set_xmp_ex.HANDLE;
+    }
+
+    public static MemorySegment jpdfium_metadata_set_xmp_ex$address() {
+        return jpdfium_metadata_set_xmp_ex.ADDR;
+    }
+
+    public static int jpdfium_metadata_set_xmp_ex(long doc, MemorySegment xmp, int xmp_len, int source_current) {
+        var mh$ = jpdfium_metadata_set_xmp_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_metadata_set_xmp_ex", doc, xmp, xmp_len, source_current);
+            }
+            return (int)mh$.invokeExact(doc, xmp, xmp_len, source_current);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

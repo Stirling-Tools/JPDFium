@@ -149,6 +149,11 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, i
 // (original bytes plus the appended revision), 0 = unlimited.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental_to_file(int64_t doc, const char* path,
                                                             int64_t max_bytes, int64_t* out_bytes);
+// Copy the file-backed working revision produced by a metadata rewrite. This
+// avoids a second PDFium serialization, which can re-encrypt an encrypted XMP
+// stream, and keeps memory bounded for large documents.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_working_to_file(int64_t doc, const char* path,
+                                                        int64_t max_bytes, int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
@@ -473,6 +478,11 @@ JPDFIUM_EXPORT int32_t jpdfium_metadata_strip_all(int64_t doc);
 // rewritten through QPDF. Object streams and cross-reference streams are
 // regenerated when the PDF version is 1.5 or later.
 JPDFIUM_EXPORT int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t* xmp, int32_t xmp_len);
+// As above, but when source_current is non-zero QPDF may read the existing
+// file-backed or memory source directly instead of serializing the live
+// document. Pass non-zero only when no PDFium-side changes are pending.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_set_xmp_ex(int64_t doc, const uint8_t* xmp, int32_t xmp_len,
+                                                   int32_t source_current);
 
 // Copy the catalog XMP metadata packet into *xmp. The caller owns the buffer
 // and must free it with jpdfium_free_buffer. Returns JPDFIUM_ERR_NOT_FOUND when

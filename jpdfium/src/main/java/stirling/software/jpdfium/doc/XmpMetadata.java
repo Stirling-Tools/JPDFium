@@ -23,9 +23,9 @@ import java.util.Set;
 /**
  * XMP preservation and /Info synchronization for conformant PDFs.
  *
- * <p>The editor must not silently turn a PDF/A or PDF/X document into one that
- * merely looks ordinary. Replacing the packet keeps the identification and
- * extension descriptions that make the conformance claim, and /Info changes
+ * <p>The editor must not silently turn a PDF/A, PDF/X, or PDF/UA document into
+ * one that merely looks ordinary. Replacing the packet keeps the identification
+ * and extension descriptions that make the conformance claim, and /Info changes
  * are reflected into the matching XMP properties so the two views stay
  * consistent.
  */
@@ -40,12 +40,14 @@ final class XmpMetadata {
     private static final String NS_PDFA_EXT = "http://www.aiim.org/pdfa/ns/extension/";
     private static final String NS_PDFX = "http://ns.adobe.com/pdfx/1.3/";
     private static final String NS_PDFX_ID = "http://www.npes.org/pdfx/ns/id/";
+    private static final String NS_PDFUA_ID = "http://www.aiim.org/pdfua/ns/id/";
 
     private static final Set<String> PDFA_PROPERTIES = Set.of("part", "conformance");
     private static final Set<String> PDFA_EXTENSION_PROPERTIES = Set.of("schemas");
     private static final Set<String> PDFX_PROPERTIES =
             Set.of("GTS_PDFXVersion", "GTS_PDFXConformance", "PDFXVersion", "PDFXConformance");
     private static final Set<String> PDFX_ID_PROPERTIES = Set.of("GTS_PDFXVersion");
+    private static final Set<String> PDFUA_PROPERTIES = Set.of("part", "rev");
 
     enum Claim {
         NONE,
@@ -76,13 +78,25 @@ final class XmpMetadata {
         return Claim.NONE;
     }
 
+    /** PDF/UA uses a separate identification schema and can coexist with PDF/A or PDF/X. */
+    static boolean hasPdfUaClaim(String xmp) {
+        if (xmp == null || xmp.isEmpty()) return false;
+        if (xmp.contains("pdfuaid:part")) return true;
+        try {
+            return hasProperty(parse(xmp), NS_PDFUA_ID, "part");
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
     /**
      * Copies conformance identification that the replacement packet omitted.
      * User-provided properties win; only missing properties are inherited.
      */
     static String mergeConformance(String existing, String replacement) {
         Claim claim = claim(existing);
-        if (claim == Claim.NONE) return replacement;
+        boolean pdfua = hasPdfUaClaim(existing);
+        if (claim == Claim.NONE && !pdfua) return replacement;
 
         Document oldDoc = parse(existing);
         Document newDoc = parse(replacement);
@@ -100,6 +114,12 @@ final class XmpMetadata {
         if (claim == Claim.PDF_X || claim == Claim.PDF_A_AND_X) {
             changed |= copyMissing(newDoc, newRdf, oldDoc, NS_PDFX, PDFX_PROPERTIES);
             changed |= copyMissing(newDoc, newRdf, oldDoc, NS_PDFX_ID, PDFX_ID_PROPERTIES);
+        }
+        if (pdfua) {
+            changed |= copyMissing(newDoc, newRdf, oldDoc, NS_PDFUA_ID, PDFUA_PROPERTIES);
+            // PDF/UA requires a document title. Keep the existing one when the
+            // replacement packet omits it; an explicit replacement title wins.
+            changed |= copyMissing(newDoc, newRdf, oldDoc, NS_DC, Set.of("title"));
         }
         return changed ? serialize(newDoc) : replacement;
     }

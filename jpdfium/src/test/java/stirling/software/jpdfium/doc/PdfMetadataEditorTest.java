@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.transform.PdfPageGeometry;
 
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -147,7 +148,10 @@ class PdfMetadataEditorTest {
 
         try (PdfDocument doc = PdfDocument.open(output)) {
             PdfMetadata metadata = PdfMetadata.of(doc);
-            assertEquals(Optional.of(packet), metadata.xmp());
+            String savedXmp = metadata.xmp().orElseThrow();
+            assertTrue(savedXmp.contains("Compressed document \u2013 R\u00e9sum\u00e9"));
+            assertTrue(savedXmp.contains("pdfuaid:part"),
+                    "the fixture's PDF/UA identification must survive");
             assertEquals("Tax", metadata.custom().get("Department"));
             assertEquals(2, doc.pageCount());
             assertTrue(PdfTextExtractor.extractPage(doc, 0).plainText().contains("1040"),
@@ -303,6 +307,8 @@ class PdfMetadataEditorTest {
         assertTrue(saved.contains("pdfaid:part"), "PDF/A part must survive");
         assertTrue(saved.contains("pdfaid:conformance"), "PDF/A conformance must survive");
         assertTrue(saved.contains("GTS_PDFXVersion"), "PDF/X version must survive");
+        assertTrue(saved.contains("pdfuaid:part"), "PDF/UA identification must survive");
+        assertTrue(saved.contains("pdfuaid:rev"), "PDF/UA revision must survive");
         assertTrue(saved.contains("pdfaExtension:schemas"),
                 "PDF/A extension description must survive");
     }
@@ -327,6 +333,20 @@ class PdfMetadataEditorTest {
             assertTrue(packet.contains("pdfaid:part"));
             assertEquals(1, occurrences(packet, "<dc:title"));
             assertEquals(1, occurrences(packet, "<dc:creator"));
+        }
+    }
+
+    @Test
+    void removingTitleFromPdfUaDocumentIsRefusedByDefault() throws Exception {
+        Path conformant = tempDir.resolve("pdfua-title.pdf");
+
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().xmp(conformantXmp("Original")).applyAndSave(conformant);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(conformant)) {
+            assertThrows(IllegalStateException.class, () -> doc.editMetadata().title(null).apply());
+            assertTrue(PdfMetadata.of(doc).xmp().orElseThrow().contains("Original"));
         }
     }
 
@@ -367,7 +387,59 @@ class PdfMetadataEditorTest {
         Path output = tempDir.resolve("signed-opt-out.pdf");
         try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/signed.pdf"))) {
             doc.editMetadata().preserveSignatures(false).xmp(xmp("Opt-out")).applyAndSave(output);
-            assertTrue(PdfMetadata.of(doc).xmp().isPresent());
+        }
+        try (PdfDocument saved = PdfDocument.open(output)) {
+            assertEquals(Optional.of(xmp("Opt-out")), PdfMetadata.of(saved).xmp());
+        }
+    }
+
+    @Test
+    void laterXmpEditRetainsEarlierInfoChanges() throws Exception {
+        Path first = tempDir.resolve("info-first.pdf");
+        Path second = tempDir.resolve("info-then-xmp.pdf");
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().title("First title").applyAndSave(first);
+        }
+        try (PdfDocument doc = PdfDocument.open(first)) {
+            doc.editMetadata().xmp(xmp("Second pass")).applyAndSave(second);
+        }
+        try (PdfDocument saved = PdfDocument.open(second)) {
+            assertEquals(Optional.of("First title"), PdfMetadata.of(saved).title());
+            assertEquals(Optional.of(xmp("Second pass")), PdfMetadata.of(saved).xmp());
+        }
+    }
+
+    @Test
+    void xmpRewriteDoesNotDiscardPriorContentEdits() throws Exception {
+        Path output = tempDir.resolve("rotated-xmp.pdf");
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            PdfPageGeometry.setRotation(doc, 0, 90);
+            doc.editMetadata().xmp(xmp("Rotated")).applyAndSave(output);
+        }
+        try (PdfDocument saved = PdfDocument.open(output)) {
+            assertEquals(90, saved.getPageRotation(0));
+            assertEquals(Optional.of(xmp("Rotated")), PdfMetadata.of(saved).xmp());
+        }
+    }
+
+    @Test
+    void metadataEditOnUserPasswordDocumentUsesRetainedPassword() throws Exception {
+        Path encrypted = tempDir.resolve("reader-password.pdf");
+        Path output = tempDir.resolve("reader-password-edited.pdf");
+        PdfSecurity.encrypt(resource("/pdfs/general/minimal.pdf"), encrypted,
+                "reader-pass", "owner-pass", PdfSecurity.PERM_ALL);
+
+        try (PdfDocument doc = PdfDocument.open(encrypted, "reader-pass")) {
+            doc.editMetadata()
+                    .title("Encrypted title")
+                    .xmp(xmp("Encrypted XMP"))
+                    .applyAndSave(output);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(output, "reader-pass")) {
+            assertTrue(DocInfo.analyze(doc).isEncrypted(), "output must stay encrypted");
+            assertEquals(Optional.of("Encrypted title"), PdfMetadata.of(doc).title());
+            assertEquals(Optional.of(xmp("Encrypted XMP")), PdfMetadata.of(doc).xmp());
         }
     }
 
@@ -409,6 +481,10 @@ class PdfMetadataEditorTest {
                   </rdf:Description>
                   <rdf:Description rdf:about="" xmlns:pdfx="http://ns.adobe.com/pdfx/1.3/">
                    <pdfx:GTS_PDFXVersion>PDF/X-4</pdfx:GTS_PDFXVersion>
+                  </rdf:Description>
+                  <rdf:Description rdf:about="" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/">
+                   <pdfuaid:part>2</pdfuaid:part>
+                   <pdfuaid:rev>2024</pdfuaid:rev>
                   </rdf:Description>
                  </rdf:RDF>
                 </x:xmpmeta>

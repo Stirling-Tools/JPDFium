@@ -4,6 +4,7 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 import stirling.software.jpdfium.panama.XmpLib;
@@ -40,10 +41,11 @@ import java.util.Set;
  *       retained. XMP replacement on a signed document is refused because it
  *       needs a full QPDF rewrite; disable {@link #preserveSignatures(boolean)}
  *       only when invalidating the signature is intentional.</li>
- *   <li>Replacing XMP on a PDF/A or PDF/X document keeps the existing
+ *   <li>Replacing XMP on a PDF/A, PDF/X, or PDF/UA document keeps the existing
  *       identification and extension descriptions. Removing XMP from such a
- *       document is refused. Standard /Info changes are mirrored into XMP so
- *       the two metadata views stay consistent.</li>
+ *       document is refused, and a PDF/UA title cannot be removed. Standard
+ *       /Info changes are mirrored into XMP so the two metadata views stay
+ *       consistent.</li>
  * </ul>
  *
  * <p>Calling {@link #apply()} alone cannot control the later save. For signed
@@ -95,9 +97,10 @@ public final class PdfMetadataEditor {
     }
 
     /**
-     * Preserve PDF/A and PDF/X identification when replacing XMP. Enabled by
-     * default. When enabled, /Info changes on a conformant document also update
-     * the matching XMP properties, and {@link #removeXmp()} is refused.
+     * Preserve PDF/A, PDF/X, and PDF/UA identification when replacing XMP.
+     * Enabled by default. When enabled, /Info changes on a conformant document
+     * also update the matching XMP properties, {@link #removeXmp()} is refused,
+     * and a PDF/UA title cannot be removed.
      */
     public PdfMetadataEditor preserveConformance(boolean preserve) {
         this.preserveConformance = preserve;
@@ -200,29 +203,37 @@ public final class PdfMetadataEditor {
 
         XmpMetadata.Claim claim = XmpMetadata.Claim.NONE;
         String existingXmp = null;
+        boolean pdfua = false;
         if (preserveConformance && (xmpSet || !info.isEmpty() || trappedSet)) {
             existingXmp = PdfMetadata.of(document).xmp().orElse(null);
             claim = XmpMetadata.claim(existingXmp);
+            pdfua = XmpMetadata.hasPdfUaClaim(existingXmp);
         }
-        if (preserveConformance && claim != XmpMetadata.Claim.NONE && xmpSet && xmp == null) {
-            throw new IllegalStateException("cannot remove XMP from a PDF/A or PDF/X document "
-                    + "while conformance preservation is enabled");
+        boolean conformanceClaim = claim != XmpMetadata.Claim.NONE || pdfua;
+        if (preserveConformance && conformanceClaim && xmpSet && xmp == null) {
+            throw new IllegalStateException("cannot remove XMP from a PDF/A, PDF/X, or PDF/UA "
+                    + "document while conformance preservation is enabled");
         }
-        if (signedDocument && preserveConformance && claim != XmpMetadata.Claim.NONE
+        if (pdfua && info.containsKey("Title")
+                && (info.get("Title") == null || info.get("Title").isBlank())) {
+            throw new IllegalStateException("cannot remove the document title from a PDF/UA "
+                    + "document while conformance preservation is enabled");
+        }
+        if (signedDocument && preserveConformance && conformanceClaim
                 && (!info.isEmpty() || trappedSet)) {
-            throw new IllegalStateException("cannot change /Info or /Trapped on a signed PDF/A "
-                    + "or PDF/X document while preserving both the signature and the "
+            throw new IllegalStateException("cannot change /Info or /Trapped on a signed PDF/A, "
+                    + "PDF/X, or PDF/UA document while preserving both the signature and the "
                     + "conformance claim");
         }
 
-        if (xmpSet && xmp != null && claim != XmpMetadata.Claim.NONE) {
+        if (xmpSet && xmp != null && conformanceClaim) {
             String replacement = new String(xmp, StandardCharsets.UTF_8);
             String merged = XmpMetadata.mergeConformance(existingXmp, replacement);
             if (!merged.equals(replacement)) {
                 xmp = merged.getBytes(StandardCharsets.UTF_8);
             }
         }
-        if (preserveConformance && claim != XmpMetadata.Claim.NONE
+        if (preserveConformance && conformanceClaim
                 && (!info.isEmpty() || trappedSet)) {
             String current = xmpSet ? new String(xmp, StandardCharsets.UTF_8) : existingXmp;
             String synchronizedXmp = XmpMetadata.synchronizeInfo(current, effectiveInfo());
@@ -260,10 +271,15 @@ public final class PdfMetadataEditor {
                     }
                 }
             });
+            // A later metadata pass must not read the original source and drop
+            // these /Info or custom-key writes.
+            document.markContentModified();
         }
 
         if (xmpSet) {
-            XmpLib.setXmp(document.nativeHandle(), xmp);
+            boolean sourceIsCurrent = !document.isContentModified()
+                    && info.isEmpty() && custom.isEmpty() && !trappedSet;
+            XmpLib.setXmp(document.nativeHandle(), xmp, sourceIsCurrent);
             document.refreshRawHandle();
         }
 
@@ -281,10 +297,18 @@ public final class PdfMetadataEditor {
         MetadataUpdate update = apply();
         if (signedDocument) {
             document.saveIncremental(output);
-        } else {
+        } else if (!update.xmpChanged() || !saveWorkingCopy(output)) {
+            // The XMP path already has a file-backed QPDF revision. Copying it
+            // avoids a second PDFium serialization, which can re-encrypt an
+            // encrypted metadata stream, and keeps large rewrites bounded.
             document.save(output);
         }
         return update;
+    }
+
+    private boolean saveWorkingCopy(Path output) {
+        return JpdfiumLib.docSaveWorkingNative(document.nativeHandleForRead(),
+                output.toAbsolutePath().toString(), 0);
     }
 
     private Map<String, String> effectiveInfo() {

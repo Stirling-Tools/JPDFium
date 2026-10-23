@@ -59,6 +59,19 @@ public final class XmpLib {
      * @param packet UTF-8 XMP XML, or null to remove the packet
      */
     public static void setXmp(long doc, byte[] packet) {
+        setXmp(doc, packet, false);
+    }
+
+    /**
+     * Replace the catalog XMP packet, optionally allowing the native bridge to
+     * read the existing file-backed source directly when no PDFium-side
+     * changes are pending.
+     *
+     * @param doc            native document handle
+     * @param packet         UTF-8 XMP XML, or null to remove the packet
+     * @param sourceIsCurrent true when /Info, custom keys, and /Trapped are unchanged
+     */
+    public static void setXmp(long doc, byte[] packet, boolean sourceIsCurrent) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment data = MemorySegment.NULL;
             int length = 0;
@@ -70,7 +83,8 @@ public final class XmpLib {
             MemorySegment segment = data;
             int size = length;
             PdfiumRuntime.execute(() -> {
-                JpdfiumLib.check(JpdfiumH.jpdfium_metadata_set_xmp(doc, segment, size), "metadataSetXmp");
+                JpdfiumLib.check(JpdfiumH.jpdfium_metadata_set_xmp_ex(
+                        doc, segment, size, sourceIsCurrent ? 1 : 0), "metadataSetXmp");
             });
         }
     }

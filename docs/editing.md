@@ -167,27 +167,32 @@ policy described below. A null value removes an /Info entry,
 `removeCustom` removes a custom key, and `removeXmp` removes the catalog packet.
 Custom keys must be non-reserved PDF name tokens.
 
-Metadata edits preserve signatures and PDF/A or PDF/X claims by default:
+Metadata edits preserve signatures and PDF/A, PDF/X, or PDF/UA claims by default:
 
 - On a signed document, `applyAndSave` appends an incremental revision for
   /Info and /Trapped changes, so the bytes covered by existing signatures stay
   unchanged. Replacing or removing XMP is refused because it requires a full
   QPDF rewrite. Call `preserveSignatures(false)` only when invalidating the
   signature is intentional.
-- Replacing XMP on a PDF/A or PDF/X document keeps the existing identification,
-  extension, and PDF/X version properties. Standard /Info changes are mirrored
-  into the matching XMP properties, and `removeXmp` is refused. Call
-  `preserveConformance(false)` to opt out.
-- A document that is both signed and PDF/A or PDF/X refuses /Info changes while
-  both policies are enabled; disable one policy explicitly.
+- Replacing XMP on a PDF/A, PDF/X, or PDF/UA document keeps the existing
+  identification, extension, and version properties. Standard /Info changes are
+  mirrored into the matching XMP properties, `removeXmp` is refused, and a
+  PDF/UA title cannot be removed. Call `preserveConformance(false)` to opt out.
+- A document that is both signed and PDF/A, PDF/X, or PDF/UA refuses /Info
+  changes while both policies are enabled; disable one policy explicitly.
 
 `apply()` alone does not choose a save mode. For a signed document, use
 `applyAndSave(output)` or `PdfDocument.saveIncremental(output)`. A full
 `save()` rewrites every object and invalidates the signature.
 
 Setting XMP rewrites the document through QPDF, so object-stream,
-cross-reference-stream, and compressed-content PDFs are accepted. Apply
-metadata before encryption.
+cross-reference-stream, and compressed-content PDFs are accepted. File-backed
+documents are read directly from their source when no other edit is pending;
+larger rewrites stream through private temporary files rather than materializing
+a document-sized byte array. Password-protected documents are supported, and
+`applyAndSave` commits the QPDF revision directly so an encrypted XMP stream is
+not serialized a second time. Apply metadata before encryption when the target
+workflow requires encryption of the metadata write itself.
 
 ## Digital signatures
 

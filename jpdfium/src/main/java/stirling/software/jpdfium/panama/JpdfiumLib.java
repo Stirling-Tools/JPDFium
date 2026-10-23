@@ -543,8 +543,39 @@ public final class JpdfiumLib {
             "jpdfium_doc_save_incremental_to_file",
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
 
+    /** Optional file-copy save of the metadata working revision. */
+    private static final MethodHandle SAVE_WORKING_TO_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_doc_save_working_to_file",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+
     /** Bounded chunk used when spooling a staged save file to a channel. */
     static final int SAVE_TRANSFER_BYTES = 256 * 1024;
+
+    /**
+     * Copy the native XMP working revision to {@code absPath}. Returns false
+     * when the loaded bridge predates the entry point, so callers can fall
+     * back to the normal save path.
+     */
+    public static boolean docSaveWorkingNative(long doc, String absPath, long maxBytes) {
+        if (SAVE_WORKING_TO_FILE_HANDLE == null) return false;
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cPath = a.allocateFrom(absPath);
+            MemorySegment outLen = a.allocate(JAVA_LONG);
+            PdfiumRuntime.execute(() -> {
+                try {
+                    check((int) SAVE_WORKING_TO_FILE_HANDLE.invokeExact(
+                                    doc, cPath, maxBytes, outLen),
+                            "docSaveWorking: " + absPath);
+                } catch (RuntimeException re) {
+                    throw re;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException("docSaveWorking failed", t);
+                }
+            });
+            return true;
+        }
+    }
 
     /**
      * Low-level guarded save to an exact filesystem path (no staging, no

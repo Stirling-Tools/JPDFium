@@ -36,6 +36,41 @@ class XmpMetadataTest {
     }
 
     @Test
+    void detectsPdfUaClaimWithStandardAndAlternatePrefixes() {
+        String claim = pdfa("2", "B").replace("</rdf:RDF>",
+                pdfua("1") + "</rdf:RDF>");
+        assertTrue(XmpMetadata.hasPdfUaClaim(claim));
+        String aliased = claim
+                .replace("pdfuaid:", "u:")
+                .replace("xmlns:pdfuaid", "xmlns:u");
+        assertTrue(XmpMetadata.hasPdfUaClaim(aliased));
+        assertFalse(XmpMetadata.hasPdfUaClaim(pdfa("2", "B")));
+    }
+
+    @Test
+    void replacementKeepsMissingPdfUaIdentification() {
+        String existing = pdfa("2", "B").replace("</rdf:RDF>",
+                description("xmlns:dc=\"http://purl.org/dc/elements/1.1/\"",
+                        "<dc:title>Existing title</dc:title>")
+                        + pdfua("2") + "</rdf:RDF>");
+        String merged = XmpMetadata.mergeConformance(existing, pdfa("3", "B"));
+
+        assertTrue(merged.contains("pdfuaid:part"), merged);
+        assertTrue(merged.contains("pdfuaid:rev"), merged);
+        assertTrue(merged.contains(">2<"), merged);
+        assertTrue(merged.contains(">2024<"), merged);
+        assertTrue(merged.contains("Existing title"), merged);
+
+        String withTitle = pdfa("3", "B").replace("</rdf:RDF>",
+                description("xmlns:dc=\"http://purl.org/dc/elements/1.1/\"",
+                        "<dc:title>New title</dc:title>")
+                        + "</rdf:RDF>");
+        String overridden = XmpMetadata.mergeConformance(existing, withTitle);
+        assertTrue(overridden.contains("New title"), overridden);
+        assertFalse(overridden.contains("Existing title"), overridden);
+    }
+
+    @Test
     void replacementKeepsMissingConformancePropertiesButHonoursOverrides() {
         String replacement = """
                 <x:xmpmeta xmlns:x="adobe:ns:meta/">
@@ -113,6 +148,12 @@ class XmpMetadataTest {
                  </rdf:RDF>
                 </x:xmpmeta>
                 """.formatted(part, conformance);
+    }
+
+    private static String pdfua(String part) {
+        return description("xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\"",
+                "<pdfuaid:part>" + part + "</pdfuaid:part>"
+                        + "<pdfuaid:rev>2024</pdfuaid:rev>");
     }
 
     private static String description(String namespaces, String body) {
