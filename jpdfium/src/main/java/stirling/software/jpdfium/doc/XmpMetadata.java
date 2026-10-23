@@ -377,9 +377,12 @@ final class XmpMetadata {
             factory.setNamespaceAware(true);
             factory.setXIncludeAware(false);
             factory.setExpandEntityReferences(false);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
             factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
             factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
             factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
             return factory.newDocumentBuilder().parse(new InputSource(new StringReader(xmp)));
         } catch (Exception e) {
             throw new IllegalArgumentException("XMP packet is not well-formed XML", e);

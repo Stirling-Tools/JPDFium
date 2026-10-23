@@ -821,6 +821,45 @@ static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
     return FPDF_SaveAsCopy(doc, &bw, FPDF_NO_INCREMENTAL) != 0;
 }
 
+// Load the bytes PDFium already holds, without asking it to serialize the live
+// document. File-backed documents are parsed straight from their source path;
+// memory-backed documents use the buffer owned by DocCore. Only documents with
+// neither source (e.g. an empty document) need the full-save fallback.
+static bool qpdf_load_source(DocWrapper* w, QPDF& pdf) {
+    if (!w || !w->core) return false;
+    if (w->core->buf && w->core->blen > 0) {
+        pdf.processMemoryFile("get_xmp_source", reinterpret_cast<const char*>(w->core->buf),
+                              static_cast<size_t>(w->core->blen));
+        return true;
+    }
+    if (!w->core->sourcePath.empty()) {
+        pdf.processFile(w->core->sourcePath.c_str());
+        return true;
+    }
+    return false;
+}
+
+// Extract the catalog XMP stream from an already-parsed QPDF document.
+static int32_t qpdf_xmp(QPDF& pdf, uint8_t** xmp, int32_t* xmp_len) {
+    QPDFObjectHandle root = pdf.getRoot();
+    QPDFObjectHandle trailer = pdf.getTrailer();
+    QPDFObjectHandle metadata =
+        root.hasKey("/Metadata") ? root.getKey("/Metadata") : trailer.getKey("/Metadata");
+    if (!metadata.isStream()) return JPDFIUM_ERR_NOT_FOUND;
+
+    std::shared_ptr<Buffer> data = metadata.getStreamData(qpdf_dl_generalized);
+    if (!data || data->getSize() == 0) return JPDFIUM_ERR_NOT_FOUND;
+    if (data->getSize() > static_cast<size_t>(INT32_MAX)) return JPDFIUM_ERR_TOO_LARGE;
+
+    auto size = static_cast<int32_t>(data->getSize());
+    auto* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
+    if (!copy) return JPDFIUM_ERR_NATIVE;
+    memcpy(copy, data->getBuffer(), static_cast<size_t>(size));
+    *xmp = copy;
+    *xmp_len = size;
+    return JPDFIUM_OK;
+}
+
 // Write a QPDF document to a byte vector.
 static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     QPDFWriter writer(pdf);
@@ -1014,32 +1053,25 @@ int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t** xmp, int32_t* xmp_len) {
     DocWrapper* w = decodeDoc(doc);
     if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
 
-    std::vector<uint8_t> pdfBytes;
-    if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        if (qpdf_load_source(w, pdf)) return qpdf_xmp(pdf, xmp, xmp_len);
+    } catch (std::exception&) {
+        // Source parsing failed; fall through to the fully serialized document.
+    }
 
     try {
+        std::vector<uint8_t> pdfBytes;
+        if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
         QPDF pdf;
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
         pdf.processMemoryFile("get_xmp", reinterpret_cast<const char*>(pdfBytes.data()),
                               pdfBytes.size());
-
-        QPDFObjectHandle root = pdf.getRoot();
-        if (!root.hasKey("/Metadata")) return JPDFIUM_ERR_NOT_FOUND;
-        QPDFObjectHandle metadata = root.getKey("/Metadata");
-        if (!metadata.isStream()) return JPDFIUM_ERR_NOT_FOUND;
-
-        std::shared_ptr<Buffer> data = metadata.getStreamData(qpdf_dl_generalized);
-        if (!data || data->getSize() == 0) return JPDFIUM_ERR_NOT_FOUND;
-        if (data->getSize() > static_cast<size_t>(INT32_MAX)) return JPDFIUM_ERR_TOO_LARGE;
-
-        auto size = static_cast<int32_t>(data->getSize());
-        auto* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
-        if (!copy) return JPDFIUM_ERR_NATIVE;
-        memcpy(copy, data->getBuffer(), static_cast<size_t>(size));
-        *xmp = copy;
-        *xmp_len = size;
-        return JPDFIUM_OK;
+        return qpdf_xmp(pdf, xmp, xmp_len);
     } catch (std::exception&) {
         return JPDFIUM_ERR_NATIVE;
     }

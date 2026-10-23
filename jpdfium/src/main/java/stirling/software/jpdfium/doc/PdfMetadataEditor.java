@@ -308,11 +308,11 @@ public final class PdfMetadataEditor {
         if (signed != null) return signed;
 
         boolean found = false;
+        RuntimeException countFailure = null;
         try {
             found = document.signatureCount() > 0;
-        } catch (RuntimeException ignored) {
-            // Fall through to the byte-level check for signatures PDFium's
-            // AcroForm walk cannot reach.
+        } catch (RuntimeException e) {
+            countFailure = e;
         }
         if (!found) {
             // Only scan bytes the document already retains. Reading a
@@ -320,10 +320,15 @@ public final class PdfMetadataEditor {
             // metadata edit into a second full-file I/O pass; PDFium's
             // signature count is authoritative for active signatures.
             byte[] bytes = document.sourceBytes();
-            found = bytes != null
-                    && (indexOf(bytes, SIG_FIELD, 0) >= 0
-                        || indexOf(bytes, SIG_FIELD_TIGHT, 0) >= 0)
-                    && hasNonEmptySignatureContents(bytes);
+            if (bytes != null) {
+                found = (indexOf(bytes, SIG_FIELD, 0) >= 0
+                            || indexOf(bytes, SIG_FIELD_TIGHT, 0) >= 0)
+                        && hasNonEmptySignatureContents(bytes);
+            } else if (countFailure != null) {
+                // Without retained bytes there is no safe fallback: refusing
+                // the edit is better than silently taking the full-save path.
+                throw countFailure;
+            }
         }
         signed = found;
         return found;

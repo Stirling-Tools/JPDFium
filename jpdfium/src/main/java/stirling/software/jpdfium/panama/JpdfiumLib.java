@@ -618,11 +618,14 @@ public final class JpdfiumLib {
     public static void docSaveIncrementalToFile(long doc, Path destination, SaveOptions options) {
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
         if (SAVE_INCREMENTAL_TO_FILE_HANDLE == null) {
-            byte[] bytes = docSaveIncremental(doc);
-            if (opts.maxOutputBytes() > 0 && bytes.length > opts.maxOutputBytes()) {
-                throw new JPDFiumException("save output " + bytes.length
-                        + " bytes exceeds limit " + opts.maxOutputBytes());
+            // The byte[] fallback cannot enforce a bound while writing: it
+            // materializes the whole result first. Refuse a bounded request
+            // instead of risking a heap spike that the caller asked to avoid.
+            if (opts.maxOutputBytes() > 0) {
+                throw new JPDFiumException("bounded incremental save requires the streaming "
+                        + "native entry point");
             }
+            byte[] bytes = docSaveIncremental(doc);
             try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
                 Files.write(tx.staging(), bytes);
                 tx.publish(opts);

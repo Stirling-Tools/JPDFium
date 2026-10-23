@@ -14,6 +14,7 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfSplit;
+import stirling.software.jpdfium.doc.PdfMetadata;
 import stirling.software.jpdfium.doc.PdfOptimizer;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.JpdfiumLib;
@@ -52,7 +53,8 @@ import java.util.concurrent.TimeUnit;
  *   <li>Score unit is {@code ms/op}, one logical operation per invocation
  *       (no manual batch loop). Logical ops: one open, one save, one
  *       every-10-pages split of the 14MB/3-page fixture, one file optimize,
- *       one page-0 redact, one metadata read, one page-0 render at 150 DPI.</li>
+ *       one page-0 redact, one metadata read, one XMP read, one page-0 render
+ *       at 150 DPI.</li>
  *   <li>Fork-level scores live in {@code build/results/jmh/results.json}
  *       ({@code rawData}); the table CI is 99.9% and needs Cnt>=15 to rank.
  *       Do not claim X faster than Y when CIs overlap.</li>
@@ -328,6 +330,15 @@ public class PdfOperationBenchmark {
     @Benchmark
     public int readMetadata() {
         return doc.metadata().size();
+    }
+
+    /**
+     * XMP read on the 14 MB file-backed fixture: guards the source-backed
+     * getter against returning to a whole-document FPDF_SaveAsCopy pass.
+     */
+    @Benchmark
+    public int readXmp() {
+        return PdfMetadata.of(doc).xmp().map(String::length).orElse(0);
     }
 
     /**
