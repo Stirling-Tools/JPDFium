@@ -142,6 +142,13 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64
 // removes the partial file and never reports success.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                                 int64_t* out_bytes);
+// Incremental file save: appends only changed objects to the original bytes.
+// This preserves existing signature revisions and their /ByteRange coverage;
+// a full save rewrites every object and invalidates them. The document must
+// not have content redaction pending. max_bytes bounds the total output
+// (original bytes plus the appended revision), 0 = unlimited.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental_to_file(int64_t doc, const char* path,
+                                                            int64_t max_bytes, int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;

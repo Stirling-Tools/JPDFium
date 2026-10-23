@@ -1101,6 +1101,32 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Save incrementally to a file: the original bytes are retained and only
+     * changed objects are appended as a new revision. Existing digital
+     * signatures keep their original {@code /ByteRange} coverage, which a full
+     * {@link #save(Path)} does not preserve.
+     *
+     * <p>The write is transactional: PDFium streams to a sibling staging file
+     * and the destination is replaced only after a successful save.
+     */
+    public void saveIncremental(Path path) {
+        saveIncrementalTo(path, SaveOptions.fast());
+    }
+
+    /**
+     * Incremental save with an explicit output policy.
+     *
+     * @param destination target file, overwritten on success
+     * @param options     save policy; null uses {@link SaveOptions#fast()}
+     */
+    public void saveIncrementalTo(Path destination, SaveOptions options) {
+        ensureOpen();
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        JpdfiumLib.docSaveIncrementalToFile(handle, destination,
+                options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
      * Save the document to a {@link WritableByteChannel} with bounded memory.
      *
      * <p>PDFium first spools to an owned temp file (guard held only for the

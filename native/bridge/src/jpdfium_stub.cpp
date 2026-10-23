@@ -647,6 +647,16 @@ int32_t jpdfium_doc_save_to_file(int64_t handle, const char* path, int64_t max_b
     return JPDFIUM_ERR_IO;
 }
 
+int32_t jpdfium_doc_save_incremental_to_file(int64_t handle, const char* path, int64_t max_bytes,
+                                             int64_t* out_bytes) {
+    auto it = g_docs.find(handle);
+    if (it != g_docs.end()) {
+        if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
+        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    }
+    return jpdfium_doc_save_to_file(handle, path, max_bytes, out_bytes);
+}
+
 void jpdfium_doc_close(int64_t handle) noexcept {
     g_docs.erase(handle);
 }

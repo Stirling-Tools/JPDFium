@@ -491,8 +491,8 @@ bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
 }
 }  // namespace
 
-int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
-                                 int64_t* out_bytes) {
+static int32_t doc_save_to_file_impl(int64_t doc, const char* path, int64_t max_bytes,
+                                     int64_t* out_bytes, FPDF_DWORD save_flags) {
     try {
         DocWrapper* w = decodeDoc(doc);
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
@@ -504,6 +504,11 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // guard so the caller sees the more specific error.
         if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        // Incremental save appends a revision, so the original objects (and
+        // any redacted content they still hold) survive. The same refusal the
+        // in-memory incremental saver makes must apply here.
+        if (save_flags == FPDF_INCREMENTAL && w->core->contentRedacted)
+            return JPDFIUM_ERR_REDACTED_SAVE;
         if (out_bytes) *out_bytes = 0;
 
         // Alias protection first: both the sanitize branch (staging + rename
@@ -515,7 +520,8 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
 
         // Opt-in sanitize pass needs the whole serialization post-hoc, so it
         // keeps the buffered path. The common case streams with no large buffer.
-        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+        if (save_flags == FPDF_NO_INCREMENTAL && w->core->contentRedacted &&
+            w->core->sanitizeOnSave) {
             struct BufWriter : FPDF_FILEWRITE {
                 std::vector<uint8_t> buf;
                 static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
@@ -570,7 +576,7 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // PDFium's own outcome and the sink's are recorded separately: a save can
         // return true while the sink failed, or fail while everything written so
         // far was fine. Reporting only one of them would misattribute the cause.
-        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
+        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, save_flags);
         const int flushRc = std::fflush(f);
         const int closeRc = std::fclose(f);
         ctx.file = nullptr;
@@ -603,6 +609,16 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // Never let a C++ exception cross the FFM boundary.
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    return doc_save_to_file_impl(doc, path, max_bytes, out_bytes, FPDF_NO_INCREMENTAL);
+}
+
+int32_t jpdfium_doc_save_incremental_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                             int64_t* out_bytes) {
+    return doc_save_to_file_impl(doc, path, max_bytes, out_bytes, FPDF_INCREMENTAL);
 }
 
 int32_t jpdfium_doc_save(int64_t doc, const char* path) {

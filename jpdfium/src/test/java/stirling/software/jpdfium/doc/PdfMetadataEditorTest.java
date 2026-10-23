@@ -11,9 +11,11 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -246,6 +248,181 @@ class PdfMetadataEditorTest {
             assertThrows(IllegalArgumentException.class,
                     () -> doc.editMetadata().xmp("   "));
         }
+    }
+
+    @Test
+    void incrementalSaveKeepsTheSignedBytesAndDigest() throws Exception {
+        Path source = resource("/pdfs/general/signed.pdf");
+        Path output = tempDir.resolve("signed-with-metadata.pdf");
+        byte[] original = Files.readAllBytes(source);
+        byte[] digest;
+
+        try (PdfDocument doc = PdfDocument.open(source)) {
+            assertTrue(doc.signatureCount() > 0, "fixture must contain a signature");
+            digest = doc.signatureDigest(0, 1);
+            doc.editMetadata().title("Signed metadata").applyAndSave(output);
+        }
+
+        byte[] saved = Files.readAllBytes(output);
+        assertTrue(saved.length > original.length,
+                "incremental save must append a revision");
+        assertArrayEquals(original, Arrays.copyOf(saved, original.length),
+                "the signed revision must remain byte-for-byte intact");
+
+        try (PdfDocument doc = PdfDocument.open(output)) {
+            assertEquals(1, doc.signatureCount());
+            assertArrayEquals(digest, doc.signatureDigest(0, 1),
+                    "the signature digest must cover the same signed bytes");
+            assertEquals(Optional.of("Signed metadata"), PdfMetadata.of(doc).title());
+        }
+    }
+
+    @Test
+    void xmpReplacementOnSignedDocumentIsRefusedByDefault() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/signed.pdf"))) {
+            assertThrows(IllegalStateException.class,
+                    () -> doc.editMetadata().xmp(xmp("Signed replacement")).apply());
+            assertEquals(Optional.empty(), PdfMetadata.of(doc).title());
+        }
+    }
+
+    @Test
+    void replacingXmpKeepsPdfaAndPdfxIdentification() throws Exception {
+        Path conformant = tempDir.resolve("conformant.pdf");
+        Path output = tempDir.resolve("conformant-edited.pdf");
+
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().xmp(conformantXmp("Original")).applyAndSave(conformant);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(conformant)) {
+            doc.editMetadata().xmp(xmp("Replacement")).applyAndSave(output);
+        }
+
+        String saved = Files.readString(output, StandardCharsets.ISO_8859_1);
+        assertTrue(saved.contains("pdfaid:part"), "PDF/A part must survive");
+        assertTrue(saved.contains("pdfaid:conformance"), "PDF/A conformance must survive");
+        assertTrue(saved.contains("GTS_PDFXVersion"), "PDF/X version must survive");
+        assertTrue(saved.contains("pdfaExtension:schemas"),
+                "PDF/A extension description must survive");
+    }
+
+    @Test
+    void conformantInfoChangesAreMirroredIntoXmp() throws Exception {
+        Path conformant = tempDir.resolve("conformant-info.pdf");
+        Path output = tempDir.resolve("conformant-info-edited.pdf");
+
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().xmp(conformantXmp("Original")).applyAndSave(conformant);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(conformant)) {
+            doc.editMetadata().title("Updated title").author("Updated author").applyAndSave(output);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(output)) {
+            String packet = PdfMetadata.of(doc).xmp().orElseThrow();
+            assertTrue(packet.contains("Updated title"));
+            assertTrue(packet.contains("Updated author"));
+            assertTrue(packet.contains("pdfaid:part"));
+            assertEquals(1, occurrences(packet, "<dc:title"));
+            assertEquals(1, occurrences(packet, "<dc:creator"));
+        }
+    }
+
+    @Test
+    void removingXmpFromConformantDocumentIsRefusedByDefault() throws Exception {
+        Path conformant = tempDir.resolve("conformant-remove.pdf");
+
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().xmp(conformantXmp("Original")).applyAndSave(conformant);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(conformant)) {
+            assertThrows(IllegalStateException.class, () -> doc.editMetadata().removeXmp().apply());
+            assertTrue(PdfMetadata.of(doc).xmp().orElseThrow().contains("pdfaid:part"));
+        }
+    }
+
+    @Test
+    void conformancePreservationCanBeDisabled() throws Exception {
+        Path conformant = tempDir.resolve("conformant-opt-out.pdf");
+        Path output = tempDir.resolve("conformant-opt-out-edited.pdf");
+
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/minimal.pdf"))) {
+            doc.editMetadata().xmp(conformantXmp("Original")).applyAndSave(conformant);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(conformant)) {
+            doc.editMetadata().preserveConformance(false).removeXmp().applyAndSave(output);
+        }
+
+        try (PdfDocument doc = PdfDocument.open(output)) {
+            assertTrue(PdfMetadata.of(doc).xmp().isEmpty());
+        }
+    }
+
+    @Test
+    void signaturePreservationCanBeDisabled() throws Exception {
+        Path output = tempDir.resolve("signed-opt-out.pdf");
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/signed.pdf"))) {
+            doc.editMetadata().preserveSignatures(false).xmp(xmp("Opt-out")).applyAndSave(output);
+            assertTrue(PdfMetadata.of(doc).xmp().isPresent());
+        }
+    }
+
+    private static String conformantXmp(String title) {
+        return """
+                <?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+                <x:xmpmeta xmlns:x="adobe:ns:meta/">
+                 <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                  <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+                   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">%s</rdf:li></rdf:Alt></dc:title>
+                  </rdf:Description>
+                  <rdf:Description rdf:about="" xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/">
+                   <pdfaid:part>2</pdfaid:part>
+                   <pdfaid:conformance>B</pdfaid:conformance>
+                  </rdf:Description>
+                  <rdf:Description rdf:about=""
+                      xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/"
+                      xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#"
+                      xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
+                   <pdfaExtension:schemas>
+                    <rdf:Bag>
+                     <rdf:li rdf:parseType="Resource">
+                      <pdfaSchema:prefix>pdfaid</pdfaSchema:prefix>
+                      <pdfaSchema:namespaceURI>http://www.aiim.org/pdfa/ns/id/</pdfaSchema:namespaceURI>
+                      <pdfaSchema:schema>PDF/A identification schema</pdfaSchema:schema>
+                      <pdfaSchema:property>
+                       <rdf:Seq>
+                        <rdf:li rdf:parseType="Resource">
+                         <pdfaProperty:name>part</pdfaProperty:name>
+                         <pdfaProperty:valueType>Integer</pdfaProperty:valueType>
+                         <pdfaProperty:category>internal</pdfaProperty:category>
+                         <pdfaProperty:description>PDF/A part</pdfaProperty:description>
+                        </rdf:li>
+                       </rdf:Seq>
+                      </pdfaSchema:property>
+                     </rdf:li>
+                    </rdf:Bag>
+                   </pdfaExtension:schemas>
+                  </rdf:Description>
+                  <rdf:Description rdf:about="" xmlns:pdfx="http://ns.adobe.com/pdfx/1.3/">
+                   <pdfx:GTS_PDFXVersion>PDF/X-4</pdfx:GTS_PDFXVersion>
+                  </rdf:Description>
+                 </rdf:RDF>
+                </x:xmpmeta>
+                <?xpacket end="w"?>
+                """.formatted(title);
+    }
+
+    private static int occurrences(String value, String needle) {
+        int count = 0;
+        for (int index = value.indexOf(needle); index >= 0;
+                index = value.indexOf(needle, index + needle.length())) {
+            count++;
+        }
+        return count;
     }
 
     private static String xmp(String title) {

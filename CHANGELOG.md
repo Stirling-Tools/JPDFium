@@ -23,7 +23,11 @@ publishing workflows, not library releases, so they are not listed here.
   writing standard /Info fields, custom keys, /Trapped, and the catalog XMP
   packet. `PdfMetadata` now reads custom keys, /Trapped, and XMP. The new EPDF
   metadata bindings back the /Info writes; XMP replacement uses the in-process
-  QPDF writer.
+  QPDF writer. Metadata edits preserve existing signatures by using an
+  incremental save for /Info and /Trapped changes, and keep PDF/A and PDF/X
+  identification when the XMP packet is replaced.
+- `PdfDocument.saveIncremental(Path)`, a transactional append-only save that
+  leaves earlier signed revisions byte-for-byte intact.
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
 

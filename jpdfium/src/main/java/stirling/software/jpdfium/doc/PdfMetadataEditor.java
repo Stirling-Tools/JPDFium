@@ -30,19 +30,37 @@ import java.util.Set;
  *     .author("Finance")
  *     .custom("Department", "Finance")
  *     .xmp(xmpPacket)
- *     .apply();
- * doc.save(output);
+ *     .applyAndSave(output);
  * }</pre>
  *
- * <p>Setting XMP rewrites the document through QPDF, so object-stream,
- * cross-reference-stream, and compressed-content PDFs are accepted. The rewrite
- * invalidates existing signatures and should be applied before encryption.
+ * <p>Signature and conformance preservation are enabled by default:
+ * <ul>
+ *   <li>{@link #applyAndSave(Path)} uses an incremental save when the document
+ *       already has a digital signature, so the original signed bytes are
+ *       retained. XMP replacement on a signed document is refused because it
+ *       needs a full QPDF rewrite; disable {@link #preserveSignatures(boolean)}
+ *       only when invalidating the signature is intentional.</li>
+ *   <li>Replacing XMP on a PDF/A or PDF/X document keeps the existing
+ *       identification and extension descriptions. Removing XMP from such a
+ *       document is refused. Standard /Info changes are mirrored into XMP so
+ *       the two metadata views stay consistent.</li>
+ * </ul>
+ *
+ * <p>Calling {@link #apply()} alone cannot control the later save. For signed
+ * documents use {@link #applyAndSave(Path)} or {@link PdfDocument#saveIncremental(Path)};
+ * a full {@link PdfDocument#save(Path)} rewrites every object and invalidates
+ * the signature.
  */
 public final class PdfMetadataEditor {
 
     private static final Set<String> RESERVED_KEYS = Set.of(
             "Title", "Author", "Subject", "Keywords", "Producer", "Creator",
             "CreationDate", "ModDate", "Trapped");
+
+    private static final byte[] BYTE_RANGE = "/ByteRange".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] CONTENTS = "/Contents".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] SIG_FIELD = "/FT /Sig".getBytes(StandardCharsets.US_ASCII);
+    private static final byte[] SIG_FIELD_TIGHT = "/FT/Sig".getBytes(StandardCharsets.US_ASCII);
 
     private final PdfDocument document;
     private final Map<String, String> info = new LinkedHashMap<>();
@@ -51,6 +69,9 @@ public final class PdfMetadataEditor {
     private boolean trappedSet;
     private byte[] xmp;
     private boolean xmpSet;
+    private boolean preserveSignatures = true;
+    private boolean preserveConformance = true;
+    private Boolean signed;
 
     private PdfMetadataEditor(PdfDocument document) {
         this.document = document;
@@ -61,6 +82,26 @@ public final class PdfMetadataEditor {
      */
     public static PdfMetadataEditor on(PdfDocument document) {
         return new PdfMetadataEditor(Objects.requireNonNull(document, "document"));
+    }
+
+    /**
+     * Preserve existing digital signatures. Enabled by default. When enabled,
+     * {@link #applyAndSave(Path)} appends an incremental revision for /Info and
+     * /Trapped edits and refuses XMP replacement, which needs a full rewrite.
+     */
+    public PdfMetadataEditor preserveSignatures(boolean preserve) {
+        this.preserveSignatures = preserve;
+        return this;
+    }
+
+    /**
+     * Preserve PDF/A and PDF/X identification when replacing XMP. Enabled by
+     * default. When enabled, /Info changes on a conformant document also update
+     * the matching XMP properties, and {@link #removeXmp()} is refused.
+     */
+    public PdfMetadataEditor preserveConformance(boolean preserve) {
+        this.preserveConformance = preserve;
+        return this;
     }
 
     /** Sets a standard field. A null value removes the entry. */
@@ -150,6 +191,47 @@ public final class PdfMetadataEditor {
             return MetadataUpdate.NONE;
         }
 
+        boolean signedDocument = preserveSignatures && hasSignature();
+        if (signedDocument && xmpSet) {
+            throw new IllegalStateException("cannot replace XMP on a signed document while "
+                    + "signature preservation is enabled; call preserveSignatures(false) "
+                    + "only when invalidating the signature is intentional");
+        }
+
+        XmpMetadata.Claim claim = XmpMetadata.Claim.NONE;
+        String existingXmp = null;
+        if (preserveConformance && (xmpSet || !info.isEmpty() || trappedSet)) {
+            existingXmp = PdfMetadata.of(document).xmp().orElse(null);
+            claim = XmpMetadata.claim(existingXmp);
+        }
+        if (preserveConformance && claim != XmpMetadata.Claim.NONE && xmpSet && xmp == null) {
+            throw new IllegalStateException("cannot remove XMP from a PDF/A or PDF/X document "
+                    + "while conformance preservation is enabled");
+        }
+        if (signedDocument && preserveConformance && claim != XmpMetadata.Claim.NONE
+                && (!info.isEmpty() || trappedSet)) {
+            throw new IllegalStateException("cannot change /Info or /Trapped on a signed PDF/A "
+                    + "or PDF/X document while preserving both the signature and the "
+                    + "conformance claim");
+        }
+
+        if (xmpSet && xmp != null && claim != XmpMetadata.Claim.NONE) {
+            String replacement = new String(xmp, StandardCharsets.UTF_8);
+            String merged = XmpMetadata.mergeConformance(existingXmp, replacement);
+            if (!merged.equals(replacement)) {
+                xmp = merged.getBytes(StandardCharsets.UTF_8);
+            }
+        }
+        if (preserveConformance && claim != XmpMetadata.Claim.NONE
+                && (!info.isEmpty() || trappedSet)) {
+            String current = xmpSet ? new String(xmp, StandardCharsets.UTF_8) : existingXmp;
+            String synchronizedXmp = XmpMetadata.synchronizeInfo(current, effectiveInfo());
+            if (synchronizedXmp != null && !synchronizedXmp.equals(current)) {
+                xmp = synchronizedXmp.getBytes(StandardCharsets.UTF_8);
+                xmpSet = true;
+            }
+        }
+
         int infoSet = 0;
         int infoRemoved = 0;
         int customSet = 0;
@@ -190,12 +272,118 @@ public final class PdfMetadataEditor {
     }
 
     /**
-     * Applies the pending changes and saves the document.
+     * Applies the pending changes and saves the document. Signed documents use
+     * an incremental save by default, preserving the bytes covered by existing
+     * signatures.
      */
     public MetadataUpdate applyAndSave(Path output) {
+        boolean signedDocument = preserveSignatures && hasSignature();
         MetadataUpdate update = apply();
-        document.save(output);
+        if (signedDocument) {
+            document.saveIncremental(output);
+        } else {
+            document.save(output);
+        }
         return update;
+    }
+
+    private Map<String, String> effectiveInfo() {
+        Map<String, String> values = new LinkedHashMap<>();
+        PdfMetadata.of(document).all().forEach((key, value) -> {
+            if (RESERVED_KEYS.contains(key)) values.put(key, value);
+        });
+        values.putAll(info);
+        if (trappedSet) {
+            values.put("Trapped", switch (trapped == null ? TrappedStatus.NOT_SET : trapped) {
+                case TRUE -> "True";
+                case FALSE -> "False";
+                case UNKNOWN -> "Unknown";
+                case NOT_SET -> null;
+            });
+        }
+        return values;
+    }
+
+    private boolean hasSignature() {
+        if (signed != null) return signed;
+
+        boolean found = false;
+        try {
+            found = document.signatureCount() > 0;
+        } catch (RuntimeException ignored) {
+            // Fall through to the byte-level check for signatures PDFium's
+            // AcroForm walk cannot reach.
+        }
+        if (!found) {
+            // Only scan bytes the document already retains. Reading a
+            // file-backed document again here would turn every unsigned
+            // metadata edit into a second full-file I/O pass; PDFium's
+            // signature count is authoritative for active signatures.
+            byte[] bytes = document.sourceBytes();
+            found = bytes != null
+                    && (indexOf(bytes, SIG_FIELD, 0) >= 0
+                        || indexOf(bytes, SIG_FIELD_TIGHT, 0) >= 0)
+                    && hasNonEmptySignatureContents(bytes);
+        }
+        signed = found;
+        return found;
+    }
+
+    /**
+     * Unsigned signature fields can carry a /ByteRange placeholder with
+     * zero-filled /Contents (several IRS forms do). Treat those as unsigned;
+     * only a dictionary with actual signature bytes blocks a full rewrite.
+     */
+    private static boolean hasNonEmptySignatureContents(byte[] bytes) {
+        int from = 0;
+        while (from < bytes.length) {
+            int range = indexOf(bytes, BYTE_RANGE, from);
+            if (range < 0) return false;
+            int start = Math.max(0, range - 65536);
+            int end = Math.min(bytes.length, range + 4096);
+            int contents = indexOf(bytes, CONTENTS, start, end);
+            if (contents >= 0) {
+                int open = indexOf(bytes, (byte) '<', contents, end);
+                if (open >= 0) {
+                    int close = indexOf(bytes, (byte) '>', open + 1, end);
+                    if (close > open && hasNonZeroHex(bytes, open + 1, close)) {
+                        return true;
+                    }
+                }
+            }
+            from = range + BYTE_RANGE.length;
+        }
+        return false;
+    }
+
+    private static boolean hasNonZeroHex(byte[] bytes, int start, int end) {
+        for (int i = start; i < end; i++) {
+            byte b = bytes[i];
+            if (b > ' ' && b != '0') return true;
+        }
+        return false;
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle, int from) {
+        return indexOf(haystack, needle, from, haystack.length);
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle, int from, int to) {
+        outer:
+        for (int i = Math.max(0, from); i <= to - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) continue outer;
+            }
+            return i;
+        }
+        return -1;
+    }
+
+    private static int indexOf(byte[] bytes, byte value, int from, int to) {
+        for (int i = Math.max(0, from); i < Math.min(bytes.length, to); i++) {
+            if (bytes[i] == value) return i;
+        }
+        return -1;
     }
 
     private static void applyMetaText(Arena arena, MemorySegment raw, String key, String value) {
