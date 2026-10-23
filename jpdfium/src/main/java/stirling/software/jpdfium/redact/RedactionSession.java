@@ -2,10 +2,15 @@ package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.model.Rect;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -62,6 +67,9 @@ import java.util.Set;
  * @see PdfPage#redactWordsEx
  */
 public final class RedactionSession implements AutoCloseable {
+
+    /** Minimum word count before the Java-side keyword prefilter is worth building. */
+    private static final int PREFILTER_MIN_WORDS = 10;
 
     private final PdfDocument document;
     private final boolean ownsDocument;
@@ -165,45 +173,53 @@ public final class RedactionSession implements AutoCloseable {
         int total = 0;
         int pageCount = document.pageCount();
 
-        if (!useRegex && words.length > 10) {
+        if (!useRegex && words.length > PREFILTER_MIN_WORDS) {
             FastKeywordIndex kwIndex = FastKeywordIndex.create(Arrays.asList(words), caseSensitive);
             Set<String> pageMatches = new HashSet<>();
-            try (PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
-                for (int i = 0; i < pageCount; i++) {
-                    int charCount;
-                    try (PdfPage page = document.page(i)) {
-                        charCount = scratch.extractChars(page.rawHandle());
+            try (Arena arena = Arena.ofConfined();
+                 PageTextScratchBuffer scratch = new PageTextScratchBuffer()) {
+                Map<String, MemorySegment> wordSegments = new HashMap<>(words.length);
+                for (String w : words) {
+                    if (w != null && !w.isEmpty()) {
+                        wordSegments.put(w, arena.allocateFrom(w));
                     }
-                    if (charCount < 0) {
-                        int count;
-                        try (PdfPage page = document.page(i)) {
-                            count = page.markRedactWords(words, argbColor, padding,
+                }
+                for (int i = 0; i < pageCount; i++) {
+                    try (PdfPage page = document.page(i)) {
+                        int charCount = scratch.extractChars(page.rawHandleForRead());
+                        if (charCount < 0) {
+                            int count = page.markRedactWords(words, argbColor, padding,
                                     wholeWord, useRegex, caseSensitive);
+                            if (count > 0) {
+                                pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
+                                        .add(new WordMark(words.clone(), argbColor, padding,
+                                                wholeWord, useRegex, caseSensitive, count));
+                                total += count;
+                            }
+                            continue;
                         }
+                        if (charCount == 0) continue;
+                        pageMatches.clear();
+                        kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
+                        if (pageMatches.isEmpty()) continue;
+
+                        int matchCount = pageMatches.size();
+                        String[] matchedWords = new String[matchCount];
+                        MemorySegment ptrs = arena.allocate(ValueLayout.ADDRESS, matchCount);
+                        int mIdx = 0;
+                        for (String m : pageMatches) {
+                            matchedWords[mIdx] = m;
+                            ptrs.setAtIndex(ValueLayout.ADDRESS, mIdx, wordSegments.get(m));
+                            mIdx++;
+                        }
+                        int count = page.markRedactWords(ptrs, matchCount, argbColor, padding,
+                                wholeWord, useRegex, caseSensitive);
                         if (count > 0) {
                             pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
-                                    .add(new WordMark(words.clone(), argbColor, padding,
+                                    .add(new WordMark(matchedWords, argbColor, padding,
                                             wholeWord, useRegex, caseSensitive, count));
                             total += count;
                         }
-                        continue;
-                    }
-                    if (charCount == 0) continue;
-                    pageMatches.clear();
-                    kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
-                    if (pageMatches.isEmpty()) continue;
-
-                    String[] matchedWords = pageMatches.toArray(String[]::new);
-                    int count;
-                    try (PdfPage page = document.page(i)) {
-                        count = page.markRedactWords(matchedWords, argbColor, padding,
-                                wholeWord, useRegex, caseSensitive);
-                    }
-                    if (count > 0) {
-                        pendingMarks.computeIfAbsent(i, k -> new ArrayList<>())
-                                .add(new WordMark(matchedWords, argbColor, padding,
-                                        wholeWord, useRegex, caseSensitive, count));
-                        total += count;
                     }
                 }
             }
@@ -396,7 +412,9 @@ public final class RedactionSession implements AutoCloseable {
             // the page, and so the document does not carry uncommitted marks
             // (the native save guard would refuse to save them).
             page.clearPendingRedactions();
-            page.flatten();
+            if (!PdfAnnotations.countAvailable() || page.annotationCount() > 0) {
+                page.flatten();
+            }
         }
         return totalCommitted;
     }

@@ -93,9 +93,15 @@ class SaveTransportTest {
         }
         byte[] viaChannel = baos.toByteArray();
         assertTrue(viaChannel.length > 0);
-        // Byte-identical: both paths serialize the same untouched document, so
-        // equal length alone would let a corrupt payload of the same size pass.
-        assertArrayEquals(expected, viaChannel,
+        assertEquals(expected.length, viaChannel.length,
+                "channel spool must produce the same length as saveBytes for minimal.pdf");
+        // PDFium's CPDF_Creator hashes the output sink's memory address into the trailer /ID
+        // entropy when minimal.pdf has no initial ID, so the first 16 hex characters of the /ID
+        // differ between in-memory MallocWriter and file-backed FileWriteContext. All other bytes
+        // must be identical.
+        String expStr = new String(expected, StandardCharsets.ISO_8859_1).replaceAll("/ID\\[<[^>]*><[^>]*>\\]", "/ID[]");
+        String actStr = new String(viaChannel, StandardCharsets.ISO_8859_1).replaceAll("/ID\\[<[^>]*><[^>]*>\\]", "/ID[]");
+        assertEquals(expStr, actStr,
                 "channel spool must carry the same bytes as saveBytes for minimal.pdf");
     }
 

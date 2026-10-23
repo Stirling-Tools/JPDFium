@@ -81,7 +81,7 @@ public final class PdfAnnotationExchange {
             if (pages != null && !pages.contains(p)) continue;
 
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -129,7 +129,7 @@ public final class PdfAnnotationExchange {
 
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -451,7 +451,7 @@ public final class PdfAnnotationExchange {
         // Form field values are exported from widget annotations
         for (int p = 0; p < doc.pageCount(); p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 int count;
                 try {
                     count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
@@ -673,11 +673,12 @@ public final class PdfAnnotationExchange {
             if (needed <= 2) return null;
 
             MemorySegment buf = arena.allocate(needed);
+            long written;
             try {
-                long _ = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
+                written = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
                         annot, keySeg, buf, needed);
             } catch (Throwable t) { return null; }
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         }
     }
 

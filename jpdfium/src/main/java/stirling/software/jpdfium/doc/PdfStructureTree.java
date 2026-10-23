@@ -124,10 +124,11 @@ public final class PdfStructureTree {
             if (needed <= 2) return "";
 
             MemorySegment buf = arena.allocate(needed);
+            long written;
             try {
-                long _ = (long) getter.invokeExact(elem, buf, needed);
+                written = (long) getter.invokeExact(elem, buf, needed);
             } catch (Throwable t) { throw new JPDFiumException(t); }
-            return FfmHelper.fromWideString(buf, needed);
+            return FfmHelper.fromWideString(buf, written);
         }
     }
 

@@ -1,7 +1,5 @@
-// jpdfium_redact_audit.cpp - audits and the crop operation.
-//
-// Post-pass audits proving no content survives where it must not, plus
-// jpdfium_crop_remove_content, which shares their geometry helpers.
+// jpdfium_redact_audit.cpp - post-pass audits proving no content survives where
+// it must not, plus jpdfium_crop_remove_content, which shares their geometry helpers.
 
 #include <epdf_redact.h>
 #include <fpdf_annot.h>
@@ -249,18 +247,52 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         const FS_RECTF cropRect = makePageRect(cL, cB, cR, cT);
 
         const int fastObjCount = FPDFPage_CountObjects(pw->page);
+        float pageMinX = 0.0f, pageMinY = 0.0f;
+        float pageMaxX = static_cast<float>(FPDF_GetPageWidth(pw->page));
+        float pageMaxY = static_cast<float>(FPDF_GetPageHeight(pw->page));
+        if (pageMaxX <= 0.0f) pageMaxX = cR + 1000.0f;
+        if (pageMaxY <= 0.0f) pageMaxY = cT + 1000.0f;
+
         bool allInside = true;
+        bool requiresFission = false;
+        bool hasNonTextOutside = false;
+
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
-            if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
+            // The bounds feed both the page-extent accumulation and the image/path
+            // straddle test, so they are fetched once per object.
+            float ol, ob, or_, ot;
+            const bool haveBounds = FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot);
+            if (haveBounds) {
+                pageMinX = std::min(pageMinX, ol);
+                pageMinY = std::min(pageMinY, ob);
+                pageMaxX = std::max(pageMaxX, or_);
+                pageMaxY = std::max(pageMaxY, ot);
+            }
+            bool inside = pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0);
+            if (!inside) {
                 allInside = false;
-                break;
+            }
+            int type = FPDFPageObj_GetType(obj);
+            if (type == FPDF_PAGEOBJ_FORM) {
+                requiresFission = true;
+                if (!inside) hasNonTextOutside = true;
+            } else if (type == FPDF_PAGEOBJ_IMAGE || type == FPDF_PAGEOBJ_PATH) {
+                if (!inside) hasNonTextOutside = true;
+                if (haveBounds && rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT) &&
+                    !isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT)) {
+                    requiresFission = true;
+                }
+            } else if (type != FPDF_PAGEOBJ_TEXT && !inside) {
+                // Shadings (and any unknown object type) can paint outside the crop but
+                // cannot be split, so they must reach the removal/verification path
+                // instead of the silent "nothing to remove" fast exit below.
+                hasNonTextOutside = true;
             }
         }
         if (allInside) return JPDFIUM_OK;
-        // Wrap tp in a unique_ptr so it is closed on every exit path, including
-        // exceptions from objectFissionRedact or vector growth (std::bad_alloc).
+
         struct TextPageDeleter {
             void operator()(FPDF_TEXTPAGE p) const noexcept {
                 if (p) FPDFText_ClosePage(p);
@@ -270,25 +302,6 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             std::unique_ptr<std::remove_pointer<FPDF_TEXTPAGE>::type, TextPageDeleter>;
         TextPagePtr tp(FPDFText_LoadPage(pw->page));
         if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-
-        // Compute aggregate bounding box covering all page objects and standard page size
-        float pageMinX = 0.0f, pageMinY = 0.0f;
-        float pageMaxX = static_cast<float>(FPDF_GetPageWidth(pw->page));
-        float pageMaxY = static_cast<float>(FPDF_GetPageHeight(pw->page));
-        if (pageMaxX <= 0.0f) pageMaxX = cR + 1000.0f;
-        if (pageMaxY <= 0.0f) pageMaxY = cT + 1000.0f;
-
-        for (int i = 0; i < fastObjCount; ++i) {
-            FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
-            if (!obj) continue;
-            float ol, ob, or_, ot;
-            if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
-                pageMinX = std::min(pageMinX, ol);
-                pageMinY = std::min(pageMinY, ob);
-                pageMaxX = std::max(pageMaxX, or_);
-                pageMaxY = std::max(pageMaxY, ot);
-            }
-        }
 
         // Expand bounds to enclose any outer content
         pageMinX -= 100.0f;
@@ -340,50 +353,8 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
                 break;
             }
         }
-        if (!anythingToRemove) {
-            const int objCount = FPDFPage_CountObjects(pw->page);
-            for (int i = 0; i < objCount; ++i) {
-                FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
-                if (!obj) continue;
-                if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;
-                if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
-                    anythingToRemove = true;
-                    break;
-                }
-            }
-        }
-        if (!anythingToRemove) {
+        if (!anythingToRemove && !hasNonTextOutside) {
             return JPDFIUM_OK;
-        }
-
-        // Detect whether the page contains Form XObjects or straddling non-text objects (images,
-        // paths). EmbedPDF's redact annotation application destroys whole objects whose bounding
-        // box intersects the annotation rect. For straddling images (which must be pixel-erased
-        // outside while surviving inside) or straddling paths (which must be subpath-clipped) or
-        // Form XObjects (which must be recursively searched), Object Fission must be used.
-        // For text (and fully contained/outside elements), EPDF redaction provides pristine font
-        // preservation.
-        bool requiresFission = false;
-        for (int i = 0; i < fastObjCount; ++i) {
-            FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
-            if (!obj) continue;
-            int type = FPDFPageObj_GetType(obj);
-            if (type == FPDF_PAGEOBJ_FORM) {
-                requiresFission = true;
-                break;
-            }
-            if (type == FPDF_PAGEOBJ_IMAGE || type == FPDF_PAGEOBJ_PATH) {
-                float ol, ob, or_, ot;
-                if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
-                    // Check if it straddles the crop: intersects both inside and outside
-                    bool overlapsCrop = rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT);
-                    bool fullyInside = isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT);
-                    if (overlapsCrop && !fullyInside) {
-                        requiresFission = true;
-                        break;
-                    }
-                }
-            }
         }
 
         // Apply EPDF redactions on the 4 margin rectangles when there are no straddling
@@ -432,16 +403,15 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         if (epdfOk) {
             if (marginCount > 0 && pw->core) pw->core->contentRedacted = true;
             FPDFPage_GenerateContent(pw->page);
-            // Refresh text page handle after EPDF content mutation; reset() closes the old one.
-            tp.reset(FPDFText_LoadPage(pw->page));
-            if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
+            if (hasNonTextOutside) {
+                tp.reset(FPDFText_LoadPage(pw->page));
+                if (!tp) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
 
-            // Run fission with skipTextObjects = true to handle non-text objects
-            // (pixel-erasing images outside crop, clipping path vectors)
-            int32_t rc =
-                objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0x00000000, pw->core,
-                                    nullptr, &cropRect, /*skipTextObjects=*/true);
-            if (rc != JPDFIUM_OK) return rc;
+                int32_t rc =
+                    objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0x00000000, pw->core,
+                                        nullptr, &cropRect, /*skipTextObjects=*/true);
+                if (rc != JPDFIUM_OK) return rc;
+            }
         } else {
             // Fallback: full Object Fission if EPDF redactions were not available
             int32_t rc =
@@ -451,10 +421,9 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         }
 
         // Audit that nothing content-bearing remains fully outside the crop.
-        FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+        UniqueTextPage audit(FPDFText_LoadPage(pw->page));
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit);
-        FPDFText_ClosePage(audit);
+        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit.get());
         if (!auditOk) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         return JPDFIUM_OK;
     } catch (...) {

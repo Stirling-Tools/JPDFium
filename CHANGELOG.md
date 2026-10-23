@@ -46,6 +46,27 @@ publishing workflows, not library releases, so they are not listed here.
   development version backwards, and updates its own branch in place instead of
   deleting it.
 
+- `RedactResult.save(Path)` and `RedactResult.saveBytes()` now refuse to publish a
+  result whose analysis did not complete on every page, and `saveBytes()` also
+  throws when the result was produced with `incrementalSave`. An incremental save
+  appends, so it can leave the pre-redaction object versions physically present,
+  and an incomplete analysis can leave the target content in place; both previously
+  produced output that looked like a finished redaction. Callers that relied on
+  receiving those bytes must request a full rewrite and run the analysis to
+  completion.
+
+- The configured global save-size limit (`-Djpdfium.maxSaveResultBytes`) is now
+  enforced on the file-backed merge and split outputs, which previously passed an
+  explicit "unbounded" budget and so ignored it. `OutputTransaction.publish` already
+  enforced the limit; a run with a small cap but no per-call budget can now fail
+  where it previously succeeded.
+
+### Fixed
+
+- A `jpdfium_doc_save_bytes` call whose document was handed to the native writer in
+  one large block reallocated the growing output buffer once per size step, copying
+  the accumulated prefix each time. It now reallocates once per write.
+
 ### Removed
 
 - `stirling.software.jpdfium.text.edit` and its `TextEditor` placeholder, which

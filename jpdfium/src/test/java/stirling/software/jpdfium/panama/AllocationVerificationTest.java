@@ -88,7 +88,7 @@ class AllocationVerificationTest {
     void testPageCount_allocatesUnderBudget() {
         // Warmup to trigger C2 JIT compilation
         for (int i = 0; i < WARMUP_ITERATIONS; i++) {
-            int _ = document.pageCount();
+            document.pageCount();
         }
 
         long beforeAllocatedBytes = threadBean.getThreadAllocatedBytes(threadId);
@@ -108,7 +108,7 @@ class AllocationVerificationTest {
     @DisplayName("Hot Path 2: Document permissions query allocates under budget (< 16 B/op)")
     void testPermissions_allocatesUnderBudget() {
         for (int i = 0; i < WARMUP_ITERATIONS; i++) {
-            long _ = document.permissions();
+            document.permissions();
         }
 
         long beforeAllocatedBytes = threadBean.getThreadAllocatedBytes(threadId);
@@ -146,7 +146,7 @@ class AllocationVerificationTest {
     @DisplayName("Hot Path 4: Page rotation query allocates under budget (< 16 B/op)")
     void testPageRotation_allocatesUnderBudget() {
         for (int i = 0; i < WARMUP_ITERATIONS; i++) {
-            int _ = PdfPageEditor.getRotation(rawPageSegment);
+            PdfPageEditor.getRotation(rawPageSegment);
         }
 
         long beforeAllocatedBytes = threadBean.getThreadAllocatedBytes(threadId);
@@ -184,7 +184,7 @@ class AllocationVerificationTest {
     @DisplayName("Hot Path 6: Text extraction allocates bounded by unmarshalled String size")
     void testTextExtraction_allocatesBoundedByStringSize() {
         for (int i = 0; i < WARMUP_ITERATIONS; i++) {
-            String _ = page.extractTextJson();
+            page.extractTextJson();
         }
 
         long beforeAllocatedBytes = threadBean.getThreadAllocatedBytes(threadId);

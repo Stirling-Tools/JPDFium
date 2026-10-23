@@ -59,6 +59,12 @@ public final class PdfColorAdjuster {
             return percent / 100.0;
         }
 
+        /** Returns true if this adjustment has no effect on pixel values. */
+        public boolean isIdentity() {
+            return contrast == 1.0 && brightness == 1.0 && saturation == 1.0
+                    && red == 1.0 && green == 1.0 && blue == 1.0;
+        }
+
         /**
          * Maps one opaque {@code 0xRRGGBB} pixel through the adjustment. The alpha byte, if present,
          * is ignored.
@@ -67,17 +73,24 @@ public final class PdfColorAdjuster {
          * @return adjusted packed {@code 0xRRGGBB} pixel
          */
         public int apply(int rgb) {
+            if (isIdentity()) {
+                return rgb;
+            }
             double r = ((rgb >> 16) & 0xFF) * red;
             double g = ((rgb >> 8) & 0xFF) * green;
             double b = (rgb & 0xFF) * blue;
 
-            r = clamp((r - 128) * contrast + 128);
-            g = clamp((g - 128) * contrast + 128);
-            b = clamp((b - 128) * contrast + 128);
+            r = Math.clamp((r - 128) * contrast + 128, 0.0, 255.0);
+            g = Math.clamp((g - 128) * contrast + 128, 0.0, 255.0);
+            b = Math.clamp((b - 128) * contrast + 128, 0.0, 255.0);
 
-            r = clamp(r * brightness);
-            g = clamp(g * brightness);
-            b = clamp(b * brightness);
+            r = Math.clamp(r * brightness, 0.0, 255.0);
+            g = Math.clamp(g * brightness, 0.0, 255.0);
+            b = Math.clamp(b * brightness, 0.0, 255.0);
+
+            if (saturation == 1.0) {
+                return ((int) Math.round(r) << 16) | ((int) Math.round(g) << 8) | (int) Math.round(b);
+            }
 
             double rn = r / 255;
             double gn = g / 255;
@@ -99,7 +112,7 @@ public final class PdfColorAdjuster {
                 }
                 h /= 6;
             }
-            s = Math.min(1, Math.max(0, s * saturation));
+            s = Math.clamp(s * saturation, 0.0, 1.0);
 
             double r2;
             double g2;
@@ -122,6 +135,9 @@ public final class PdfColorAdjuster {
          * @param pixels packed {@code 0xRRGGBB} pixels, modified in place
          */
         public void apply(int[] pixels) {
+            if (isIdentity()) {
+                return;
+            }
             if (pixels.length >= PARALLEL_THRESHOLD) {
                 Arrays.parallelSetAll(pixels, i -> apply(pixels[i]));
                 return;
@@ -140,13 +156,9 @@ public final class PdfColorAdjuster {
             return p;
         }
 
-        private static double clamp(double value) {
-            return Math.min(255, Math.max(0, value));
-        }
-
         /** JS {@code Math.round} rounds halves up, as does {@link Math#round(double)}. */
         private static int toByte(double unit) {
-            return (int) clamp(Math.round(unit * 255));
+            return (int) Math.clamp(Math.round(unit * 255), 0L, 255L);
         }
     }
 

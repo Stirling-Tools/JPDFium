@@ -21,10 +21,6 @@ public final class RenderBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     // Render flag constants
     public static final int FPDF_ANNOT               = 0x01;
     public static final int FPDF_LCD_TEXT             = 0x02;

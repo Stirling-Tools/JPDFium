@@ -25,10 +25,6 @@ public final class AnnotationBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
         return Symbols.downcallOptional(name, desc);
     }
@@ -52,13 +48,13 @@ public final class AnnotationBindings {
     public static final MethodHandle FPDFPage_CreateAnnot = downcall("FPDFPage_CreateAnnot",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
-    public static final MethodHandle FPDFPage_GetAnnotCount = downcallCritical("FPDFPage_GetAnnotCount",
+    public static final MethodHandle FPDFPage_GetAnnotCount = downcall("FPDFPage_GetAnnotCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFPage_GetAnnot = downcall("FPDFPage_GetAnnot",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
-    public static final MethodHandle FPDFPage_GetAnnotIndex = downcallCritical("FPDFPage_GetAnnotIndex",
+    public static final MethodHandle FPDFPage_GetAnnotIndex = downcall("FPDFPage_GetAnnotIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFPage_CloseAnnot = downcall("FPDFPage_CloseAnnot",
@@ -67,7 +63,7 @@ public final class AnnotationBindings {
     public static final MethodHandle FPDFPage_RemoveAnnot = downcall("FPDFPage_RemoveAnnot",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
-    public static final MethodHandle FPDFAnnot_GetSubtype = downcallCritical("FPDFAnnot_GetSubtype",
+    public static final MethodHandle FPDFAnnot_GetSubtype = downcall("FPDFAnnot_GetSubtype",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFAnnot_GetRect = downcall("FPDFAnnot_GetRect",
@@ -85,7 +81,7 @@ public final class AnnotationBindings {
     public static final MethodHandle FPDFAnnot_GetColor = downcall("FPDFAnnot_GetColor",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFAnnot_GetFlags = downcallCritical("FPDFAnnot_GetFlags",
+    public static final MethodHandle FPDFAnnot_GetFlags = downcall("FPDFAnnot_GetFlags",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFAnnot_SetFlags = downcall("FPDFAnnot_SetFlags",
@@ -98,23 +94,23 @@ public final class AnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
     // Form field inspection (requires FPDF_FORMHANDLE)
-    public static final MethodHandle FPDFAnnot_GetFormFieldType = downcallCritical("FPDFAnnot_GetFormFieldType",
+    public static final MethodHandle FPDFAnnot_GetFormFieldType = downcall("FPDFAnnot_GetFormFieldType",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
     public static final MethodHandle FPDFAnnot_GetFormFieldName = downcall("FPDFAnnot_GetFormFieldName",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
     public static final MethodHandle FPDFAnnot_GetFormFieldValue = downcall("FPDFAnnot_GetFormFieldValue",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
-    public static final MethodHandle FPDFAnnot_IsChecked = downcallCritical("FPDFAnnot_IsChecked",
+    public static final MethodHandle FPDFAnnot_IsChecked = downcall("FPDFAnnot_IsChecked",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
-    public static final MethodHandle FPDFAnnot_GetOptionCount = downcallCritical("FPDFAnnot_GetOptionCount",
+    public static final MethodHandle FPDFAnnot_GetOptionCount = downcall("FPDFAnnot_GetOptionCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
     public static final MethodHandle FPDFAnnot_GetOptionLabel = downcall("FPDFAnnot_GetOptionLabel",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
-    public static final MethodHandle FPDFAnnot_IsOptionSelected = downcallCritical("FPDFAnnot_IsOptionSelected",
+    public static final MethodHandle FPDFAnnot_IsOptionSelected = downcall("FPDFAnnot_IsOptionSelected",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     public static final MethodHandle FPDFAnnot_GetFormFieldAlternateName = downcall("FPDFAnnot_GetFormFieldAlternateName",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
-    public static final MethodHandle FPDFAnnot_GetFormFieldFlags = downcallCritical("FPDFAnnot_GetFormFieldFlags",
+    public static final MethodHandle FPDFAnnot_GetFormFieldFlags = downcall("FPDFAnnot_GetFormFieldFlags",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
     public static final MethodHandle FPDFAnnot_GetFormFieldExportValue = downcall("FPDFAnnot_GetFormFieldExportValue",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
@@ -122,11 +118,11 @@ public final class AnnotationBindings {
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 
     /** Number of controls in the radio/checkbox group this annotation belongs to. */
-    public static final MethodHandle FPDFAnnot_GetFormControlCount = downcallCritical("FPDFAnnot_GetFormControlCount",
+    public static final MethodHandle FPDFAnnot_GetFormControlCount = downcall("FPDFAnnot_GetFormControlCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Zero-based index of this control within its radio/checkbox group. */
-    public static final MethodHandle FPDFAnnot_GetFormControlIndex = downcallCritical("FPDFAnnot_GetFormControlIndex",
+    public static final MethodHandle FPDFAnnot_GetFormControlIndex = downcall("FPDFAnnot_GetFormControlIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     // Annotation creation helpers

@@ -74,13 +74,11 @@ class DomainConsistencyTest {
     }
 
     @Test
-    void noDirectLockUseOutsideDomain() throws IOException {
+    void noJavaPdfiumLock() throws IOException {
         Path root = mainSources();
         List<String> hits = new ArrayList<>();
         hits.addAll(grep(root, ".acquire()"));
         hits.addAll(grep(root, "ReentrantLock"));
-        // PdfiumRuntime owns the lock.
-        hits.removeIf(hit -> hit.contains("panama/PdfiumRuntime.java"));
         // Opt-in slot bounding (QpdfLib/Vips) is admission control, not
         // PDFium serialization. Allowed only inside the slot helpers.
         hits.removeIf(hit -> (hit.contains("panama/QpdfLib.java")
@@ -90,7 +88,8 @@ class DomainConsistencyTest {
                 || hit.contains("QPDF_PERMITS.acquire()")
                 || hit.contains("IMAGE_PERMITS.acquire()"));
         if (!hits.isEmpty()) {
-            fail("the domain lock lives only in PdfiumRuntime:\n" + String.join("\n", hits));
+            fail("PDFium is serialized natively; a Java lock would be a second serializer:\n"
+                    + String.join("\n", hits));
         }
     }
 
@@ -100,10 +99,19 @@ class DomainConsistencyTest {
         List<String> hits = grep(root, ".downcallHandle(");
         hits.removeIf(hit -> hit.contains("panama/Symbols.java")
                 || hit.contains("panama/FastLinks.java")
-                || hit.contains("panama/JpdfiumH.java")
-                || hit.contains("panama/FontLib.java"));
+                || hit.contains("panama/NativeDomain.java"));
         if (!hits.isEmpty()) {
-            fail("raw downcall handles are created only in Symbols/FastLinks/JpdfiumH/FontLib:\n"
+            fail("raw downcall handles are created only in Symbols/FastLinks/NativeDomain:\n"
+                    + String.join("\n", hits));
+        }
+    }
+
+    @Test
+    void jextractBindingsResolveThroughTheNativeDomain() throws IOException {
+        Path root = mainSources();
+        List<String> hits = grep(root, "SYMBOL_LOOKUP.find");
+        if (!hits.isEmpty()) {
+            fail("JpdfiumH must resolve symbols via NativeDomain so PDFium calls bind their guard:\n"
                     + String.join("\n", hits));
         }
     }

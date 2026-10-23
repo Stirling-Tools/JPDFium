@@ -21,8 +21,9 @@ import stirling.software.jpdfium.model.ImageToPdfOptions;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.DocBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
-import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -33,7 +34,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -102,6 +102,10 @@ public final class PdfDocument implements AutoCloseable {
      * (no structural mutation since open). Never deleted by this document.
      */
     private volatile Path sourcePath;
+    /** Size of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceSize = -1L;
+    /** Last-modified time of {@link #sourcePath} when it was recorded, or -1 when unknown. */
+    private volatile long sourceMtime = -1L;
     private volatile byte[] sourceBytes;
 
     PdfDocument(long handle) {
@@ -187,6 +191,7 @@ public final class PdfDocument implements AutoCloseable {
         Path abs = path.toAbsolutePath();
         PdfDocument doc = new PdfDocument(JpdfiumLib.docOpen(abs.toString()));
         doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
         return doc;
     }
 
@@ -441,15 +446,49 @@ public final class PdfDocument implements AutoCloseable {
         if (path == null) throw new IllegalArgumentException("path must not be null");
         if (password == null) throw new IllegalArgumentException("password must not be null");
         if (password.isEmpty()) return open(path);
-        PdfDocument doc =
-                new PdfDocument(JpdfiumLib.docOpenProtected(path.toAbsolutePath().toString(), password));
-        doc.sourcePath = path.toAbsolutePath();
+        Path abs = path.toAbsolutePath();
+        PdfDocument doc = new PdfDocument(JpdfiumLib.docOpenProtected(abs.toString(), password));
+        doc.sourcePath = abs;
+        doc.recordSourceStamp(abs);
         return doc;
     }
 
     /** Original open path, or null when not file-backed. Never deleted here. */
     public Path sourcePath() {
         return sourcePath;
+    }
+
+    /**
+     * Records the size and last-modified time of a path-backed source so callers can detect a file
+     * that was rewritten after it was opened.
+     */
+    private void recordSourceStamp(Path path) {
+        try {
+            sourceSize = Files.size(path);
+            sourceMtime = Files.getLastModifiedTime(path).toMillis();
+        } catch (IOException e) {
+            sourceSize = -1L;
+            sourceMtime = -1L;
+        }
+    }
+
+    /**
+     * Returns whether the file-backed source still matches the snapshot taken when this document was
+     * opened. Callers that reuse {@link #sourcePath()} instead of serialising the in-memory document
+     * must check this first: a file rewritten after open would otherwise be read from behind the
+     * document's back.
+     */
+    public boolean sourceFileUnchanged() {
+        Path path = sourcePath;
+        if (path == null) {
+            return false;
+        }
+        try {
+            return Files.size(path) == sourceSize
+                    && Files.getLastModifiedTime(path).toMillis() == sourceMtime;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**
@@ -1213,8 +1252,9 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getBox = EmbedPdfDocumentBindings.EPDF_GetPageBoxByIndex;
         if (getBox != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment rectBuf = arena.allocate(EmbedPdfTextBindings.FS_RECTF_LAYOUT);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                MemorySegment rectBuf = scratch.rect;
                 Rect mediaBox = queryBoxByIndex(getBox, pageIndex, 0, rectBuf)
                         .orElseGet(() -> {
                             try (PdfPage p = page(pageIndex)) {
@@ -1248,10 +1288,10 @@ public final class PdfDocument implements AutoCloseable {
         try {
             int ok = (int) getBox.invokeExact(rawDocSegment, pageIndex, boxType, rectBuf);
             if (ok == 0) return Optional.empty();
-            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("left")));
-            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bottom")));
-            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("right")));
-            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")));
+            float left = rectBuf.get(ValueLayout.JAVA_FLOAT, 0);
+            float top = rectBuf.get(ValueLayout.JAVA_FLOAT, 4);
+            float right = rectBuf.get(ValueLayout.JAVA_FLOAT, 8);
+            float bottom = rectBuf.get(ValueLayout.JAVA_FLOAT, 12);
             return Optional.of(new Rect(left, bottom, right - left, top - bottom));
         } catch (Throwable t) {
             return Optional.empty();
@@ -1301,11 +1341,11 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         MethodHandle getUnit = EmbedPdfDocumentBindings.EPDF_GetPageUserUnitByIndex;
         if (getUnit != null) {
-            try (Arena arena = Arena.ofConfined()) {
-                MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
-                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, buf);
+            Scratch scratch = FfmHelper.scratch();
+            try {
+                int ok = (int) getUnit.invokeExact(rawDocSegment, pageIndex, scratch.float0);
                 if (ok != 0) {
-                    return buf.get(ValueLayout.JAVA_FLOAT, 0);
+                    return scratch.float0.get(ValueLayout.JAVA_FLOAT, 0);
                 }
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
@@ -1371,6 +1411,7 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
+        markContentModified();
         invalidateOpenPages();
     }
 
@@ -1487,6 +1528,10 @@ public final class PdfDocument implements AutoCloseable {
     /**
      * Get the document's complete bookmark tree.
      */
+    public boolean hasBookmarks() {
+        return PdfBookmarks.hasBookmarks(rawHandleForRead());
+    }
+
     public List<Bookmark> bookmarks() {
         return PdfBookmarks.list(rawHandleForRead());
     }

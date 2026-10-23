@@ -67,10 +67,7 @@ public final class PdfOptimizer {
      */
     public static void optimize(Path input, Path output, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) throws IOException {
-        // The file route takes no compression level: using it here would
-        // silently replace an explicit level with qpdf's default. Only take it
-        // when no level was requested; the buffered path honors the level.
-        if (compressionLevel == DEFAULT && QpdfLib.optimizeFile(input, output, flags,
+        if (QpdfLib.optimizeFile(input, output, flags,
                 objectStreamMode, streamDataMode, decodeLevel)) {
             return;
         }

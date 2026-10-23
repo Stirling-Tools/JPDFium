@@ -18,26 +18,22 @@ public final class DocBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     public static final MethodHandle FPDF_GetMetaText = downcall("FPDF_GetMetaText",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG));
 
     public static final MethodHandle FPDF_GetPageLabel = downcall("FPDF_GetPageLabel",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDF_GetDocPermissions = downcallCritical("FPDF_GetDocPermissions",
+    public static final MethodHandle FPDF_GetDocPermissions = downcall("FPDF_GetDocPermissions",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDF_GetSecurityHandlerRevision = downcallCritical("FPDF_GetSecurityHandlerRevision",
+    public static final MethodHandle FPDF_GetSecurityHandlerRevision = downcall("FPDF_GetSecurityHandlerRevision",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDF_GetFileIdentifier = downcall("FPDF_GetFileIdentifier",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDF_GetPageCount = downcallCritical("FPDF_GetPageCount",
+    public static final MethodHandle FPDF_GetPageCount = downcall("FPDF_GetPageCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Save a raw FPDF_DOCUMENT to a caller-supplied FPDF_FILEWRITE sink (flags=0 - full save). */
@@ -53,7 +49,7 @@ public final class DocBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Check if the document catalog is tagged. Returns 1 if tagged. */
-    public static final MethodHandle FPDFCatalog_IsTagged = downcallCritical("FPDFCatalog_IsTagged",
+    public static final MethodHandle FPDFCatalog_IsTagged = downcall("FPDFCatalog_IsTagged",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Save with explicit PDF version number. */
@@ -61,7 +57,7 @@ public final class DocBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT));
 
     /** Count named destinations. */
-    public static final MethodHandle FPDF_CountNamedDests = downcallCritical("FPDF_CountNamedDests",
+    public static final MethodHandle FPDF_CountNamedDests = downcall("FPDF_CountNamedDests",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS));
 
     /** Get named destination by index. buflen is in/out. */

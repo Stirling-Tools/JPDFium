@@ -121,11 +121,39 @@ endif()
 #   cmake -DJPDFIUM_USE_PDFIUM=ON -DPDFIUM_DIR=/path/to/pdfium-linux-x64 ..
 option(JPDFIUM_USE_PDFIUM "Build against real PDFium (requires PDFIUM_DIR)" OFF)
 
+# Identity reported by jpdf_runtime_get_info; bindings check it to detect mismatched cores.
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE _jpdfium_git_rev
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+if(NOT _jpdfium_git_rev)
+    set(_jpdfium_git_rev "unknown")
+endif()
+file(STRINGS "${CMAKE_SOURCE_DIR}/pdfium.version" _jpdfium_pdfium_pin REGEX "^pdfium-")
+
+# The native domain and the jpdf_guard_* shims for jpdfium_* exist in both bridges, so the
+# stub serializes exactly like the real build.
+set(JPDFIUM_DOMAIN_SOURCES
+    bridge/src/runtime/domain.cpp
+    bridge/src/runtime/guard.cpp
+    bridge/src/runtime/api_runtime.cpp
+    bridge/src/runtime/api_status.cpp
+    bridge/src/runtime/api_module.cpp
+    bridge/src/legacy/guards_bridge.cpp)
+
 # Stub library (always built for testing).
 # jpdfium_stub.cpp contains inline stubs for every jpdfium_rust_* function
 # (they return JPDFIUM_ERR_NATIVE so unit tests run without PDFium/Rust).
-add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp)
-target_include_directories(jpdfium_stub PUBLIC bridge/include)
+add_library(jpdfium_stub SHARED bridge/src/jpdfium_stub.cpp
+    ${JPDFIUM_DOMAIN_SOURCES}
+    bridge/src/runtime/pdfium_core_stub.cpp)
+target_include_directories(jpdfium_stub PUBLIC bridge/include PRIVATE bridge/src)
+target_compile_definitions(jpdfium_stub PRIVATE
+    JPDF_BUILDING_CORE
+    JPDFIUM_STUB_GUARDS
+    "JPDFIUM_BUILD_ID=\"jpdfium-stub ${_jpdfium_git_rev} ${JPDFIUM_PLATFORM}\"")
 if(MSVC)
     target_compile_options(jpdfium_stub PRIVATE /W4 /WX)
 else()
@@ -210,10 +238,26 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_pdfio.cpp
         bridge/src/jpdfium_lcms.cpp
         bridge/src/jpdfium_openjpeg.cpp
-        bridge/src/jpdfium_signature.cpp)
+        bridge/src/jpdfium_signature.cpp
+        # Safe jpdf_* API (jpdfium_api.h): native domain, generation-checked handles.
+        ${JPDFIUM_DOMAIN_SOURCES}
+        bridge/src/legacy/guards_pdfium.cpp
+        bridge/src/pdf/api_document.cpp
+        bridge/src/pdf/api_render.cpp
+        bridge/src/pdf/api_raster.cpp
+        bridge/src/images/pixels.cpp
+        bridge/src/images/api_bitmap.cpp
+        bridge/src/output/output_transaction.cpp
+        bridge/src/output/image_writer.cpp
+        bridge/src/textlayer/text_layer_font.cpp
+        bridge/src/textlayer/text_layer_parse.cpp
+        bridge/src/textlayer/text_layer_pdf.cpp)
     target_include_directories(jpdfium
         PUBLIC  bridge/include
-        PRIVATE "${PDFIUM_INCLUDE_DIR}")
+        PRIVATE "${PDFIUM_INCLUDE_DIR}" bridge/src)
+    target_compile_definitions(jpdfium PRIVATE
+        JPDF_BUILDING_CORE
+        "JPDFIUM_BUILD_ID=\"jpdfium ${_jpdfium_git_rev} ${JPDFIUM_PLATFORM} ${_jpdfium_pdfium_pin}\"")
     # Warnings-as-errors: the redaction engine is a security boundary - every
     # warning is a potential UB/leak. -Wno-ignored-qualifiers stays (harmless
     # const-qualifier noise from the qpdf headers).
@@ -659,6 +703,33 @@ if(JPDFIUM_BUILD_TESTS)
         target_compile_options(registry_cost PRIVATE -Wall -Wextra -Wpedantic -Werror)
     endif()
     add_test(NAME registry_cost COMMAND registry_cost)
+
+    # Safe jpdf_* API: the full C API against real PDFium, including the
+    # handle table suite, which needs no PDFium model.
+    if(JPDFIUM_USE_PDFIUM)
+        add_executable(api_safety bridge/tests/api_safety.cpp)
+        target_include_directories(api_safety PRIVATE bridge/include bridge/src)
+        if(MSVC)
+            target_compile_options(api_safety PRIVATE /W4 /WX)
+            # The suite reads a scratch font path and getenv like the harnesses above, so it
+            # needs the same CRT deprecation opt-out that /WX would otherwise reject.
+            target_compile_definitions(api_safety PRIVATE _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+        else()
+            target_compile_options(api_safety PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_safety PRIVATE jpdfium)
+        add_test(NAME api_safety COMMAND api_safety)
+
+        add_executable(api_text_layer bridge/tests/api_text_layer.cpp)
+        target_include_directories(api_text_layer PRIVATE bridge/include "${PDFIUM_INCLUDE_DIR}")
+        if(MSVC)
+            target_compile_options(api_text_layer PRIVATE /W4 /WX)
+        else()
+            target_compile_options(api_text_layer PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        target_link_libraries(api_text_layer PRIVATE jpdfium)
+        add_test(NAME api_text_layer COMMAND api_text_layer)
+    endif()
     # Test environment. ENVIRONMENT is a whole-property value, so every
     # contributor has to append here: setting it twice silently drops the first
     # assignment, which previously cost the component-build library path as soon
@@ -691,6 +762,10 @@ if(JPDFIUM_BUILD_TESTS)
     if(NOT _jpdfium_test_env STREQUAL "")
         set_tests_properties(native_smoke handle_safety PROPERTIES
             ENVIRONMENT "${_jpdfium_test_env}")
+        if(JPDFIUM_USE_PDFIUM)
+            set_tests_properties(api_safety api_text_layer PROPERTIES
+                ENVIRONMENT "${_jpdfium_test_env}")
+        endif()
     endif()
     # handle_safety reads a real PDF fixture by relative path, and CTest runs
     # from the build directory, so the path must be anchored at the repo root.
@@ -738,3 +813,71 @@ if(JPDFIUM_USE_PDFIUM)
         RUNTIME DESTINATION bin)
 endif()
 install(DIRECTORY bridge/include/ DESTINATION include)
+
+# Optional OCR module: PP-OCR models on ONNX Runtime. It links to the core and never compiles
+# its own copy of the domain or the handle table (docs/design/DESIGN.md).
+option(JPDFIUM_BUILD_OCR "Build libjpdfium_ocr; needs ONNX Runtime in ocr/onnxruntime" OFF)
+if(JPDFIUM_USE_PDFIUM AND JPDFIUM_BUILD_OCR)
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/ocr/onnxruntime" CACHE PATH "ONNX Runtime package")
+    find_library(ONNXRUNTIME_LIB NAMES onnxruntime PATHS "${ONNXRUNTIME_DIR}/lib"
+        NO_DEFAULT_PATH REQUIRED)
+    set(JPDFIUM_OCR_SOURCES
+        ocr/src/api_ocr.cpp
+        ocr/src/engine.cpp
+        ocr/src/profile.cpp
+        ocr/src/sha256.cpp
+        ocr/src/paddle.cpp
+        ocr/src/cv_resize.cpp
+        ocr/src/cv_warp.cpp
+        ocr/src/cv_contours.cpp
+        ocr/src/cv_hull.cpp
+        ocr/src/cv_fill.cpp)
+    add_library(jpdfium_ocr SHARED ${JPDFIUM_OCR_SOURCES})
+    target_include_directories(jpdfium_ocr
+        PUBLIC ocr/include bridge/include
+        PRIVATE ocr/src "${ONNXRUNTIME_DIR}/include")
+    target_compile_definitions(jpdfium_ocr PRIVATE JPDF_BUILDING_OCR)
+    target_link_libraries(jpdfium_ocr PRIVATE jpdfium "${ONNXRUNTIME_LIB}")
+    set_target_properties(jpdfium_ocr PROPERTIES CXX_VISIBILITY_PRESET hidden)
+    if(MSVC)
+        target_compile_options(jpdfium_ocr PRIVATE /W4 /WX)
+    else()
+        target_compile_options(jpdfium_ocr PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    if(APPLE)
+        set_target_properties(jpdfium_ocr PROPERTIES
+            INSTALL_RPATH "@loader_path" BUILD_RPATH "@loader_path;${ONNXRUNTIME_DIR}/lib")
+    elseif(UNIX)
+        set_target_properties(jpdfium_ocr PROPERTIES
+            INSTALL_RPATH "$ORIGIN" BUILD_RPATH "$ORIGIN;${ONNXRUNTIME_DIR}/lib")
+    endif()
+
+    if(JPDFIUM_BUILD_TESTS)
+        # Geometry and pre/post-processing against values recorded from OpenCV and pyclipper.
+        add_executable(ocr_geometry ocr/tests/ocr_geometry.cpp ocr/src/paddle.cpp
+            ocr/src/cv_resize.cpp ocr/src/cv_warp.cpp ocr/src/cv_contours.cpp
+            ocr/src/cv_hull.cpp ocr/src/cv_fill.cpp ocr/src/sha256.cpp)
+        target_include_directories(ocr_geometry PRIVATE ocr/src bridge/include)
+        add_test(NAME ocr_geometry COMMAND ocr_geometry)
+
+        # Needs a fetched profile in JPDFIUM_OCR_PROFILE; skipped (77) without one.
+        add_executable(ocr_engine ocr/tests/ocr_engine.cpp)
+        target_include_directories(ocr_engine PRIVATE ocr/include bridge/include)
+        target_link_libraries(ocr_engine PRIVATE jpdfium_ocr jpdfium)
+        add_test(NAME ocr_engine COMMAND ocr_engine)
+        set_tests_properties(ocr_engine PROPERTIES SKIP_RETURN_CODE 77)
+        # ONNX Runtime is not instrumented: its own allocations and worker threads are excluded.
+        # Each sanitizer rejects the other's rule type, so the two live in separate files.
+        if(JPDFIUM_SANITIZE MATCHES "address")
+            set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
+                "LSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers_lsan.supp")
+        elseif(JPDFIUM_SANITIZE MATCHES "thread")
+            set_tests_properties(ocr_engine PROPERTIES ENVIRONMENT
+                "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ocr/tests/sanitizers_tsan.supp")
+        endif()
+        if(NOT MSVC)
+            target_compile_options(ocr_geometry PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_options(ocr_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+    endif()
+endif()

@@ -23,10 +23,6 @@ public final class PageEditBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     public static final MethodHandle FPDF_CreateNewDocument = downcall("FPDF_CreateNewDocument",
             FunctionDescriptor.of(ADDRESS));
 
@@ -39,10 +35,10 @@ public final class PageEditBindings {
     public static final MethodHandle FPDFPage_GenerateContent = downcall("FPDFPage_GenerateContent",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDFPage_CountObjects = downcallCritical("FPDFPage_CountObjects",
+    public static final MethodHandle FPDFPage_CountObjects = downcall("FPDFPage_CountObjects",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDFPage_GetObject = downcallCritical("FPDFPage_GetObject",
+    public static final MethodHandle FPDFPage_GetObject = downcall("FPDFPage_GetObject",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
     public static final MethodHandle FPDFPage_InsertObject = downcall("FPDFPage_InsertObject",
@@ -51,7 +47,7 @@ public final class PageEditBindings {
     public static final MethodHandle FPDFPage_RemoveObject = downcall("FPDFPage_RemoveObject",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFPageObj_GetType = downcallCritical("FPDFPageObj_GetType",
+    public static final MethodHandle FPDFPageObj_GetType = downcall("FPDFPageObj_GetType",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFPageObj_Transform = downcall("FPDFPageObj_Transform",
@@ -119,15 +115,15 @@ public final class PageEditBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS));
 
     /** Check if font is embedded. Returns 1=embedded, 0=not, -1=failure. */
-    public static final MethodHandle FPDFFont_GetIsEmbedded = downcallCritical("FPDFFont_GetIsEmbedded",
+    public static final MethodHandle FPDFFont_GetIsEmbedded = downcall("FPDFFont_GetIsEmbedded",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get font descriptor flags (ISO 32000-1 table 123). Returns -1 on failure. */
-    public static final MethodHandle FPDFFont_GetFlags = downcallCritical("FPDFFont_GetFlags",
+    public static final MethodHandle FPDFFont_GetFlags = downcall("FPDFFont_GetFlags",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get font weight (400=normal, 700=bold). Returns -1 on failure. */
-    public static final MethodHandle FPDFFont_GetWeight = downcallCritical("FPDFFont_GetWeight",
+    public static final MethodHandle FPDFFont_GetWeight = downcall("FPDFFont_GetWeight",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get italic angle in degrees. Returns FPDF_BOOL. */
@@ -142,32 +138,32 @@ public final class PageEditBindings {
     public static final MethodHandle FPDFFont_GetDescent = downcall("FPDFFont_GetDescent",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, ADDRESS));
 
-    public static final MethodHandle FPDFBitmap_GetWidth = downcallCritical("FPDFBitmap_GetWidth",
+    public static final MethodHandle FPDFBitmap_GetWidth = downcall("FPDFBitmap_GetWidth",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDFBitmap_GetHeight = downcallCritical("FPDFBitmap_GetHeight",
+    public static final MethodHandle FPDFBitmap_GetHeight = downcall("FPDFBitmap_GetHeight",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDFBitmap_GetBuffer = downcallCritical("FPDFBitmap_GetBuffer",
+    public static final MethodHandle FPDFBitmap_GetBuffer = downcall("FPDFBitmap_GetBuffer",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFBitmap_GetStride = downcallCritical("FPDFBitmap_GetStride",
+    public static final MethodHandle FPDFBitmap_GetStride = downcall("FPDFBitmap_GetStride",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Returns the pixel format: 1=Gray, 2=BGR, 3=BGRx, 4=BGRA. */
-    public static final MethodHandle FPDFBitmap_GetFormat = downcallCritical("FPDFBitmap_GetFormat",
+    public static final MethodHandle FPDFBitmap_GetFormat = downcall("FPDFBitmap_GetFormat",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFBitmap_Destroy = downcall("FPDFBitmap_Destroy",
             FunctionDescriptor.ofVoid(ADDRESS));
 
-    public static final MethodHandle FPDFPage_GetRotation = downcallCritical("FPDFPage_GetRotation",
+    public static final MethodHandle FPDFPage_GetRotation = downcall("FPDFPage_GetRotation",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFPage_SetRotation = downcall("FPDFPage_SetRotation",
             FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT));
 
-    public static final MethodHandle FPDFPage_Flatten = downcallCritical("FPDFPage_Flatten",
+    public static final MethodHandle FPDFPage_Flatten = downcall("FPDFPage_Flatten",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Close a page handle obtained via FPDFPage_New or FPDF_LoadPage. */
@@ -207,7 +203,7 @@ public final class PageEditBindings {
             FunctionDescriptor.ofVoid(ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
 
     /** Check if page has transparency. */
-    public static final MethodHandle FPDFPage_HasTransparency = downcallCritical("FPDFPage_HasTransparency",
+    public static final MethodHandle FPDFPage_HasTransparency = downcall("FPDFPage_HasTransparency",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     // Page object property getters
@@ -217,7 +213,7 @@ public final class PageEditBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
     public static final MethodHandle FPDFPageObj_GetStrokeWidth = downcall("FPDFPageObj_GetStrokeWidth",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
-    public static final MethodHandle FPDFPageObj_HasTransparency = downcallCritical("FPDFPageObj_HasTransparency",
+    public static final MethodHandle FPDFPageObj_HasTransparency = downcall("FPDFPageObj_HasTransparency",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get transform matrix [a,b,c,d,e,f]. */
@@ -225,9 +221,9 @@ public final class PageEditBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     // Marked content
-    public static final MethodHandle FPDFPageObj_CountMarks = downcallCritical("FPDFPageObj_CountMarks",
+    public static final MethodHandle FPDFPageObj_CountMarks = downcall("FPDFPageObj_CountMarks",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
-    public static final MethodHandle FPDFPageObj_GetMark = downcallCritical("FPDFPageObj_GetMark",
+    public static final MethodHandle FPDFPageObj_GetMark = downcall("FPDFPageObj_GetMark",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
     public static final MethodHandle FPDFPageObjMark_GetName = downcall("FPDFPageObjMark_GetName",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG));
@@ -245,7 +241,7 @@ public final class PageEditBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_LONG, JAVA_FLOAT));
 
     // Text render mode
-    public static final MethodHandle FPDFTextObj_GetTextRenderMode = downcallCritical("FPDFTextObj_GetTextRenderMode",
+    public static final MethodHandle FPDFTextObj_GetTextRenderMode = downcall("FPDFTextObj_GetTextRenderMode",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Layout of FS_MATRIX: { float a, b, c, d, e, f }. */
