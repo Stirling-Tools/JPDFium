@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Compare a JMH results.json against a baseline.json and fail on regressions.
+"""Compare a JMH results.json against a baseline.json and report regressions.
 
-The gate is intentionally conservative because the benchmarks run on shared
-GitHub runners:
+CI runs this in ``--advisory`` mode, which always exits 0. The benchmarks run
+on shared GitHub runners and the baseline is cached from a previous run on a
+different runner instance, so absolute scores are not comparable enough to
+gate a pull request: the same unchanged commit commonly measures 20-40% apart
+across `ubuntu-latest` hardware classes. A blocking verdict therefore flakes
+regardless of the tolerance; the report is kept for trend visibility only.
+Without ``--advisory`` the script still fails on regressions so it remains
+usable for controlled A/B measurements (same runner, same run).
+
+The comparison itself is conservative:
 
 * A benchmark is flagged only when the current run's lower confidence bound
   (score - scoreError) still exceeds the baseline's upper bound
@@ -17,12 +25,11 @@ GitHub runners:
   single-digit-microsecond no-ops on numbers no runner can reproduce.
 * A run whose whole suite shifted together (a different `ubuntu-latest`
   hardware class) is reported but not gated; see RUNNER_CLASS_TOLERANCE.
-* The caller (ci.yml) re-runs the suite once when this script fails, to rule
-  out transient host noise, before failing the job.
 
-Exit code: 1 if any gated benchmark regressed, 0 otherwise.
+Exit code: 0 in advisory mode or when no gated benchmark regressed, 1 otherwise.
 """
 
+import argparse
 import json
 import statistics
 import sys
@@ -89,7 +96,7 @@ def common_mode_shift(results: dict, baseline: dict) -> float | None:
     return statistics.median(ratios)
 
 
-def main() -> int:
+def main(advisory: bool) -> int:
     results_path = "jpdfium/build/results/jmh/results.json"
     baseline_path = "jpdfium/build/results/jmh/baseline.json"
 
@@ -150,12 +157,20 @@ def main() -> int:
             print(f"  {name}")
 
     if regressions:
+        label = "ADVISORY" if advisory else "FAIL"
         print(
-            f"\nFAIL: {len(regressions)} benchmark(s) regressed by more than "
+            f"\n{label}: {len(regressions)} benchmark(s) regressed by more than "
             f"{MAX_REGRESSION_PCT}% (error-adjusted):"
         )
         for name, pct in regressions:
             print(f"  {name}: +{pct:.1f}%")
+        if advisory:
+            print(
+                "\nNot failing the build: cross-runner JMH variance is larger "
+                "than this threshold, so a cached baseline cannot prove a "
+                "code regression. Results are uploaded for trend analysis."
+            )
+            return 0
         return 1
 
     if shifted:
@@ -170,4 +185,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--advisory",
+        action="store_true",
+        help="report regressions but exit 0 (used by CI on shared runners)",
+    )
+    sys.exit(main(parser.parse_args().advisory))
