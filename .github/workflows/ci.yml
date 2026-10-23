@@ -327,10 +327,15 @@ jobs:
           path: jpdfium/build/reports/tests/test/
 
   # -------------------------------------------------------------------------
-  # Job 5: JMH microbenchmarks (FFM downcall overhead gate)
+  # Job 5: JMH microbenchmarks (advisory trend report, not a gate)
+  #
+  # Shared runners cannot reproduce absolute scores closely enough to gate a
+  # PR: the same commit can measure 20-40% apart across `ubuntu-latest`
+  # instances. This job still fails if JMH itself cannot run, but a baseline
+  # regression is reported without failing the build.
   # -------------------------------------------------------------------------
   jmh-benchmarks:
-    name: JMH Benchmarks (FFM Downcall Overhead Gate)
+    name: JMH Benchmarks (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
@@ -369,7 +374,12 @@ jobs:
           key: jmh-baseline-v3-${{ github.base_ref || 'main' }}-${{ github.run_id }}
           restore-keys: jmh-baseline-v3-${{ github.base_ref || 'main' }}-
 
-      - name: Compare results against baseline (warn if regressed >15%)
+      - name: Compare results against baseline (advisory only)
+        # Advisory, never blocking. Absolute JMH scores from two different
+        # `ubuntu-latest` runner instances routinely differ by 20-40% on the
+        # same commit, so a cached cross-run baseline cannot support a
+        # regression gate. The comparison stays for trend visibility, but its
+        # exit code must not decide whether the job passes.
         run: |
           RESULTS="jpdfium/build/results/jmh/results.json"
           BASELINE="jpdfium/build/results/jmh/baseline.json"
@@ -379,21 +389,7 @@ jobs:
             cp "$RESULTS" "$BASELINE"
             exit 0
           fi
-          if python3 .github/scripts/compare-jmh.py; then
-            exit 0
-          fi
-          echo ""
-          echo "Regressions detected - re-running benchmarks once to rule out"
-          echo "transient runner noise before failing the job..."
-          # --rerun-tasks forces a fresh measurement: without it Gradle sees the
-          # first :jpdfium:jmh output as UP-TO-DATE and the retry just re-reads
-          # the same results.json, so a noisy first pass can never be recovered.
-          ./gradlew :jpdfium:jmh \
-            -Pjmh.warmupIterations=4 \
-            -Pjmh.iterations=5 \
-            --rerun-tasks \
-            --no-daemon
-          python3 .github/scripts/compare-jmh.py
+          python3 .github/scripts/compare-jmh.py --advisory
 
       - name: Update baseline cache on main push
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
