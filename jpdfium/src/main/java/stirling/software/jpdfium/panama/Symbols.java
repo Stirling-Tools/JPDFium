@@ -139,6 +139,18 @@ public final class Symbols {
     }
 
     /**
+     * Historical alias of {@link #downcall}; the {@code Critical} suffix never promised
+     * {@link Linker.Option#critical(boolean)}. Kept for binary compatibility; new call sites should
+     * use {@link #downcall}.
+     *
+     * @deprecated use {@link #downcall(String, FunctionDescriptor, Linker.Option...)}
+     */
+    @Deprecated(forRemoval = true)
+    public static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
+        return downcall(name, desc);
+    }
+
+    /**
      * List of symbols requested but not found in the current native library.
      */
     public static List<String> auditMissing() {
