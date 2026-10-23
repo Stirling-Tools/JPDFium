@@ -21,10 +21,6 @@ public final class EmbedPdfDocumentBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     /** Bit 3: Print document. */
     public static final long EPDF_PERM_PRINT         = 1L << 2;
     /** Bit 4: Modify contents. */
@@ -58,15 +54,15 @@ public final class EmbedPdfDocumentBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Check if a document is encrypted. */
-    public static final MethodHandle EPDF_IsEncrypted = downcallCritical("EPDF_IsEncrypted",
+    public static final MethodHandle EPDF_IsEncrypted = downcall("EPDF_IsEncrypted",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Check if owner permissions are unlocked. */
-    public static final MethodHandle EPDF_IsOwnerUnlocked = downcallCritical("EPDF_IsOwnerUnlocked",
+    public static final MethodHandle EPDF_IsOwnerUnlocked = downcall("EPDF_IsOwnerUnlocked",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Get the page's /Rotate at the given index without loading the page; returns -1 on error. */
-    public static final MethodHandle EPDF_GetPageRotateByIndex = downcallCritical("EPDF_GetPageRotateByIndex",
+    public static final MethodHandle EPDF_GetPageRotateByIndex = downcall("EPDF_GetPageRotateByIndex",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
 
     /** Load a page with rotation normalized to 0 degrees. */

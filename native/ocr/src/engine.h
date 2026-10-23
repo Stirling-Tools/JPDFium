@@ -91,9 +91,12 @@ struct Profile {
     RecognizerParams rec;
 };
 
-// Reads DIR/profile.txt, checks the small files against their pinned SHA-256 and loads the
-// dictionary from the same bytes it hashed. Models are checked when read, by read_pinned.
-jpdf_status load_profile(const std::filesystem::path& dir, Profile* out, std::string* detail);
+// Reads DIR/profile.txt, checks it against EXPECTED_SHA256 when non-empty (otherwise against
+// the compiled-in digest for its id), checks the small files against their pinned SHA-256 and
+// loads the dictionary from the same bytes it hashed. Models are checked when read, by
+// read_pinned.
+jpdf_status load_profile(const std::filesystem::path& dir, const std::string& expected_sha256,
+                         Profile* out, std::string* detail);
 
 // Reads a whole file and refuses it unless it matches its digest, so the bytes checked are the
 // bytes used.
@@ -121,7 +124,8 @@ struct OcrResult {
 
 class Engine {
    public:
-    static jpdf_status open(const std::filesystem::path& profile_dir, int intra_op_threads,
+    static jpdf_status open(const std::filesystem::path& profile_dir,
+                            const std::string& expected_sha256, int intra_op_threads,
                             std::unique_ptr<Engine>* out, std::string* detail);
 
     // Runs detection, cropping and recognition on a BGR image. Safe to call concurrently.

@@ -907,7 +907,11 @@ JPDF_API void* jpdf_guard_FPDFText_LoadPage(void* page) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFText_LoadPage(page);
+        auto result = FPDFText_LoadPage(page);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::TextPage, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -919,6 +923,9 @@ JPDF_API void jpdf_guard_FPDFText_ClosePage(void* p0) noexcept {
     if (!guard.admitted()) return;
     try {
         FPDFText_ClosePage(p0);
+        if (p0 != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::TextPage, p0);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;

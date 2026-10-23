@@ -12,10 +12,11 @@ constexpr uintmax_t kMaxModelBytes = uintmax_t{512} << 20;
 
 }  // namespace
 
-jpdf_status Engine::open(const std::filesystem::path& profile_dir, int intra_op_threads,
+jpdf_status Engine::open(const std::filesystem::path& profile_dir,
+                         const std::string& expected_sha256, int intra_op_threads,
                          std::unique_ptr<Engine>* out, std::string* detail) {
     std::unique_ptr<Engine> engine(new Engine());
-    jpdf_status st = load_profile(profile_dir, &engine->profile_, detail);
+    jpdf_status st = load_profile(profile_dir, expected_sha256, &engine->profile_, detail);
     if (st != JPDF_OK) return st;
     std::vector<uint8_t> model;
     if ((st = read_pinned(engine->profile_.detector, kMaxModelBytes, &model, detail)) != JPDF_OK) {
@@ -166,11 +167,39 @@ const OrtApi* runtime_api() noexcept {
     return api;
 }
 
-OrtEnv* runtime_env(const OrtApi* api) noexcept {
+bool failed(const OrtApi* api, OrtStatus* status, std::string* detail);
+
+OrtEnv* runtime_env(const OrtApi* api, int intra_op_threads) noexcept {
     static std::once_flag once;
     static OrtEnv* env = nullptr;
-    std::call_once(once, [api] {
-        if (OrtStatus* st = api->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "jpdfium-ocr", &env)) {
+    std::call_once(once, [api, intra_op_threads] {
+        std::string ignored;
+        OrtThreadingOptions* threading = nullptr;
+        if (OrtStatus* st = api->CreateThreadingOptions(&threading)) {
+            api->ReleaseStatus(st);
+            return;
+        }
+        struct ThreadingGuard {
+            const OrtApi* api;
+            OrtThreadingOptions* options;
+            ~ThreadingGuard() {
+                if (options) api->ReleaseThreadingOptions(options);
+            }
+        } guard{api, threading};
+        // One global pool shared by the detector and recognizer sessions. Per-session pools
+        // would size each session to the physical core count and oversubscribe the CPU when
+        // both run, or when several engines are open. The first engine's explicit request sets
+        // the process-wide pool; later values cannot resize it.
+        if (intra_op_threads > 0 &&
+            failed(api, api->SetGlobalIntraOpNumThreads(threading, intra_op_threads), &ignored)) {
+            return;
+        }
+        if (failed(api, api->SetGlobalInterOpNumThreads(threading, 1), &ignored)) return;
+        // Do not spin between calls: the JVM server is mostly idle and the default spin burns
+        // CPU in the caller's cgroup.
+        if (failed(api, api->SetGlobalSpinControl(threading, 0), &ignored)) return;
+        if (OrtStatus* st = api->CreateEnvWithGlobalThreadPools(ORT_LOGGING_LEVEL_WARNING,
+                                                                "jpdfium-ocr", threading, &env)) {
             api->ReleaseStatus(st);
             env = nullptr;
         }
@@ -229,7 +258,7 @@ jpdf_status Session::create(const std::vector<uint8_t>& model, int intra_op_thre
         *detail = "ONNX Runtime is older than the C API this module needs";
         return JPDF_E_UNSUPPORTED;
     }
-    OrtEnv* env = runtime_env(api);
+    OrtEnv* env = runtime_env(api, intra_op_threads);
     if (!env) {
         *detail = "ONNX Runtime environment could not be created";
         return JPDF_E_INTERNAL;
@@ -240,9 +269,17 @@ jpdf_status Session::create(const std::vector<uint8_t>& model, int intra_op_thre
     if (failed(api, api->CreateSessionOptions(&options), detail)) return JPDF_E_INTERNAL;
     std::unique_ptr<OrtSessionOptions, void (*)(OrtSessionOptions*)> owned_options(
         options, [](OrtSessionOptions* o) { runtime_api()->ReleaseSessionOptions(o); });
-    if (intra_op_threads > 0 &&
-        failed(api, api->SetIntraOpNumThreads(options, intra_op_threads), detail)) {
-        return JPDF_E_INVALID_ARGUMENT;
+    // The env owns the process-wide intra-op pool, so every session must use it instead of
+    // creating a second pool sized to the same core count.
+    if (failed(api, api->DisablePerSessionThreads(options), detail)) return JPDF_E_INTERNAL;
+    if (failed(api, api->SetInterOpNumThreads(options, 1), detail)) return JPDF_E_INTERNAL;
+    // Detector and recognizer input shapes change on every call. Memory pattern planning would
+    // allocate for each shape and never give the peak back, so disable it and use the plain
+    // device allocator below instead of a per-session arena.
+    if (failed(api, api->DisableMemPattern(options), detail)) return JPDF_E_INTERNAL;
+    if (failed(api, api->AddSessionConfigEntry(options, "session.intra_op.allow_spinning", "0"),
+               detail)) {
+        return JPDF_E_INTERNAL;
     }
     if (failed(api,
                api->CreateSessionFromArray(env, model.data(), model.size(), options,
@@ -251,7 +288,7 @@ jpdf_status Session::create(const std::vector<uint8_t>& model, int intra_op_thre
         return JPDF_E_FORMAT;
     }
     if (failed(api,
-               api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &session->memory_),
+               api->CreateCpuMemoryInfo(OrtDeviceAllocator, OrtMemTypeDefault, &session->memory_),
                detail)) {
         return JPDF_E_INTERNAL;
     }

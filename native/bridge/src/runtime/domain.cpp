@@ -2,9 +2,11 @@
 
 #include "domain.h"
 
+#include <algorithm>
 #include <new>
 #include <string>
 #include <system_error>
+#include <thread>
 
 #include "api_status.h"
 #include "guard.h"
@@ -25,6 +27,13 @@ uint64_t between_ns(std::chrono::steady_clock::time_point from,
                     std::chrono::steady_clock::time_point to) noexcept {
     auto d = to - from;
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
+}
+
+// Saturating so a mismatched close cannot wrap a counter and mask a real leak from shutdown.
+void saturating_decrement(std::atomic<uint64_t>& count) noexcept {
+    for (uint64_t current = count.load(std::memory_order_relaxed); current != 0;) {
+        if (count.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)) return;
+    }
 }
 
 jpdf_status reject_for_state(State state, Purpose purpose) noexcept {
@@ -52,6 +61,10 @@ bool in_domain() noexcept {
     return t_in_domain;
 }
 
+Domain::Domain() noexcept {
+    for (auto& count : live_) count.store(0, std::memory_order_relaxed);
+}
+
 Domain& Domain::instance() noexcept {
     // Never destroyed: worker threads may still be leaving the domain during static teardown.
     alignas(Domain) static unsigned char storage[sizeof(Domain)];
@@ -65,9 +78,9 @@ jpdf_status Domain::init(int32_t renderer) noexcept {
         renderer != JPDF_RENDERER_SKIA) {
         return fail(JPDF_E_INVALID_ARGUMENT, "unknown renderer");
     }
-    // std::timed_mutex::lock can throw std::system_error; this function is noexcept, so a throw
+    // std::mutex::lock can throw std::system_error; this function is noexcept, so a throw
     // here would terminate before any ABI firewall could map it to a status.
-    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
     try {
         lock.lock();
     } catch (const std::system_error&) {
@@ -115,18 +128,28 @@ jpdf_status Domain::resume() noexcept {
 
 jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
     if (t_in_domain) return fail(JPDF_E_REENTRANT, "shutdown called from inside the domain");
-    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
-    // Both lock() and try_lock_for() can throw std::system_error; this function is noexcept and
-    // must report a status instead of letting the exception terminate the process.
-    try {
-        if (timeout_ms < 0) {
-            lock.lock();
-        } else if (!lock.try_lock_for(std::chrono::milliseconds(timeout_ms))) {
-            // Bounded so a JVM exit hook never parks behind a long-running operation.
+    std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+    // A plain mutex with a try_lock backoff is cheaper than std::timed_mutex on MSVC, where
+    // timed waits are built from a mutex and a condition variable. The bounded loop lets a JVM
+    // exit hook give up instead of parking behind a long operation.
+    const auto deadline =
+        timeout_ms < 0 ? std::chrono::steady_clock::time_point::max()
+                       : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    auto backoff = std::chrono::microseconds(50);
+    for (;;) {
+        if (mutex_.try_lock()) {
+            lock = std::unique_lock<std::mutex>(mutex_, std::adopt_lock);
+            break;
+        }
+        if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline) {
             return fail(JPDF_E_TIMEOUT, "PDFium domain stayed busy; shutdown skipped");
         }
-    } catch (const std::system_error&) {
-        return fail(JPDF_E_INTERNAL, "could not acquire the PDFium domain");
+        try {
+            std::this_thread::sleep_for(backoff);
+        } catch (...) {
+            return fail(JPDF_E_INTERNAL, "could not wait for the PDFium domain");
+        }
+        backoff = std::min(backoff * 2, std::chrono::microseconds(2000));
     }
     switch (state()) {
         case State::Stopped:
@@ -144,13 +167,21 @@ jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
     }
     const uint64_t docs = live_documents_.load();
     const uint64_t pages = live_pages_.load();
-    if (docs != 0 || pages != 0) {
-        // Stays QUIESCING so the caller can close what is open and retry.
+    uint64_t others = 0;
+    for (size_t i = static_cast<size_t>(Resource::TextPage);
+         i < static_cast<size_t>(Resource::Count); ++i) {
+        others += live_[i].load(std::memory_order_relaxed);
+    }
+    if (docs != 0 || pages != 0 || others != 0) {
+        // Stays QUIESCING so the caller can close what is open and retry. Text pages, form
+        // environments, searches, annotations and raw bitmaps can outlive a guarded call, and
+        // PDFium must not be destroyed while any of them is still alive.
         try {
             return fail(JPDF_E_BUSY, "shutdown refused with " + std::to_string(docs) +
-                                         " documents and " + std::to_string(pages) + " pages open");
+                                         " documents, " + std::to_string(pages) + " pages and " +
+                                         std::to_string(others) + " other PDFium resources open");
         } catch (...) {
-            return fail(JPDF_E_BUSY, "shutdown refused with documents or pages open");
+            return fail(JPDF_E_BUSY, "shutdown refused with open PDFium resources");
         }
     }
     // Only a still-quiescing domain may be destroyed: resume() is lock-free and can
@@ -173,35 +204,91 @@ jpdf_status Domain::shutdown(int64_t timeout_ms) noexcept {
 }
 
 DomainStats Domain::stats() const noexcept {
-    return DomainStats{acquisitions_.load(), wait_ns_.load(), hold_ns_.load(),
-                       live_documents_.load(), live_pages_.load()};
+    uint64_t others = 0;
+    for (size_t i = static_cast<size_t>(Resource::TextPage);
+         i < static_cast<size_t>(Resource::Count); ++i) {
+        others += live_[i].load(std::memory_order_relaxed);
+    }
+    return DomainStats{acquisitions_.load(), wait_ns_.load(),
+                       hold_ns_.load(),      live_documents_.load(),
+                       live_pages_.load(),   live_documents_.load() + live_pages_.load() + others};
 }
 
-void Domain::document_opened() noexcept {
-    live_documents_.fetch_add(1);
-}
-
-void Domain::document_closed() noexcept {
-    // Saturating so a mismatched close cannot wrap the counter and mask a real leak from
-    // shutdown's BUSY check.
-    for (uint64_t current = live_documents_.load(std::memory_order_relaxed); current != 0;) {
-        if (live_documents_.compare_exchange_weak(current, current - 1,
-                                                  std::memory_order_relaxed)) {
-            return;
+void Domain::document_opened(const void* document) noexcept {
+    bool added = true;
+    if (document) {
+        try {
+            std::lock_guard<std::mutex> lock(handle_mutex_);
+            added = live_document_handles_.insert(document).second;
+        } catch (...) {
+            // The registry is an optimization against double counting; failing to record the
+            // handle must not terminate a noexcept PDFium call.
+            added = true;
         }
+    }
+    if (added) live_documents_.fetch_add(1);
+}
+
+void Domain::document_closed(const void* document) noexcept {
+    bool removed = true;
+    if (document) {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        removed = live_document_handles_.erase(document) != 0;
+    }
+    if (removed) saturating_decrement(live_documents_);
+}
+
+void Domain::page_opened(const void* page) noexcept {
+    bool added = true;
+    if (page) {
+        try {
+            std::lock_guard<std::mutex> lock(handle_mutex_);
+            added = live_page_handles_.insert(page).second;
+        } catch (...) {
+            added = true;
+        }
+    }
+    if (added) live_pages_.fetch_add(1);
+}
+
+void Domain::page_closed(const void* page) noexcept {
+    bool removed = true;
+    if (page) {
+        std::lock_guard<std::mutex> lock(handle_mutex_);
+        removed = live_page_handles_.erase(page) != 0;
+    }
+    if (removed) saturating_decrement(live_pages_);
+}
+
+void Domain::resource_opened(Resource resource, const void* handle) noexcept {
+    switch (resource) {
+        case Resource::Document:
+            document_opened(handle);
+            return;
+        case Resource::Page:
+            page_opened(handle);
+            return;
+        case Resource::Count:
+            return;
+        default:
+            live_[static_cast<size_t>(resource)].fetch_add(1, std::memory_order_relaxed);
+            return;
     }
 }
 
-void Domain::page_opened() noexcept {
-    live_pages_.fetch_add(1);
-}
-
-void Domain::page_closed() noexcept {
-    // Saturating for the same reason as document_closed().
-    for (uint64_t current = live_pages_.load(std::memory_order_relaxed); current != 0;) {
-        if (live_pages_.compare_exchange_weak(current, current - 1, std::memory_order_relaxed)) {
+void Domain::resource_closed(Resource resource, const void* handle) noexcept {
+    switch (resource) {
+        case Resource::Document:
+            document_closed(handle);
             return;
-        }
+        case Resource::Page:
+            page_closed(handle);
+            return;
+        case Resource::Count:
+            return;
+        default:
+            saturating_decrement(live_[static_cast<size_t>(resource)]);
+            return;
     }
 }
 
@@ -215,16 +302,22 @@ Admission::Admission(Purpose purpose) noexcept {
     if (domain.mutex_.try_lock()) {
         // Uncontended, the common case: nothing was waited for, so no wait telemetry needs a
         // clock read and the acquisition is a plain try_lock rather than a blocking lock.
-        lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_, std::adopt_lock);
+        lock_ = std::unique_lock<std::mutex>(domain.mutex_, std::adopt_lock);
         acquired_at_ = std::chrono::steady_clock::now();
     } else {
         const auto requested = std::chrono::steady_clock::now();
-        try {
-            lock_ = std::unique_lock<std::timed_mutex>(domain.mutex_);
-        } catch (const std::system_error&) {
-            status_ = fail(JPDF_E_INTERNAL, "could not lock the PDFium domain");
-            return;
+        auto backoff = std::chrono::microseconds(50);
+        while (!domain.mutex_.try_lock()) {
+            // Backoff keeps a queue of tiny calls from spinning while a render holds the domain.
+            try {
+                std::this_thread::sleep_for(backoff);
+            } catch (...) {
+                status_ = fail(JPDF_E_INTERNAL, "could not wait for the PDFium domain");
+                return;
+            }
+            backoff = std::min(backoff * 2, std::chrono::microseconds(2000));
         }
+        lock_ = std::unique_lock<std::mutex>(domain.mutex_, std::adopt_lock);
         // The wait ends exactly where the hold begins, so reuse the acquisition timestamp
         // instead of taking a redundant second clock read.
         acquired_at_ = std::chrono::steady_clock::now();

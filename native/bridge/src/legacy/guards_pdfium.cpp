@@ -733,7 +733,7 @@ JPDF_API FPDF_PAGE jpdf_guard_EPDFDoc_LoadPageByObjectNumber(FPDF_DOCUMENT docum
     try {
         auto result = EPDFDoc_LoadPageByObjectNumber(document, obj_num);
         if (result != nullptr) {
-            jpdf::Domain::instance().page_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Page, result);
         }
         return result;
     } catch (...) {
@@ -749,7 +749,7 @@ JPDF_API FPDF_PAGE jpdf_guard_EPDFDoc_LoadPageByObjectNumberNormalized(
     try {
         auto result = EPDFDoc_LoadPageByObjectNumberNormalized(document, obj_num);
         if (result != nullptr) {
-            jpdf::Domain::instance().page_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Page, result);
         }
         return result;
     } catch (...) {
@@ -1030,7 +1030,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_EPDFPage_CreateAnnot(FPDF_PAGE page,
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFPage_CreateAnnot(page, subtype);
+        auto result = EPDFPage_CreateAnnot(page, subtype);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1045,7 +1049,7 @@ JPDF_API FPDF_DOCUMENT jpdf_guard_EPDFPage_ExportAnnotationsAsDocument(FPDF_PAGE
     try {
         auto result = EPDFPage_ExportAnnotationsAsDocument(page, annots, annot_count);
         if (result != nullptr) {
-            jpdf::Domain::instance().document_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Document, result);
         }
         return result;
     } catch (...) {
@@ -1083,7 +1087,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_EPDFPage_GetAnnotByName(FPDF_PAGE page,
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFPage_GetAnnotByName(page, nm);
+        auto result = EPDFPage_GetAnnotByName(page, nm);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1095,7 +1103,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_EPDFPage_GetAnnotByObjectNumber(FPDF_PAGE pa
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFPage_GetAnnotByObjectNumber(page, obj_num);
+        auto result = EPDFPage_GetAnnotByObjectNumber(page, obj_num);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1118,7 +1130,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_EPDFPage_GetAnnotRaw(FPDF_DOCUMENT doc, int 
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFPage_GetAnnotRaw(doc, page_index, index);
+        auto result = EPDFPage_GetAnnotRaw(doc, page_index, index);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1313,7 +1329,7 @@ JPDF_API FPDF_PAGE jpdf_guard_EPDF_LoadPageNormalized(FPDF_DOCUMENT document, in
     try {
         auto result = EPDF_LoadPageNormalized(document, page_index, out_original_rotation);
         if (result != nullptr) {
-            jpdf::Domain::instance().page_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Page, result);
         }
         return result;
     } catch (...) {
@@ -1972,7 +1988,11 @@ JPDF_API FPDF_BITMAP jpdf_guard_FPDFBitmap_Create(int width, int height, int alp
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFBitmap_Create(width, height, alpha);
+        auto result = FPDFBitmap_Create(width, height, alpha);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Bitmap, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1984,7 +2004,11 @@ JPDF_API FPDF_BITMAP jpdf_guard_FPDFBitmap_CreateEx(int width, int height, int f
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFBitmap_CreateEx(width, height, format, first_scan, stride);
+        auto result = FPDFBitmap_CreateEx(width, height, format, first_scan, stride);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Bitmap, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -1996,6 +2020,9 @@ JPDF_API void jpdf_guard_FPDFBitmap_Destroy(FPDF_BITMAP bitmap) noexcept {
     if (!guard.admitted()) return;
     try {
         FPDFBitmap_Destroy(bitmap);
+        if (bitmap != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::Bitmap, bitmap);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;
@@ -2167,6 +2194,9 @@ JPDF_API void jpdf_guard_FPDFDOC_ExitFormFillEnvironment(FPDF_FORMHANDLE hHandle
     if (!guard.admitted()) return;
     try {
         FPDFDOC_ExitFormFillEnvironment(hHandle);
+        if (hHandle != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::FormEnvironment, hHandle);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;
@@ -2178,7 +2208,11 @@ JPDF_API FPDF_FORMHANDLE jpdf_guard_FPDFDOC_InitFormFillEnvironment(
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFDOC_InitFormFillEnvironment(document, formInfo);
+        auto result = FPDFDOC_InitFormFillEnvironment(document, formInfo);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::FormEnvironment, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -2421,7 +2455,11 @@ JPDF_API FPDF_BITMAP jpdf_guard_FPDFImageObj_GetBitmap(FPDF_PAGEOBJECT image_obj
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFImageObj_GetBitmap(image_object);
+        auto result = FPDFImageObj_GetBitmap(image_object);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Bitmap, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -2508,7 +2546,11 @@ JPDF_API FPDF_BITMAP jpdf_guard_FPDFImageObj_GetRenderedBitmap(
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFImageObj_GetRenderedBitmap(document, page, image_object);
+        auto result = FPDFImageObj_GetRenderedBitmap(document, page, image_object);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Bitmap, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -2978,6 +3020,9 @@ JPDF_API void jpdf_guard_FPDFPage_CloseAnnot(FPDF_ANNOTATION annot) noexcept {
     if (!guard.admitted()) return;
     try {
         FPDFPage_CloseAnnot(annot);
+        if (annot != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::Annotation, annot);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;
@@ -3000,7 +3045,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_FPDFPage_CreateAnnot(FPDF_PAGE page,
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFPage_CreateAnnot(page, subtype);
+        auto result = FPDFPage_CreateAnnot(page, subtype);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3044,7 +3093,11 @@ JPDF_API FPDF_ANNOTATION jpdf_guard_FPDFPage_GetAnnot(FPDF_PAGE page, int index)
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFPage_GetAnnot(page, index);
+        auto result = FPDFPage_GetAnnot(page, index);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Annotation, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3171,7 +3224,11 @@ JPDF_API FPDF_BITMAP jpdf_guard_FPDFPage_GetThumbnailAsBitmap(FPDF_PAGE page) no
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFPage_GetThumbnailAsBitmap(page);
+        auto result = FPDFPage_GetThumbnailAsBitmap(page);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Bitmap, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3220,7 +3277,7 @@ JPDF_API FPDF_PAGE jpdf_guard_FPDFPage_New(FPDF_DOCUMENT document, int page_inde
     try {
         auto result = FPDFPage_New(document, page_index, width, height);
         if (result != nullptr) {
-            jpdf::Domain::instance().page_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Page, result);
         }
         return result;
     } catch (...) {
@@ -3506,6 +3563,9 @@ JPDF_API void jpdf_guard_FPDFText_ClosePage(FPDF_TEXTPAGE text_page) noexcept {
     if (!guard.admitted()) return;
     try {
         FPDFText_ClosePage(text_page);
+        if (text_page != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::TextPage, text_page);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;
@@ -3540,6 +3600,9 @@ JPDF_API void jpdf_guard_FPDFText_FindClose(FPDF_SCHHANDLE handle) noexcept {
     if (!guard.admitted()) return;
     try {
         FPDFText_FindClose(handle);
+        if (handle != nullptr) {
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::Search, handle);
+        }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return;
@@ -3574,7 +3637,11 @@ JPDF_API FPDF_SCHHANDLE jpdf_guard_FPDFText_FindStart(FPDF_TEXTPAGE text_page,
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFText_FindStart(text_page, findwhat, flags, start_index);
+        auto result = FPDFText_FindStart(text_page, findwhat, flags, start_index);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Search, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3706,7 +3773,11 @@ JPDF_API FPDF_TEXTPAGE jpdf_guard_FPDFText_LoadPage(FPDF_PAGE page) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return FPDFText_LoadPage(page);
+        auto result = FPDFText_LoadPage(page);
+        if (result != nullptr) {
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::TextPage, result);
+        }
+        return result;
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};
@@ -3731,7 +3802,7 @@ JPDF_API void jpdf_guard_FPDF_CloseDocument(FPDF_DOCUMENT document) noexcept {
     try {
         FPDF_CloseDocument(document);
         if (document != nullptr) {
-            jpdf::Domain::instance().document_closed();
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::Document, document);
         }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
@@ -3745,7 +3816,7 @@ JPDF_API void jpdf_guard_FPDF_ClosePage(FPDF_PAGE page) noexcept {
     try {
         FPDF_ClosePage(page);
         if (page != nullptr) {
-            jpdf::Domain::instance().page_closed();
+            jpdf::Domain::instance().resource_closed(jpdf::Resource::Page, page);
         }
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
@@ -3782,7 +3853,7 @@ JPDF_API FPDF_DOCUMENT jpdf_guard_FPDF_CreateNewDocument(void) noexcept {
     try {
         auto result = FPDF_CreateNewDocument();
         if (result != nullptr) {
-            jpdf::Domain::instance().document_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Document, result);
         }
         return result;
     } catch (...) {
@@ -3957,7 +4028,7 @@ JPDF_API FPDF_DOCUMENT jpdf_guard_FPDF_ImportNPagesToOne(FPDF_DOCUMENT src_doc, 
         auto result = FPDF_ImportNPagesToOne(src_doc, output_width, output_height,
                                              num_pages_on_x_axis, num_pages_on_y_axis);
         if (result != nullptr) {
-            jpdf::Domain::instance().document_opened();
+            jpdf::Domain::instance().resource_opened(jpdf::Resource::Document, result);
         }
         return result;
     } catch (...) {

@@ -109,7 +109,7 @@ jpdf_status jpdf_doc_open_file(const char* path_utf8, const jpdf_open_options* o
             return jpdf::fail(st, "object table rejected the document");
         }
         loaded.doc = nullptr;
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(object->doc);
         *out_doc = token;
         return JPDF_OK;
     });
@@ -127,9 +127,10 @@ jpdf_status jpdf_doc_close(jpdf_handle doc) noexcept {
         }
         st = jpdf::objects().retire(doc, jpdf::ObjectType::Document, nullptr);
         if (st != JPDF_OK) return jpdf::fail(st, "document handle rejected");
+        const FPDF_DOCUMENT raw_doc = object->doc;
         FPDF_CloseDocument(object->doc);
         object->doc = nullptr;
-        jpdf::Domain::instance().document_closed();
+        jpdf::Domain::instance().document_closed(raw_doc);
         return JPDF_OK;
     });
 }
@@ -170,7 +171,7 @@ jpdf_status jpdf_page_open(jpdf_handle doc, int32_t index, jpdf_handle* out_page
         }
         loaded.page = nullptr;
         document->open_pages++;
-        jpdf::Domain::instance().page_opened();
+        jpdf::Domain::instance().page_opened(object->page);
         *out_page = token;
         return JPDF_OK;
     });
@@ -183,10 +184,11 @@ jpdf_status jpdf_page_close(jpdf_handle page) noexcept {
         std::shared_ptr<jpdf::PageObject> object;
         jpdf_status st = jpdf::objects().retire_as(page, jpdf::ObjectType::Page, &object);
         if (st != JPDF_OK) return jpdf::fail(st, "page handle rejected");
+        const FPDF_PAGE raw_page = object->page;
         FPDF_ClosePage(object->page);
         object->page = nullptr;
         object->document->open_pages--;
-        jpdf::Domain::instance().page_closed();
+        jpdf::Domain::instance().page_closed(raw_page);
         return JPDF_OK;
     });
 }

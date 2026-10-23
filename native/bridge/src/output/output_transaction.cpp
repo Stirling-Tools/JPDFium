@@ -6,7 +6,9 @@
 #include <atomic>
 #include <cerrno>
 #include <cmath>
+#include <csignal>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -85,9 +87,66 @@ int close_fd(int fd) noexcept {
 int sync_fd(int fd) noexcept {
 #if defined(_WIN32)
     return ::_commit(fd);
+#elif defined(__APPLE__)
+    // fsync on macOS does not guarantee the platter cache is flushed; F_FULLFSYNC does. Fall
+    // back to fsync on filesystems that do not implement the fcntl.
+    if (::fcntl(fd, F_FULLFSYNC) == 0) return 0;
+    return ::fsync(fd);
 #else
     return ::fsync(fd);
 #endif
+}
+
+bool process_alive(uint64_t pid) noexcept {
+    if (pid == 0) return false;
+#if defined(_WIN32)
+    HANDLE process =
+        ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+    if (!process) return ::GetLastError() != ERROR_INVALID_PARAMETER;
+    DWORD code = 0;
+    const bool alive = ::GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+    ::CloseHandle(process);
+    return alive;
+#else
+    if (pid > static_cast<uint64_t>(std::numeric_limits<pid_t>::max())) return true;
+    if (::kill(static_cast<pid_t>(pid), 0) == 0) return true;
+    return errno == EPERM;
+#endif
+}
+
+// Best-effort removal of staging files left by a process that crashed before abort() could run.
+// Only names belonging to this destination are touched, and a live owner is always left alone.
+void remove_stale_staging(const fs::path& parent, const fs::path& destination) noexcept {
+    try {
+        std::error_code ec;
+        const fs::path::string_type name = destination.filename().native();
+        const fs::path::string_type marker = fs::path(".jpdf-").native();
+        const fs::path::string_type suffix = fs::path(".tmp").native();
+        for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec)) {
+            const fs::path::string_type candidate = it->path().filename().native();
+            const size_t start = 1 + name.size() + marker.size();
+            if (candidate.size() <= start + suffix.size() || candidate[0] != '.' ||
+                candidate.compare(1, name.size(), name) != 0 ||
+                candidate.compare(1 + name.size(), marker.size(), marker) != 0 ||
+                candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                continue;
+            }
+            uint64_t pid = 0;
+            size_t pos = start;
+            bool digits = false;
+            while (pos < candidate.size() && candidate[pos] >= '0' && candidate[pos] <= '9') {
+                pid = pid * 10 + static_cast<uint64_t>(candidate[pos] - '0');
+                ++pos;
+                digits = true;
+            }
+            if (!digits || pos >= candidate.size() || candidate[pos] != '-') continue;
+            if (process_alive(pid)) continue;
+            fs::remove(it->path(), ec);
+            ec.clear();
+        }
+    } catch (...) {
+        // Cleanup is opportunistic; never fail the transaction because of a stale file.
+    }
 }
 
 fs::path resolve_symlinks(const fs::path& destination, std::error_code& ec) {
@@ -144,6 +203,7 @@ jpdf_status OutputTransaction::begin(const char* destination_utf8, bool durable,
         if (!fs::is_directory(parent, ec)) {
             return fail(JPDF_E_IO, "output directory does not exist");
         }
+        remove_stale_staging(parent, destination);
 
         static std::atomic<unsigned> counter{0};
         auto tx = std::unique_ptr<OutputTransaction>(new OutputTransaction());
@@ -237,7 +297,13 @@ jpdf_status OutputTransaction::publish() noexcept {
 #if defined(_WIN32)
     DWORD flags = MOVEFILE_REPLACE_EXISTING | (durable_ ? MOVEFILE_WRITE_THROUGH : 0);
     if (!::MoveFileExW(staging_.c_str(), destination_.c_str(), flags)) {
-        return fail(JPDF_E_IO, "atomic replace of the destination failed");
+        const DWORD error = ::GetLastError();
+        try {
+            return fail(JPDF_E_IO, "atomic replace of the destination failed",
+                        ": " + std::system_category().message(static_cast<int>(error)));
+        } catch (...) {
+            return fail(JPDF_E_IO, "atomic replace of the destination failed");
+        }
     }
 #else
     if (::rename(staging_.c_str(), destination_.c_str()) != 0) {

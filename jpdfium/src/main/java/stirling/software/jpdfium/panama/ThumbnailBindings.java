@@ -17,16 +17,12 @@ public final class ThumbnailBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     public static final MethodHandle FPDFPage_GetDecodedThumbnailData = downcall("FPDFPage_GetDecodedThumbnailData",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
 
     public static final MethodHandle FPDFPage_GetRawThumbnailData = downcall("FPDFPage_GetRawThumbnailData",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDFPage_GetThumbnailAsBitmap = downcallCritical("FPDFPage_GetThumbnailAsBitmap",
+    public static final MethodHandle FPDFPage_GetThumbnailAsBitmap = downcall("FPDFPage_GetThumbnailAsBitmap",
             FunctionDescriptor.of(ADDRESS, ADDRESS));
 }

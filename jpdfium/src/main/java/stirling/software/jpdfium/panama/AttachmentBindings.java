@@ -18,17 +18,13 @@ public final class AttachmentBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
-    public static final MethodHandle FPDFDoc_GetAttachmentCount = downcallCritical("FPDFDoc_GetAttachmentCount",
+    public static final MethodHandle FPDFDoc_GetAttachmentCount = downcall("FPDFDoc_GetAttachmentCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     public static final MethodHandle FPDFDoc_AddAttachment = downcall("FPDFDoc_AddAttachment",
             FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
 
-    public static final MethodHandle FPDFDoc_GetAttachment = downcallCritical("FPDFDoc_GetAttachment",
+    public static final MethodHandle FPDFDoc_GetAttachment = downcall("FPDFDoc_GetAttachment",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
     public static final MethodHandle FPDFDoc_DeleteAttachment = downcall("FPDFDoc_DeleteAttachment",

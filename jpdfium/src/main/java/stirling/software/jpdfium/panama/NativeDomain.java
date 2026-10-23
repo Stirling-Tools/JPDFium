@@ -25,8 +25,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  *
  * <p>Every PDFium entry point the Java bindings call is reached through its
  * {@code jpdf_guard_<name>} shim, which admits that one call natively. A refused admission
- * returns a zero value the caller cannot tell from success, so each guarded handle checks
- * {@code jpdf_guard_take_refusal} afterwards and throws {@link JPDFiumException}.
+ * returns a zero value the caller cannot tell from success, so a guarded call checks
+ * {@code jpdf_guard_take_refusal} when its result is zero (always for {@code void}) and throws
+ * {@link JPDFiumException}.
  */
 public final class NativeDomain {
 
@@ -108,6 +109,15 @@ public final class NativeDomain {
         private static final MethodHandle STATUS_NAME;
         private static final MethodHandle STRUCT_SIZE;
         private static final MethodHandle CHECK;
+        private static final MethodHandle ZERO_INT;
+        private static final MethodHandle ZERO_LONG;
+        private static final MethodHandle ZERO_SHORT;
+        private static final MethodHandle ZERO_BYTE;
+        private static final MethodHandle ZERO_CHAR;
+        private static final MethodHandle ZERO_FLOAT;
+        private static final MethodHandle ZERO_DOUBLE;
+        private static final MethodHandle FALSE_IS_REFUSAL;
+        private static final MethodHandle NULL_SEGMENT;
 
         static {
             NativeLoader.ensureLoaded();
@@ -120,11 +130,78 @@ public final class NativeDomain {
             STATUS_NAME = raw("jpdf_status_name", FunctionDescriptor.of(ADDRESS, JAVA_INT));
             STRUCT_SIZE = raw("jpdf_abi_struct_size", FunctionDescriptor.of(JAVA_LONG, JAVA_INT));
             try {
-                CHECK = MethodHandles.lookup().findStatic(Guards.class, "checkRefusal",
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
+                CHECK = lookup.findStatic(Guards.class, "checkRefusal",
                         MethodType.methodType(void.class));
+                ZERO_INT = predicate(lookup, "isZeroInt", int.class);
+                ZERO_LONG = predicate(lookup, "isZeroLong", long.class);
+                ZERO_SHORT = predicate(lookup, "isZeroShort", short.class);
+                ZERO_BYTE = predicate(lookup, "isZeroByte", byte.class);
+                ZERO_CHAR = predicate(lookup, "isZeroChar", char.class);
+                ZERO_FLOAT = predicate(lookup, "isZeroFloat", float.class);
+                ZERO_DOUBLE = predicate(lookup, "isZeroDouble", double.class);
+                FALSE_IS_REFUSAL = predicate(lookup, "isFalse", boolean.class);
+                NULL_SEGMENT = predicate(lookup, "isNull", MemorySegment.class);
             } catch (ReflectiveOperationException e) {
                 throw new ExceptionInInitializerError(e);
             }
+        }
+
+        private static MethodHandle predicate(MethodHandles.Lookup lookup, String name,
+                                              Class<?> parameter) throws NoSuchMethodException,
+                IllegalAccessException {
+            return lookup.findStatic(Guards.class, name,
+                    MethodType.methodType(boolean.class, parameter));
+        }
+
+        /** The predicate that recognizes a refused zero result, or null for other types. */
+        static MethodHandle zeroTest(Class<?> ret) {
+            if (ret == int.class) return ZERO_INT;
+            if (ret == long.class) return ZERO_LONG;
+            if (ret == short.class) return ZERO_SHORT;
+            if (ret == byte.class) return ZERO_BYTE;
+            if (ret == char.class) return ZERO_CHAR;
+            if (ret == float.class) return ZERO_FLOAT;
+            if (ret == double.class) return ZERO_DOUBLE;
+            if (ret == boolean.class) return FALSE_IS_REFUSAL;
+            if (ret == MemorySegment.class) return NULL_SEGMENT;
+            return null;
+        }
+
+        private static boolean isZeroInt(int v) {
+            return v == 0;
+        }
+
+        private static boolean isZeroLong(long v) {
+            return v == 0;
+        }
+
+        private static boolean isZeroShort(short v) {
+            return v == 0;
+        }
+
+        private static boolean isZeroByte(byte v) {
+            return v == 0;
+        }
+
+        private static boolean isZeroChar(char v) {
+            return v == 0;
+        }
+
+        private static boolean isZeroFloat(float v) {
+            return v == 0.0f;
+        }
+
+        private static boolean isZeroDouble(double v) {
+            return v == 0.0;
+        }
+
+        private static boolean isFalse(boolean v) {
+            return !v;
+        }
+
+        private static boolean isNull(MemorySegment v) {
+            return v == null || v.address() == 0;
         }
 
         private static MemorySegment require(String name) {
@@ -258,9 +335,22 @@ public final class NativeDomain {
         if (ret == void.class) {
             return MethodHandles.filterReturnValue(target, Guards.CHECK);
         }
-        MethodHandle check = MethodHandles.dropArguments(Guards.CHECK, 0, ret);
-        return MethodHandles.filterReturnValue(target,
-                MethodHandles.foldArguments(MethodHandles.identity(ret), check));
+        MethodHandle test = Guards.zeroTest(ret);
+        if (test == null) {
+            // Unknown return type: keep the conservative check on every call.
+            MethodHandle check = MethodHandles.dropArguments(Guards.CHECK, 0, ret);
+            return MethodHandles.filterReturnValue(target,
+                    MethodHandles.foldArguments(MethodHandles.identity(ret), check));
+        }
+        // A refused call returns the zero value, so only a zero result can be a refusal.
+        // filterReturnValue calls the filter with the result; the checker runs before the original
+        // result is returned and does not change it.
+        MethodHandle checkThenReturn = MethodHandles.foldArguments(
+                MethodHandles.identity(ret),
+                MethodHandles.dropArguments(Guards.CHECK, 0, ret));
+        MethodHandle filter = MethodHandles.guardWithTest(test, checkThenReturn,
+                MethodHandles.identity(ret));
+        return MethodHandles.filterReturnValue(target, filter);
     }
 
     /** Status name plus this thread's native detail for the call that just failed. */

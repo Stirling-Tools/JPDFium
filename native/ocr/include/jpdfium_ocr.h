@@ -21,7 +21,7 @@ extern "C" {
 #endif
 
 #define JPDF_OCR_API_VERSION_MAJOR 1
-#define JPDF_OCR_API_VERSION_MINOR 0
+#define JPDF_OCR_API_VERSION_MINOR 1
 
 #define JPDF_OCR_STRUCT_OPTIONS 1
 #define JPDF_OCR_STRUCT_ENGINE_INFO 2
@@ -33,8 +33,11 @@ typedef struct jpdf_ocr_options {
     uint32_t struct_size;
     uint32_t flags;                // reserved, must be 0
     const char* profile_dir_utf8;  // holds profile.txt and every file it pins
-    int32_t intra_op_threads;      // 0 lets ONNX Runtime choose
+    int32_t intra_op_threads;      // 0 lets ONNX Runtime choose; first engine sets the pool
     int32_t reserved0;
+    // Optional lowercase SHA-256 of profile.txt. NULL accepts only a compiled-in profile id;
+    // an unknown id requires this pin so a swapped profile cannot supply its own digests.
+    const char* expected_profile_sha256;
 } jpdf_ocr_options;
 
 typedef struct jpdf_ocr_engine_info {

@@ -182,17 +182,25 @@ exception firewall that maps failures to status codes. The generated guards keep
 without a catch boundary of their own: each wrapped `jpdfium_*` function is itself `noexcept` or
 catches every exception internally, and the raw PDFium symbols are C functions that cannot throw
 across this frame. Beyond admitting the call through the domain, the guard's only added work is
-atomic lifetime accounting, which does not allocate and cannot throw.
+lifetime accounting: atomics for counters plus an identity registry that keeps a raw close and a
+bridge close of the same document or page from decrementing twice. The registry's allocation is
+caught inside the `noexcept` entry point, so accounting cannot terminate the call.
 
 A small, fixed set of raw PDFium factories and their matching closes carry the same lifetime
-accounting as the bridge: `FPDF_CreateNewDocument`, `FPDF_ImportNPagesToOne`,
-`EPDFPage_ExportAnnotationsAsDocument`, `FPDFPage_New`, `EPDF_LoadPageNormalized`,
-`EPDFDoc_LoadPageByObjectNumber` and `EPDFDoc_LoadPageByObjectNumberNormalized` record an open
-document or page when they return a non-null handle, and `FPDF_CloseDocument` and
-`FPDF_ClosePage` record the matching close. So a document or page created through the raw bindings
-still keeps `jpdf_runtime_shutdown` returning `JPDF_E_BUSY` until it is closed through the matching
-raw close. Objects the bridge creates are counted once, by the bridge, because the bridge calls
-PDFium directly and never through these guards.
+accounting as the bridge: documents, pages, text pages, form-fill environments, search handles,
+annotations and raw bitmaps. A factory records an open when it returns a non-null handle, and the
+matching close records a close; the generator refuses to emit a guarded factory that returns one
+of those handle types without an open entry, or an open/close pair that is unbalanced. So a
+resource created through the raw bindings keeps `jpdf_runtime_shutdown` returning `JPDF_E_BUSY`
+until it is closed through the matching close. Objects the bridge creates are counted once, by the
+bridge, because the bridge calls PDFium directly and never through these guards.
+
+The lifetime accounting is not a concurrency guarantee for raw handles. A guarded shim admits one
+call at a time, so a raw `FPDF_PAGE`, `FPDF_TEXTPAGE` or annotation pointer held by Java is safe
+only while no other thread closes it; a close between two calls can free it before the next call
+is admitted. The `jpdf_*` object table closes that race with generation-checked handles and
+per-call leases. Existing raw paths must therefore confine a handle (and its close) to one thread,
+or move to the safe `jpdf_*` API; the guards keep shutdown safe, not arbitrary concurrent closes.
 
 ## Runtime, handle and resource lifetime
 
@@ -208,9 +216,10 @@ UNINITIALIZED --init--> RUNNING --quiesce/shutdown--> QUIESCING --> DESTROYING -
 - Closing a document never shuts the runtime down. The runtime normally lives for the process.
 - `jpdf_runtime_quiesce` stops admitting ordinary work. Closing existing pages and documents is
   still allowed.
-- `jpdf_runtime_shutdown` quiesces, then destroys PDFium only when no documents or pages remain.
-  Otherwise it returns `JPDF_E_BUSY` with the counts and stays `QUIESCING` so the caller can
-  close what is open and retry.
+- `jpdf_runtime_shutdown` quiesces, then destroys PDFium only when no documents, pages, text
+  pages, form-fill environments, search handles, annotations or raw bitmaps remain. Otherwise it
+  returns `JPDF_E_BUSY` with the counts and stays `QUIESCING` so the caller can close what is open
+  and retry.
 - `jpdf_runtime_resume` returns `QUIESCING` to `RUNNING`, for callers that abandon a shutdown.
 - `jpdf_runtime_shutdown_within(ms)` gives up with `JPDF_E_TIMEOUT` if the domain stays busy, so
   an exit hook never waits behind a long operation.
@@ -272,7 +281,11 @@ are immutable after publication, so views need no locking.
 - Publication is atomic replacement only (`rename(2)`, `MoveFileExW`). There is no non-atomic
   fallback; a refused rename fails the operation and leaves the destination untouched.
 - `JPDF_WRITE_DURABLE` adds fsync of the file and its directory. It is a separate policy from
-  atomicity.
+  atomicity. On macOS the file sync uses `F_FULLFSYNC`, so it does not rely on fsync's write cache.
+- Replacement swaps the directory entry, so hard links, ACLs, xattrs and owner/group of an existing
+  destination do not transfer to the new inode; only regular-file permission bits are mirrored.
+- Staging files left by a crashed process are removed on the next transaction for the same
+  destination when their recorded process id is no longer alive. Cleanup is best effort.
 - A pre-publication failure removes the staging file and leaves the destination unchanged.
 - A successful call reports one of three outcomes, never conflated into "nothing changed": a
   non-zero status before publication means the destination was not replaced; success means the
@@ -348,7 +361,12 @@ listed follow-up in [Java migration to the native domain](#java-migration-to-the
 
 The OCR module answers for its own names through `jpdf_ocr_capability`: `ocr.recognize` is
 implemented and matches the official PaddleOCR pipeline ([OCR.md](#ocr-module)); `ocr.word_geometry`
-is absent.
+is absent. `profile.txt` is pinned by a SHA-256 compiled into the module for each shipped profile;
+an unknown profile id is refused unless the caller supplies `expected_profile_sha256`, so a swapped
+profile cannot vouch for its own model digests. Pinned ONNX Runtime packages exist for linux-x64,
+linux-aarch64, osx-arm64, win-x64 and win-arm64; osx-x64, musl and FreeBSD builds do not ship the
+OCR module yet. The prebuilt runtime dominates the module size, so a minimal ORT build is a
+follow-up rather than part of this change.
 
 Reserved names, absent until their phase lands: `pdf.optimize`, `svg.render`.
 `fonts.shape_explicit` and `fonts.subset` stay absent: the glyphless text layer needs neither

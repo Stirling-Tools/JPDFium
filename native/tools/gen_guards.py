@@ -46,23 +46,55 @@ TEARDOWN = re.compile(r"(Close|close|Destroy|destroy|Exit|Free|free|Release|rele
 PDFIUM_SYMBOL = re.compile(r"^(FPDF|EPDF|FORM_|FSDK_)\w+$")
 NEVER_GUARD = {"FPDF_InitLibrary", "FPDF_InitLibraryWithConfig", "FPDF_DestroyLibrary"}
 
-# Raw factory/close shims that create or destroy a document/page the Java bindings own directly.
+# Raw factory/close shims that create or destroy a PDFium handle the Java bindings own directly.
 # They must keep the safe-runtime lifetime counters in step with the bridge's own accounting so
 # `jpdf_runtime_shutdown` reports JPDF_E_BUSY for every supported path. The bridge's jpdfium_*
 # entry points call PDFium directly and are counted by the bridge itself, so counting only here
-# covers the raw surface without double counting.
+# covers the raw surface without double counting. Every handle that can outlive one guarded call
+# has an entry; generation fails if a factory returns one of these handle types without one.
 LIFETIME_OPEN = {
-    "FPDF_CreateNewDocument": "document_opened",
-    "FPDF_ImportNPagesToOne": "document_opened",
-    "EPDFPage_ExportAnnotationsAsDocument": "document_opened",
-    "FPDFPage_New": "page_opened",
-    "EPDF_LoadPageNormalized": "page_opened",
-    "EPDFDoc_LoadPageByObjectNumber": "page_opened",
-    "EPDFDoc_LoadPageByObjectNumberNormalized": "page_opened",
+    "FPDF_CreateNewDocument": "Document",
+    "FPDF_ImportNPagesToOne": "Document",
+    "EPDFPage_ExportAnnotationsAsDocument": "Document",
+    "FPDFPage_New": "Page",
+    "EPDF_LoadPageNormalized": "Page",
+    "EPDFDoc_LoadPageByObjectNumber": "Page",
+    "EPDFDoc_LoadPageByObjectNumberNormalized": "Page",
+    "FPDFText_LoadPage": "TextPage",
+    "FPDFDOC_InitFormFillEnvironment": "FormEnvironment",
+    "FPDFText_FindStart": "Search",
+    "FPDFPage_GetAnnot": "Annotation",
+    "FPDFPage_CreateAnnot": "Annotation",
+    "EPDFPage_CreateAnnot": "Annotation",
+    "EPDFPage_GetAnnotByName": "Annotation",
+    "EPDFPage_GetAnnotByObjectNumber": "Annotation",
+    "EPDFPage_GetAnnotRaw": "Annotation",
+    "FPDFAnnot_GetFormFieldAtPoint": "Annotation",
+    "FPDFBitmap_Create": "Bitmap",
+    "FPDFBitmap_CreateEx": "Bitmap",
+    "FPDFImageObj_GetBitmap": "Bitmap",
+    "FPDFImageObj_GetRenderedBitmap": "Bitmap",
+    "FPDFPage_GetThumbnailAsBitmap": "Bitmap",
 }
 LIFETIME_CLOSE = {
-    "FPDF_CloseDocument": "document_closed",
-    "FPDF_ClosePage": "page_closed",
+    "FPDF_CloseDocument": "Document",
+    "FPDF_ClosePage": "Page",
+    "FPDFText_ClosePage": "TextPage",
+    "FPDFDOC_ExitFormFillEnvironment": "FormEnvironment",
+    "FPDFText_FindClose": "Search",
+    "FPDFPage_CloseAnnot": "Annotation",
+    "FPDFBitmap_Destroy": "Bitmap",
+}
+# PDFium return types that hand the caller a live handle. A guarded factory returning one of
+# these must be in LIFETIME_OPEN, or shutdown would destroy PDFium underneath the caller.
+HANDLE_RETURNS = {
+    "FPDF_DOCUMENT": "Document",
+    "FPDF_PAGE": "Page",
+    "FPDF_TEXTPAGE": "TextPage",
+    "FPDF_FORMHANDLE": "FormEnvironment",
+    "FPDF_SCHHANDLE": "Search",
+    "FPDF_ANNOTATION": "Annotation",
+    "FPDF_BITMAP": "Bitmap",
 }
 
 
@@ -146,20 +178,20 @@ def shim(fn: Function, header_comment: str = "") -> str:
     refused = "return;" if fn.ret == "void" else "return {};"
     call = f"{fn.name}({', '.join(args)})"
     if fn.name in LIFETIME_OPEN:
-        counter = LIFETIME_OPEN[fn.name]
+        resource = LIFETIME_OPEN[fn.name]
         body = (
             f"    auto result = {call};\n"
             f"    if (result != nullptr) {{\n"
-            f"        jpdf::Domain::instance().{counter}();\n"
+            f"        jpdf::Domain::instance().resource_opened(jpdf::Resource::{resource}, result);\n"
             f"    }}\n"
             f"    return result;\n"
         )
     elif fn.name in LIFETIME_CLOSE:
-        counter = LIFETIME_CLOSE[fn.name]
+        resource = LIFETIME_CLOSE[fn.name]
         body = (
             f"    {call};\n"
             f"    if ({args[0]} != nullptr) {{\n"
-            f"        jpdf::Domain::instance().{counter}();\n"
+            f"        jpdf::Domain::instance().resource_closed(jpdf::Resource::{resource}, {args[0]});\n"
             f"    }}\n"
         )
     else:
@@ -227,15 +259,20 @@ def main() -> int:
     exported = set(opts.pdfium_exports.read_text().split())
     wanted = java_bound_pdfium_symbols()
     guarded = sorted(n for n in wanted if n in declared and n in exported)
-    # Every guarded factory that hands the caller a live PDFium document/page must be counted, or
-    # shutdown can destroy PDFium while that resource is still open. Fail rather than emit a shim
-    # that silently drops the accounting.
+    # Every guarded factory that hands the caller a live PDFium handle must be counted, or
+    # shutdown can destroy PDFium while that resource is still open. Fail rather than emit a
+    # shim that silently drops the accounting; the open and close tables must also balance.
     uncounted = [
         n for n in guarded
-        if declared[n].ret in ("FPDF_PAGE", "FPDF_DOCUMENT") and n not in LIFETIME_OPEN
+        if declared[n].ret in HANDLE_RETURNS and n not in LIFETIME_OPEN
     ]
     if uncounted:
         raise SystemExit(f"guarded factories without lifetime accounting: {uncounted}")
+    opened = set(LIFETIME_OPEN.values())
+    closed = set(LIFETIME_CLOSE.values())
+    if opened != closed:
+        raise SystemExit(
+            f"lifetime accounting is unbalanced: opened={sorted(opened)} closed={sorted(closed)}")
     skipped = sorted(wanted - set(guarded))
     used_headers = sorted({owner[n] for n in guarded})
     pdfium_shims = [shim(declared[n]) for n in guarded]

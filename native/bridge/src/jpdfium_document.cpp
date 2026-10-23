@@ -349,7 +349,7 @@ int32_t jpdfium_doc_create(int64_t* handle) {
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -369,7 +369,7 @@ int32_t jpdfium_doc_open(const char* path, int64_t* handle) {
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -397,7 +397,7 @@ int32_t jpdfium_doc_open_bytes(const uint8_t* data, int64_t len, int64_t* handle
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -424,7 +424,7 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -446,7 +446,7 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
-        jpdf::Domain::instance().document_opened();
+        jpdf::Domain::instance().document_opened(doc);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -752,9 +752,10 @@ void jpdfium_doc_close(int64_t doc) noexcept {
     // operator delete on an arbitrary address.
     DocWrapper* w = decodeDoc(doc);
     if (!w) return;
+    const FPDF_DOCUMENT raw_doc = w->core ? w->core->doc : nullptr;
     DocHandleRegistry::instance().remove(w);
     delete w;
-    jpdf::Domain::instance().document_closed();
+    jpdf::Domain::instance().document_closed(raw_doc);
 }
 
 int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
@@ -769,7 +770,7 @@ int32_t jpdfium_page_open(int64_t doc, int32_t idx, int64_t* handle) {
         auto* pw = new PageWrapper(page, w->core->doc, idx, w->core);
         PageHandleRegistry::instance().add(pw);
         *handle = encodeHandle(pw);
-        jpdf::Domain::instance().page_opened();
+        jpdf::Domain::instance().page_opened(page);
         return JPDFIUM_OK;
 
     } catch (...) {
@@ -835,9 +836,10 @@ void jpdfium_page_close(int64_t page) noexcept {
             jpdfium_render_forget_progressive(pw->page);
         }
     }
+    const FPDF_PAGE raw_page = pw->page;
     PageHandleRegistry::instance().remove(pw);
     delete pw;
-    jpdf::Domain::instance().page_closed();
+    jpdf::Domain::instance().page_closed(raw_page);
 }
 
 // JSON report of the last sanitize stage ("" when none has run).

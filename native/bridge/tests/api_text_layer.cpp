@@ -82,6 +82,8 @@ JPDF_API void jpdf_guard_FPDF_CloseDocument(FPDF_DOCUMENT document) noexcept;
 JPDF_API FPDF_PAGE jpdf_guard_FPDFPage_New(FPDF_DOCUMENT document, int page_index, double width,
                                            double height) noexcept;
 JPDF_API void jpdf_guard_FPDF_ClosePage(FPDF_PAGE page) noexcept;
+JPDF_API FPDF_TEXTPAGE jpdf_guard_FPDFText_LoadPage(FPDF_PAGE page) noexcept;
+JPDF_API void jpdf_guard_FPDFText_ClosePage(FPDF_TEXTPAGE text_page) noexcept;
 }
 
 namespace {
@@ -256,9 +258,9 @@ void test_both_bindings_share_one_domain(const std::string& path) {
     CHECK(mismatches == 0, "legacy and safe callers interleave safely in one process");
 }
 
-// Documents and pages created through the raw PDFium guards must hold the domain open, exactly
-// as ones created through the legacy bridge do, so shutdown cannot free PDFium underneath them.
-// The matching raw close must release the accounting.
+// Documents, pages and the other long-lived PDFium handles created through the raw PDFium guards
+// must hold the domain open, exactly as ones created through the legacy bridge do, so shutdown
+// cannot free PDFium underneath them. The matching raw close must release the accounting.
 void test_raw_factory_lifetime_accounting() {
     jpdf_runtime_info before{};
     before.struct_size = sizeof(before);
@@ -280,6 +282,12 @@ void test_raw_factory_lifetime_accounting() {
         paged.struct_size = sizeof(paged);
         jpdf_runtime_get_info(&paged);
         CHECK(paged.live_pages == before.live_pages + 1, "the raw page is counted");
+        FPDF_TEXTPAGE text_page = jpdf_guard_FPDFText_LoadPage(raw_page);
+        CHECK(text_page != nullptr, "raw FPDFText_LoadPage admitted by the guard");
+        CHECK(jpdf_runtime_shutdown_within(50) == JPDF_E_BUSY,
+              "shutdown refuses while a raw text page is live");
+        CHECK(jpdf_runtime_resume() == JPDF_OK, "resume after the text-page refusal");
+        jpdf_guard_FPDFText_ClosePage(text_page);
         jpdf_guard_FPDF_ClosePage(raw_page);
     }
 

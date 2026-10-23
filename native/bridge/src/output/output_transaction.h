@@ -11,6 +11,11 @@ namespace jpdf {
 
 // created -> writing -> finalized -> validated -> published; any failure before publish aborts
 // and removes the staging file, leaving the destination byte-for-byte untouched.
+//
+// Publication replaces the destination directory entry. If the destination is a hard link, has
+// extra ACLs/xattrs, or is owned by another user/group, those properties do not transfer to the
+// new inode; only the permission bits of an existing regular file are mirrored. On macOS,
+// durable mode uses F_FULLFSYNC so the file data reaches stable storage, not just fsync's cache.
 class OutputTransaction {
    public:
     enum class Stage : std::uint8_t { Created, Writing, Finalized, Validated, Published, Aborted };

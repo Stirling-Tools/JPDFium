@@ -1,5 +1,6 @@
 // profile.cpp - profile.txt parsing and digest checks. Unknown lines and keys are refused.
 
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -12,6 +13,33 @@ namespace jpdf::ocr {
 namespace {
 
 constexpr uintmax_t kMaxDictionaryBytes = uintmax_t{16} << 20;
+constexpr uintmax_t kMaxProfileBytes = uintmax_t{1} << 20;
+
+struct KnownProfile {
+    const char* id;
+    const char* sha256;  // digest of the shipped profile.txt
+};
+
+// Compiled-in digests make the profile -- which carries the model digests -- tamper-evident.
+// A caller that supplies its own profile must pin it explicitly through
+// jpdf_ocr_options.expected_profile_sha256; an unpinned unknown id is refused.
+constexpr KnownProfile kKnownProfiles[] = {
+    {"pp-ocrv6-small", "a8b4fa0c32804ba22d1e5c0f66ef2dabba212d0356b7c77262000b9cd9b24e59"},
+    {"pp-ocrv6-small-balanced", "a306ba3b9e2963aa32a19a9599f2a4eb71bc30ca6138dc9362f6148439f7699e"},
+};
+
+const KnownProfile* known_profile(const std::string& id) {
+    for (const KnownProfile& profile : kKnownProfiles) {
+        if (id == profile.id) return &profile;
+    }
+    return nullptr;
+}
+
+bool hex_digest(const std::string& text) {
+    if (text.size() != 64) return false;
+    return std::all_of(text.begin(), text.end(),
+                       [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
 
 jpdf_status refuse(jpdf_status status, std::string* detail, const std::string& why) {
     *detail = why;
@@ -126,15 +154,21 @@ jpdf_status read_pinned(const PinnedFile& file, uintmax_t max_bytes, std::vector
     return JPDF_OK;
 }
 
-jpdf_status load_profile(const std::filesystem::path& dir, Profile* out, std::string* detail) {
+jpdf_status load_profile(const std::filesystem::path& dir, const std::string& expected_sha256,
+                         Profile* out, std::string* detail) {
     std::ifstream in(dir / "profile.txt", std::ios::binary);
     if (!in)
         return refuse(JPDF_E_NOT_FOUND, detail, "profile.txt not found in the profile directory");
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (text.size() > kMaxProfileBytes)
+        return refuse(JPDF_E_LIMIT, detail, "profile.txt is too large");
+    const std::string profile_digest = sha256_hex(std::vector<uint8_t>(text.begin(), text.end()));
     Profile p;
     bool format_ok = false;
     std::map<std::string, std::pair<std::string, std::string>> files;  // role -> name, digest
+    std::istringstream lines(text);
     std::string line;
-    while (std::getline(in, line)) {
+    while (std::getline(lines, line)) {
         std::istringstream fields(line);
         std::vector<std::string> f;
         for (std::string token; fields >> token;) f.push_back(token);
@@ -144,8 +178,12 @@ jpdf_status load_profile(const std::filesystem::path& dir, Profile* out, std::st
                 return refuse(JPDF_E_UNSUPPORTED, detail, "unsupported profile format");
             format_ok = true;
         } else if (f[0] == "id" && f.size() == 2) {
+            if (!p.id.empty()) return refuse(JPDF_E_FORMAT, detail, "profile repeats its id");
             p.id = f[1];
         } else if ((f[0] == "file" && f.size() == 5) || (f[0] == "derived" && f.size() == 4)) {
+            if (files.count(f[1])) {
+                return refuse(JPDF_E_FORMAT, detail, "profile repeats the role " + f[1]);
+            }
             files[f[1]] = {f[2], f[3]};
         } else if (f[0] == "param" && f.size() == 3) {
             jpdf_status st = apply_param(f[1], f[2], &p, detail);
@@ -156,6 +194,27 @@ jpdf_status load_profile(const std::filesystem::path& dir, Profile* out, std::st
     }
     if (!format_ok || p.id.empty())
         return refuse(JPDF_E_FORMAT, detail, "profile lacks format or id");
+    // The profile pins its model digests, so trusting it without an external anchor only catches
+    // corruption. Accept a caller-supplied digest, or one of the digests compiled in for the
+    // shipped profiles; refuse anything else rather than silently trust a swapped profile.
+    if (!expected_sha256.empty()) {
+        if (!hex_digest(expected_sha256))
+            return refuse(JPDF_E_INVALID_ARGUMENT, detail,
+                          "expected_profile_sha256 must be 64 lowercase hex characters");
+        if (profile_digest != expected_sha256) {
+            return refuse(JPDF_E_FORMAT, detail,
+                          "profile.txt does not match expected_profile_sha256");
+        }
+    } else {
+        const KnownProfile* known = known_profile(p.id);
+        if (!known) {
+            return refuse(JPDF_E_UNSUPPORTED, detail,
+                          "unknown profile id; pin it with expected_profile_sha256");
+        }
+        if (profile_digest != known->sha256) {
+            return refuse(JPDF_E_FORMAT, detail, "profile.txt does not match its compiled digest");
+        }
+    }
     for (const char* role : {"detector", "recognizer", "dictionary"}) {
         if (!files.count(role)) {
             return refuse(JPDF_E_FORMAT, detail, std::string("profile lacks the ") + role);

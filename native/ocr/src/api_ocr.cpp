@@ -105,18 +105,35 @@ jpdf_status read_bitmap(jpdf_handle bitmap, uint64_t max_pixels, Image* out, dou
     out->width = v.width;
     out->height = v.height;
     out->pixels.resize(static_cast<size_t>(v.width) * v.height * 3);
-    for (int y = 0; y < v.height; ++y) {
-        const uint8_t* s = v.data + static_cast<size_t>(y) * v.stride;
-        uint8_t* d = out->pixels.data() + static_cast<size_t>(y) * v.width * 3;
-        for (int x = 0; x < v.width; ++x, d += 3) {
-            if (v.pixel_format == JPDF_PIXEL_GRAY8) {
-                d[0] = d[1] = d[2] = s[x];
-            } else {
-                const size_t px =
-                    static_cast<size_t>(x) * (v.pixel_format == JPDF_PIXEL_RGBA8 ? 4 : 3);
-                d[0] = s[px + 2];
-                d[1] = s[px + 1];
-                d[2] = s[px];
+    if (v.pixel_format == JPDF_PIXEL_GRAY8) {
+        for (int y = 0; y < v.height; ++y) {
+            const uint8_t* s = v.data + static_cast<size_t>(y) * v.stride;
+            uint8_t* d = out->pixels.data() + static_cast<size_t>(y) * v.width * 3;
+            for (int x = 0; x < v.width; ++x, d += 3) {
+                const uint8_t gray = s[x];
+                d[0] = gray;
+                d[1] = gray;
+                d[2] = gray;
+            }
+        }
+    } else if (v.pixel_format == JPDF_PIXEL_RGBA8) {
+        for (int y = 0; y < v.height; ++y) {
+            const uint8_t* s = v.data + static_cast<size_t>(y) * v.stride;
+            uint8_t* d = out->pixels.data() + static_cast<size_t>(y) * v.width * 3;
+            for (int x = 0; x < v.width; ++x, d += 3, s += 4) {
+                d[0] = s[2];
+                d[1] = s[1];
+                d[2] = s[0];
+            }
+        }
+    } else {
+        for (int y = 0; y < v.height; ++y) {
+            const uint8_t* s = v.data + static_cast<size_t>(y) * v.stride;
+            uint8_t* d = out->pixels.data() + static_cast<size_t>(y) * v.width * 3;
+            for (int x = 0; x < v.width; ++x, d += 3, s += 3) {
+                d[0] = s[2];
+                d[1] = s[1];
+                d[2] = s[0];
             }
         }
     }
@@ -194,9 +211,11 @@ jpdf_status jpdf_ocr_engine_open(const jpdf_ocr_options* options,
         }
         const std::filesystem::path dir(
             std::u8string_view(reinterpret_cast<const char8_t*>(options->profile_dir_utf8)));
+        const std::string expected =
+            options->expected_profile_sha256 ? options->expected_profile_sha256 : "";
         std::unique_ptr<Engine> engine;
         std::string detail;
-        st = Engine::open(dir, options->intra_op_threads, &engine, &detail);
+        st = Engine::open(dir, expected, options->intra_op_threads, &engine, &detail);
         if (st != JPDF_OK) return fail(st, detail);
         jpdf_handle token = 0;
         Engine* owned = engine.release();
