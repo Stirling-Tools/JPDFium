@@ -647,6 +647,20 @@ int32_t jpdfium_doc_save_to_file(int64_t handle, const char* path, int64_t max_b
     return JPDFIUM_ERR_IO;
 }
 
+int32_t jpdfium_doc_save_working_to_file(int64_t, const char*, int64_t, int64_t*) {
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
+int32_t jpdfium_doc_save_incremental_to_file(int64_t handle, const char* path, int64_t max_bytes,
+                                             int64_t* out_bytes) {
+    auto it = g_docs.find(handle);
+    if (it != g_docs.end()) {
+        if (it->second.hasMutatedRedaction) return JPDFIUM_ERR_REDACTED_SAVE;
+        if (it->second.unappliedMarks() > 0) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+    }
+    return jpdfium_doc_save_to_file(handle, path, max_bytes, out_bytes);
+}
+
 void jpdfium_doc_close(int64_t handle) noexcept {
     g_docs.erase(handle);
 }
@@ -1123,6 +1137,20 @@ int32_t jpdfium_metadata_strip(int64_t, const char**, int32_t) {
 
 int32_t jpdfium_metadata_strip_all(int64_t) {
     return JPDFIUM_OK;
+}
+
+int32_t jpdfium_metadata_set_xmp(int64_t, const uint8_t*, int32_t) {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_metadata_set_xmp_ex(int64_t, const uint8_t*, int32_t, int32_t) {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_metadata_get_xmp(int64_t, uint8_t** xmp, int32_t* xmp_len) {
+    if (xmp) *xmp = nullptr;
+    if (xmp_len) *xmp_len = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
 }
 
 int32_t jpdfium_strip_fonts(int64_t, int32_t* fonts_removed) {

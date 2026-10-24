@@ -142,6 +142,18 @@ JPDFIUM_EXPORT int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64
 // removes the partial file and never reports success.
 JPDFIUM_EXPORT int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
                                                 int64_t* out_bytes);
+// Incremental file save: appends only changed objects to the original bytes.
+// This preserves existing signature revisions and their /ByteRange coverage;
+// a full save rewrites every object and invalidates them. The document must
+// not have content redaction pending. max_bytes bounds the total output
+// (original bytes plus the appended revision), 0 = unlimited.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_incremental_to_file(int64_t doc, const char* path,
+                                                            int64_t max_bytes, int64_t* out_bytes);
+// Copy the file-backed working revision produced by a metadata rewrite. This
+// avoids a second PDFium serialization, which can re-encrypt an encrypted XMP
+// stream, and keeps memory bounded for large documents.
+JPDFIUM_EXPORT int32_t jpdfium_doc_save_working_to_file(int64_t doc, const char* path,
+                                                        int64_t max_bytes, int64_t* out_bytes);
 JPDFIUM_EXPORT int32_t jpdfium_doc_set_sanitize_on_save(int64_t doc,
                                                         int32_t enable) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT void jpdfium_doc_close(int64_t doc) JPDFIUM_NOEXCEPT;
@@ -459,6 +471,23 @@ JPDFIUM_EXPORT int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, in
 // Strip ALL metadata from the document: /Info dictionary + XMP stream + /MarkInfo.
 // The nuclear option for metadata-clean redaction.
 JPDFIUM_EXPORT int32_t jpdfium_metadata_strip_all(int64_t doc);
+
+// Replace the catalog XMP metadata stream with the supplied XML packet.
+// A NULL buffer with xmp_len == 0 removes /Metadata. A negative xmp_len, or a
+// NULL buffer with xmp_len > 0, returns JPDFIUM_ERR_INVALID. The document is
+// rewritten through QPDF. Object streams and cross-reference streams are
+// regenerated when the PDF version is 1.5 or later.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t* xmp, int32_t xmp_len);
+// As above, but when source_current is non-zero QPDF may read the existing
+// file-backed or memory source directly instead of serializing the live
+// document. Pass non-zero only when no PDFium-side changes are pending.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_set_xmp_ex(int64_t doc, const uint8_t* xmp, int32_t xmp_len,
+                                                   int32_t source_current);
+
+// Copy the catalog XMP metadata packet into *xmp. The caller owns the buffer
+// and must free it with jpdfium_free_buffer. Returns JPDFIUM_ERR_NOT_FOUND when
+// the catalog has no /Metadata stream.
+JPDFIUM_EXPORT int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t** xmp, int32_t* xmp_len);
 
 // Strip embedded font resources from all pages using qpdf resource dictionary manipulation.
 // Removes /Font from each page's /Resources dict and garbage-collects orphaned font streams.

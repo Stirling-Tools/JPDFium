@@ -102,12 +102,22 @@ struct DocCore {
     // O_TRUNC on the source would destroy the bytes PDFium is still reading.
     // Never a general-purpose ownership handle.
     std::string sourcePath{};
+    // Latest file-backed revision when a rewrite had to replace the document
+    // with temporary bytes. Empty when the document still reads from sourcePath
+    // or owns an in-memory buffer. Removed by the destructor.
+    std::string workingPath{};
+    // Password supplied to a protected open. Retained only for QPDF and the
+    // transactional reload; never exposed to Java.
+    std::string openPassword{};
 
     void* redactPatternCache = nullptr;
     void (*redactPatternDeleter)(void*) = nullptr;
 
     ~DocCore() {
         clearRedactPatternCache();
+        if (!workingPath.empty() && workingPath != sourcePath) {
+            std::remove(workingPath.c_str());
+        }
     }
 
     void clearRedactPatternCache() {
@@ -153,7 +163,8 @@ struct DocCore {
 };
 
 inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nullptr,
-                                            int64_t blen = 0, const char* sourcePath = nullptr) {
+                                            int64_t blen = 0, const char* sourcePath = nullptr,
+                                            const char* password = nullptr) {
     // Own the document and buffer until DocCore takes them: `new DocCore()` and
     // the shared_ptr construction below can both throw, and the caller has no
     // handle to clean up with at that point.
@@ -171,6 +182,7 @@ inline std::shared_ptr<DocCore> makeDocCore(FPDF_DOCUMENT doc, uint8_t* buf = nu
     core->buf = pending.buf;
     core->blen = blen;
     if (sourcePath) core->sourcePath = sourcePath;
+    if (password) core->openPassword = password;
     pending.doc = nullptr;
     pending.buf = nullptr;
     return std::shared_ptr<DocCore>(core, [](DocCore* c) {

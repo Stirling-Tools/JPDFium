@@ -534,8 +534,53 @@ public final class JpdfiumLib {
             "jpdfium_doc_save_to_file",
             FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
 
+    /**
+     * Optional streaming incremental file save. Older native bundles do not
+     * export it, so the caller falls back to {@link #docSaveIncremental(long)}
+     * and a staged Java write.
+     */
+    private static final MethodHandle SAVE_INCREMENTAL_TO_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_doc_save_incremental_to_file",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+
+    /** Optional file-copy save of the metadata working revision. */
+    private static final MethodHandle SAVE_WORKING_TO_FILE_HANDLE = Symbols.downcallOptional(
+            "jpdfium_doc_save_working_to_file",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+
     /** Bounded chunk used when spooling a staged save file to a channel. */
     static final int SAVE_TRANSFER_BYTES = 256 * 1024;
+
+    /**
+     * Copy the native XMP working revision to {@code absPath}. Returns false
+     * when the loaded bridge predates the entry point, so callers can fall
+     * back to the normal save path.
+     */
+    public static boolean docSaveWorkingNative(long doc, String absPath, long maxBytes) {
+        if (SAVE_WORKING_TO_FILE_HANDLE == null) return false;
+        boolean[] unavailable = {false};
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cPath = a.allocateFrom(absPath);
+            MemorySegment outLen = a.allocate(JAVA_LONG);
+            PdfiumRuntime.execute(() -> {
+                try {
+                    int rc = (int) SAVE_WORKING_TO_FILE_HANDLE.invokeExact(
+                            doc, cPath, maxBytes, outLen);
+                    if (rc == ERR_NOT_FOUND) {
+                        unavailable[0] = true;
+                        return;
+                    }
+                    check(rc, "docSaveWorking: " + absPath);
+                } catch (RuntimeException re) {
+                    throw re;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException("docSaveWorking failed", t);
+                }
+            });
+            return !unavailable[0];
+        }
+    }
 
     /**
      * Low-level guarded save to an exact filesystem path (no staging, no
@@ -599,6 +644,53 @@ public final class JpdfiumLib {
 
     public static void docSaveToFile(long doc, Path destination) {
         docSaveToFile(doc, destination, SaveOptions.fast());
+    }
+
+    /**
+     * Transactional incremental file save. The original bytes stay intact and
+     * the changed objects are appended, so signatures over earlier revisions
+     * keep their byte ranges.
+     */
+    public static void docSaveIncrementalToFile(long doc, Path destination, SaveOptions options) {
+        SaveOptions opts = options == null ? SaveOptions.fast() : options;
+        if (SAVE_INCREMENTAL_TO_FILE_HANDLE == null) {
+            // The byte[] fallback cannot enforce a bound while writing: it
+            // materializes the whole result first. Refuse a bounded request
+            // instead of risking a heap spike that the caller asked to avoid.
+            if (opts.maxOutputBytes() > 0) {
+                throw new JPDFiumException("bounded incremental save requires the streaming "
+                        + "native entry point");
+            }
+            byte[] bytes = docSaveIncremental(doc);
+            try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
+                Files.write(tx.staging(), bytes);
+                tx.publish(opts);
+            } catch (IOException e) {
+                throw new JPDFiumException("docSaveIncrementalToFile failed", e);
+            }
+            return;
+        }
+        try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment cPath = a.allocateFrom(tx.staging().toAbsolutePath().toString());
+                MemorySegment outLen = a.allocate(JAVA_LONG);
+                PdfiumRuntime.execute(() -> {
+                    try {
+                        check((int) SAVE_INCREMENTAL_TO_FILE_HANDLE.invokeExact(
+                                doc, cPath, opts.maxOutputBytes(), outLen),
+                                "docSaveIncremental: " + destination);
+                    } catch (RuntimeException re) {
+                        throw re;
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                        throw new JPDFiumException("docSaveIncremental failed", t);
+                    }
+                });
+            }
+            tx.publish(opts);
+        } catch (IOException e) {
+            throw new JPDFiumException("docSaveIncrementalToFile failed", e);
+        }
     }
 
     /**
