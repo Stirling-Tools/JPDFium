@@ -892,7 +892,18 @@ static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
 // Save an FPDF_DOCUMENT directly to a file. Keep the callback buffer small;
 // PDFium streams blocks through it instead of materializing the whole PDF.
 static bool qpdf_save_fpdf_file(FPDF_DOCUMENT doc, const std::string& path) {
-    UniqueFile file(std::fopen(path.c_str(), "wb"));
+    // The path was created with owner-only permissions by
+    // create_private_temp_file(); open it without O_CREAT so the mode cannot be
+    // widened to the process default.
+#ifdef _WIN32
+    int fd = _open(path.c_str(), _O_WRONLY | _O_TRUNC | _O_BINARY);
+    UniqueFile file(fd >= 0 ? _fdopen(fd, "wb") : nullptr);
+    if (fd >= 0 && !file) _close(fd);
+#else
+    int fd = ::open(path.c_str(), O_WRONLY | O_TRUNC);
+    UniqueFile file(fd >= 0 ? fdopen(fd, "wb") : nullptr);
+    if (fd >= 0 && !file) ::close(fd);
+#endif
     if (!file) return false;
 
     struct FileWriter : FPDF_FILEWRITE {
