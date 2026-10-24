@@ -394,6 +394,16 @@ class PdfMetadataEditorTest {
     }
 
     @Test
+    void autoCropMarksTheDocumentModified() throws Exception {
+        try (PdfDocument doc = PdfDocument.open(resource("/pdfs/general/basic-text.pdf"))) {
+            int cropped = PdfAutoCrop.cropAll(doc, 0f, false, false);
+            assertTrue(cropped > 0, "fixture must have croppable content");
+            assertTrue(doc.isContentModified(),
+                    "auto-crop must invalidate the file-backed source snapshot");
+        }
+    }
+
+    @Test
     void laterXmpEditRetainsEarlierInfoChanges() throws Exception {
         Path first = tempDir.resolve("info-first.pdf");
         Path second = tempDir.resolve("info-then-xmp.pdf");

@@ -558,14 +558,19 @@ public final class JpdfiumLib {
      */
     public static boolean docSaveWorkingNative(long doc, String absPath, long maxBytes) {
         if (SAVE_WORKING_TO_FILE_HANDLE == null) return false;
+        boolean[] unavailable = {false};
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPath = a.allocateFrom(absPath);
             MemorySegment outLen = a.allocate(JAVA_LONG);
             PdfiumRuntime.execute(() -> {
                 try {
-                    check((int) SAVE_WORKING_TO_FILE_HANDLE.invokeExact(
-                                    doc, cPath, maxBytes, outLen),
-                            "docSaveWorking: " + absPath);
+                    int rc = (int) SAVE_WORKING_TO_FILE_HANDLE.invokeExact(
+                            doc, cPath, maxBytes, outLen);
+                    if (rc == ERR_NOT_FOUND) {
+                        unavailable[0] = true;
+                        return;
+                    }
+                    check(rc, "docSaveWorking: " + absPath);
                 } catch (RuntimeException re) {
                     throw re;
                 } catch (Throwable t) {
@@ -573,7 +578,7 @@ public final class JpdfiumLib {
                     throw new JPDFiumException("docSaveWorking failed", t);
                 }
             });
-            return true;
+            return !unavailable[0];
         }
     }
 

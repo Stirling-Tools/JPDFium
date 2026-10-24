@@ -1040,13 +1040,12 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     w->core->touchedFontNames.clear();
     w->core->sanitizeReport.clear();
     w->core->sourcePath.clear();
-    if (!w->core->workingPath.empty()) {
-        std::remove(w->core->workingPath.c_str());
-        w->core->workingPath.clear();
-    }
+    std::string staleWorking = std::move(w->core->workingPath);
+    w->core->workingPath.clear();
 
     FPDF_CloseDocument(w->core->doc);
     free(w->core->buf);  // free() ignores NULL
+    if (!staleWorking.empty()) std::remove(staleWorking.c_str());
     w->core->doc = candidate;
     w->core->buf = copy;
     w->core->blen = static_cast<int64_t>(sz);
@@ -1146,71 +1145,75 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
 
 int32_t jpdfium_metadata_set_xmp_ex(int64_t doc, const uint8_t* xmp, int32_t xmp_len,
                                     int32_t source_current) {
-    DocWrapper* w = decodeDoc(doc);
-    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
-    if (xmp_len < 0 || (xmp_len > 0 && !xmp)) return JPDFIUM_ERR_INVALID;
-
-    // When the caller has no live PDFium changes, QPDF can read the existing
-    // file-backed source directly. This avoids a document-sized PDFium save
-    // for the common metadata-only path. Otherwise stream the live revision to
-    // a temporary file first so /Info changes are included.
-    bool memoryInput = false;
-    std::string sourceInput;
-    if (source_current) {
-        if (!w->core->workingPath.empty()) {
-            sourceInput = w->core->workingPath;
-        } else if (!w->core->sourcePath.empty()) {
-            sourceInput = w->core->sourcePath;
-        } else if (w->core->buf && w->core->blen > 0) {
-            memoryInput = true;
-        }
-    }
-
-    std::string tempInput;
-    if (!memoryInput && sourceInput.empty()) {
-        if (!create_private_temp_file(tempInput)) return JPDFIUM_ERR_NATIVE;
-        if (!qpdf_save_fpdf_file(w->core->doc, tempInput)) {
-            std::remove(tempInput.c_str());
-            return JPDFIUM_ERR_IO;
-        }
-    }
-    TempFilePath inputGuard(tempInput);
-    const std::string inputPath = !tempInput.empty() ? tempInput : sourceInput;
-
-    std::string outputPath;
-    if (!create_private_temp_file(outputPath)) return JPDFIUM_ERR_NATIVE;
-    TempFilePath outputGuard(outputPath);
-
     try {
-        QPDF pdf;
-        pdf.setSuppressWarnings(true);
-        pdf.setAttemptRecovery(true);
-        if (memoryInput) {
-            pdf.processMemoryFile("set_xmp", reinterpret_cast<const char*>(w->core->buf),
-                                  static_cast<size_t>(w->core->blen), qpdf_password(w));
-        } else {
-            pdf.processFile(inputPath.c_str(), qpdf_password(w));
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (xmp_len < 0 || (xmp_len > 0 && !xmp)) return JPDFIUM_ERR_INVALID;
+
+        // When the caller has no live PDFium changes, QPDF can read the existing
+        // file-backed source directly. This avoids a document-sized PDFium save
+        // for the common metadata-only path. Otherwise stream the live revision to
+        // a temporary file first so /Info changes are included.
+        bool memoryInput = false;
+        std::string sourceInput;
+        if (source_current) {
+            if (!w->core->workingPath.empty()) {
+                sourceInput = w->core->workingPath;
+            } else if (!w->core->sourcePath.empty()) {
+                sourceInput = w->core->sourcePath;
+            } else if (w->core->buf && w->core->blen > 0) {
+                memoryInput = true;
+            }
         }
 
-        QPDFObjectHandle root = pdf.getRoot();
-        if (xmp_len > 0) {
-            auto buf = std::make_shared<Buffer>(static_cast<size_t>(xmp_len));
-            memcpy(buf->getBuffer(), xmp, static_cast<size_t>(xmp_len));
-            QPDFObjectHandle metadata = QPDFObjectHandle::newStream(&pdf, buf);
-            metadata.getDict().replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
-            metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
-            root.replaceKey("/Metadata", metadata);
-        } else {
-            if (root.hasKey("/Metadata")) root.removeKey("/Metadata");
-            QPDFObjectHandle trailer = pdf.getTrailer();
-            if (trailer.hasKey("/Metadata")) trailer.removeKey("/Metadata");
+        std::string tempInput;
+        if (!memoryInput && sourceInput.empty()) {
+            if (!create_private_temp_file(tempInput)) return JPDFIUM_ERR_NATIVE;
+            if (!qpdf_save_fpdf_file(w->core->doc, tempInput)) {
+                std::remove(tempInput.c_str());
+                return JPDFIUM_ERR_IO;
+            }
         }
+        TempFilePath inputGuard(tempInput);
+        const std::string inputPath = !tempInput.empty() ? tempInput : sourceInput;
 
-        qpdf_write_compressed_to_file(pdf, outputPath);
-        int32_t rc = docwrapper_reload_file(w, outputPath);
-        if (rc == JPDFIUM_OK) outputGuard.release();
-        return rc;
-    } catch (std::exception&) {
+        std::string outputPath;
+        if (!create_private_temp_file(outputPath)) return JPDFIUM_ERR_NATIVE;
+        TempFilePath outputGuard(outputPath);
+
+        try {
+            QPDF pdf;
+            pdf.setSuppressWarnings(true);
+            pdf.setAttemptRecovery(true);
+            if (memoryInput) {
+                pdf.processMemoryFile("set_xmp", reinterpret_cast<const char*>(w->core->buf),
+                                      static_cast<size_t>(w->core->blen), qpdf_password(w));
+            } else {
+                pdf.processFile(inputPath.c_str(), qpdf_password(w));
+            }
+
+            QPDFObjectHandle root = pdf.getRoot();
+            if (xmp_len > 0) {
+                auto buf = std::make_shared<Buffer>(static_cast<size_t>(xmp_len));
+                memcpy(buf->getBuffer(), xmp, static_cast<size_t>(xmp_len));
+                QPDFObjectHandle metadata = QPDFObjectHandle::newStream(&pdf, buf);
+                metadata.getDict().replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
+                metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
+                root.replaceKey("/Metadata", metadata);
+            } else {
+                if (root.hasKey("/Metadata")) root.removeKey("/Metadata");
+                QPDFObjectHandle trailer = pdf.getTrailer();
+                if (trailer.hasKey("/Metadata")) trailer.removeKey("/Metadata");
+            }
+
+            qpdf_write_compressed_to_file(pdf, outputPath);
+            int32_t rc = docwrapper_reload_file(w, outputPath);
+            if (rc == JPDFIUM_OK) outputGuard.release();
+            return rc;
+        } catch (std::exception&) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+    } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
 }

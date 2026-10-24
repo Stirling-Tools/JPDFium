@@ -629,6 +629,11 @@ int32_t jpdfium_doc_save_working_to_file(int64_t doc, const char* path, int64_t 
         if (!path || !*path || max_bytes < 0) return JPDFIUM_ERR_INVALID;
         if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        // The working revision is not sanitized. Let the caller use the
+        // regular save path, which runs the opt-in sanitize stage.
+        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+            return JPDFIUM_ERR_NOT_FOUND;
+        }
         if (w->core->workingPath.empty()) return JPDFIUM_ERR_INVALID;
         if (isSaveAlias(w->core->sourcePath, path) || isSaveAlias(w->core->workingPath, path)) {
             return JPDFIUM_ERR_INVALID;
