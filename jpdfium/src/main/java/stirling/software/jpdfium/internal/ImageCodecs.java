@@ -7,6 +7,7 @@ import java.awt.image.DataBufferInt;
 import java.awt.image.SinglePixelPackedSampleModel;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -197,12 +198,28 @@ public final class ImageCodecs {
         if (images == null || images.isEmpty()) {
             throw new IllegalArgumentException("At least one image is required for multi-page TIFF");
         }
+        ImageCodec codec = Holder.CODEC;
+        if (codec != null && codec.canEncodeMultiPageTiff()) {
+            TrackingOutputStream tracked = new TrackingOutputStream(output);
+            try {
+                codec.encodeMultiPageTiff(images, tracked, quality);
+                return;
+            } catch (RuntimeException e) {
+                if (tracked.written) {
+                    // The stream already saw bytes; retrying ImageIO on the
+                    // same stream could append a second partial TIFF.
+                    throw e;
+                }
+                // Codec declined or failed before touching the stream: fall
+                // through to ImageIO.
+            }
+        }
         Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("tiff");
         if (!writers.hasNext()) {
             writers = ImageIO.getImageWritersByFormatName("TIFF");
         }
         if (!writers.hasNext()) {
-            throw new IOException("No TIFF ImageWriter found. A TIFF ImageIO plugin is required.");
+            throw new IOException("No TIFF encoder available. Add com.stirling:jpdfium-vips or a TIFF ImageIO plugin.");
         }
         ImageWriter writer = writers.next();
         try (ImageOutputStream ios = ImageIO.createImageOutputStream(output)) {
@@ -531,5 +548,25 @@ public final class ImageCodecs {
     private static int readLeInt32(byte[] buf, int off) {
         return (buf[off] & 0xFF) | ((buf[off + 1] & 0xFF) << 8)
                 | ((buf[off + 2] & 0xFF) << 16) | ((buf[off + 3] & 0xFF) << 24);
+    }
+
+    private static final class TrackingOutputStream extends FilterOutputStream {
+        private boolean written;
+
+        TrackingOutputStream(OutputStream out) {
+            super(out);
+        }
+
+        @Override
+        public void write(int b) throws IOException {
+            written = true;
+            super.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) throws IOException {
+            written = true;
+            super.write(b, off, len);
+        }
     }
 }

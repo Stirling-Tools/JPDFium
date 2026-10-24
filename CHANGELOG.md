@@ -45,6 +45,11 @@ publishing workflows, not library releases, so they are not listed here.
   reconciles every documented version reference on every run, never moves the
   development version backwards, and updates its own branch in place instead of
   deleting it.
+- The `jpdfium` artifact no longer depends on TwelveMonkeys `imageio-tiff`.
+  Baseline TIFF, including multi-page output, uses the JDK ImageIO implementation;
+  `jpdfium-vips` handles advanced TIFF variants and multi-page TIFF through
+  libvips. Add TwelveMonkeys explicitly if you need BigTIFF, CMYK, or compression
+  variants without libvips.
 
 ### Removed
 

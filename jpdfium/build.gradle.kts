@@ -69,13 +69,25 @@ graalvmNative {
     }
 }
 
+val localNatives = configurations.create("localNatives") {
+    isCanBeConsumed = false
+    isCanBeResolved = false
+}
+configurations.named("runtimeClasspath") { extendsFrom(localNatives) }
+configurations.named("testRuntimeClasspath") { extendsFrom(localNatives) }
+// GraalVM's native-image classpath is created from a snapshot of the runtime
+// dependencies, so extending runtimeClasspath is not enough for nativeCompile.
+configurations.named("nativeImageClasspath") { extendsFrom(localNatives) }
+configurations.findByName("nativeImageCliClasspath")?.extendsFrom(localNatives)
+configurations.findByName("nativeImageTestClasspath")?.extendsFrom(localNatives)
+
 dependencies {
-    // No imageio-webp: jpdfium-vips registers a libvips-backed ImageCodec as
-    // the default and writes WebP without an ImageIO plugin. WebP writing
-    // without the vips module is intentionally unsupported
-    // (canWrite(WEBP) == false). TwelveMonkeys TIFF stays for the ImageIO
-    // fallback (BigTIFF/CMYK + compression the JDK writer lacks).
-    implementation(libs.imageio.tiff)
+    // No imageio-webp or imageio-tiff runtime dependency: jpdfium-vips
+    // registers a libvips-backed ImageCodec and handles TIFF, including
+    // multi-page output. Core-only users can add a TIFF ImageIO plugin;
+    // tests keep TwelveMonkeys to exercise that fallback path.
+    compileOnly(libs.imageio.tiff)
+    testImplementation(libs.imageio.tiff)
     // Which platform's native jar lands on the classpath. Auto-detects host OS
     // and arch by default; CI overrides per matrix job with
     // -Pjpdfium.testNatives=<platform> so the smoke loads the native it built.
@@ -106,7 +118,11 @@ dependencies {
         }
     }
     val testNatives = (findProperty("jpdfium.testNatives") ?: defaultPlatform).toString()
-    runtimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
+    // Local run/native-image/test classpaths only. This must NOT be a
+    // runtimeOnly dependency: that is published in the POM and Gradle module
+    // metadata, which forced every consumer to download the Linux x64 natives
+    // even on macOS/Windows/ARM. Consumers pick their platform artifact.
+    localNatives(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
