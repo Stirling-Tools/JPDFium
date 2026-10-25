@@ -1,10 +1,8 @@
 // jpdfium_qpdf_sanitize.cpp - In-process qpdf structural sanitization (FFM, no CLI).
 //
-// jpdfium_qpdf_sanitize drives the bundled qpdf library entirely in memory via
-// its QPDF/QPDFWriter C++ API. Scrubs metadata/info/structure, JavaScript
-// actions, embedded files, AcroForm widgets, and flattens annotations. Visual
-// redaction of content streams is handled by the pdfium side; this pass cleans
-// up the structural copies it leaves behind.
+// Drives the bundled qpdf library in memory (QPDF/QPDFWriter) to scrub metadata,
+// info, structure, JavaScript actions, embedded files and AcroForm widgets, and to
+// flatten annotations; content-stream redaction belongs to the pdfium side.
 
 #include <cstdint>
 #include <cstdio>
@@ -36,6 +34,11 @@
 #include <qpdf/QPDFWriter.hh>
 
 namespace {
+
+// Same one-buffer-per-writer policy as createOutputFile in jpdfium_qpdf.cpp:
+// the default 4 KiB stdio buffer turns a large save into thousands of small
+// write(2) calls.
+constexpr std::size_t kQpdfIoBufferBytes = static_cast<std::size_t>(256) * 1024;
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -172,6 +175,9 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
         }
 #endif
         if (!out) return -1;
+        // Before the writer takes the FILE*: one large stdio buffer, exactly as
+        // createOutputFile does in jpdfium_qpdf.cpp.
+        std::setvbuf(out, nullptr, _IOFBF, kQpdfIoBufferBytes);
         bool writerOwnsFile = false;
         try {
             QPDFWriter w(*qpdf);

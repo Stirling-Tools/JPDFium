@@ -57,10 +57,6 @@ public final class FormFillBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
         return Symbols.downcallOptional(name, desc);
     }

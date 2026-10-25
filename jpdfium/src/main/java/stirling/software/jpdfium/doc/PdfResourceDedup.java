@@ -3,19 +3,21 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
-import java.lang.foreign.Arena;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import stirling.software.jpdfium.panama.ImageObjBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
-import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
  * Detect and report duplicate embedded resources (images) across pages.
@@ -77,12 +79,18 @@ public final class PdfResourceDedup {
      * @return dedup report with duplicate groups
      */
     public static DedupReport analyze(PdfDocument doc) {
+        int pageCount = doc.pageCount();
+        if (pageCount == 0) {
+            return new DedupReport(Collections.emptyList(), 0, 0, 0);
+        }
+
         Map<String, List<ImageRef>> fingerprints = new LinkedHashMap<>();
         int totalImages = 0;
+        Scratch scratch = FfmHelper.scratch();
 
-        for (int p = 0; p < doc.pageCount(); p++) {
+        for (int p = 0; p < pageCount; p++) {
             try (PdfPage page = doc.page(p)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
 
                 int objCount;
                 try {
@@ -101,21 +109,18 @@ public final class PdfResourceDedup {
 
                     if (type == FPDF_PAGEOBJ_IMAGE) {
                         totalImages++;
-                        String fp = fingerprint(obj);
-                        int w = 0, h = 0;
-                        try (var arena = Arena.ofConfined()) {
-                            var wBuf = arena.allocate(ValueLayout.JAVA_INT);
-                            var hBuf = arena.allocate(ValueLayout.JAVA_INT);
-                            try {
-                                int ok = (int) ImageObjBindings
-                                        .FPDFImageObj_GetImagePixelSize.invokeExact(obj, wBuf, hBuf);
-                                if (ok != 0) {
-                                    w = wBuf.get(ValueLayout.JAVA_INT, 0);
-                                    h = hBuf.get(ValueLayout.JAVA_INT, 0);
-                                }
-                            } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
-                        }
+                        int w = 0;
+                        int h = 0;
+                        try {
+                            int ok = (int) ImageObjBindings
+                                    .FPDFImageObj_GetImagePixelSize.invokeExact(obj, scratch.int0, scratch.int1);
+                            if (ok != 0) {
+                                w = scratch.int0.get(ValueLayout.JAVA_INT, 0);
+                                h = scratch.int1.get(ValueLayout.JAVA_INT, 0);
+                            }
+                        } catch (Throwable t) { NativeRuntime.rethrowFatal(t); }
 
+                        String fp = fingerprint(obj, w, h, scratch);
                         ImageRef ref = new ImageRef(p, i, w, h);
                         fingerprints.computeIfAbsent(fp, k -> new ArrayList<>()).add(ref);
                     }
@@ -141,59 +146,48 @@ public final class PdfResourceDedup {
     }
 
     /**
-     * Generate a fingerprint for an image object based on its pixel data hash.
+     * Generate a fingerprint for an image object from its encoded stream bytes,
+     * falling back to decoded pixel bytes. Two images are only reported as
+     * duplicates when their actual image content is identical - pixel
+     * dimensions alone are not enough (many distinct images share dimensions).
      */
-    private static String fingerprint(MemorySegment imgObj) {
-        try (var arena = Arena.ofConfined()) {
-            var wBuf = arena.allocate(ValueLayout.JAVA_INT);
-            var hBuf = arena.allocate(ValueLayout.JAVA_INT);
-            try {
-                int ok = (int) ImageObjBindings
-                        .FPDFImageObj_GetImagePixelSize.invokeExact(imgObj, wBuf, hBuf);
-                if (ok == 0) return "unknown-" + System.identityHashCode(imgObj);
-            } catch (Throwable t) { return "unknown-" + System.identityHashCode(imgObj); }
-
-            int w = wBuf.get(ValueLayout.JAVA_INT, 0);
-            int h = hBuf.get(ValueLayout.JAVA_INT, 0);
-
-            // Use dimensions + bounds as a quick fingerprint
-            // (Full pixel comparison would require rendering, which is expensive)
-            try {
-                var lb = arena.allocate(ValueLayout.JAVA_FLOAT);
-                var bb = arena.allocate(ValueLayout.JAVA_FLOAT);
-                var rb = arena.allocate(ValueLayout.JAVA_FLOAT);
-                var tb = arena.allocate(ValueLayout.JAVA_FLOAT);
-                int ok = (int) PageEditBindings.FPDFPageObj_GetBounds.invokeExact(imgObj, lb, bb, rb, tb);
-            if (ok == 0) {
-                throw new JPDFiumException("FPDFPageObj_GetBounds failed");
-            }
-
-                float left = lb.get(ValueLayout.JAVA_FLOAT, 0);
-                float bottom = bb.get(ValueLayout.JAVA_FLOAT, 0);
-                float right = rb.get(ValueLayout.JAVA_FLOAT, 0);
-                float top = tb.get(ValueLayout.JAVA_FLOAT, 0);
-
-                // Hash dimensions + display bounds
-                MessageDigest md = MessageDigest.getInstance("SHA-256");
-                md.update(intBytes(w));
-                md.update(intBytes(h));
-                // Note: for true dedup, you'd want to hash the raw image data.
-                // As a heuristic, images with identical pixel dimensions are candidates.
-                byte[] hash = md.digest(intBytes(w * 31 + h));
-                return hex(hash).substring(0, 16);
-            } catch (Throwable t) {
-                return String.format("dim-%dx%d", w, h);
-            }
+    private static String fingerprint(MemorySegment imgObj, int w, int h, Scratch scratch) {
+        if (w == 0 && h == 0) {
+            return "unknown-" + imgObj.address();
         }
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(intBytes(w));
+            md.update(intBytes(h));
+            if (!hashImageData(ImageObjBindings.FPDFImageObj_GetImageDataRaw, md, imgObj, scratch)
+                    && !hashImageData(
+                            ImageObjBindings.FPDFImageObj_GetImageDataDecoded, md, imgObj, scratch)) {
+                return "unreadable-" + imgObj.address() + "-" + w + "x" + h;
+            }
+            byte[] digest = md.digest();
+            return HexFormat.of().formatHex(digest, 0, 8);
+        } catch (Throwable t) {
+            return "unreadable-" + imgObj.address() + "-" + w + "x" + h;
+        }
+    }
+
+    private static boolean hashImageData(
+            MethodHandle getData, MessageDigest md, MemorySegment imgObj, Scratch scratch)
+            throws Throwable {
+        long size = (long) getData.invokeExact(imgObj, MemorySegment.NULL, 0L);
+        if (size <= 0) {
+            return false;
+        }
+        MemorySegment buf = scratch.ensureNativeBuffer(size);
+        long written = (long) getData.invokeExact(imgObj, buf, size);
+        if (written <= 0 || written > buf.byteSize()) {
+            return false;
+        }
+        md.update(buf.asSlice(0, written).asByteBuffer());
+        return true;
     }
 
     private static byte[] intBytes(int v) {
         return new byte[]{(byte) (v >> 24), (byte) (v >> 16), (byte) (v >> 8), (byte) v};
-    }
-
-    private static String hex(byte[] bytes) {
-        var sb = new StringBuilder();
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.toString();
     }
 }

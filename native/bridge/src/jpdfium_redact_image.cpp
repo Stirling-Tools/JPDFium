@@ -102,9 +102,9 @@ bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageOb
 
     // Pixel-center -> page map (row-vector convention, row 0 = top):
     //   px = pa*ix + pc*iy + pe,  py = pb*ix + pd*iy + pf
-    const double pa = imgMatrix.a / w;
+    const double pa = static_cast<double>(imgMatrix.a) / w;
     const double pc = -static_cast<double>(imgMatrix.c) / h;
-    const double pb = imgMatrix.b / w;
+    const double pb = static_cast<double>(imgMatrix.b) / w;
     const double pd = -static_cast<double>(imgMatrix.d) / h;
     const double pe = imgMatrix.e + imgMatrix.c + 0.5 * pa + 0.5 * pc;
     const double pf = imgMatrix.f + imgMatrix.d + 0.5 * pb + 0.5 * pd;

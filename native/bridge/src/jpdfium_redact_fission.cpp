@@ -413,8 +413,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 }
                 if (lig) {
                     ligated.replace(li, n, 1, lig);
-                    runIdx.erase(runIdx.begin() + li, runIdx.begin() + li + n);
-                    runIdx.insert(runIdx.begin() + li, ri);
+                    runIdx.erase(runIdx.begin() + static_cast<std::ptrdiff_t>(li),
+                                 runIdx.begin() + static_cast<std::ptrdiff_t>(li + n));
+                    runIdx.insert(runIdx.begin() + static_cast<std::ptrdiff_t>(li), ri);
                 } else {
                     li++;
                 }
@@ -445,8 +446,10 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
     // FreeType font cache: avoid re-loading font data for every fragment.
 #ifdef JPDFIUM_HAS_FREETYPE
+    // Move-only with a noexcept destructor: a std::vector throw between
+    // FT_New_Memory_Face and the explicit release below must not leak the face.
     struct FtFontCache {
-        FT_Face face = nullptr;         // owned; freed after the plans are built
+        FT_Face face = nullptr;         // owned; freed by destroy()/the destructor
         std::vector<uint8_t> fontData;  // backing store for |face|, must outlive it
         std::unordered_map<uint32_t, uint32_t> unicodeToGid;
         // glyph id -> advance (font units, FT_LOAD_NO_SCALE), loaded on first use.
@@ -454,6 +457,42 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         short upem = 0;
         bool isCidKeyed = false;
         bool valid = false;
+
+        FtFontCache() = default;
+        ~FtFontCache() noexcept {
+            destroy();
+        }
+        FtFontCache(const FtFontCache&) = delete;
+        FtFontCache& operator=(const FtFontCache&) = delete;
+        FtFontCache(FtFontCache&& other) noexcept
+            : face(other.face),
+              fontData(std::move(other.fontData)),
+              unicodeToGid(std::move(other.unicodeToGid)),
+              advances(std::move(other.advances)),
+              upem(other.upem),
+              isCidKeyed(other.isCidKeyed),
+              valid(other.valid) {
+            other.face = nullptr;
+        }
+        FtFontCache& operator=(FtFontCache&& other) noexcept {
+            if (this != &other) {
+                destroy();
+                face = other.face;
+                fontData = std::move(other.fontData);
+                unicodeToGid = std::move(other.unicodeToGid);
+                advances = std::move(other.advances);
+                upem = other.upem;
+                isCidKeyed = other.isCidKeyed;
+                valid = other.valid;
+                other.face = nullptr;
+            }
+            return *this;
+        }
+
+        void destroy() noexcept {
+            if (face) FT_Done_Face(face);
+            face = nullptr;
+        }
     };
     std::unordered_map<uintptr_t, FtFontCache> ftCache;
 
@@ -615,7 +654,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     if (computeDeviations(currentRun, devs) && devs.size() >= 2) {
                         double sum = 0;
                         for (double d : devs) sum += d;
-                        double mean = sum / devs.size();
+                        double mean = sum / static_cast<double>(devs.size());
                         // 0.25pt: above matrix-chain noise, below any real TJ
                         // adjustment (TJ numbers are integer /1000 em - at 12pt
                         // even -25 units = 0.3pt).
@@ -707,8 +746,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
 
 #ifdef JPDFIUM_HAS_FREETYPE
     // The deviation detector is done with the faces once every plan is built.
+    // destroy() is idempotent, so the destructor also covers an early throw.
     for (auto& [key, cache] : ftCache) {
-        if (cache.face) FT_Done_Face(cache.face);
+        cache.destroy();
     }
     ftCache.clear();
 #endif
@@ -1582,9 +1622,12 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                     canEdit = false;
                 } else {
                     const ObjRef& ref = allObjs[pit->second];
-                    if (ref.topFormObj && objsToDestroy.count(ref.topFormObj)) {
-                        canEdit = false;  // freed with the destroyed top form
-                    } else if (!FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
+                    // A top form that is being destroyed frees the object, and a failed
+                    // detach leaves it owned by the form: both mean "do not edit in place".
+                    const bool freedWithTopForm =
+                        ref.topFormObj && objsToDestroy.count(ref.topFormObj) > 0;
+                    if (freedWithTopForm ||
+                        !FPDFFormObj_RemoveObject(plan.parentForm, plan.originalObj)) {
                         canEdit = false;
                     } else {
                         detachedFromForms.insert(plan.parentForm);

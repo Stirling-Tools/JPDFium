@@ -24,9 +24,9 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * {@code FLASHTEXT_FREE}) always use plain downcalls because cleanup work
  * does not satisfy the short-call contract.
  *
- * <p>These direct handles are not wrapped by combinators; callers must invoke
- * them from inside the {@link PdfiumRuntime} execution domain
- * ({@code execute}/{@code executeTeardown}).
+ * <p>Entry points with a native {@code jpdf_guard_*} shim bind the shim, so the native
+ * domain admits each call. A guard can wait for the domain, so guarded handles are never
+ * critical; only unguarded leaves keep the critical linkage.
  */
 public final class FastLinks {
 
@@ -47,12 +47,8 @@ public final class FastLinks {
     public static final MethodHandle FONT_FREE_INFO;
     public static final MethodHandle PAGE_FLATTEN;
 
-    // Critical-suitability audit: critical downcalls must be short in all cases
-    // and never call back into Java, lock, or run variable-length PDFium work.
-    // Eligible here are trivial getters (page count/dimensions), plain free()s,
-    // and small fixed-struct releases. Rendering, parsing, saving, redaction,
-    // text extraction, flattening, and all cleanup that walks heap state stay
-    // plain - they go through the guarded JpdfiumH bindings, never this table.
+    // Critical downcalls must be short and never block, call back into Java or run PDFium work.
+    // Every entry below that has a native guard is linked plain; the flag applies only otherwise.
     static {
         DOC_PAGE_COUNT  = link("jpdfium_doc_page_count", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
         PAGE_WIDTH      = link("jpdfium_page_width", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS), true);
@@ -68,6 +64,10 @@ public final class FastLinks {
     }
 
     private static MethodHandle link(String name, FunctionDescriptor desc, boolean isLeafCritical) {
+        Optional<MemorySegment> guard = NativeDomain.guard(name);
+        if (guard.isPresent()) {
+            return NativeDomain.checked(LINKER.downcallHandle(guard.get(), desc));
+        }
         Optional<MemorySegment> sym = Symbols.find(name);
         if (sym.isEmpty()) return null;
         if (isLeafCritical && CRITICAL_ENABLED) {

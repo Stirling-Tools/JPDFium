@@ -1,0 +1,8 @@
+# ONNX Runtime for the optional OCR module: CPU packages from the GitHub release, pinned by the
+# digests GitHub publishes for each asset.
+version 1.30.0
+sha256 linux-x64 a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd
+sha256 linux-aarch64 e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da
+sha256 osx-arm64 6ebb5062a934537c352937821f9fe9718e7de1a2db1122a93dd363ffd53a7012
+sha256 win-x64 c6ba983baf5681af108599675d2a89c2d145512d02de28aed0bff177cd0ba949
+sha256 win-arm64 e53db8a50b23ae35be901cc93428baf997dc8d420333b097b2eae53d3ea9f2d3

@@ -7,9 +7,9 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.RenderBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
-
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
@@ -59,7 +59,7 @@ public final class PdfAutoCrop {
      */
     public static Rect detectContentBoundsText(PdfDocument doc, int pageIndex, float margin) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
             MemorySegment textPage;
             try {
                 textPage = (MemorySegment) TextPageBindings.FPDFText_LoadPage.invokeExact(rawPage);
@@ -81,34 +81,33 @@ public final class PdfAutoCrop {
                 float maxTop = -Float.MAX_VALUE;
                 boolean foundAny = false;
 
-                try (Arena arena = Arena.ofConfined()) {
-                    MemorySegment left = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment right = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment bottom = arena.allocate(ValueLayout.JAVA_DOUBLE);
-                    MemorySegment top = arena.allocate(ValueLayout.JAVA_DOUBLE);
+                Scratch scratch = FfmHelper.scratch();
+                MemorySegment left = scratch.double0;
+                MemorySegment right = scratch.double1;
+                MemorySegment bottom = scratch.double2;
+                MemorySegment top = scratch.double3;
 
-                    for (int i = 0; i < charCount; i++) {
-                        int ok;
-                        try {
-                            ok = (int) TextPageBindings.FPDFText_GetCharBox.invokeExact(
-                                    textPage, i, left, right, bottom, top);
-                        } catch (Throwable t) { continue; }
-                        if (ok == 0) continue;
+                for (int i = 0; i < charCount; i++) {
+                    int ok;
+                    try {
+                        ok = (int) TextPageBindings.FPDFText_GetCharBox.invokeExact(
+                                textPage, i, left, right, bottom, top);
+                    } catch (Throwable t) { continue; }
+                    if (ok == 0) continue;
 
-                        float l = (float) left.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float r = (float) right.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float b = (float) bottom.get(ValueLayout.JAVA_DOUBLE, 0);
-                        float t2 = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float l = (float) left.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float r = (float) right.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float b = (float) bottom.get(ValueLayout.JAVA_DOUBLE, 0);
+                    float t2 = (float) top.get(ValueLayout.JAVA_DOUBLE, 0);
 
-                        // Skip generated space characters (width ~0, position ~0)
-                        if (l == r && b == t2) continue;
+                    // Skip generated space characters (width ~0, position ~0)
+                    if (l == r && b == t2) continue;
 
-                        if (l < minLeft) minLeft = l;
-                        if (r > maxRight) maxRight = r;
-                        if (b < minBottom) minBottom = b;
-                        if (t2 > maxTop) maxTop = t2;
-                        foundAny = true;
-                    }
+                    if (l < minLeft) minLeft = l;
+                    if (r > maxRight) maxRight = r;
+                    if (b < minBottom) minBottom = b;
+                    if (t2 > maxTop) maxTop = t2;
+                    foundAny = true;
                 }
 
                 if (!foundAny) return null;
@@ -154,7 +153,7 @@ public final class PdfAutoCrop {
     public static Rect detectContentBoundsBitmap(PdfDocument doc, int pageIndex,
                                                   int dpi, float whiteThreshold, float margin) {
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
 
             // Get page dimensions in points
             float pageWidth = page.size().width();
@@ -205,11 +204,17 @@ public final class PdfAutoCrop {
                 // BGRx read as one 32-bit word; little-endian, since the masks assume the low byte is B.
                 ValueLayout.OfInt pixelLayout =
                         ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
+                int[] rowPixels = new int[bmpW];
                 for (int y = 0; y < bmpH; y++) {
                     long rowOffset = (long) y * stride;
+                    MemorySegment.copy(buffer, pixelLayout, rowOffset, rowPixels, 0, bmpW);
                     for (int x = 0; x < bmpW; x++) {
-                        // low byte = B, then G, then R. One access beats three.
-                        int pixel = buffer.get(pixelLayout, rowOffset + (long) x * 4);
+                        int pixel = rowPixels[x];
+                        // Fast skip pure white margin pixel
+                        if ((pixel & 0x00FFFFFF) == 0x00FFFFFF) {
+                            continue;
+                        }
+
                         int b = pixel & 0xFF;
                         int g = (pixel >>> 8) & 0xFF;
                         int r = (pixel >>> 16) & 0xFF;

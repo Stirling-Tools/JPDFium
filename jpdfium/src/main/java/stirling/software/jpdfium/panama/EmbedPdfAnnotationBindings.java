@@ -27,10 +27,6 @@ public final class EmbedPdfAnnotationBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
     private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
         return Symbols.downcallOptional(name, desc);
     }
@@ -75,7 +71,7 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Get dash pattern entry count. */
-    public static final MethodHandle EPDFAnnot_GetBorderDashPatternCount = downcallCritical("EPDFAnnot_GetBorderDashPatternCount",
+    public static final MethodHandle EPDFAnnot_GetBorderDashPatternCount = downcall("EPDFAnnot_GetBorderDashPatternCount",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS));
 
     /** Get dash pattern values. */
@@ -103,15 +99,15 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get effective blend mode of annotation's appearance stream. */
-    public static final MethodHandle EPDFAnnot_GetBlendMode = downcallCritical("EPDFAnnot_GetBlendMode",
+    public static final MethodHandle EPDFAnnot_GetBlendMode = downcall("EPDFAnnot_GetBlendMode",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Check if annotation has an appearance stream for the given mode. */
-    public static final MethodHandle EPDFAnnot_HasAppearanceStream = downcallCritical("EPDFAnnot_HasAppearanceStream",
+    public static final MethodHandle EPDFAnnot_HasAppearanceStream = downcall("EPDFAnnot_HasAppearanceStream",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get bitmask of available appearance modes (N=1, R=2, D=4). */
-    public static final MethodHandle EPDFAnnot_GetAvailableAppearanceModes = downcallCritical("EPDFAnnot_GetAvailableAppearanceModes",
+    public static final MethodHandle EPDFAnnot_GetAvailableAppearanceModes = downcall("EPDFAnnot_GetAvailableAppearanceModes",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Set AP stream matrix. */
@@ -163,7 +159,7 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get text alignment. */
-    public static final MethodHandle EPDFAnnot_GetTextAlignment = downcallCritical("EPDFAnnot_GetTextAlignment",
+    public static final MethodHandle EPDFAnnot_GetTextAlignment = downcall("EPDFAnnot_GetTextAlignment",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Set vertical alignment. Optional: absent from some builds. */
@@ -195,7 +191,7 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Get annotation count without loading the page. */
-    public static final MethodHandle EPDFPage_GetAnnotCountRaw = downcallCritical("EPDFPage_GetAnnotCountRaw",
+    public static final MethodHandle EPDFPage_GetAnnotCountRaw = downcall("EPDFPage_GetAnnotCountRaw",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get annotation by index without loading the page. */
@@ -254,7 +250,7 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
     /** Get reply type (RT). */
-    public static final MethodHandle EPDFAnnot_GetReplyType = downcallCritical("EPDFAnnot_GetReplyType",
+    public static final MethodHandle EPDFAnnot_GetReplyType = downcall("EPDFAnnot_GetReplyType",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Set reply type (RT). */
@@ -275,7 +271,7 @@ public final class EmbedPdfAnnotationBindings {
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     /** Get whether overlay text repeats. */
-    public static final MethodHandle EPDFAnnot_GetOverlayTextRepeat = downcallCritical("EPDFAnnot_GetOverlayTextRepeat",
+    public static final MethodHandle EPDFAnnot_GetOverlayTextRepeat = downcall("EPDFAnnot_GetOverlayTextRepeat",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
     /** Apply redact annotations on a page (burns content under them).

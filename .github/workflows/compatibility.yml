@@ -94,6 +94,12 @@ jobs:
           # "Removed" in CHANGELOG.md so consumers can see it. Remove entries
           # from this list as soon as the baseline no longer contains the class.
           #
+          # Accepted breakage (one removed member): PdfiumRuntime.guarded(MethodHandle)
+          # wrapped a downcall so that invoking it entered the execution domain.
+          # Admission now happens natively per downcall, so the Java wrapper is gone
+          # and the method with it. The member-level exclude below matches that one
+          # method; the rest of PdfiumRuntime must stay compatible.
+          #
           # Member-level breakage (pin-driven only, excluded individually): the
           # PDFium pin beyond 20260921 removed or reshaped four native symbols
           # that the panama binding holders mirrored as public MethodHandle
@@ -113,6 +119,7 @@ jobs:
             --ignore-missing-classes \
             --exclude "stirling.software.jpdfium.panama.NativeGuard" \
             --exclude "stirling.software.jpdfium.doc.PdfAConverter" \
+            --exclude "stirling.software.jpdfium.panama.PdfiumRuntime#guarded(java.lang.invoke.MethodHandle)" \
             --exclude "stirling.software.jpdfium.text.edit.TextEditor" \
             --exclude "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings#EPDFAnnot_SetRectangleDifferences" \
             --exclude "stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings#EPDFAnnot_ApplyRedaction" \

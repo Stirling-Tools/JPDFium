@@ -173,6 +173,11 @@ public final class QpdfLib {
             "jpdfium_qpdf_extract_pages_file",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 
+    // E1 experiment: one source parse serving every range.
+    private static final MethodHandle EXTRACT_RANGES_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
+            "jpdfium_qpdf_extract_ranges_file",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
+
     private static final MethodHandle SANITIZE_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_sanitize_file", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT));
     private static final MethodHandle ENCRYPT_FILE_HANDLE = Symbols.downcallOptionalUnguarded(
@@ -195,6 +200,10 @@ public final class QpdfLib {
 
     public static boolean isExtractFileSupported() {
         return EXTRACT_PAGES_FILE_HANDLE != null;
+    }
+
+    public static boolean isExtractRangesSupported() {
+        return EXTRACT_RANGES_FILE_HANDLE != null;
     }
 
     public static boolean isSanitizeFileSupported() {
@@ -466,22 +475,9 @@ public final class QpdfLib {
         // commit, empty-file and budget checks.
         try (QpdfCall call = new QpdfCall();
                 OutputTransaction tx = OutputTransaction.begin(output, durable)) {
-            int count = inputs.size();
-            MemorySegment pathsArraySeg = call.arena.allocate(ADDRESS, count);
-            for (int i = 0; i < count; i++) {
-                Path p = inputs.get(i);
-                if (p == null) {
-                    pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
-                } else {
-                    MemorySegment s = call.cString(p.toAbsolutePath().toString());
-                    pathsArraySeg.setAtIndex(ADDRESS, i, s);
-                }
-            }
             rejectAlias(inputs, output);
             staging = tx.staging();
-            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
-            int rc = (int) MERGE_FILES_HANDLE.invokeExact(pathsArraySeg, count, outSeg);
-            if (rc != 0) {
+            if (invokeMergeFiles(call, inputs, staging) != 0) {
                 return false;
             }
             publish(staging, output, durable);
@@ -494,6 +490,59 @@ public final class QpdfLib {
             deleteQuietly(staging);
             releaseSlot(held);
         }
+    }
+
+    /**
+     * Write a merged PDF straight into a caller-owned staging file.
+     *
+     * <p>Unlike {@link #mergeFiles(List, Path, boolean)} this creates no second
+     * staging file and publishes nothing: the caller writes into the staging
+     * file it already placed beside the destination and publishes it exactly
+     * once. That keeps a single owner of the final rename and removes the
+     * nested staging/rename cycle. QpdfLib still owns the job slot, the
+     * alias rejection and the native error mapping.
+     *
+     * @param inputs        input PDF file paths
+     * @param stagingTarget a staging file the caller owns and will delete
+     * @return true on success; false if the file operation is unavailable or failed
+     */
+    public static boolean mergeFilesInto(List<Path> inputs, Path stagingTarget) {
+        if (MERGE_FILES_HANDLE == null || inputs == null || inputs.isEmpty()
+                || stagingTarget == null) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf merge interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            rejectAlias(inputs, stagingTarget);
+            return invokeMergeFiles(call, inputs, stagingTarget) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf merge files failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeMergeFiles(QpdfCall call, List<Path> inputs, Path stagingTarget)
+            throws Throwable {
+        int count = inputs.size();
+        MemorySegment pathsArraySeg = call.arena.allocate(ADDRESS, count);
+        for (int i = 0; i < count; i++) {
+            Path p = inputs.get(i);
+            if (p == null) {
+                pathsArraySeg.setAtIndex(ADDRESS, i, MemorySegment.NULL);
+            } else {
+                pathsArraySeg.setAtIndex(ADDRESS, i, call.cString(p.toAbsolutePath().toString()));
+            }
+        }
+        MemorySegment outSeg = call.cString(stagingTarget.toAbsolutePath().toString());
+        return (int) MERGE_FILES_HANDLE.invokeExact(pathsArraySeg, count, outSeg);
     }
 
     /**
@@ -530,14 +579,9 @@ public final class QpdfLib {
         Path staging = null;
         try (QpdfCall call = new QpdfCall();
                 OutputTransaction tx = OutputTransaction.begin(output, durable)) {
-            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
-            MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
             rejectAlias(List.of(input), output);
             staging = tx.staging();
-            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
-            int rc = (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
-                    inSeg, indicesSeg, pageIndices.length, outSeg);
-            if (rc != 0) {
+            if (invokeExtractPagesToFile(call, input, pageIndices, staging) != 0) {
                 return false;
             }
             publish(staging, output, durable);
@@ -550,6 +594,120 @@ public final class QpdfLib {
             deleteQuietly(staging);
             releaseSlot(held);
         }
+    }
+
+    /**
+     * Extract pages straight into a caller-owned staging file.
+     *
+     * <p>The file-backed counterpart of {@link #mergeFilesInto}: no second
+     * staging file, no publication. The caller validates and publishes once.
+     *
+     * @param input         input PDF file path
+     * @param pageIndices   zero-based page indices to extract
+     * @param stagingTarget a staging file the caller owns and will delete
+     * @return true on success; false if the file operation is unavailable or failed
+     */
+    public static boolean extractPagesInto(Path input, int[] pageIndices, Path stagingTarget) {
+        if (EXTRACT_PAGES_FILE_HANDLE == null || input == null || stagingTarget == null
+                || pageIndices == null || pageIndices.length == 0) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            rejectAlias(List.of(input), stagingTarget);
+            return invokeExtractPagesToFile(call, input, pageIndices, stagingTarget) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf extract pages to file failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeExtractPagesToFile(QpdfCall call, Path input, int[] pageIndices,
+            Path stagingTarget) throws Throwable {
+        MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+        // copyInts already copies into off-heap memory; the clone keeps the
+        // caller's array as the immutable snapshot for the duration of the call
+        // so a concurrent mutation cannot tear the index list.
+        MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
+        MemorySegment outSeg = call.cString(stagingTarget.toAbsolutePath().toString());
+        return (int) EXTRACT_PAGES_FILE_HANDLE.invokeExact(
+                inSeg, indicesSeg, pageIndices.length, outSeg);
+    }
+
+    /**
+     * E1 experiment: extract several ranges into several staging files with a single
+     * native source parse. Each entry of {@code indexRanges} is the absolute page index
+     * list for one output; {@code stagingTargets} is positionally aligned with it.
+     * Returns false when the capability is unavailable or the native call fails.
+     */
+    public static boolean extractRangesInto(Path input, List<int[]> indexRanges,
+                                            List<Path> stagingTargets) {
+        if (EXTRACT_RANGES_FILE_HANDLE == null || input == null || indexRanges == null
+                || stagingTargets == null || indexRanges.isEmpty()
+                || indexRanges.size() != stagingTargets.size()) {
+            return false;
+        }
+        for (int[] range : indexRanges) {
+            if (range == null || range.length == 0) {
+                return false;
+            }
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf extract interrupted while waiting for a job slot", e);
+        }
+        try (QpdfCall call = new QpdfCall()) {
+            for (Path out : stagingTargets) {
+                rejectAlias(List.of(input), out);
+            }
+            return invokeExtractRangesFile(call, input, indexRanges, stagingTargets) == 0;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf extract ranges to file failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static int invokeExtractRangesFile(QpdfCall call, Path input,
+                                               List<int[]> indexRanges, List<Path> stagingTargets)
+            throws Throwable {
+        int rangeCount = indexRanges.size();
+        int total = 0;
+        for (int[] r : indexRanges) {
+            total = Math.addExact(total, r.length);
+        }
+        int[] flat = new int[total];
+        int[] offsets = new int[rangeCount + 1];
+        int pos = 0;
+        for (int i = 0; i < rangeCount; i++) {
+            offsets[i] = pos;
+            int[] r = indexRanges.get(i);
+            System.arraycopy(r, 0, flat, pos, r.length);
+            pos += r.length;
+        }
+        offsets[rangeCount] = pos;
+        MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+        MemorySegment indicesSeg = call.copyInts(flat);
+        MemorySegment offsetsSeg = call.copyInts(offsets);
+        MemorySegment outArraySeg = call.arena.allocate(ADDRESS, rangeCount);
+        for (int i = 0; i < rangeCount; i++) {
+            outArraySeg.setAtIndex(ADDRESS, i,
+                    call.cString(stagingTargets.get(i).toAbsolutePath().toString()));
+        }
+        return (int) EXTRACT_RANGES_FILE_HANDLE.invokeExact(
+                inSeg, indicesSeg, offsetsSeg, rangeCount, outArraySeg);
     }
 
     public static byte[] extractPages(byte[] input, int[] pageIndices) {
@@ -833,10 +991,6 @@ public final class QpdfLib {
         }
     }
 
-    private static void publish(Path staging, Path output) throws IOException {
-        publish(staging, output, 0);
-    }
-
     private static void publish(Path staging, Path output, boolean durable) throws IOException {
         publish(staging, output, 0, new PublishCommit(), durable);
     }
@@ -871,11 +1025,6 @@ public final class QpdfLib {
         }
         publishCommitted(staging, output, maxBytes, false, durable);
         if (commit != null) commit.committed();
-    }
-
-    private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber)
-            throws IOException {
-        publishCommitted(staging, output, maxBytes, noClobber, true);
     }
 
     private static void publishCommitted(Path staging, Path output, long maxBytes, boolean noClobber,

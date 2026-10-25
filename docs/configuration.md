@@ -69,7 +69,7 @@ These are for troubleshooting JPDFium itself and may change between releases.
 
 | Property | Default | Description |
 |---|---|---|
-| `jpdfium.nativeGuard.telemetry` | `false` | Records native-call wait and hold times. Read through `PdfiumRuntime.stats()`. Read once at startup. |
+| `jpdfium.nativeGuard.telemetry` | `false` | No effect since the native domain took over serialization: wait and hold times are always recorded. Kept so existing launch flags stay valid. |
 | `jpdfium.traceDomain` | unset | JFR event domain for native tracing. Read once at startup. |
 
 ## Per-operation options

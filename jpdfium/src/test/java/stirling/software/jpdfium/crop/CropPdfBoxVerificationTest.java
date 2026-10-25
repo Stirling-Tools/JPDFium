@@ -200,7 +200,6 @@ class CropPdfBoxVerificationTest {
         }
     }
 
-    // helpers
 
     private static byte[] cropFirstPage(byte[] input, Rect crop) {
         try (PdfDocument doc = PdfDocument.open(input)) {

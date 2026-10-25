@@ -205,8 +205,8 @@ public final class EmbedPdfAnnotations {
                     annot, MemorySegment.NULL, 0L);
             if (needed <= 2) return Optional.empty();
             MemorySegment buf = arena.allocate(needed);
-            long _ = (long) EmbedPdfAnnotationBindings.EPDFAnnot_GetOverlayText.invokeExact(annot, buf, needed);
-            String value = FfmHelper.fromWideString(buf, needed);
+            long written = (long) EmbedPdfAnnotationBindings.EPDFAnnot_GetOverlayText.invokeExact(annot, buf, needed);
+            String value = FfmHelper.fromWideString(buf, written);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }

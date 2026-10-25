@@ -897,6 +897,8 @@
     FPDF_VIEWERREF_GetPrintPageRangeElement;
     FPDF_VIEWERREF_GetPrintScaling;
     jpdfium_*;
+    jpdf_*;
+    jpdf_guard_*;
   local:
     *;
 };

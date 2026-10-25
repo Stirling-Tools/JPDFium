@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.redact;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.fonts.FontNormalizer;
 import stirling.software.jpdfium.redact.pii.EntityRedactor;
 import stirling.software.jpdfium.redact.pii.PatternEngine;
@@ -166,17 +167,57 @@ public record RedactResult(PdfDocument document, List<PageResult> pageResults, l
     }
 
     /**
-     * Save the document to a file, respecting the incremental save option.
+     * True when at least one page's redaction could not be completed: its
+     * {@link PageResult#matchesFound()} is negative. Such a document must not be
+     * presented as fully sanitized, because the targets on that page were not all
+     * removed.
+     */
+    public boolean analysisIncomplete() {
+        for (PageResult page : pageResults) {
+            if (page.matchesFound() < 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Save the document to a file.
+     *
+     * <p>{@link PdfDocument#save(Path)} always performs a full rewrite, so this is a safe
+     * redaction output as long as the analysis completed on every page. Refusing when it
+     * did not keeps a partially sanitized document from being mistaken for a redacted one.
+     *
+     * @throws JPDFiumException when the analysis was incomplete
      */
     public void save(Path path) {
+        requireComplete();
         document.save(path);
     }
 
     /**
-     * Save the document to bytes, respecting the incremental save option.
+     * Save the document to bytes, as {@link #save(Path)} but returning the bytes.
+     *
+     * <p>The incremental option is rejected: an incremental save appends and can leave the
+     * pre-redaction object versions physically present, so a full rewrite is always produced.
+     *
+     * @throws JPDFiumException when the analysis was incomplete or the result was produced
+     *     with {@code incrementalSave}
      */
     public byte[] saveBytes() {
-        return incrementalSave ? document.saveBytesIncremental() : document.saveBytes();
+        requireComplete();
+        if (incrementalSave) {
+            throw new JPDFiumException("incremental save cannot be used as a redaction output; "
+                    + "request a full rewrite so old object versions are not retained");
+        }
+        return document.saveBytes();
+    }
+
+    private void requireComplete() {
+        if (analysisIncomplete()) {
+            throw new JPDFiumException("redaction analysis was incomplete; refusing to publish "
+                    + "a document that may still contain the target content");
+        }
     }
 
     @Override

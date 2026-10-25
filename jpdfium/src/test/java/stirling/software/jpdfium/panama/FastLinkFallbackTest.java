@@ -7,6 +7,8 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -28,12 +30,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FastLinkFallbackTest {
 
     @AfterEach
-    void restoreAndAssertClean() {
+    void restoreAndAssertClean() throws Exception {
         if (PdfiumRuntime.state() != PdfiumRuntime.State.RUNNING) {
-            PdfiumRuntime.restoreRunningForTests();
+            PdfiumRuntime.resume();
         }
-        assertEquals(0, PdfiumRuntime.entryDepth(), "leaked domain entry");
-        assertFalse(PdfiumRuntime.domainLocked(), "leaked the domain lock");
+        assertNativeDomainFree();
+    }
+
+    /** A leaked native admission would block every other thread's PDFium call. */
+    private static void assertNativeDomainFree() throws Exception {
+        CompletableFuture<Integer> probe =
+                CompletableFuture.supplyAsync(JpdfiumH::jpdfium_active_renderer);
+        probe.get(10, TimeUnit.SECONDS);
     }
 
     private static byte[] pdf() throws Exception {
@@ -135,8 +143,6 @@ class FastLinkFallbackTest {
         assertEquals(before.pages(), PdfiumRuntime.liveResources().pages(),
                 "rejected closes must not change live-resource accounting");
         assertEquals(before.documents(), PdfiumRuntime.liveResources().documents());
-        assertEquals(0, PdfiumRuntime.entryDepth());
-        assertFalse(PdfiumRuntime.domainLocked());
     }
 
     @Test

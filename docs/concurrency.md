@@ -6,7 +6,7 @@ PDFium calls are serialized within each process. Adding threads does not paralle
 
 A document may be used by different threads sequentially, but access must not overlap. Its pages follow the same rule.
 
-`close()` is idempotent: a second call returns without releasing the native handle again. It acquires the same lock as PDFium calls, so it cannot free the document in the middle of a single native call.
+`close()` is idempotent: a second call returns without releasing the native handle again. It is admitted by the same native domain as PDFium calls, so it cannot free the document in the middle of a single native call.
 
 It does not track a compound operation. A redaction or save that spans several native calls can have its handle freed by a concurrent `close()` between two of them. Do not close a document while another thread is using it.
 
@@ -31,15 +31,15 @@ void rasterize(Path input, Path output) throws IOException {
 
 ## Why PDFium work is serialized
 
-Upstream PDFium shares mutable state across all documents, including the font manager and cache, the page module, parser tables, and the last-error slot. JPDFium admits one PDFium call at a time through a single process-wide lock, so throughput does not increase with thread count.
+Upstream PDFium shares mutable state across all documents, including the font manager and cache, the page module, parser tables, and the last-error slot. JPDFium admits one PDFium call at a time through a single process-wide native domain, so throughput does not increase with thread count. The domain lives in the native library, so other bindings loaded into the same process (such as PyJPDFium) share it.
 
-Java work that does not enter PDFium is unaffected. Text processing, image encoding, and file I/O between native calls run in parallel, which is why `PdfPipeline` can process pages concurrently while the native portion stays serialized.
+Java work that does not enter PDFium is unaffected. JPDFium holds no Java lock, so text processing, image encoding, and file I/O between native calls run in parallel, which is why `PdfPipeline` can process pages concurrently while the native portion stays serialized. The one exception is the legacy save path: `FileWriteSink` writes to a caller `OutputStream` while its guarded PDFium save holds the domain.
 
 `PdfPipeline.PDFIUM_LOCK` is deprecated as of 1.0.4. JPDFium serializes PDFium calls internally, so caller-side locking is unnecessary. The field remains so existing `synchronized (PDFIUM_LOCK)` blocks keep compiling.
 
 ## Observing contention
 
-`PdfiumRuntime.stats()` reports the acquisition count unconditionally, plus native-call wait and hold times. Enable wait/hold timing with `-Djpdfium.nativeGuard.telemetry=true`. Wait time well above hold time indicates threads are waiting on the lock.
+`PdfiumRuntime.stats()` reports the native domain's acquisition count and its wait and hold times, which are always recorded. Wait time well above hold time indicates threads are queuing for PDFium.
 
 ## Parallel work
 

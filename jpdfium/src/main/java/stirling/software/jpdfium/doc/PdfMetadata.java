@@ -2,10 +2,10 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PdfiumRuntime;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -64,38 +64,43 @@ public final class PdfMetadata {
         if (rawDocSegment == null || rawDocSegment.equals(MemorySegment.NULL) || rawDocSegment.address() == 0) {
             return Optional.empty();
         }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment tagSegment = arena.allocateFrom(tag.pdfKey());
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+        MemorySegment key = tag.nativeKey();
 
-            long needed = PdfiumRuntime.executeLong(() -> {
+        long needed = PdfiumRuntime.executeLong(() -> {
+            try {
+                if (DocBindings.FPDF_GetMetaText == null) return -1L;
+                return (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, key,
+                        buf, cap);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                return -1L;
+            }
+        });
+
+        if (needed <= 2) return Optional.empty();
+
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written = PdfiumRuntime.executeLong(() -> {
                 try {
-                    if (DocBindings.FPDF_GetMetaText == null) return -1L;
-                    return (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment,
-                            MemorySegment.NULL, 0L);
+                    // Two-call contract: decode the bytes reported by the retry, not the probe.
+                    return (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, key,
+                            largeBuf, needed);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
                     return -1L;
                 }
             });
-
-            if (needed <= 2) return Optional.empty();
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            boolean fillOk = PdfiumRuntime.execute(() -> {
-                try {
-                    long written = (long) DocBindings.FPDF_GetMetaText.invokeExact(rawDocSegment, tagSegment, bufferSegment, needed);
-                    // -1 means the fill failed and the buffer was never written.
-                    return written >= 0;
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                    return false;
-                }
-            });
-            if (!fillOk) return Optional.empty();
-
-            String value = FfmHelper.fromWideString(bufferSegment, needed);
+            if (written <= 2) return Optional.empty();
+            String value = scratch.decodeWideString(largeBuf, written);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         }
+
+        String value = scratch.decodeWideString(needed);
+        return value.isEmpty() ? Optional.empty() : Optional.of(value);
     }
 
     /**
@@ -147,37 +152,44 @@ public final class PdfMetadata {
      * @return the page label, or empty if not defined
      */
     public Optional<String> pageLabel(int pageIndex) {
-        try (Arena arena = Arena.ofConfined()) {
-            long needed = PdfiumRuntime.executeLong(() -> {
+        if (rawDocSegment == null || rawDocSegment.equals(MemorySegment.NULL) || rawDocSegment.address() == 0) {
+            return Optional.empty();
+        }
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
+
+        long needed = PdfiumRuntime.executeLong(() -> {
+            try {
+                if (DocBindings.FPDF_GetPageLabel == null) return -1L;
+                return (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
+                        buf, cap);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("FPDF_GetPageLabel call", t);
+            }
+        });
+
+        if (needed <= 2) return Optional.empty();
+
+        if (needed > cap) {
+            MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+            long written = PdfiumRuntime.executeLong(() -> {
                 try {
-                    if (DocBindings.FPDF_GetPageLabel == null) return -1L;
-                    return (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex,
-                            MemorySegment.NULL, 0L);
+                    // Two-call contract: decode the bytes reported by the retry, not the probe.
+                    return (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment,
+                            pageIndex, largeBuf, needed);
                 } catch (Throwable t) {
                     NativeRuntime.rethrowFatal(t);
-                    throw new JPDFiumException("FPDF_GetPageLabel size call", t);
+                    return -1L;
                 }
             });
-
-            if (needed <= 2) return Optional.empty();
-
-            MemorySegment bufferSegment = arena.allocate(needed);
-            boolean fillOk = PdfiumRuntime.execute(() -> {
-                try {
-                    // FPDF_GetPageLabel returns the length it stored, or -1 on
-                    // failure. A negative result means the buffer was never
-                    // written, so decoding it would read uninitialized memory.
-                    long written = (long) DocBindings.FPDF_GetPageLabel.invokeExact(rawDocSegment, pageIndex, bufferSegment, needed);
-                    return written >= 0;
-                } catch (Throwable t) {
-                    NativeRuntime.rethrowFatal(t);
-                    return false;
-                }
-            });
-            if (!fillOk) return Optional.empty();
-
-            String label = FfmHelper.fromWideString(bufferSegment, needed);
+            if (written <= 2) return Optional.empty();
+            String label = scratch.decodeWideString(largeBuf, written);
             return label.isEmpty() ? Optional.empty() : Optional.of(label);
         }
+
+        String label = scratch.decodeWideString(needed);
+        return label.isEmpty() ? Optional.empty() : Optional.of(label);
     }
 }

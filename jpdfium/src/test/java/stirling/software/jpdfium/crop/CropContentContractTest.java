@@ -221,7 +221,6 @@ class CropContentContractTest {
         }
     }
 
-    // helpers
 
     private static byte[] crop(byte[] input, Rect rect) {
         try (PdfDocument doc = PdfDocument.open(input)) {

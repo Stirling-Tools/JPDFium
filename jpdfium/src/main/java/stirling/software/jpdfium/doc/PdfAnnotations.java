@@ -3,6 +3,7 @@ package stirling.software.jpdfium.doc;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.EmbedPdfAnnotationBindings;
 import stirling.software.jpdfium.panama.FfmHelper;
+import stirling.software.jpdfium.panama.FfmHelper.Scratch;
 import stirling.software.jpdfium.panama.AnnotationBindings;
 
 import java.lang.foreign.Arena;
@@ -44,6 +45,11 @@ public final class PdfAnnotations {
         try {
             return (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(page);
         } catch (Throwable t) { throw new JPDFiumException("FPDFPage_GetAnnotCount failed", t); }
+    }
+
+    /** Returns whether the native annotation count query is available. */
+    public static boolean countAvailable() {
+        return AnnotationBindings.FPDFPage_GetAnnotCount != null;
     }
 
     /**
@@ -214,8 +220,8 @@ public final class PdfAnnotations {
         int n = count(page);
         if (n <= 0) return new int[0];
         List<Integer> removed = new ArrayList<>();
+        Scratch scratch = FfmHelper.scratch();
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
             MemorySegment apKey = arena.allocateFrom("AP");
             for (int i = n - 1; i >= 0; i--) {
                 MemorySegment annot;
@@ -226,13 +232,13 @@ public final class PdfAnnotations {
                 try {
                     int rectOk;
                     try {
-                        rectOk = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
+                        rectOk = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, scratch.rect);
                     } catch (Throwable t) { throw new JPDFiumException(t); }
                     if (rectOk == 0) continue;
-                    float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
-                    float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
-                    float right = rectSeg.get(ValueLayout.JAVA_FLOAT, 8);
-                    float bottom = rectSeg.get(ValueLayout.JAVA_FLOAT, 12);
+                    float left = scratch.rect.get(ValueLayout.JAVA_FLOAT, 0);
+                    float top = scratch.rect.get(ValueLayout.JAVA_FLOAT, 4);
+                    float right = scratch.rect.get(ValueLayout.JAVA_FLOAT, 8);
+                    float bottom = scratch.rect.get(ValueLayout.JAVA_FLOAT, 12);
                     float cx0 = Math.max(left, crop.x());
                     float cy0 = Math.max(bottom, crop.y());
                     float cx1 = Math.min(right, crop.x() + crop.width());
@@ -262,13 +268,13 @@ public final class PdfAnnotations {
                         }
                     } else if ((cx0 != left || cy0 != bottom || cx1 != right || cy1 != top)
                             && !hasAppearance(annot, apKey)) {
-                        rectSeg.set(ValueLayout.JAVA_FLOAT, 0, cx0);
-                        rectSeg.set(ValueLayout.JAVA_FLOAT, 4, cy1);
-                        rectSeg.set(ValueLayout.JAVA_FLOAT, 8, cx1);
-                        rectSeg.set(ValueLayout.JAVA_FLOAT, 12, cy0);
+                        scratch.rect.set(ValueLayout.JAVA_FLOAT, 0, cx0);
+                        scratch.rect.set(ValueLayout.JAVA_FLOAT, 4, cy1);
+                        scratch.rect.set(ValueLayout.JAVA_FLOAT, 8, cx1);
+                        scratch.rect.set(ValueLayout.JAVA_FLOAT, 12, cy0);
                         int rectSetOk;
                         try {
-                            rectSetOk = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
+                            rectSetOk = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, scratch.rect);
                         } catch (Throwable t) { throw new JPDFiumException(t); }
                         if (rectSetOk == 0) throw new JPDFiumException("FPDFAnnot_SetRect failed");
                     }
@@ -307,50 +313,58 @@ public final class PdfAnnotations {
     }
 
     private static Rect getAnnotRect(MemorySegment annot) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
-            try {
-                int ok = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, rectSeg);
-                if (ok == 0) return new Rect(0, 0, 0, 0);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
+        Scratch scratch = FfmHelper.scratch();
+        try {
+            int ok = (int) AnnotationBindings.FPDFAnnot_GetRect.invokeExact(annot, scratch.rect);
+            if (ok == 0) return new Rect(0, 0, 0, 0);
+        } catch (Throwable t) { throw new JPDFiumException(t); }
 
-            float left = rectSeg.get(ValueLayout.JAVA_FLOAT, 0);
-            float top = rectSeg.get(ValueLayout.JAVA_FLOAT, 4);
-            float right = rectSeg.get(ValueLayout.JAVA_FLOAT, 8);
-            float bottom = rectSeg.get(ValueLayout.JAVA_FLOAT, 12);
-            return new Rect(left, bottom, right - left, top - bottom);
-        }
+        float left = scratch.rect.get(ValueLayout.JAVA_FLOAT, 0);
+        float top = scratch.rect.get(ValueLayout.JAVA_FLOAT, 4);
+        float right = scratch.rect.get(ValueLayout.JAVA_FLOAT, 8);
+        float bottom = scratch.rect.get(ValueLayout.JAVA_FLOAT, 12);
+        return new Rect(left, bottom, right - left, top - bottom);
     }
 
     private static void setAnnotRect(MemorySegment annot, Rect rect) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);
-            rectSeg.set(ValueLayout.JAVA_FLOAT, 0, rect.x());                          // left
-            rectSeg.set(ValueLayout.JAVA_FLOAT, 4, rect.y() + rect.height());          // top
-            rectSeg.set(ValueLayout.JAVA_FLOAT, 8, rect.x() + rect.width());           // right
-            rectSeg.set(ValueLayout.JAVA_FLOAT, 12, rect.y());                         // bottom
-            try {
-                int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, rectSeg);
-                if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetRect failed");
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-        }
+        Scratch scratch = FfmHelper.scratch();
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 0, rect.x());                          // left
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 4, rect.y() + rect.height());          // top
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 8, rect.x() + rect.width());           // right
+        scratch.rect.set(ValueLayout.JAVA_FLOAT, 12, rect.y());                         // bottom
+        try {
+            int ok = (int) AnnotationBindings.FPDFAnnot_SetRect.invokeExact(annot, scratch.rect);
+            if (ok == 0) throw new JPDFiumException("FPDFAnnot_SetRect failed");
+        } catch (Throwable t) { throw new JPDFiumException(t); }
     }
 
     static Optional<String> getAnnotStringValue(MemorySegment annot, String key) {
+        Scratch scratch = FfmHelper.scratch();
+        MemorySegment buf = scratch.buffer();
+        long cap = scratch.bufferSize();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment keySeg = arena.allocateFrom(key);
             long needed;
             try {
                 needed = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(annot, keySeg,
-                        MemorySegment.NULL, 0L);
+                        buf, cap);
             } catch (Throwable t) { throw new JPDFiumException(t); }
             if (needed <= 2) return Optional.empty();
 
-            MemorySegment buf = arena.allocate(needed);
-            try {
-                AnnotationBindings.FPDFAnnot_GetStringValue.invoke(annot, keySeg, buf, needed);
-            } catch (Throwable t) { throw new JPDFiumException(t); }
-            String value = FfmHelper.fromWideString(buf, needed);
+            if (needed > cap) {
+                MemorySegment largeBuf = scratch.ensureNativeBuffer(needed);
+                long written;
+                try {
+                    // Two-call contract: decode the bytes actually written on the retry, not the
+                    // probed size (a concurrent edit may make the value shorter).
+                    written = (long) AnnotationBindings.FPDFAnnot_GetStringValue.invokeExact(
+                            annot, keySeg, largeBuf, needed);
+                } catch (Throwable t) { throw new JPDFiumException(t); }
+                if (written <= 2) return Optional.empty();
+                String value = scratch.decodeWideString(largeBuf, written);
+                return value.isEmpty() ? Optional.empty() : Optional.of(value);
+            }
+            String value = scratch.decodeWideString(needed);
             return value.isEmpty() ? Optional.empty() : Optional.of(value);
         }
     }

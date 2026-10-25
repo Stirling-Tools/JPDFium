@@ -2,6 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
+import stirling.software.jpdfium.model.StorageOptions;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -44,6 +45,18 @@ public final class OutputTransaction implements AutoCloseable {
 
     public static OutputTransaction begin(Path destination) throws IOException {
         return begin(destination, true);
+    }
+
+    /**
+     * Create a staging file beside the resolved {@code destination} so its publication is a
+     * rename, whatever the destination path itself points at.
+     *
+     * <p>An output that is a symlink is resolved first: staging beside the link could land on a
+     * different filesystem from the real target, and {@link #publishStagedDurable} would then be
+     * unable to move it atomically.
+     */
+    public static Path stagingFile(StorageOptions options, Path destination) throws IOException {
+        return options.createStagingFile(resolveSymlinks(destination.toAbsolutePath()));
     }
 
     /**
@@ -116,7 +129,9 @@ public final class OutputTransaction implements AutoCloseable {
     public void publish(SaveOptions options) throws IOException {
         if (published) return;
         validateStaged(staging, options);
-        publishStaged(staging, destination, durable);
+        // destination was already symlink-resolved in begin(); resolve it once
+        // there, not again on every publish.
+        publishResolved(staging, destination, durable);
         published = true;
     }
 
@@ -149,15 +164,96 @@ public final class OutputTransaction implements AutoCloseable {
      */
     public static void publishStaged(Path staging, Path destination, boolean durable)
             throws IOException {
-        if (durable) {
-            publishDurable(staging, destination);
-            return;
-        }
-        moveIntoPlace(staging, resolveSymlinks(destination));
+        publishResolved(staging, resolveSymlinks(destination.toAbsolutePath()), durable);
     }
 
-    private static void publishDurable(Path staging, Path destination) throws IOException {
-        Path target = resolveSymlinks(destination);
+    /**
+     * Outcome of a durable publication. A publication that did not happen is
+     * never represented here: it throws instead.
+     *
+     * <ul>
+     *   <li>{@link #CONFIRMED} — the destination was replaced and its directory
+     *       entry was flushed, so the replacement survives a crash.</li>
+     *   <li>{@link #UNCONFIRMED} — the destination was replaced but the
+     *       directory entry could not be synchronised (the platform cannot open
+     *       a directory as a channel, or the flush failed). The new bytes are
+     *       visible; their crash durability is not guaranteed. The rename is
+     *       never undone to "fix" this.</li>
+     * </ul>
+     */
+    public enum Durability {
+        CONFIRMED,
+        UNCONFIRMED
+    }
+
+    /**
+     * Durable publication that reports whether the directory entry was
+     * synchronised, rather than leaving the caller to assume it was.
+     *
+     * <p>Mirrors the native contract ({@code JPDF_E_UNSYNCED}): the destination
+     * always holds the new bytes on return, and only the crash-durability of
+     * the replacement is in question.
+     *
+     * @param staging     finished file to publish
+     * @param destination caller-chosen destination path
+     * @return whether the directory entry flush was confirmed
+     * @throws IOException if the publication itself failed; the destination is
+     *                     left untouched
+     */
+    public static Durability publishStagedDurable(Path staging, Path destination) throws IOException {
+        return publishDurableResolved(staging, resolveSymlinks(destination.toAbsolutePath()));
+    }
+
+    /**
+     * Validate a staging file that a caller filled itself, applying the same
+     * size/budget gate the instance {@link #publish} applies. The static
+     * {@link #publishStaged} methods do not validate, so callers that hand
+     * their own staging file to them must run this first.
+     *
+     * @param staging  finished staging file
+     * @param maxBytes upper bound in bytes; {@code 0} disables the bound
+     * @return true when the staging file is non-empty and within {@code maxBytes}
+     */
+    public static boolean isPublishableStaging(Path staging, long maxBytes) {
+        try {
+            long size = Files.size(staging);
+            return size > 0 && (maxBytes <= 0 || size <= maxBytes);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Validate a caller-filled staging file against the global save-result limit
+     * ({@code jpdfium.maxSaveResultBytes}), the same default the instance
+     * {@link #publish} path applies through {@link #validateStaged}. The two-arg
+     * overload keeps {@code 0} meaning "unbounded" for callers with their own
+     * budget; this one is what file-backed merge/split outputs must use so a
+     * configured global cap is not silently bypassed.
+     *
+     * @param staging finished staging file
+     * @return true when the staging file is non-empty and within the global bound
+     */
+    public static boolean isPublishableStaging(Path staging) {
+        return isPublishableStaging(staging, JpdfiumLib.maxSaveResultBytes());
+    }
+
+    /**
+     * Publish when {@code target} is already symlink-resolved. The instance path
+     * resolves the destination once in {@code begin()}; re-walking symlinks here
+     * would repeat up to {@link #MAX_SYMLINK_HOPS} stat/readlink calls per publish
+     * for no benefit.
+     */
+    private static void publishResolved(Path staging, Path target, boolean durable)
+            throws IOException {
+        if (durable) {
+            publishDurableResolved(staging, target);
+            return;
+        }
+        moveIntoPlace(staging, target);
+    }
+
+    private static Durability publishDurableResolved(Path staging, Path target) throws IOException {
         applyDestinationPermissions(staging, target);
         // Flush file content before the rename: without this a power loss can
         // leave the destination with zero or partial bytes despite a
@@ -166,24 +262,66 @@ public final class OutputTransaction implements AutoCloseable {
             channel.force(true);
         }
         moveIntoPlace(staging, target);
-        // Flush the directory entry so the rename itself survives a crash.
-        // Windows cannot open directories: NTFS journals renames, so skip there.
+        // Flush the directory entry so the rename itself survives a crash. The
+        // destination already holds the new bytes here, so a failure is
+        // reported as UNCONFIRMED rather than rolled back.
         Path dir = target.getParent();
-        if (dir != null) {
-            try (FileChannel dirChannel = FileChannel.open(dir, StandardOpenOption.READ)) {
-                dirChannel.force(true);
-            } catch (IOException | UnsupportedOperationException ignored) {
-                // Best effort durability only; the bytes are already correct.
-            }
+        if (dir == null) {
+            return Durability.UNCONFIRMED;
+        }
+        FileChannel dirChannel;
+        try {
+            dirChannel = FileChannel.open(dir, StandardOpenOption.READ);
+        } catch (IOException | UnsupportedOperationException e) {
+            // The platform cannot open a directory as a channel (for example
+            // Windows): the rename's durability cannot be established here.
+            return Durability.UNCONFIRMED;
+        }
+        try (dirChannel) {
+            dirChannel.force(true);
+            return Durability.CONFIRMED;
+        } catch (IOException e) {
+            return Durability.UNCONFIRMED;
         }
     }
 
+    /**
+     * Replace the destination with a single atomic rename.
+     *
+     * <p>Atomic movement is the contract, not a preference: if the platform
+     * cannot move the file atomically the destination is left exactly as it was
+     * and an {@link IOException} is thrown. There is no non-atomic downgrade —
+     * an in-place overwrite can expose a partially written destination, which
+     * is the failure the staging file exists to prevent.
+     */
     private static void moveIntoPlace(Path staging, Path target) throws IOException {
-        try {
-            Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE,
+        moveIntoPlace(ATOMIC_MOVE, staging, target);
+    }
+
+    /** The production mover: a single atomic rename with replacement. */
+    private static final MoveOperation ATOMIC_MOVE = (source, target) ->
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE,
                     StandardCopyOption.REPLACE_EXISTING);
+
+    /**
+     * Seam for the atomic-refusal contract. A filesystem that refuses atomic
+     * movement cannot be produced on every platform, so the move itself is
+     * injectable; the policy under test (refuse, never downgrade) does not
+     * depend on the mover.
+     */
+    @FunctionalInterface
+    interface MoveOperation {
+        void move(Path source, Path target) throws IOException;
+    }
+
+    static void moveIntoPlace(MoveOperation operation, Path staging, Path target)
+            throws IOException {
+        try {
+            operation.move(staging, target);
         } catch (AtomicMoveNotSupportedException e) {
-            Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
+            throw new IOException(
+                    "Atomic publication is unavailable for " + target
+                            + "; refusing to replace it non-atomically", e);
         }
     }
 

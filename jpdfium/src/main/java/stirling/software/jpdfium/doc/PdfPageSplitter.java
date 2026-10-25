@@ -156,7 +156,7 @@ public final class PdfPageSplitter {
         if (bmpW <= 10 || bmpH <= 10) return pageWidth / 2.0f;
 
         try (PdfPage page = doc.page(pageIndex)) {
-            MemorySegment rawPage = page.rawHandle();
+            MemorySegment rawPage = page.rawHandleForRead();
 
             MemorySegment bitmap;
             try {

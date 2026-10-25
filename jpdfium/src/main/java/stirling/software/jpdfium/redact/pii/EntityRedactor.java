@@ -78,7 +78,13 @@ public final class EntityRedactor implements AutoCloseable {
      */
     public Result analyze(PdfDocument doc) {
         ensureOpen();
+        if (doc.pageCount() == 0) {
+            return new Result(List.of(), List.of());
+        }
         List<PageText> pages = PdfTextExtractor.extractAll(doc);
+        if (pages.isEmpty()) {
+            return new Result(List.of(), List.of());
+        }
         List<EntityMatch> allEntities = new ArrayList<>();
         List<RedactionTarget> allTargets = new ArrayList<>();
 
@@ -90,8 +96,9 @@ public final class EntityRedactor implements AutoCloseable {
             List<EntityMatch> pageEntities = parseEntityJson(entityJson, page.pageIndex());
             allEntities.addAll(pageEntities);
 
+            List<PatternEngine.Match> patternMatches = null;
             if (patternEngine != null) {
-                List<PatternEngine.Match> patternMatches = patternEngine.findAll(text);
+                patternMatches = patternEngine.findAll(text);
                 for (PatternEngine.Match pm : patternMatches) {
                     String label = pm.category() != null ? pm.category().key() : "pattern";
                     allEntities.add(new EntityMatch(page.pageIndex(), pm.start(), pm.end(),
@@ -132,8 +139,9 @@ public final class EntityRedactor implements AutoCloseable {
                 if (entitySentenceIndices.contains(idx)) continue;
                 Sentence s = sentences.get(idx);
                 String sentenceText = text.substring(s.start, Math.min(s.end, text.length()));
+                String lowerSentence = sentenceText.toLowerCase(Locale.ROOT);
                 for (String pronoun : coreferencePronouns) {
-                    if (sentenceText.toLowerCase(Locale.ROOT).contains(pronoun.toLowerCase(Locale.ROOT))) {
+                    if (lowerSentence.contains(pronoun.toLowerCase(Locale.ROOT))) {
                         allTargets.add(new RedactionTarget(page.pageIndex(), s.start, s.end,
                                 sentenceText, RedactionReason.COREFERENCE_CONTEXT, pronoun));
                         break;
@@ -141,8 +149,8 @@ public final class EntityRedactor implements AutoCloseable {
                 }
             }
 
-            if (patternEngine != null) {
-                for (PatternEngine.Match pm : patternEngine.findAll(text)) {
+            if (patternMatches != null) {
+                for (PatternEngine.Match pm : patternMatches) {
                     String detail = pm.category() != null ? pm.category().key() : "pattern";
                     allTargets.add(new RedactionTarget(page.pageIndex(), pm.start(), pm.end(),
                             pm.text(), RedactionReason.PATTERN_MATCH, detail));
@@ -269,6 +277,7 @@ public final class EntityRedactor implements AutoCloseable {
     private record Sentence(int start, int end) {}
 
     public static List<EntityMatch> parseEntityJson(String json, int pageIndex) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         List<EntityMatch> matches = new ArrayList<>();
         for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
             int start = Integer.parseInt(fields.getOrDefault("start", "0"));
@@ -281,6 +290,7 @@ public final class EntityRedactor implements AutoCloseable {
     }
 
     private static List<Sentence> parseSentenceJson(String json) {
+        if (json == null || json.isEmpty() || "[]".equals(json)) return List.of();
         List<Sentence> sentences = new ArrayList<>();
         for (Map<String, String> fields : NativeJsonParser.parseArray(json)) {
             int start = Integer.parseInt(fields.getOrDefault("start", "0"));

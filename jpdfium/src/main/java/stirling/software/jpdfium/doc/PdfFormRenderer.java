@@ -58,10 +58,10 @@ public final class PdfFormRenderer {
         // The form environment and page must stay on one thread for the whole
         // open/render/draw/teardown sequence: PDFium form state is process-wide.
         return PdfiumRuntime.execute(() -> {
-            MemorySegment rawDoc = document.rawHandle();
+            MemorySegment rawDoc = document.rawHandleForRead();
             PdfFormFiller.FormEnv env = PdfFormFiller.initFormEnvironment(rawDoc);
             try (PdfPage page = document.page(pageIndex)) {
-                MemorySegment rawPage = page.rawHandle();
+                MemorySegment rawPage = page.rawHandleForRead();
                 PageSize size = page.size();
                 int width = Math.max(1, (int) Math.round(size.width() * dpi / 72.0));
                 int height = Math.max(1, (int) Math.round(size.height() * dpi / 72.0));

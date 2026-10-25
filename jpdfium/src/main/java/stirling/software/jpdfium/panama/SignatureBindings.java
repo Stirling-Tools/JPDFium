@@ -18,14 +18,10 @@ public final class SignatureBindings {
         return Symbols.downcall(name, desc);
     }
 
-    private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
-        return Symbols.downcallCritical(name, desc);
-    }
-
-    public static final MethodHandle FPDF_GetSignatureCount = downcallCritical("FPDF_GetSignatureCount",
+    public static final MethodHandle FPDF_GetSignatureCount = downcall("FPDF_GetSignatureCount",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    public static final MethodHandle FPDF_GetSignatureObject = downcallCritical("FPDF_GetSignatureObject",
+    public static final MethodHandle FPDF_GetSignatureObject = downcall("FPDF_GetSignatureObject",
             FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
 
     public static final MethodHandle FPDFSignatureObj_GetContents = downcall("FPDFSignatureObj_GetContents",
@@ -43,6 +39,6 @@ public final class SignatureBindings {
     public static final MethodHandle FPDFSignatureObj_GetTime = downcall("FPDFSignatureObj_GetTime",
             FunctionDescriptor.of(JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG));
 
-    public static final MethodHandle FPDFSignatureObj_GetDocMDPPermission = downcallCritical("FPDFSignatureObj_GetDocMDPPermission",
+    public static final MethodHandle FPDFSignatureObj_GetDocMDPPermission = downcall("FPDFSignatureObj_GetDocMDPPermission",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 }
