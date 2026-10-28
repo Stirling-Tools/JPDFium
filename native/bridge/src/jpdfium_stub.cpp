@@ -1454,6 +1454,8 @@ int32_t stub_copy_pdf_file(const char* in_path, const char* out_path) {
     std::array<char, 8192> buf{};
     bool header_checked = false;
     while (true) {
+        if (std::feof(in.get())) break;
+        // NOLINTNEXTLINE(clang-analyzer-unix.Stream)
         const std::size_t n = std::fread(buf.data(), 1, buf.size(), in.get());
         if (n == 0) break;
         if (!header_checked) {
