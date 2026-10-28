@@ -204,6 +204,14 @@ JPDFIUM_EXPORT void jpdfium_free_string(char* str) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h,
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
+// jpdfium_redact_region with a glyph coverage rule: a character is removed whole when at
+// least glyph_coverage (0 to 1) of its glyph box lies inside the rectangle, and 0 removes
+// every character the rectangle overlaps at all. jpdfium_redact_region uses 0.5. The
+// post-redaction audits apply the same rule. Out-of-range or NaN coverage is
+// JPDFIUM_ERR_INVALID.
+JPDFIUM_EXPORT int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h,
+                                                uint32_t argb, int32_t remove_content,
+                                                float glyph_coverage) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;

@@ -1335,6 +1335,15 @@ public final class JpdfiumLib {
         });
     }
 
+    /** {@link #redactRegion} with the share of a glyph box that must be inside the rect for the glyph to go. */
+    public static void redactRegion(long page, float x, float y, float w, float h, int argb, boolean removeContent,
+                                    float glyphCoverage) {
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_redact_region_ex(page, x, y, w, h, argb, removeContent ? 1 : 0, glyphCoverage),
+                    "redactRegion");
+        });
+    }
+
     /**
      * Hard crop: physically remove everything outside the crop rectangle.
      * Straddling text is split per character, straddling images are

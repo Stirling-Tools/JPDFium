@@ -58,6 +58,22 @@ Discard a document after a failed redaction rather than saving it. Reopen the so
 
 Related APIs: `redactRegion`, `redactWords`, `redactInRect`, and the two-phase `markRedactRegion` / `commitRedactions` pair. `redactWordsEx` returns a match count.
 
+### Region coverage
+
+`redactRegion(rect, argbColor, glyphCoverage)` sets how much of a character the rectangle must cover before the character is removed. A character is removed whole when at least `glyphCoverage` of its glyph box lies inside the rectangle. The glyph box is the `l,r,b,t` box that `extractCharPositionsJson` reports. `0` removes every character the rectangle overlaps at all, and `1` removes only characters fully inside it. The other `redactRegion` overloads use `0.5`.
+
+Excerpt, requires an open `PdfPage`:
+
+```java
+// Excerpt: requires an open PdfPage named page.
+// A one-point strip removes every letter it crosses.
+page.redactRegion(new Rect(72f, 686f, 240f, 1f), 0xFF000000, 0f);
+```
+
+The cover is painted over the rectangle only, and image pixels are erased inside the rectangle only. Ink of a removed character that lay outside the rectangle is gone from the page rather than painted over.
+
+The audit applies the same rule and throws `RedactIncompleteException` when a character the rule removes is still on the page. Kept characters that share a text object with removed ones are rewritten and can land slightly off their original position, for example in kerned text. One that lands up to 1 point away is still recognised as kept. Text with tight negative character spacing can shift further than that, and the audit then refuses the redaction rather than pass it unchecked.
+
 ### What the audit covers
 
 The audit scope differs by operation, and it is narrower than "the text is gone from the file".

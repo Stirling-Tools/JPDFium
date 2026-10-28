@@ -726,6 +726,19 @@
         "returnType": "jint",
         "parameterTypes": [
           "jlong",
+          "jfloat",
+          "jfloat",
+          "jfloat",
+          "jfloat",
+          "jint",
+          "jint",
+          "jfloat"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "jlong",
           "void*",
           "jint",
           "jint",

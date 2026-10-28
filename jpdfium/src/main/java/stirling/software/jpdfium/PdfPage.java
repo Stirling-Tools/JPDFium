@@ -12,6 +12,7 @@ import stirling.software.jpdfium.doc.PdfStructureTree;
 import stirling.software.jpdfium.doc.PdfThumbnails;
 import stirling.software.jpdfium.doc.StructElement;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.RedactIncompleteException;
 import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ColorType;
@@ -859,6 +860,42 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         requireContentRemoval(removeContent);
         JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true);
+        ownerDoc.markContentModified();
+    }
+
+    /**
+     * Redact a region, choosing how much of a character the rectangle must cover
+     * before the character is removed.
+     *
+     * <p>A character is removed whole when at least {@code glyphCoverage} of its
+     * glyph box lies inside {@code rect}. The glyph box is the one reported as
+     * {@code l,r,b,t} by {@link #extractCharPositionsJson()}. {@code 0} removes
+     * every character the rectangle overlaps at all, {@code 1} only characters
+     * fully inside it. A character with an empty glyph box counts when its centre
+     * is inside. The other {@code redactRegion} overloads use {@code 0.5}.
+     *
+     * <p>The rule decides only which characters go. The cover is painted over
+     * {@code rect}, and image pixels are erased inside {@code rect} only, not across
+     * the full box of a removed character. The post-redaction audit applies the
+     * same rule and throws {@link RedactIncompleteException} when a character the
+     * rule removes is still on the page. Kept characters that share a text object
+     * with removed ones are rewritten, and can land slightly off their original
+     * position, for example in kerned text. One that lands up to 1 point away is
+     * still recognised as kept and does not fail the audit.
+     *
+     * @param rect          the area to redact (PDF coordinates)
+     * @param argbColor     cover color (0xAARRGGBB)
+     * @param glyphCoverage share of a glyph box, from 0 to 1, that must be inside
+     *                      {@code rect} for the character to be removed
+     * @throws IllegalArgumentException if {@code glyphCoverage} is NaN or outside 0 to 1
+     */
+    public void redactRegion(Rect rect, int argbColor, float glyphCoverage) {
+        ensureOpen();
+        if (!(glyphCoverage >= 0f && glyphCoverage <= 1f)) {
+            throw new IllegalArgumentException("glyphCoverage must be between 0 and 1: " + glyphCoverage);
+        }
+        JpdfiumLib.redactRegion(handle, rect.x(), rect.y(), rect.width(), rect.height(), argbColor, true,
+                glyphCoverage);
         ownerDoc.markContentModified();
     }
 

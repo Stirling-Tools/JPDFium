@@ -21,9 +21,23 @@ publishing workflows, not library releases, so they are not listed here.
 
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
+- `PdfPage.redactRegion(Rect, int, float)` sets the share of a glyph box that
+  must lie inside the rectangle before the character is removed. `0` removes
+  every character the rectangle overlaps. The existing overloads keep `0.5`.
+  The native entry point is `jpdfium_redact_region_ex`. The audit recognises a
+  kept letter that the redaction rewrites up to 1 point off its original
+  position, as happens in kerned text.
 
 ### Fixed
 
+- Region redaction threw `RedactIncompleteException` when the rectangle's edge
+  fell in the spacing just after a letter and text survived on both sides of
+  the rectangle. The audit counted the space that text extraction inserts
+  between the surviving pieces, which is not page content, and now skips it.
+- Region redaction threw `RedactIncompleteException` for a rectangle over most
+  of a short word when every letter in it stayed under the coverage rule. The
+  object audit now leaves text that the character audit already checked to
+  that check, so both apply the same rule.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.
