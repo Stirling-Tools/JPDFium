@@ -46,6 +46,18 @@ fi
 ICU_FULL_VER=$(icupkg --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
 ICU_FULL_VER=${ICU_FULL_VER:-74.2}
 ICU_VER=$(echo "$ICU_FULL_VER" | cut -d. -f1)
+# The PDFium prebuild may link a newer libicudata than the distro's -dev
+# package (for example ICU 78 data on an ICU 74 dev tree). Detect the actual
+# data library so trimming targets the version that will be bundled.
+ACTUAL_ICUDATA=$(find /usr/lib /lib -maxdepth 6 -type f -name 'libicudata.so.*' \
+    2>/dev/null | sort -V | tail -1)
+if [ -n "$ACTUAL_ICUDATA" ]; then
+    ACTUAL_VER=$(basename "$ACTUAL_ICUDATA" | sed -E 's/^libicudata\.so\.([0-9]+).*/\1/')
+    if [ -n "$ACTUAL_VER" ]; then
+        ICU_VER="$ACTUAL_VER"
+        ICU_FULL_VER="${ACTUAL_VER}.0"
+    fi
+fi
 echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 
 # The Ubuntu binary packages (libicu-dev, icu-devtools) DO NOT ship the
