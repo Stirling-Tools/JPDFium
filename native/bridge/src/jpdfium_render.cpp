@@ -43,7 +43,7 @@ inline int bitmapFormatForRenderer() {
 }
 
 #ifdef JPDFIUM_HAS_SKIA
-consteval auto generateUnpremulTable() {
+static const auto kUnpremulTable = [] {
     std::array<std::array<uint8_t, 256>, 256> table{};
     for (uint32_t a = 1; a < 256; ++a) {
         for (uint32_t v = 0; v <= a; ++v) {
@@ -54,8 +54,7 @@ consteval auto generateUnpremulTable() {
         }
     }
     return table;
-}
-static constexpr auto kUnpremulTable = generateUnpremulTable();
+}();
 
 inline void bgraToRgbaInPlace(uint8_t* __restrict buf, int w, int h, int stride) {
     if (stride == w * 4) {

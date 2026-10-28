@@ -19,4 +19,9 @@ fast_image_resize = "6.1"
 resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 usvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
-
+# CMYK JPEG encoder for DeviceCMYK image conversion. `ColorType::Cmyk` writes
+# an Adobe APP14 (transform=0) JPEG with the samples inverted, which is exactly
+# the layout PDFium decodes back with /Decode [1 0 1 0 1 0 1 0].
+# `simd` enables runtime-detected AVX2 DCT/color paths on x86_64. It is a
+# no-op on other architectures and falls back to the scalar path.
+jpeg-encoder = { version = "0.7", features = ["simd"] }

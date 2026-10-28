@@ -53,6 +53,27 @@ public final class FormFillBindings {
     public static final MethodHandle EPDFForm_ResetField = downcallOptional("EPDFForm_ResetField",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
 
+    /**
+     * Newer EmbedPDF form API: write a terminal field's value. The NONE kind
+     * clears the value (and is the replacement for the removed ResetField API).
+     */
+    public static final MethodHandle EPDFForm_SetFieldValue = downcallOptional(
+            "EPDFForm_SetFieldValue",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG));
+
+    /** {@code EPDF_FORM_VALUE_NONE}: remove the field's /V (or write an empty value). */
+    public static final int EPDF_FORM_VALUE_NONE = 0;
+
+    /** Delete a terminal field, detaching its widgets from the AcroForm tree. */
+    public static final MethodHandle EPDFForm_DeleteField = downcallOptional(
+            "EPDFForm_DeleteField",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
+    /** Newer EmbedPDF form API: regenerate a text/choice field's widget appearances. */
+    public static final MethodHandle EPDFForm_RedrawFieldWidgets = downcallOptional(
+            "EPDFForm_RedrawFieldWidgets",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
         return Symbols.downcall(name, desc);
     }

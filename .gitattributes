@@ -29,3 +29,4 @@ gradlew text eol=lf
 *.tar* binary
 *.zip binary
 *.gz binary
+*.icc binary

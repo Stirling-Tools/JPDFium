@@ -2,6 +2,7 @@ package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.MemorySegment;
 import java.lang.foreign.StructLayout;
 import java.lang.invoke.MethodHandle;
 
@@ -25,6 +26,10 @@ public final class PageEditBindings {
 
     private static MethodHandle downcallCritical(String name, FunctionDescriptor desc) {
         return Symbols.downcallCritical(name, desc);
+    }
+
+    private static MethodHandle downcallOptional(String name, FunctionDescriptor desc) {
+        return Symbols.downcallOptional(name, desc);
     }
 
     public static final MethodHandle FPDF_CreateNewDocument = downcall("FPDF_CreateNewDocument",
@@ -53,6 +58,51 @@ public final class PageEditBindings {
 
     public static final MethodHandle FPDFPageObj_GetType = downcallCritical("FPDFPageObj_GetType",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Enumerate child objects of a form XObject. Optional for older PDFium builds. */
+    public static final MethodHandle FPDFFormObj_CountObjects = downcallOptional(
+            "FPDFFormObj_CountObjects", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Get a child object of a form XObject at {@code index}. */
+    public static final MethodHandle FPDFFormObj_GetObject = downcallOptional(
+            "FPDFFormObj_GetObject", FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_LONG));
+
+    /**
+     * Mark a form's content stream dirty after editing a child. JPDFium PDFium
+     * extension; absent on stock PDFium, where form children cannot be written
+     * back reliably.
+     */
+    public static final MethodHandle FPDFFormObj_MarkDirty = downcallOptional(
+            "FPDFFormObj_MarkDirty", FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    /** Stable form identity (stream object number), 0 for inline forms. */
+    public static final MethodHandle FPDFFormObj_GetObjectNumber = downcallOptional(
+            "FPDFFormObj_GetObjectNumber", FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+
+    /** True when form objects can be traversed and written back. */
+    public static boolean formConversionAvailable() {
+        return FPDFFormObj_CountObjects != null
+                && FPDFFormObj_GetObject != null
+                && FPDFFormObj_MarkDirty != null;
+    }
+
+    /**
+     * Identity used to avoid converting the same shared form more than once.
+     * Falls back to the native object address when the patched object-number
+     * probe is unavailable (stock PDFium).
+     */
+    public static long formIdentity(MemorySegment form) {
+        if (form == null) return 0;
+        if (FPDFFormObj_GetObjectNumber != null) {
+            try {
+                long objNum = (long) FPDFFormObj_GetObjectNumber.invokeExact(form);
+                if (objNum > 0) return objNum;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+            }
+        }
+        return form.address();
+    }
 
     public static final MethodHandle FPDFPageObj_Transform = downcall("FPDFPageObj_Transform",
             FunctionDescriptor.ofVoid(ADDRESS, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE));
@@ -83,6 +133,9 @@ public final class PageEditBindings {
 
     public static final MethodHandle FPDFPath_SetDrawMode = downcall("FPDFPath_SetDrawMode",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
+
+    public static final MethodHandle FPDFPath_GetDrawMode = downcall("FPDFPath_GetDrawMode",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
     public static final MethodHandle FPDFPath_MoveTo = downcall("FPDFPath_MoveTo",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT));

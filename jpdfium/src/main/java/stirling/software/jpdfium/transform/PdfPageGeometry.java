@@ -10,7 +10,9 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -220,7 +222,8 @@ public final class PdfPageGeometry {
                 || FormFillBindings.EPDFForm_CountFieldWidgets == null
                 || FormFillBindings.EPDFForm_GetFieldWidgetObjNum == null
                 || FormFillBindings.EPDFForm_GetFieldObjNum == null
-                || FormFillBindings.EPDFForm_ResetField == null
+                || (FormFillBindings.EPDFForm_ResetField == null
+                        && FormFillBindings.EPDFForm_SetFieldValue == null)
                 || rawDoc == null || rawDoc.equals(MemorySegment.NULL)) {
             throw new JPDFiumException("form cleanup is unverifiable: required binding is unavailable");
         }
@@ -295,10 +298,38 @@ public final class PdfPageGeometry {
         // A write invalidates the model, so reset only after it is closed.
         for (int objNum : unplaced) {
             try {
-                // EPDFForm_ResetField returns int; invokeExact requires the return type
-                // to match exactly, so the result must be captured.
-                int ignored = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
-                        MemorySegment.NULL, 0L, MemorySegment.NULL);
+                // Removing the terminal field also removes its /AS state and
+                // field-tree reference, not just the visible widget.
+                if (FormFillBindings.EPDFForm_DeleteField != null) {
+                    try (Arena detachedArena = Arena.ofConfined()) {
+                        MemorySegment detached =
+                                detachedArena.allocate(ValueLayout.JAVA_INT, 256);
+                        MemorySegment detachedCount =
+                                detachedArena.allocate(ValueLayout.JAVA_LONG);
+                        int removed = (int) FormFillBindings.EPDFForm_DeleteField.invokeExact(
+                                rawDoc, objNum, detached, 256L, detachedCount);
+                        if (removed != 0) continue;
+                    }
+                }
+                if (FormFillBindings.EPDFForm_SetFieldValue != null) {
+                    int ok = (int) FormFillBindings.EPDFForm_SetFieldValue.invokeExact(
+                            rawDoc, objNum, FormFillBindings.EPDF_FORM_VALUE_NONE,
+                            MemorySegment.NULL, 0L);
+                    // Signature/push-button fields do not carry a writable value; the
+                    // legacy ResetField path also ignored this case. Their widgets were
+                    // already removed, so there is nothing left to clear.
+                    if (ok != 0 && FormFillBindings.EPDFForm_RedrawFieldWidgets != null) {
+                        // SetFieldValue intentionally does not draw. Regenerate text and
+                        // choice appearances so the old value is not left in /AP.
+                        int ignored = (int) FormFillBindings.EPDFForm_RedrawFieldWidgets.invokeExact(
+                                rawDoc, objNum, MemorySegment.NULL, 0L, MemorySegment.NULL);
+                    }
+                } else {
+                    // Legacy EmbedPDF API. invokeExact requires the int return type
+                    // to be captured exactly.
+                    int ignored = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
+                            MemorySegment.NULL, 0L, MemorySegment.NULL);
+                }
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
