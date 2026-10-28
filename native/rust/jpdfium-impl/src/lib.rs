@@ -568,7 +568,7 @@ unsafe fn encode_cmyk_jpeg(
     let ptr = malloc_copy(&buffer);
     let len = buffer.len();
     let capacity = buffer.capacity();
-    if capacity > 16 * 1024 * 1024 {
+    if capacity > 4 * 1024 * 1024 {
         // A single huge JPEG must not pin its capacity to a long-lived worker.
         CMYK_JPEG_BUFFER.with(|cell| *cell.borrow_mut() = Vec::new());
     } else {

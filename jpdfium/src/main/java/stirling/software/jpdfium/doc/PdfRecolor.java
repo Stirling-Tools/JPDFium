@@ -311,7 +311,7 @@ public final class PdfRecolor {
 
         private static int stretch(int v, double factor) {
             double centred = 128.0d + (v - 128.0d) * factor;
-            return Math.clamp((int) Math.round(centred), 0, 255);
+            return Math.clamp(Math.round(centred), 0, 255);
         }
 
         public static Builder builder() { return new Builder(); }
@@ -342,7 +342,13 @@ public final class PdfRecolor {
             public Builder strength(int s) { this.strength = Math.clamp(s, 0, 100); return this; }
 
             /** Contrast multiplier for {@link Mode#HIGH_CONTRAST} (1.0 = no-op). */
-            public Builder contrastFactor(double f) { this.contrastFactor = f; return this; }
+            public Builder contrastFactor(double f) {
+                if (!Double.isFinite(f)) {
+                    throw new IllegalArgumentException("contrastFactor must be finite: " + f);
+                }
+                this.contrastFactor = f;
+                return this;
+            }
 
             /** Luminance threshold 0-255; setting it enables black/white binarisation. */
             public Builder threshold(int t) { this.threshold = Math.clamp(t, 0, 255); return this; }

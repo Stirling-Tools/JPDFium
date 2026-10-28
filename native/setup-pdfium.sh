@@ -935,15 +935,16 @@ FPDFImageObj_HasTransparency(FPDF_PAGEOBJECT image_object) {
 
 """ + anchor
 if anchor not in src:
-    print("  WARNING: EPDFImageObj_SetJpeg anchor not found; fast transparency probe skipped")
-    sys.exit(0)
+    print("  ERROR: EPDFImageObj_SetJpeg anchor not found; image transparency probe cannot be applied",
+          file=sys.stderr)
+    sys.exit(1)
 with open(path, "w") as f:
     f.write(src.replace(anchor, addition, 1))
 print("  Added FPDFImageObj_HasTransparency to fpdf_editimg.cpp.")
 PY_EOF
 fi
 
-if ! grep -q 'FPDFImageObj_HasTransparency' "${EDITHEADER}" \
+if [ ! -f "${EDITIMG}" ] || ! grep -q 'FPDFImageObj_HasTransparency' "${EDITHEADER}" \
     || ! grep -q 'FPDFImageObj_HasTransparency' "${EDITIMG}"; then
     echo "  ERROR: image transparency probe patch incomplete" >&2
     exit 1

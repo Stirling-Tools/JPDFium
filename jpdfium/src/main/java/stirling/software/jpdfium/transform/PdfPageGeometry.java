@@ -10,7 +10,9 @@ import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -296,6 +298,19 @@ public final class PdfPageGeometry {
         // A write invalidates the model, so reset only after it is closed.
         for (int objNum : unplaced) {
             try {
+                // Removing the terminal field also removes its /AS state and
+                // field-tree reference, not just the visible widget.
+                if (FormFillBindings.EPDFForm_DeleteField != null) {
+                    try (Arena detachedArena = Arena.ofConfined()) {
+                        MemorySegment detached =
+                                detachedArena.allocate(ValueLayout.JAVA_INT, 256);
+                        MemorySegment detachedCount =
+                                detachedArena.allocate(ValueLayout.JAVA_LONG);
+                        int removed = (int) FormFillBindings.EPDFForm_DeleteField.invokeExact(
+                                rawDoc, objNum, detached, 256L, detachedCount);
+                        if (removed != 0) continue;
+                    }
+                }
                 if (FormFillBindings.EPDFForm_SetFieldValue != null) {
                     int ok = (int) FormFillBindings.EPDFForm_SetFieldValue.invokeExact(
                             rawDoc, objNum, FormFillBindings.EPDF_FORM_VALUE_NONE,

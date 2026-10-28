@@ -149,7 +149,7 @@ void RgbToCmykLut(const uint8_t* lut, int32_t grid, uint8_t r, uint8_t g, uint8_
 // Reusable buffers for one image-conversion pass. The image pass can see many
 // XObjects; resizing vectors would zero-fill and reallocating would churn the
 // allocator. Grow only when an image is larger than the previous one.
-constexpr size_t kMaxRetainedScratchBytes = 32u * 1024u * 1024u;
+constexpr size_t kMaxRetainedScratchBytes = 4u * 1024u * 1024u;
 
 struct ImageScratch {
     std::unique_ptr<uint8_t[]> samples;
@@ -528,7 +528,7 @@ std::string CreateUniqueSibling(const std::string& out_path) {
         }
         ::_close(fd);
 #else
-        const int fd = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+        const int fd = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
         if (fd < 0) continue;
         ::close(fd);
 #endif
@@ -543,7 +543,13 @@ void ApplyPublishMode(const std::string& staging, const char* destination) {
 #ifndef _WIN32
     struct stat st;
     std::memset(&st, 0, sizeof(st));
-    if (::stat(destination, &st) == 0) ::chmod(staging.c_str(), st.st_mode & 07777);
+    if (::stat(destination, &st) == 0) {
+        ::chmod(staging.c_str(), st.st_mode & 07777);
+    } else {
+        const mode_t mask = ::umask(0);
+        ::umask(mask);
+        ::chmod(staging.c_str(), static_cast<mode_t>(0666 & ~mask));
+    }
 #else
     (void)staging;
     (void)destination;
