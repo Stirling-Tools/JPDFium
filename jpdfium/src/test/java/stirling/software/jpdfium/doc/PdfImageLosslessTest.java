@@ -38,7 +38,7 @@ class PdfImageLosslessTest {
         assumeTrue(ColorBindings.imageConversionAvailable(),
                 "CMYK image conversion unavailable in this native build");
 
-        byte[] input = flateImagePdf();
+        byte[] input = flateLineArtPdf();
         try (PdfDocument document = PdfDocument.open(input)) {
             assertEquals(0, PdfColorConverter.convertImagesToCmyk(document, 90),
                     "a Flate-only image must not be converted by default");
@@ -51,6 +51,18 @@ class PdfImageLosslessTest {
                     "explicit lossless opt-in must convert the image");
             assertTrue(filters(document.saveBytes()).contains(COSName.DCT_DECODE),
                     "explicit lossless opt-in did not produce a JPEG");
+        }
+    }
+
+    @Test
+    void strictConversionRejectsSkippedLosslessImages() throws Exception {
+        assumeTrue(ColorBindings.imageConversionAvailable(),
+                "CMYK image conversion unavailable in this native build");
+        try (PdfDocument document = PdfDocument.open(flateLineArtPdf())) {
+            assertEquals(-1,
+                    ColorBindings.pageImagesToCmyk(document.nativeHandle(), 0, 90,
+                            ColorBindings.IMAGE_STRICT),
+                    "strict conversion must fail when an RGB image is skipped");
         }
     }
 
@@ -90,9 +102,37 @@ class PdfImageLosslessTest {
         }
     }
 
+    @Test
+    void sharedImageIsConvertedOnEveryPage() throws Exception {
+        assumeTrue(ColorBindings.imageConversionAvailable(),
+                "CMYK image conversion unavailable in this native build");
+
+        byte[] input = sharedJpegPdf();
+        byte[] output;
+        try (PdfDocument document = PdfDocument.open(input)) {
+            assertTrue(PdfColorConverter.convertImagesToCmyk(document, 90) > 0,
+                    "shared JPEG must convert");
+            output = document.saveBytes();
+        }
+
+        try (PDDocument document = Loader.loadPDF(output)) {
+            for (int page = 0; page < document.getNumberOfPages(); page++) {
+                PDImageXObject image = firstImage(document, page);
+                assertNotNull(image, "page " + page + " lost its image");
+                assertEquals("DeviceCMYK", image.getColorSpace().getName(),
+                        "page " + page + " still references the RGB image");
+            }
+        }
+    }
+
     private static PDImageXObject firstImage(PDDocument document) throws Exception {
-        for (COSName name : document.getPage(0).getResources().getXObjectNames()) {
-            if (document.getPage(0).getResources().getXObject(name) instanceof PDImageXObject image) {
+        return firstImage(document, 0);
+    }
+
+    private static PDImageXObject firstImage(PDDocument document, int pageIndex) throws Exception {
+        for (COSName name : document.getPage(pageIndex).getResources().getXObjectNames()) {
+            if (document.getPage(pageIndex).getResources().getXObject(name)
+                    instanceof PDImageXObject image) {
                 return image;
             }
         }
@@ -124,6 +164,31 @@ class PdfImageLosslessTest {
         }
     }
 
+    private static byte[] sharedJpegPdf() throws Exception {
+        BufferedImage image = new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 32; y++) {
+            for (int x = 0; x < 32; x++) {
+                image.setRGB(x, y, 0x3366CC);
+            }
+        }
+        ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+        assertTrue(ImageIO.write(image, "jpeg", jpeg), "JPEG writer missing");
+        try (PDDocument document = new PDDocument()) {
+            PDImageXObject xobject = PDImageXObject.createFromByteArray(
+                    document, jpeg.toByteArray(), "shared");
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage();
+                document.addPage(page);
+                try (PDPageContentStream content = new PDPageContentStream(document, page)) {
+                    content.drawImage(xobject, 20, 20, 200, 200);
+                }
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            return out.toByteArray();
+        }
+    }
+
     private static Set<COSName> filters(byte[] pdf) throws Exception {
         Set<COSName> filters = new LinkedHashSet<>();
         try (PDDocument document = Loader.loadPDF(pdf)) {
@@ -145,7 +210,7 @@ class PdfImageLosslessTest {
         return filters;
     }
 
-    private static byte[] flateImagePdf() throws Exception {
+    private static byte[] flateLineArtPdf() throws Exception {
         try (PDDocument document = new PDDocument()) {
             PDPage page = new PDPage();
             document.addPage(page);

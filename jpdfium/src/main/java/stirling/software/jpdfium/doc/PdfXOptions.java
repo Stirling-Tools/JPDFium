@@ -123,7 +123,7 @@ public final class PdfXOptions {
         private String info = "JPDFium PDF/X output intent";
         private boolean convertColors = true;
         private boolean convertImages = true;
-        private boolean convertForms = true;
+        private boolean convertForms = false;
         private boolean convertSpecialColors;
         private boolean convertSpotColors;
         private boolean extractBlack = true;

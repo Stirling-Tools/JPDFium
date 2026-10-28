@@ -134,6 +134,9 @@ public final class PageEditBindings {
     public static final MethodHandle FPDFPath_SetDrawMode = downcall("FPDFPath_SetDrawMode",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT));
 
+    public static final MethodHandle FPDFPath_GetDrawMode = downcall("FPDFPath_GetDrawMode",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
     public static final MethodHandle FPDFPath_MoveTo = downcall("FPDFPath_MoveTo",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT));
 

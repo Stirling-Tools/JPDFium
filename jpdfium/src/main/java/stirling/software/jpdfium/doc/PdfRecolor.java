@@ -107,8 +107,9 @@ public final class PdfRecolor {
             MemorySegment g = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment b = arena.allocate(ValueLayout.JAVA_INT);
             MemorySegment a = arena.allocate(ValueLayout.JAVA_INT);
+            MemorySegment fillFlag = arena.allocate(ValueLayout.JAVA_INT);
+            MemorySegment strokeFlag = arena.allocate(ValueLayout.JAVA_INT);
             int[] mapped = new int[3];
-            int[] cmykProbe = new int[5];
 
             for (int i = 0; i < count; i++) {
                 MemorySegment obj;
@@ -130,8 +131,33 @@ public final class PdfRecolor {
                 // 1 = TEXT, 2 = PATH. Images and form XObjects (5) are skipped.
                 if (type != 1 && type != 2) continue;
 
-                boolean objChanged = recolorOne(obj, options, r, g, b, a, mapped, cmykProbe, true);
-                if (recolorOne(obj, options, r, g, b, a, mapped, cmykProbe, false)) {
+                boolean doFill = true;
+                boolean doStroke = true;
+                try {
+                    if (type == 1) {
+                        int renderMode = (int) PageEditBindings.FPDFTextObj_GetTextRenderMode
+                                .invokeExact(obj);
+                        doFill = renderMode == 0 || renderMode == 2 || renderMode == 4
+                                || renderMode == 6;
+                        doStroke = renderMode == 1 || renderMode == 2 || renderMode == 5
+                                || renderMode == 6;
+                    } else {
+                        int got = (int) PageEditBindings.FPDFPath_GetDrawMode.invokeExact(
+                                obj, fillFlag, strokeFlag);
+                        if (got != 0) {
+                            doFill = fillFlag.get(ValueLayout.JAVA_INT, 0) != 0;
+                            doStroke = strokeFlag.get(ValueLayout.JAVA_INT, 0) != 0;
+                        }
+                    }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                }
+
+                boolean objChanged = false;
+                if (doFill) {
+                    objChanged = recolorOne(obj, options, r, g, b, a, mapped, true);
+                }
+                if (doStroke && recolorOne(obj, options, r, g, b, a, mapped, false)) {
                     objChanged = true;
                 }
                 if (objChanged) {
@@ -142,15 +168,15 @@ public final class PdfRecolor {
         }
 
         if (dirty) {
+            int ok;
             try {
-                int ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
-                if (ok == 0) {
-                    throw new JPDFiumException("FPDFPage_GenerateContent failed");
-                }
-            } catch (JPDFiumException e) {
-                throw e;
+                ok = (int) PageEditBindings.FPDFPage_GenerateContent.invokeExact(rawPage);
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException("FPDFPage_GenerateContent failed", t);
+            }
+            if (ok == 0) {
+                throw new JPDFiumException("FPDFPage_GenerateContent failed");
             }
         }
         return changed;
@@ -158,19 +184,17 @@ public final class PdfRecolor {
 
     private static boolean recolorOne(MemorySegment obj, RecolorOptions options,
                                       MemorySegment r, MemorySegment g, MemorySegment b, MemorySegment a,
-                                      int[] mapped, int[] cmykProbe, boolean fill) {
+                                      int[] mapped, boolean fill) {
         try {
             // Only gray/RGB can be rebuilt from the RGB getter.
             int sourceSpace = fill
                     ? ColorBindings.fillColorSpace(obj)
                     : ColorBindings.strokeColorSpace(obj);
-            if (sourceSpace >= 0) {
-                if (sourceSpace != ColorBindings.COLORSPACE_DEVICEGRAY
-                        && sourceSpace != ColorBindings.COLORSPACE_DEVICERGB) {
-                    return false;
-                }
-            } else if (fill ? ColorBindings.getFillColorCmyk(obj, cmykProbe)
-                    : ColorBindings.getStrokeColorCmyk(obj, cmykProbe)) {
+            // Without the patched colour-space probe we cannot tell CMYK or
+            // spot colours from RGB, so leave the object untouched.
+            if (sourceSpace < 0) return false;
+            if (sourceSpace != ColorBindings.COLORSPACE_DEVICEGRAY
+                    && sourceSpace != ColorBindings.COLORSPACE_DEVICERGB) {
                 return false;
             }
             int ok = fill

@@ -179,6 +179,47 @@ class PdfxMetadataSafetyTest {
     }
 
     @Test
+    void updatesPdfxValuesInEveryMetadataDescription() throws Exception {
+        assumeTrue(PdfOutputIntent.isSupported(), "QPDF output-intent support unavailable");
+
+        String xmp = "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>"
+                + "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF "
+                + "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
+                + "<rdf:Description rdf:about=\"\" "
+                + "xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\" "
+                + "pdfx:GTS_PDFXVersion=\"PDF/X-3\"/>"
+                + "<rdf:Description rdf:about=\"second\" "
+                + "xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\" "
+                + "pdfx:GTS_PDFXVersion=\"PDF/X-1a:2001\"/>"
+                + "</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>";
+
+        byte[] input;
+        try (PDDocument document = new PDDocument()) {
+            document.addPage(new PDPage());
+            document.setVersion(1.7f);
+            PDMetadata metadata = new PDMetadata(document);
+            metadata.importXMPMetadata(xmp.getBytes(StandardCharsets.UTF_8));
+            document.getDocumentCatalog().setMetadata(metadata);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            document.save(out);
+            input = out.toByteArray();
+        }
+
+        byte[] output = PdfOutputIntent.applyPdfxMetadata(input, CMYK,
+                PdfOutputIntent.Spec.pdfx("FOGRA39", "FOGRA39"),
+                PdfXStandard.PDF_X_4.gtsVersion(), PdfXStandard.PDF_X_4.gtsConformance());
+        String edited = new String(output, StandardCharsets.ISO_8859_1);
+        assertTrue(edited.startsWith("%PDF-1.6"), "PDF/X-4 header must be PDF 1.6");
+        try (PDDocument document = Loader.loadPDF(output)) {
+            String metadata = new String(
+                    document.getDocumentCatalog().getMetadata().exportXMPMetadata().readAllBytes(),
+                    StandardCharsets.UTF_8);
+            assertTrue(metadata.contains("PDF/X-4"), "first block was not updated");
+            assertTrue(!metadata.contains("PDF/X-1a:2001"), "second block kept a stale version");
+        }
+    }
+
+    @Test
     void hugeHostileXmpPacketIsReplacedWithoutParsing() throws Exception {
         assumeTrue(PdfOutputIntent.isSupported(), "QPDF output-intent support unavailable");
 

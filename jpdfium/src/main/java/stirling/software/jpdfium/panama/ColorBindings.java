@@ -75,6 +75,12 @@ public final class ColorBindings {
             FunctionDescriptor.of(JAVA_INT,
                     JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
 
+    /** {@code int32_t color_document_images_to_cmyk_ex(doc, quality, flags, lut, grid, out)} */
+    private static final MethodHandle DOCUMENT_IMAGES_TO_CMYK_EX = downcallOptional(
+            "jpdfium_color_document_images_to_cmyk_ex",
+            FunctionDescriptor.of(JAVA_INT,
+                    JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
+
     /** {@code int32_t color_output_intent_bytes(input, len, icc, icc_len, s, cid, info, out, out_len)} */
     private static final MethodHandle OUTPUT_INTENT_BYTES = downcallOptionalUnguarded(
             "jpdfium_color_output_intent_bytes",
@@ -323,6 +329,30 @@ public final class ColorBindings {
             MemorySegment outConverted = arena.allocate(JAVA_LONG);
             int rc = (int) PAGE_IMAGES_TO_CMYK_EX.invokeExact(
                     docHandle, pageIndex, quality, flags, lutSeg, grid, outConverted);
+            if (rc != JPDFIUM_OK) return -1;
+            return Math.toIntExact(outConverted.get(JAVA_LONG, 0));
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return -1;
+        }
+    }
+
+    /** Convert all document images in one two-phase pass. */
+    public static int documentImagesToCmyk(long docHandle, int quality, int flags,
+                                           byte[] lut, int grid) {
+        if (DOCUMENT_IMAGES_TO_CMYK_EX == null) return -1;
+        if (lut != null) {
+            long expected = (long) grid * grid * grid * 4L;
+            if (grid < 2 || grid > 256 || expected != lut.length) return -1;
+        } else if (grid != 0) {
+            return -1;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment lutSeg = lut == null
+                    ? MemorySegment.NULL : arena.allocateFrom(JAVA_BYTE, lut);
+            MemorySegment outConverted = arena.allocate(JAVA_LONG);
+            int rc = (int) DOCUMENT_IMAGES_TO_CMYK_EX.invokeExact(
+                    docHandle, quality, flags, lutSeg, grid, outConverted);
             if (rc != JPDFIUM_OK) return -1;
             return Math.toIntExact(outConverted.get(JAVA_LONG, 0));
         } catch (Throwable t) {

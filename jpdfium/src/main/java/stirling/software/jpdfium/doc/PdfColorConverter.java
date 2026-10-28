@@ -68,7 +68,10 @@ public final class PdfColorConverter {
         int total = 0;
         for (int i = 0; i < doc.pageCount(); i++) {
             try (PdfPage page = doc.page(i)) {
-                total += convertPage(page.rawHandle(), ColorSpace.GRAYSCALE, formIds);
+                total += convertPage(page.rawHandle(), ColorConvertOptions.builder()
+                        .targetColorSpace(ColorSpace.GRAYSCALE)
+                        .convertForms(false)
+                        .build(), formIds);
             }
         }
         return total;
@@ -87,7 +90,10 @@ public final class PdfColorConverter {
         for (int i : pageIndices) {
             if (i >= 0 && i < doc.pageCount()) {
                 try (PdfPage page = doc.page(i)) {
-                    total += convertPage(page.rawHandle(), ColorSpace.GRAYSCALE, formIds);
+                    total += convertPage(page.rawHandle(), ColorConvertOptions.builder()
+                        .targetColorSpace(ColorSpace.GRAYSCALE)
+                        .convertForms(false)
+                        .build(), formIds);
                 }
             }
         }
@@ -130,6 +136,7 @@ public final class PdfColorConverter {
                 try (PdfPage page = doc.page(i)) {
                     total += convertPage(page.rawHandle(), ColorConvertOptions.builder()
                             .targetColorSpace(ColorSpace.RGB)
+                            .convertForms(false)
                             .preserveBlack(false)
                             .build(), formIds);
                 }
@@ -149,6 +156,9 @@ public final class PdfColorConverter {
     public static int toCmyk(PdfDocument doc, Set<Integer> pageIndices) {
         ColorConvertOptions options = ColorConvertOptions.builder()
                 .targetColorSpace(ColorSpace.CMYK)
+                .convertForms(false)
+                // Shared image XObjects can be referenced by unselected pages.
+                .convertImages(false)
                 .build();
         requireCmykSupport(options);
         IccCmykTransform xform = cmykTransform(options);
@@ -180,7 +190,9 @@ public final class PdfColorConverter {
     public static int convertImagesToCmyk(PdfDocument doc, int quality, boolean convertLossless) {
         if (!ColorBindings.imageConversionAvailable()) return -1;
         int flags = convertLossless ? ColorBindings.IMAGE_CONVERT_LOSSLESS : 0;
-        int total = 0;
+        int total = ColorBindings.documentImagesToCmyk(doc.nativeHandle(), quality, flags, null, 0);
+        if (total >= 0) return total;
+        total = 0;
         for (int i = 0; i < doc.pageCount(); i++) {
             int n = ColorBindings.pageImagesToCmyk(doc.nativeHandle(), i, quality, flags);
             if (n < 0) return -1;
@@ -199,10 +211,27 @@ public final class PdfColorConverter {
     public static int convert(PdfDocument doc, ColorConvertOptions options) {
         requireCmykSupport(options);
         IccCmykTransform xform = cmykTransform(options);
-        Set<Long> formIds = new HashSet<>();
+        boolean imagesConverted = false;
         int total = 0;
+        if (options.convertImages() && options.targetColorSpace() == ColorSpace.CMYK
+                && ColorBindings.imageConversionAvailable()) {
+            int flags = options.strictImages() ? ColorBindings.IMAGE_STRICT : 0;
+            if (!options.extractBlack()) flags |= ColorBindings.IMAGE_NO_GCR;
+            if (options.convertLosslessImages()) flags |= ColorBindings.IMAGE_CONVERT_LOSSLESS;
+            byte[] lut = xform == null ? null : xform.lutBytes();
+            int grid = xform == null ? 0 : IccCmykTransform.lutGrid();
+            int images = ColorBindings.documentImagesToCmyk(
+                    doc.nativeHandle(), options.jpegQuality(), flags, lut, grid);
+            if (images >= 0) {
+                total += images;
+                imagesConverted = true;
+            } else if (options.strictImages()) {
+                throw new JPDFiumException("CMYK image conversion failed");
+            }
+        }
+        Set<Long> formIds = new HashSet<>();
         for (int i = 0; i < doc.pageCount(); i++) {
-            total += convertDocumentPage(doc, i, options, xform, formIds);
+            total += convertDocumentPage(doc, i, options, xform, formIds, imagesConverted);
         }
         return total;
     }
@@ -247,8 +276,14 @@ public final class PdfColorConverter {
     private static int convertDocumentPage(PdfDocument doc, int pageIndex,
                                            ColorConvertOptions options, IccCmykTransform xform,
                                            Set<Long> formIds) {
+        return convertDocumentPage(doc, pageIndex, options, xform, formIds, false);
+    }
+
+    private static int convertDocumentPage(PdfDocument doc, int pageIndex,
+                                           ColorConvertOptions options, IccCmykTransform xform,
+                                           Set<Long> formIds, boolean imagesConverted) {
         int total = 0;
-        if (options.convertImages()
+        if (!imagesConverted && options.convertImages()
                 && options.targetColorSpace() == ColorSpace.CMYK
                 && ColorBindings.imageConversionAvailable()) {
             int flags = options.strictImages() ? ColorBindings.IMAGE_STRICT : 0;
@@ -651,7 +686,7 @@ public final class PdfColorConverter {
             private boolean convertImages = true;
             private boolean convertVectors = true;
             private boolean convertText = true;
-            private boolean convertForms = true;
+            private boolean convertForms = false;
             private boolean convertSpecialColors;
             private boolean convertSpotColors;
             private boolean preserveBlack = true;
@@ -667,7 +702,11 @@ public final class PdfColorConverter {
             public Builder convertImages(boolean v) { this.convertImages = v; return this; }
             public Builder convertVectors(boolean v) { this.convertVectors = v; return this; }
             public Builder convertText(boolean v) { this.convertText = v; return this; }
-            /** Recurse into form XObjects when the patched PDFium is available. */
+            /**
+             * Recurse into form XObjects when the patched PDFium is available.
+             * Off by default because a form is shared content: editing it in
+             * place also changes every other page that paints the same form.
+             */
             public Builder convertForms(boolean v) { this.convertForms = v; return this; }
 
             /**

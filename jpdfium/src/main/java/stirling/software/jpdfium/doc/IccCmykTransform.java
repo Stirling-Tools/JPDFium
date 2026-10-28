@@ -87,6 +87,16 @@ final class IccCmykTransform {
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
         ICC_ColorSpace source = sourceSpace(sourceIcc, components.length);
         float[] xyz = source.toCIEXYZ(components);
+        if (components.length == 1 || components.length == 4) {
+            // Gray and CMYK source profiles already carry ink information.
+            // Round-tripping them through sRGB would turn a pure K black into
+            // four-colour black, so map directly into the target profile.
+            float[] device = cmyk.fromCIEXYZ(xyz);
+            for (int i = 0; i < 4; i++) {
+                out[i] = clamp255(device[i]);
+            }
+            return;
+        }
         float[] sourceRgb = srgb.fromCIEXYZ(xyz);
         toCmyk(clamp255(sourceRgb[0]), clamp255(sourceRgb[1]), clamp255(sourceRgb[2]), out);
     }
