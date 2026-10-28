@@ -15,9 +15,8 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * colours and image pixels go through that same table, so an sRGB fill and an
  * sRGB image pixel with identical components produce identical ink values.
  *
- * <p><strong>Not thread-safe.</strong> The instance keeps a one-entry source
- * profile cache; use one instance per conversion (as {@link PdfColorConverter}
- * does) or create a separate instance for each thread.
+ * <p>Instances are immutable after construction and can be shared between
+ * threads; the source-profile cache is thread-local.
  */
 final class IccCmykTransform {
 
@@ -27,12 +26,13 @@ final class IccCmykTransform {
     private static final int LUT_LAST = LUT_GRID - 1;
     private static final int LUT_BYTES = LUT_GRID * LUT_GRID * LUT_GRID * 4;
 
+    private static final ThreadLocal<SourceCache> SOURCE_CACHE =
+            ThreadLocal.withInitial(SourceCache::new);
+
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
     private final byte[] lut = new byte[LUT_BYTES];
     private final float[] rgb = new float[3];
-    private byte[] lastSourceIcc;
-    private ICC_ColorSpace lastSourceSpace;
 
     /** Build from a 4-component CMYK ICC profile. */
     IccCmykTransform(byte[] iccProfile) {
@@ -173,15 +173,7 @@ final class IccCmykTransform {
     }
 
     private ICC_ColorSpace sourceSpace(byte[] sourceIcc, int expectedComponents) {
-        if (lastSourceSpace != null && lastSourceIcc != null
-                && lastSourceIcc.length == sourceIcc.length
-                && Arrays.equals(lastSourceIcc, sourceIcc)) {
-            return lastSourceSpace;
-        }
-        ICC_ColorSpace space = staticSourceSpace(sourceIcc, expectedComponents);
-        lastSourceIcc = sourceIcc.clone();
-        lastSourceSpace = space;
-        return space;
+        return staticSourceSpace(sourceIcc, expectedComponents);
     }
 
     /**
@@ -217,6 +209,10 @@ final class IccCmykTransform {
 
     private static ICC_ColorSpace staticSourceSpace(byte[] sourceIcc, int expectedComponents) {
         validateIccStructure(sourceIcc);
+        SourceCache cache = SOURCE_CACHE.get();
+        if (cache.space != null && Arrays.equals(cache.icc, sourceIcc)) {
+            return cache.space;
+        }
         ICC_Profile profile;
         try {
             profile = ICC_Profile.getInstance(sourceIcc);
@@ -227,7 +223,15 @@ final class IccCmykTransform {
             throw new JPDFiumException("Source ICC component count mismatch: profile="
                     + profile.getNumComponents() + " components=" + expectedComponents);
         }
-        return new ICC_ColorSpace(profile);
+        ICC_ColorSpace space = new ICC_ColorSpace(profile);
+        cache.icc = sourceIcc.clone();
+        cache.space = space;
+        return space;
+    }
+
+    private static final class SourceCache {
+        private byte[] icc;
+        private ICC_ColorSpace space;
     }
 
     private static int clampByte(int v) {

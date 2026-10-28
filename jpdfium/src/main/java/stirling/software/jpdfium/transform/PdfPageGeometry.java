@@ -224,6 +224,8 @@ public final class PdfPageGeometry {
                 || FormFillBindings.EPDFForm_GetFieldObjNum == null
                 || (FormFillBindings.EPDFForm_ResetField == null
                         && FormFillBindings.EPDFForm_SetFieldValue == null)
+                || (FormFillBindings.EPDFForm_SetFieldValue != null
+                        && FormFillBindings.EPDFForm_RedrawFieldWidgets == null)
                 || rawDoc == null || rawDoc.equals(MemorySegment.NULL)) {
             throw new JPDFiumException("form cleanup is unverifiable: required binding is unavailable");
         }
@@ -312,23 +314,35 @@ public final class PdfPageGeometry {
                     }
                 }
                 if (FormFillBindings.EPDFForm_SetFieldValue != null) {
+                    if (FormFillBindings.EPDFForm_RedrawFieldWidgets == null) {
+                        throw new JPDFiumException(
+                                "form appearance regeneration is unavailable; cannot crop safely");
+                    }
                     int ok = (int) FormFillBindings.EPDFForm_SetFieldValue.invokeExact(
                             rawDoc, objNum, FormFillBindings.EPDF_FORM_VALUE_NONE,
                             MemorySegment.NULL, 0L);
                     // Signature/push-button fields do not carry a writable value; the
                     // legacy ResetField path also ignored this case. Their widgets were
                     // already removed, so there is nothing left to clear.
-                    if (ok != 0 && FormFillBindings.EPDFForm_RedrawFieldWidgets != null) {
+                    if (ok != 0) {
                         // SetFieldValue intentionally does not draw. Regenerate text and
                         // choice appearances so the old value is not left in /AP.
-                        int ignored = (int) FormFillBindings.EPDFForm_RedrawFieldWidgets.invokeExact(
+                        int redrawn = (int) FormFillBindings.EPDFForm_RedrawFieldWidgets.invokeExact(
                                 rawDoc, objNum, MemorySegment.NULL, 0L, MemorySegment.NULL);
+                        if (redrawn == 0) {
+                            throw new JPDFiumException(
+                                    "EPDFForm_RedrawFieldWidgets failed for field " + objNum);
+                        }
                     }
                 } else {
                     // Legacy EmbedPDF API. invokeExact requires the int return type
                     // to be captured exactly.
-                    int ignored = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
+                    int reset = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
                             MemorySegment.NULL, 0L, MemorySegment.NULL);
+                    if (reset == 0) {
+                        throw new JPDFiumException(
+                                "EPDFForm_ResetField failed for field " + objNum);
+                    }
                 }
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
@@ -426,14 +440,18 @@ public final class PdfPageGeometry {
     }
 
     /**
-     * Rotate all pages by the given angle.
+     * Rotate all pages relative to their current rotation.
      *
      * @param doc     open PDF document
-     * @param degrees rotation in degrees (0, 90, 180, 270)
+     * @param degrees rotation in degrees; normalized to 0, 90, 180 or 270
      */
     public static void rotateAll(PdfDocument doc, int degrees) {
+        if (degrees % 90 != 0) {
+            throw new IllegalArgumentException("rotation must be a multiple of 90 degrees: " + degrees);
+        }
+        int delta = ((degrees % 360) + 360) % 360;
         for (int i = 0; i < doc.pageCount(); i++) {
-            setRotation(doc, i, degrees);
+            setRotation(doc, i, (getRotation(doc, i) + delta) % 360);
         }
     }
 }
