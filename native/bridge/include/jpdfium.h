@@ -752,6 +752,13 @@ JPDFIUM_EXPORT int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t doc_handle, 
                                                             const uint8_t* lut, int32_t lut_grid,
                                                             int64_t* out_converted);
 
+// Convert every eligible image in the document in one pass. Images are
+// encoded before any page is mutated, so an image shared by several pages is
+// still converted on each page instead of being skipped after the first edit.
+JPDFIUM_EXPORT int32_t jpdfium_color_document_images_to_cmyk_ex(
+    int64_t doc_handle, int32_t quality, int32_t flags, const uint8_t* lut, int32_t lut_grid,
+    int64_t* out_converted);
+
 // Merge the document /OutputIntents entry (subtype defaults to GTS_PDFX):
 // intents with the same /S are replaced, unrelated intents are preserved.
 // Returns PDF bytes in *output, freed with jpdfium_free_buffer.

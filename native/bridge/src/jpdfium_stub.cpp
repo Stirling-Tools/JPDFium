@@ -1695,6 +1695,12 @@ int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t, int32_t, int32_t, int32_t,
     return JPDFIUM_ERR_NOT_FOUND;
 }
 
+int32_t jpdfium_color_document_images_to_cmyk_ex(int64_t, int32_t, int32_t, const uint8_t*, int32_t,
+                                                 int64_t* out_converted) {
+    if (out_converted) *out_converted = 0;
+    return JPDFIUM_ERR_NOT_FOUND;
+}
+
 int32_t jpdfium_color_output_intent_bytes(const uint8_t*, int64_t, const uint8_t*, int64_t,
                                           const char*, const char*, const char*, uint8_t** output,
                                           int64_t* output_len) {

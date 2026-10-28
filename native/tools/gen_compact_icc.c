@@ -47,7 +47,8 @@ int main(int argc, char** argv) {
     const int lab_grid = G * G * G;
     cmsUInt16Number* a2b = calloc((size_t)grid * 3, sizeof(cmsUInt16Number));
     cmsUInt16Number* b2a = calloc((size_t)lab_grid * 4, sizeof(cmsUInt16Number));
-    if (!a2b || !b2a) return 3;
+    cmsUInt16Number* gamt = calloc((size_t)lab_grid, sizeof(cmsUInt16Number));
+    if (!a2b || !b2a || !gamt) return 3;
 
     cmsHPROFILE srgb = cmsCreate_sRGBProfile();
     cmsHPROFILE lab = cmsCreateLab4Profile(NULL);
@@ -97,13 +98,25 @@ int main(int argc, char** argv) {
     cmsSetHeaderRenderingIntent(h, INTENT_PERCEPTUAL);
 
     cmsPipeline* a = cmsPipelineAlloc(NULL, 4, 3);
+    cmsPipeline* a1 = cmsPipelineAlloc(NULL, 4, 3);
     cmsPipeline* b = cmsPipelineAlloc(NULL, 3, 4);
+    cmsPipeline* b1 = cmsPipelineAlloc(NULL, 3, 4);
+    cmsPipeline* g = cmsPipelineAlloc(NULL, 3, 1);
     cmsStage* as = cmsStageAllocCLut16bit(NULL, G, 4, 3, a2b);
+    cmsStage* as1 = cmsStageAllocCLut16bit(NULL, G, 4, 3, a2b);
     cmsStage* bs = cmsStageAllocCLut16bit(NULL, G, 3, 4, b2a);
+    cmsStage* bs1 = cmsStageAllocCLut16bit(NULL, G, 3, 4, b2a);
+    cmsStage* gs = cmsStageAllocCLut16bit(NULL, G, 3, 1, gamt);
     cmsPipelineInsertStage(a, cmsAT_BEGIN, as);
+    cmsPipelineInsertStage(a1, cmsAT_BEGIN, as1);
     cmsPipelineInsertStage(b, cmsAT_BEGIN, bs);
+    cmsPipelineInsertStage(b1, cmsAT_BEGIN, bs1);
+    cmsPipelineInsertStage(g, cmsAT_BEGIN, gs);
     cmsWriteTag(h, cmsSigAToB0Tag, a);
+    cmsWriteTag(h, cmsSigAToB1Tag, a1);
     cmsWriteTag(h, cmsSigBToA0Tag, b);
+    cmsWriteTag(h, cmsSigBToA1Tag, b1);
+    cmsWriteTag(h, cmsSigGamutTag, g);
     cmsWriteTag(h, cmsSigMediaWhitePointTag, cmsD50_XYZ());
 
     cmsMLU* desc = cmsMLUalloc(NULL, 1);
@@ -117,7 +130,10 @@ int main(int argc, char** argv) {
     cmsMLUfree(desc);
     cmsMLUfree(cprt);
     cmsPipelineFree(a);
+    cmsPipelineFree(a1);
     cmsPipelineFree(b);
+    cmsPipelineFree(b1);
+    cmsPipelineFree(g);
     cmsCloseProfile(h);
     cmsDeleteTransform(rgb_to_lab);
     cmsDeleteTransform(lab_to_rgb);
@@ -125,5 +141,6 @@ int main(int argc, char** argv) {
     cmsCloseProfile(lab);
     free(a2b);
     free(b2a);
+    free(gamt);
     return 0;
 }

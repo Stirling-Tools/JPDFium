@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #ifdef JPDFIUM_HAS_PUGIXML
 #include <pugixml.hpp>
@@ -330,37 +331,46 @@ bool ImageUsesDct(FPDF_PAGEOBJECT obj) {
     return false;
 }
 
+struct PendingImage {
+    FPDF_PAGE page;
+    FPDF_PAGEOBJECT object;
+    uint8_t* jpeg;
+    int64_t length;
+};
+
 // Returns 1 when the image was converted, 0 when it was skipped, -1 on failure.
 int32_t ConvertImageToCmykJpeg(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT obj,
-                               int32_t quality, int32_t flags, const uint8_t* lut, int32_t lut_grid,
-                               ImageScratch* scratch) {
+                               FPDF_PAGE* pages, int32_t page_count, int32_t quality, int32_t flags,
+                               const uint8_t* lut, int32_t lut_grid, ImageScratch* scratch,
+                               std::vector<PendingImage>* pending) {
     FPDF_IMAGEOBJ_METADATA meta{};
     if (!FPDFImageObj_GetImageMetadata(obj, page, &meta)) return 0;
-
     // DeviceGray is already ink-only (K) and valid in PDF/X. DeviceCMYK,
     // indexed, ICC-based, separation and unknown images are preserved.
     if (meta.colorspace != FPDF_COLORSPACE_DEVICERGB) return 0;
     constexpr int32_t components = 3;
-    if (meta.bits_per_pixel != 24) return 0;
+    if (meta.bits_per_pixel != 24) return -2;
     if (meta.width == 0 || meta.height == 0) return 0;
+    const bool uses_dct = ImageUsesDct(obj);
     // Lossless sources are only converted with an explicit opt-in; otherwise a
     // Flate screenshot or QR code would be silently turned into a lossy JPEG.
-    if (!ImageUsesDct(obj) && (flags & JPDFIUM_COLOR_IMAGE_CONVERT_LOSSLESS) == 0) return 0;
+    if (!uses_dct && (flags & JPDFIUM_COLOR_IMAGE_CONVERT_LOSSLESS) == 0) return -2;
     // Over the encoder's per-dimension limit: skipping avoids a huge allocation
     // that the JPEG encoder would reject only after the buffer is filled.
-    if (meta.width > 65535u || meta.height > 65535u) return 0;
+    if (meta.width > 65535u || meta.height > 65535u) return -2;
 
 #ifdef JPDFIUM_HAVE_CMYK_API
     // Only render when a mask is present; an opaque SMask is safe to drop.
     if (FPDFImageObj_HasTransparency(obj) && ImageHasTransparency(doc, page, obj)) {
-        return 0;
+        return -2;
     }
 #else
-    if (ImageHasTransparency(doc, page, obj)) return 0;
+    if (ImageHasTransparency(doc, page, obj)) return -2;
 #endif
 
     const int64_t pixels = static_cast<int64_t>(meta.width) * static_cast<int64_t>(meta.height);
-    if (pixels <= 0 || pixels > (INT64_MAX / 4)) return 0;
+    constexpr int64_t kMaxImagePixels = 64LL * 1024 * 1024;
+    if (pixels <= 0 || pixels > kMaxImagePixels || pixels > (INT64_MAX / 4)) return -2;
     const size_t sample_len = static_cast<size_t>(pixels) * static_cast<size_t>(components);
     std::unique_ptr<uint8_t[]> local_samples;
     uint8_t* samples;
@@ -371,11 +381,20 @@ int32_t ConvertImageToCmykJpeg(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJEC
         samples = local_samples.get();
     }
 
-    const unsigned long got =
-        FPDFImageObj_GetImageDataDecoded(obj, samples, static_cast<unsigned long>(sample_len));
-    if (got != sample_len && !DecodeImageBitmap(obj, static_cast<int>(meta.width),
-                                                static_cast<int>(meta.height), samples)) {
-        return 0;
+    // The raw decoder does not apply /Decode. Render lossless sources through
+    // the bitmap path so inverted or remapped samples keep their meaning.
+    if (!uses_dct) {
+        if (!DecodeImageBitmap(obj, static_cast<int>(meta.width), static_cast<int>(meta.height),
+                               samples)) {
+            return -2;
+        }
+    } else {
+        const unsigned long got =
+            FPDFImageObj_GetImageDataDecoded(obj, samples, static_cast<unsigned long>(sample_len));
+        if (got != sample_len && !DecodeImageBitmap(obj, static_cast<int>(meta.width),
+                                                    static_cast<int>(meta.height), samples)) {
+            return -2;
+        }
     }
 
     uint8_t* jpeg = nullptr;
@@ -386,25 +405,30 @@ int32_t ConvertImageToCmykJpeg(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJEC
         &jpeg, &jpeg_len);
     if (rc != JPDFIUM_OK) return -1;
 
+    if (pending) {
+        pending->push_back({page, obj, jpeg, jpeg_len});
+        return 1;
+    }
+
     // Own the encoder output so a throw from the embedding call cannot leak it.
     std::unique_ptr<uint8_t, void (*)(void*)> jpeg_owner(jpeg, std::free);
-    FPDF_PAGE pages[1] = {page};
-    const FPDF_BOOL ok =
-        EPDFImageObj_SetJpeg(pages, 1, obj, jpeg_owner.get(), static_cast<size_t>(jpeg_len));
+    const FPDF_BOOL ok = EPDFImageObj_SetJpeg(pages, page_count, obj, jpeg_owner.get(),
+                                              static_cast<size_t>(jpeg_len));
     return ok ? 1 : -1;
 }
 
 // Recurse into forms only when dirty-stream write-back is available.
-void ConvertImagesInObject(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT obj, int32_t quality,
-                           int32_t flags, const uint8_t* lut, int32_t lut_grid, bool strict,
-                           int64_t* converted, std::unordered_set<FPDF_PAGEOBJECT>* visited,
-                           int32_t* failure, ImageScratch* scratch) {
+void ConvertImagesInObject(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT obj, FPDF_PAGE* pages,
+                           int32_t page_count, int32_t quality, int32_t flags, const uint8_t* lut,
+                           int32_t lut_grid, bool strict, int64_t* converted,
+                           std::unordered_set<FPDF_PAGEOBJECT>* visited, int32_t* failure,
+                           ImageScratch* scratch, std::vector<PendingImage>* pending) {
     if (!obj || *failure != JPDFIUM_OK) return;
 
     const int type = FPDFPageObj_GetType(obj);
     if (type == FPDF_PAGEOBJ_IMAGE) {
-        const int32_t result =
-            ConvertImageToCmykJpeg(doc, page, obj, quality, flags, lut, lut_grid, scratch);
+        const int32_t result = ConvertImageToCmykJpeg(doc, page, obj, pages, page_count, quality,
+                                                      flags, lut, lut_grid, scratch, pending);
         if (result < 0) {
             if (strict) *failure = JPDFIUM_ERR_NATIVE;
             return;
@@ -422,8 +446,8 @@ void ConvertImagesInObject(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT ob
     const int64_t before = *converted;
     for (int i = 0; i < count && *failure == JPDFIUM_OK; ++i) {
         FPDF_PAGEOBJECT child = FPDFFormObj_GetObject(obj, static_cast<unsigned long>(i));
-        ConvertImagesInObject(doc, page, child, quality, flags, lut, lut_grid, strict, converted,
-                              visited, failure, scratch);
+        ConvertImagesInObject(doc, page, child, pages, page_count, quality, flags, lut, lut_grid,
+                              strict, converted, visited, failure, scratch, pending);
     }
     if (*converted != before) {
         FPDFFormObj_MarkDirty(obj);
@@ -504,7 +528,7 @@ std::string CreateUniqueSibling(const std::string& out_path) {
         }
         ::_close(fd);
 #else
-        const int fd = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+        const int fd = ::open(candidate.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
         if (fd < 0) continue;
         ::close(fd);
 #endif
@@ -513,8 +537,8 @@ std::string CreateUniqueSibling(const std::string& out_path) {
     throw std::runtime_error("cannot create a temporary output file");
 }
 
-// Preserves an existing destination's mode; a brand-new file keeps the staging
-// file's owner-only mode rather than being widened to the umask default.
+// Preserves an existing destination's mode; a brand-new file keeps the mode
+// created by the normal umask-aware 0666 staging file.
 void ApplyPublishMode(const std::string& staging, const char* destination) {
 #ifndef _WIN32
     struct stat st;
@@ -554,16 +578,17 @@ void ConfigureWriter(QPDFWriter& writer) {
     writer.setDecodeLevel(qpdf_dl_none);
 }
 
-// PDFium may serialise a PDF 2.0 source with a 1.0 header. PDF/X-4 requires
-// PDF 1.6 and PDF/X-3 a PDF 1.3 base, so raise the header when needed.
+// PDF/X fixes the base PDF version: X-4 is PDF 1.6 and X-3 is PDF 1.3.
+// Force the header instead of only raising it, so a PDF 1.7 source does not
+// claim a version the selected standard does not allow.
 void ConfigurePdfxWriter(QPDFWriter& writer, const char* version) {
     ConfigureWriter(writer);
     if (!version) return;
     const std::string value(version);
     if (value.find("PDF/X-4") != std::string::npos) {
-        writer.setMinimumPDFVersion("1.6");
+        writer.forcePDFVersion("1.6");
     } else if (value.find("PDF/X-3") != std::string::npos) {
-        writer.setMinimumPDFVersion("1.3");
+        writer.forcePDFVersion("1.3");
     }
 }
 
@@ -745,18 +770,17 @@ std::string XmlEnsurePrefix(pugi::xml_node node, const std::string& uri,
     return preferred;
 }
 
-pugi::xml_node XmlFindDescription(const pugi::xml_node& node, int depth = 0) {
-    if (depth > kMaxXmpDepth) return {};
+void XmlCollectDescriptions(const pugi::xml_node& node, int depth,
+                            std::vector<pugi::xml_node>* out) {
+    if (depth > kMaxXmpDepth) return;
     for (pugi::xml_node child : node.children()) {
         if (child.type() != pugi::node_element) continue;
         if (XmlLocalName(child.name()) == "Description") {
             const std::string ns = XmlNamespaceUri(child, XmlPrefix(child.name()));
-            if (ns.empty() || ns == kRdfNs) return child;
+            if (ns.empty() || ns == kRdfNs) out->push_back(child);
         }
-        pugi::xml_node nested = XmlFindDescription(child, depth + 1);
-        if (nested) return nested;
+        XmlCollectDescriptions(child, depth + 1, out);
     }
-    return {};
 }
 
 bool XmlUpdateAttribute(const pugi::xml_node& description, const std::string& local,
@@ -801,29 +825,35 @@ bool XmlUpdateProperty(const pugi::xml_node& description, const std::string& loc
 
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
                  const std::string& conformance) {
-    pugi::xml_node description = XmlFindDescription(*document);
-    if (!description) return false;
+    std::vector<pugi::xml_node> descriptions;
+    XmlCollectDescriptions(*document, 0, &descriptions);
+    if (descriptions.empty()) return false;
 
-    const bool has_pdfxid_version =
-        XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxIdNs, {}, version);
-    const bool has_pdfx_version =
-        XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxNs, {}, version);
-    const bool has_conformance =
-        XmlUpdateProperty(description, "GTS_PDFXConformance", kPdfxNs, kPdfxIdNs, conformance);
+    // Update every metadata block so a second rdf:Description cannot keep a
+    // stale, conflicting PDF/X version.
+    bool has_pdfxid_version = false;
+    bool has_pdfx_version = false;
+    bool has_conformance = false;
+    for (const pugi::xml_node& description : descriptions) {
+        has_pdfxid_version |=
+            XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxIdNs, {}, version);
+        has_pdfx_version |= XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxNs, {}, version);
+        has_conformance |=
+            XmlUpdateProperty(description, "GTS_PDFXConformance", kPdfxNs, kPdfxIdNs, conformance);
+    }
 
+    pugi::xml_node first = descriptions.front();
     if (!has_pdfxid_version) {
-        const std::string prefix = XmlEnsurePrefix(description, kPdfxIdNs, "pdfxid");
-        description.append_attribute((prefix + ":GTS_PDFXVersion").c_str())
-            .set_value(version.c_str());
+        const std::string prefix = XmlEnsurePrefix(first, kPdfxIdNs, "pdfxid");
+        first.append_attribute((prefix + ":GTS_PDFXVersion").c_str()).set_value(version.c_str());
     }
     if (!has_pdfx_version) {
-        const std::string prefix = XmlEnsurePrefix(description, kPdfxNs, "pdfx");
-        description.append_attribute((prefix + ":GTS_PDFXVersion").c_str())
-            .set_value(version.c_str());
+        const std::string prefix = XmlEnsurePrefix(first, kPdfxNs, "pdfx");
+        first.append_attribute((prefix + ":GTS_PDFXVersion").c_str()).set_value(version.c_str());
     }
     if (!has_conformance) {
-        const std::string prefix = XmlEnsurePrefix(description, kPdfxNs, "pdfx");
-        description.append_attribute((prefix + ":GTS_PDFXConformance").c_str())
+        const std::string prefix = XmlEnsurePrefix(first, kPdfxNs, "pdfx");
+        first.append_attribute((prefix + ":GTS_PDFXConformance").c_str())
             .set_value(conformance.c_str());
     }
     return true;
@@ -972,6 +1002,7 @@ JPDFIUM_EXPORT int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t doc_handle, 
 
         UniquePage page(FPDF_LoadPage(wrapper->core->doc, page_index));
         if (!page) return JPDFIUM_ERR_NOT_FOUND;
+        FPDF_PAGE page_handles[1] = {page.get()};
 
         const bool strict = (flags & JPDFIUM_COLOR_IMAGE_STRICT) != 0;
         int64_t converted = 0;
@@ -985,8 +1016,9 @@ JPDFIUM_EXPORT int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t doc_handle, 
         const int object_count = FPDFPage_CountObjects(page.get());
         for (int i = 0; i < object_count && failure == JPDFIUM_OK; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page.get(), i);
-            ConvertImagesInObject(wrapper->core->doc, page.get(), obj, quality, flags, lut,
-                                  lut_grid, strict, &converted, &visited_forms, &failure, &scratch);
+            ConvertImagesInObject(wrapper->core->doc, page.get(), obj, page_handles, 1, quality,
+                                  flags, lut, lut_grid, strict, &converted, &visited_forms,
+                                  &failure, &scratch, nullptr);
         }
 
         if (failure != JPDFIUM_OK) return failure;
@@ -997,6 +1029,86 @@ JPDFIUM_EXPORT int32_t jpdfium_color_page_images_to_cmyk_ex(int64_t doc_handle, 
 #endif
     } catch (const std::exception& e) {
         std::fprintf(stderr, "jpdfium color images: %s\n", e.what());
+        return JPDFIUM_ERR_NATIVE;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_color_document_images_to_cmyk_ex(int64_t doc_handle, int32_t quality,
+                                                                int32_t flags, const uint8_t* lut,
+                                                                int32_t lut_grid,
+                                                                int64_t* out_converted) {
+    if (!out_converted) return JPDFIUM_ERR_INVALID;
+    *out_converted = 0;
+    if (lut && (lut_grid < 2 || lut_grid > 256)) return JPDFIUM_ERR_INVALID;
+    try {
+#ifndef JPDFIUM_HAVE_EPDF_JPEG
+        (void)doc_handle;
+        (void)quality;
+        (void)flags;
+        (void)lut;
+        (void)lut_grid;
+        return JPDFIUM_ERR_NOT_FOUND;
+#else
+        if (jpdfium_has_rust() == 0) return JPDFIUM_ERR_NOT_FOUND;
+        DocWrapper* wrapper = decodeDoc(doc_handle);
+        if (!wrapper || !wrapper->core || !wrapper->core->doc) return JPDFIUM_ERR_INVALID;
+
+        const int page_count = FPDF_GetPageCount(wrapper->core->doc);
+        std::vector<UniquePage> pages;
+        std::vector<FPDF_PAGE> page_handles;
+        pages.reserve(static_cast<size_t>(page_count));
+        page_handles.reserve(static_cast<size_t>(page_count));
+        for (int i = 0; i < page_count; ++i) {
+            UniquePage loaded(FPDF_LoadPage(wrapper->core->doc, i));
+            if (!loaded) return JPDFIUM_ERR_NOT_FOUND;
+            page_handles.push_back(loaded.get());
+            pages.push_back(std::move(loaded));
+        }
+
+        const bool strict = (flags & JPDFIUM_COLOR_IMAGE_STRICT) != 0;
+        int32_t failure = JPDFIUM_OK;
+        int64_t converted = 0;
+        std::unordered_set<FPDF_PAGEOBJECT> visited_forms;
+        std::vector<PendingImage> pending;
+        thread_local ImageScratch scratch;
+        ImageScratchTrim trim{&scratch};
+        for (int i = 0; i < page_count && failure == JPDFIUM_OK; ++i) {
+            const int objects = FPDFPage_CountObjects(page_handles[static_cast<size_t>(i)]);
+            for (int j = 0; j < objects && failure == JPDFIUM_OK; ++j) {
+                FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page_handles[static_cast<size_t>(i)], j);
+                ConvertImagesInObject(wrapper->core->doc, page_handles[static_cast<size_t>(i)], obj,
+                                      page_handles.data(), page_count, quality, flags, lut,
+                                      lut_grid, strict, &converted, &visited_forms, &failure,
+                                      &scratch, &pending);
+            }
+        }
+        if (failure != JPDFIUM_OK) {
+            for (PendingImage& image : pending) std::free(image.jpeg);
+            return failure;
+        }
+
+        std::unordered_set<FPDF_PAGE> changed_pages;
+        for (PendingImage& image : pending) {
+            FPDF_PAGE page = image.page;
+            if (!EPDFImageObj_SetJpeg(&page, 1, image.object, image.jpeg,
+                                      static_cast<size_t>(image.length))) {
+                for (PendingImage& remaining : pending) std::free(remaining.jpeg);
+                return JPDFIUM_ERR_NATIVE;
+            }
+            std::free(image.jpeg);
+            image.jpeg = nullptr;
+            changed_pages.insert(image.page);
+        }
+        for (FPDF_PAGE page : changed_pages) {
+            if (!FPDFPage_GenerateContent(page)) return JPDFIUM_ERR_NATIVE;
+        }
+        *out_converted = converted;
+        return JPDFIUM_OK;
+#endif
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "jpdfium color document images: %s\n", e.what());
         return JPDFIUM_ERR_NATIVE;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
