@@ -266,6 +266,21 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /** One two-tone image XObject drawn at (100,100)-(300,300) on each of two pages. */
+    public static byte[] sharedImageAcrossPagesPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "shared");
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(LETTER);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawImage(img, 100, 100, 200, 200);
+                }
+            }
+            return save(doc);
+        }
+    }
+
     /**
      * One page with a Form XObject (BBox = full page) whose only child is the
      * two-tone image at form-local (100,100)-(300,300).
