@@ -18,8 +18,8 @@
 # so the native backend's AES/RC4 is fully sufficient for our use.
 #
 # Output:
-#   Linux  - /usr/local/lib/libqpdf.so.<v> + headers + libqpdf.pc
-#   macOS  - $(brew --prefix)/lib/libqpdf.<v>.dylib + headers + libqpdf.pc
+#   Linux  - /usr/local/lib/libqpdf.a + headers + libqpdf.pc
+#   macOS  - $(brew --prefix)/lib/libqpdf.a + headers + libqpdf.pc
 # Both picked up by the bridge's pkg_check_modules(libqpdf) via the
 # default pkg-config search path. The original (apt / brew) libqpdf
 # files are moved aside so the bundler's ldd/otool walk resolves to
@@ -33,7 +33,9 @@ case "$(uname -s)" in
     Linux*)
         OS=linux
         PREFIX=/usr/local
-        SUDO=sudo
+        # Containers often run as root without sudo installed; CI runners are
+        # non-root and need it for /usr/local.
+        if [ "$(id -u)" = "0" ]; then SUDO=""; else SUDO=sudo; fi
         ;;
     Darwin*)
         OS=darwin
@@ -100,14 +102,14 @@ for pc in zlib libjpeg; do
         if [ "$pc" = "libjpeg" ] && pkg-config --exists libjpeg-turbo; then
             continue
         fi
-        echo "build-qpdf-native-crypto.sh: missing pkg-config $pc; skipping" >&2
-        exit 0
+        echo "build-qpdf-native-crypto.sh: missing pkg-config $pc" >&2
+        exit 1
     fi
 done
 
 if ! command -v cmake >/dev/null 2>&1; then
-    echo "build-qpdf-native-crypto.sh: cmake not installed; skipping" >&2
-    exit 0
+    echo "build-qpdf-native-crypto.sh: cmake not installed" >&2
+    exit 1
 fi
 
 WORK=$(mktemp -d)
@@ -115,8 +117,8 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning qpdf ${QPDF_TAG}..."
 if ! git clone --depth 1 -b "$QPDF_TAG" "$QPDF_REPO" "$WORK/qpdf"; then
-    echo "build-qpdf-native-crypto.sh: git clone failed; skipping" >&2
-    exit 0
+    echo "build-qpdf-native-crypto.sh: git clone failed" >&2
+    exit 1
 fi
 
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
@@ -136,6 +138,10 @@ if [ "$OS" = "darwin" ]; then
     CMAKE_EXTRA_ARGS+=("-DCMAKE_MACOSX_RPATH=OFF")
 fi
 
+# Static archive: the bridge uses a small slice of qpdf, so the final link
+# can dead-strip unused objects/functions instead of shipping a complete
+# libqpdf dylib (2.5 MB) in every natives jar. PIC is required because the
+# archive ends up inside libjpdfium.so/.dylib.
 cmake -S "$WORK/qpdf" -B "$WORK/qpdf/build" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" \
@@ -143,53 +149,77 @@ cmake -S "$WORK/qpdf" -B "$WORK/qpdf/build" \
     -DREQUIRE_CRYPTO_NATIVE=1 \
     -DREQUIRE_CRYPTO_GNUTLS=0 \
     -DREQUIRE_CRYPTO_OPENSSL=0 \
-    -DBUILD_SHARED_LIBS=ON \
-    -DBUILD_STATIC_LIBS=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_STATIC_LIBS=ON \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_C_FLAGS="-fPIC -ffunction-sections -fdata-sections" \
+    -DCMAKE_CXX_FLAGS="-fPIC -ffunction-sections -fdata-sections" \
     -DUSE_IMPLICIT_CRYPTO=OFF \
     -DBUILD_DOC=OFF -DBUILD_DOC_HTML=OFF -DBUILD_DOC_PDF=OFF \
     -DBUILD_DOC_DIST=OFF \
     -DCI_MODE=ON \
     "${CMAKE_EXTRA_ARGS[@]}" \
-  || { echo "build-qpdf-native-crypto.sh: cmake configure failed; skipping" >&2; exit 0; }
+  || { echo "build-qpdf-native-crypto.sh: cmake configure failed" >&2; exit 1; }
 
 cmake --build "$WORK/qpdf/build" --target libqpdf -j"$NPROC" \
-  || { echo "build-qpdf-native-crypto.sh: cmake build failed; skipping" >&2; exit 0; }
+  || { echo "build-qpdf-native-crypto.sh: cmake build failed" >&2; exit 1; }
 
 # Install lib + dev components separately (cmake --install takes a single
 # --component at a time).
 $SUDO cmake --install "$WORK/qpdf/build" --component lib \
-  || { echo "build-qpdf-native-crypto.sh: install lib failed; skipping" >&2; exit 0; }
+  || { echo "build-qpdf-native-crypto.sh: install lib failed" >&2; exit 1; }
 $SUDO cmake --install "$WORK/qpdf/build" --component dev \
-  || { echo "build-qpdf-native-crypto.sh: install dev failed; skipping" >&2; exit 0; }
+  || { echo "build-qpdf-native-crypto.sh: install dev failed" >&2; exit 1; }
 if [ "$OS" = "linux" ]; then
     $SUDO ldconfig 2>/dev/null || true
 fi
 
-# Diagnostics - confirm libcrypto/libgnutls/libssl aren't pulled in.
-if [ "$OS" = "linux" ]; then
-    NEW_QPDF=$(find "$PREFIX/lib" -maxdepth 1 -name "libqpdf.so.*" -type f 2>/dev/null | head -1)
-    if [ -n "$NEW_QPDF" ]; then
-        echo "Installed: $NEW_QPDF ($(du -h "$NEW_QPDF" | cut -f1))"
-        echo "ldd:"
-        ldd "$NEW_QPDF" | sed 's/^/  /'
-    fi
-else
-    NEW_QPDF=$(find "$PREFIX/lib" -maxdepth 1 -name "libqpdf.*.dylib" -type f 2>/dev/null | head -1)
-    if [ -n "$NEW_QPDF" ]; then
-        echo "Installed: $NEW_QPDF ($(du -h "$NEW_QPDF" | cut -f1))"
-        echo "otool -L:"
-        otool -L "$NEW_QPDF" | sed 's/^/  /'
-    fi
+# Point pkg-config at the archive itself. A plain -lqpdf would resolve to
+# the distro/brew shared library that still sits beside it, defeating the
+# dead-strip and pulling libqpdf back into the bundle.
+QPDF_STATIC="$PREFIX/lib/libqpdf.a"
+QPDF_PC="$PREFIX/lib/pkgconfig/libqpdf.pc"
+if [ ! -f "$QPDF_STATIC" ] || [ ! -f "$QPDF_PC" ]; then
+    echo "build-qpdf-native-crypto.sh: static archive/pkg-config missing after install" >&2
+    exit 1
 fi
+JPEG_ARGS="-ljpeg"
+if [ "$OS" = "darwin" ]; then
+    JPEG_PREFIX="$PREFIX/opt/jpeg-turbo"
+    JPEG_ARGS="-L$JPEG_PREFIX/lib -ljpeg"
+fi
+$SUDO python3 - "$QPDF_PC" "$QPDF_STATIC" "$JPEG_ARGS" <<'PY_EOF'
+import re, sys
+path, archive, jpeg = sys.argv[1:4]
+with open(path) as f:
+    text = f.read()
+text = re.sub(r'(?m)^Requires\.private:.*\n?', '', text)
+text = re.sub(r'(?m)^Libs\.private:.*\n?', '', text)
+libs = f"Libs: -L{archive.rsplit('/libqpdf.a', 1)[0]} -lqpdf {jpeg} -lz"
+if re.search(r'(?m)^Libs:', text):
+    text = re.sub(r'(?m)^Libs:.*$', libs, text, count=1)
+else:
+    text += libs + "\n"
+with open(path, 'w') as f:
+    f.write(text)
+print(f"Rewrote {path} Libs -> {libs}")
+PY_EOF
 
-# Move the original libqpdf aside so the bundler picks up our build.
-# Linux: apt libs under /usr/lib/<triplet>/. macOS: the install above
-# already overwrote brew's canonical names in $(brew --prefix)/lib/;
-# the Cellar copies aren't on the default linker search path so they
-# don't get picked up.
+echo "Installed static qpdf: $QPDF_STATIC ($(du -h "$QPDF_STATIC" | cut -f1))"
+echo "pkg-config libs: $(pkg-config --libs libqpdf 2>/dev/null || true)"
+
+# The linker prefers a shared libqpdf over the static archive when both are
+# on the search path, which would put the 2.5 MB dylib straight back into the
+# bundle. Disable the shared copies now that the bridge is built against the
+# archive; the pc file points at -lqpdf and resolves to libqpdf.a.
 if [ "$OS" = "linux" ]; then
-    for old in /usr/lib/x86_64-linux-gnu/libqpdf.so* /usr/lib/aarch64-linux-gnu/libqpdf.so*; do
+    for old in /usr/lib/x86_64-linux-gnu/libqpdf.so* /usr/lib/aarch64-linux-gnu/libqpdf.so*                /usr/local/lib/libqpdf.so*; do
         [ -e "$old" ] || continue
-        sudo mv "$old" "${old}.disabled" 2>/dev/null || true
+        $SUDO mv "$old" "${old}.disabled" 2>/dev/null || true
+    done
+else
+    for old in "$PREFIX"/lib/libqpdf*.dylib; do
+        { [ -e "$old" ] || [ -L "$old" ]; } || continue
+        mv "$old" "${old}.disabled" 2>/dev/null || true
     done
 fi

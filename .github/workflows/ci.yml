@@ -106,6 +106,25 @@ jobs:
       - name: Compile main and test sources
         run: ./gradlew :jpdfium:compileJava :jpdfium:compileTestJava :jpdfium:processResources :jpdfium-vips:compileJava :jpdfium-vips:compileTestJava :jpdfium-vips:processResources --no-daemon --stacktrace
 
+      - name: Full JDK with jmods for ProGuard
+        if: runner.os == 'Linux'
+        # Temurin 25 is a jmod-less runtime under JEP 493. ProGuard still needs
+        # Java library class files, so use GraalVM's full JDK for this
+        # measurement only; the production build stays on Temurin.
+        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ProGuard jar size experiment (non-publishing)
+        if: runner.os == 'Linux'
+        # Production jars remain unmodified: ProGuard's safe shrink-only mode
+        # saves only a few percent and its optimized/obfuscated modes alter
+        # public signatures or reflection/native-image metadata. Keep the
+        # experiment visible in CI instead of letting the trade-off drift.
+        run: bash native/proguard-jars.sh
+
   # -------------------------------------------------------------------------
   # Job 1b: Validate musl native detection on a real Alpine/musl JVM
   # -------------------------------------------------------------------------
@@ -145,16 +164,17 @@ jobs:
             echo "FAIL: could not pull an Alpine JDK image from any registry"; exit 1
           fi
           echo "Using Alpine JDK image: $IMG"
-          docker run --rm -i -v "$PWD":/src -w /src "$IMG" sh -s <<'INNER'
+          cp buildSrc/libs/xz-1.10.jar /tmp/xz.jar
+          docker run --rm -i -v "$PWD":/src -v /tmp/xz.jar:/tmp/xz.jar:ro -w /src "$IMG" sh -s <<'INNER'
           set -e
           mkdir -p /tmp/m
           # Compile the whole main source tree: NativeLoader calls
           # JpdfiumLib.checkAbiCompatible(), so a hand-picked file list breaks
           # the moment the loader gains another intra-module reference.
-          javac -d /tmp/m \
+          javac -cp /tmp/xz.jar --module-path /tmp/xz.jar -d /tmp/m \
             $(find jpdfium/src/main/java -name '*.java')
           OUT=$(echo 'System.out.println(stirling.software.jpdfium.panama.NativeLoader.detectPlatform());' \
-            | jshell -q --class-path /tmp/m -)
+            | jshell -q --class-path /tmp/m:/tmp/xz.jar -)
           echo "detectPlatform() on Alpine => $OUT"
           echo "$OUT" | grep -q 'linux-musl-' || { echo "FAIL: expected linux-musl-*, got: $OUT"; exit 1; }
           echo "OK: musl detection works"
@@ -481,6 +501,23 @@ jobs:
               fi
             done
           done
+          # Consumers must choose their platform. The core artifact must never
+          # publish a jpdfium-natives-* dependency (that used to force Linux
+          # x64 onto every macOS/Windows/ARM user).
+          meta_count=0
+          for meta in $(find ~/.m2/repository/com/stirling/jpdfium -maxdepth 2 \
+              \( -name 'jpdfium-*.pom' -o -name 'jpdfium-*.module' \)); do
+            meta_count=$((meta_count + 1))
+            if grep -q 'jpdfium-natives' "$meta"; then
+              echo "ERROR: published metadata contains a native dependency: $meta"
+              grep -n 'jpdfium-natives' "$meta" || true
+              missing=1
+            fi
+          done
+          if [ "$meta_count" -eq 0 ]; then
+            echo "ERROR: no jpdfium POM/module metadata found to inspect"
+            missing=1
+          fi
           exit $missing
 
   # -------------------------------------------------------------------------
