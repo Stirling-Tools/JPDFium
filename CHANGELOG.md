@@ -24,6 +24,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Whole-word redaction skipped pages where words are separated by control
+  characters (some fonts map the space glyph to U+0002): the keyword prefilter
+  reads text without those characters and saw the words joined. The prefilter
+  now screens pages by substring and leaves the whole-word test to the native
+  matcher.
 - Region and text redaction left an image nested in a Form XObject intact under
   the painted cover when the redaction covered only part of it. The covered
   pixels are now erased and the image is moved to the page, as crop already did.
