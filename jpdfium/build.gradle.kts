@@ -1,6 +1,3 @@
-import java.nio.file.Files
-import java.nio.file.Path
-
 plugins {
     id("jpdfium.library-conventions")
     alias(libs.plugins.graalvm.native)
@@ -69,6 +66,21 @@ graalvmNative {
     }
 }
 
+// The platform natives this build loads for its own tests, benchmarks, `run` and native
+// images. Not runtimeOnly: that is published, and would hand every consumer the natives of
+// whichever platform ran the publish. Consumers declare jpdfium-natives-<platform> themselves.
+val testNatives = testNativesPlatform()
+val platformNatives by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = false
+}
+// The GraalVM plugin builds each image from its own nativeImage*Classpath, not runtimeClasspath.
+val nativesClasspaths = setOf(
+    "runtimeClasspath", "testRuntimeClasspath",
+    "nativeImageClasspath", "nativeImageCliClasspath", "nativeImageTestClasspath",
+)
+configurations.matching { it.name in nativesClasspaths }.configureEach { extendsFrom(platformNatives) }
+
 dependencies {
     // No imageio-webp: jpdfium-vips registers a libvips-backed ImageCodec as
     // the default and writes WebP without an ImageIO plugin. WebP writing
@@ -76,42 +88,12 @@ dependencies {
     // (canWrite(WEBP) == false). TwelveMonkeys TIFF stays for the ImageIO
     // fallback (BigTIFF/CMYK + compression the JDK writer lacks).
     implementation(libs.imageio.tiff)
-    // Which platform's native jar lands on the classpath. Auto-detects host OS
-    // and arch by default; CI overrides per matrix job with
-    // -Pjpdfium.testNatives=<platform> so the smoke loads the native it built.
-    val defaultPlatform = run {
-        val os = System.getProperty("os.name").lowercase()
-        val arch = System.getProperty("os.arch").lowercase()
-        val isArm = arch == "aarch64" || arch == "arm64"
-        when {
-            os.contains("mac") || os.contains("darwin") -> if (isArm) "darwin-arm64" else "darwin-x64"
-            os.contains("win") -> if (isArm) "windows-arm64" else "windows-x64"
-            else -> {
-                // Linux natives are libc-specific: a musl host (Alpine) needs the
-                // linux-musl-* artifact - a glibc-linked libjpdfium.so won't load
-                // into a musl JVM. Mirror NativeLoader's detection here so builds
-                // executed on Alpine resolve the right natives jar automatically.
-                val muslLoader = Path.of("/lib/ld-musl-${if (isArm) "aarch64" else "x86_64"}.so.1")
-                val musl = Files.exists(muslLoader)
-                    || runCatching {
-                        Files.newDirectoryStream(Path.of("/lib"), "ld-musl-*").use { it.iterator().hasNext() }
-                    }.getOrDefault(false)
-                when {
-                    musl && isArm -> "linux-musl-arm64"
-                    musl -> "linux-musl-x64"
-                    isArm -> "linux-arm64"
-                    else -> "linux-x64"
-                }
-            }
-        }
-    }
-    val testNatives = (findProperty("jpdfium.testNatives") ?: defaultPlatform).toString()
-    runtimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
+    platformNatives(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
     jmhRuntimeOnly(project(":jpdfium-vips"))
-    // The jmh source set needs the same platform natives as testRuntimeOnly.
+    // The jmh source set needs the same platform natives as the tests.
     // Without it every benchmark dies in JpdfiumLib's static initializer with
     // "Symbol not found", so JMH silently measures nothing.
     jmhRuntimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
