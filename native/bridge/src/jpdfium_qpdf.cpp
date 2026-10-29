@@ -7,7 +7,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <vector>
@@ -25,8 +27,10 @@
 
 #include <qpdf/Buffer.hh>
 #include <qpdf/QPDF.hh>
+#include <qpdf/QPDFAcroFormDocumentHelper.hh>
 #include <qpdf/QPDFExc.hh>
-#include <qpdf/QPDFPageDocumentHelper.hh>
+#include <qpdf/QPDFPageLabelDocumentHelper.hh>
+#include <qpdf/QPDFPageObjectHelper.hh>
 #include <qpdf/QPDFWriter.hh>
 #include <qpdf/QUtil.hh>
 
@@ -127,17 +131,175 @@ QpdfResult optimize(std::span<const uint8_t> input, int32_t flags, int32_t objec
     }
 }
 
+// Pages taken from one input, in output order. Out-of-range indices are skipped.
+struct PageSelection {
+    QPDF* source;
+    std::vector<int32_t> pages;
+};
+
+std::vector<int32_t> allPageIndices(QPDF& qpdf) {
+    std::vector<int32_t> indices(qpdf.getAllPages().size());
+    for (size_t i = 0; i < indices.size(); ++i) indices[i] = static_cast<int32_t>(i);
+    return indices;
+}
+
+// A page with no label in its source is labelled with its physical number in the output, which
+// is what a viewer shows for a file without labels. qpdf's own fabricated label has no /S, which
+// renders as a blank label.
+QPDFObjectHandle labelFor(QPDFPageLabelDocumentHelper& labels, long long sourceIndex,
+                          long long outputIndex) {
+    QPDFObjectHandle label = labels.getLabelForPage(sourceIndex);
+    if (!label.isDictionary()) {
+        label = QPDFObjectHandle::newDictionary();
+        label.replaceKey("/S", QPDFObjectHandle::newName("/D"));
+        label.replaceKey("/St", QPDFObjectHandle::newInteger(outputIndex + 1));
+    }
+    return label;
+}
+
+void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
+                 QPDFObjectHandle label) {
+    if (nums.size() >= 2) {
+        QPDFObjectHandle previousIndex = nums[nums.size() - 2];
+        QPDFObjectHandle previous = nums.back();
+        bool continuesPrevious =
+            previous.getKey("/S").unparse() == label.getKey("/S").unparse() &&
+            previous.getKey("/P").unparse() == label.getKey("/P").unparse() &&
+            previous.getKey("/St").isInteger() && label.getKey("/St").isInteger() &&
+            label.getKey("/St").getIntValue() - previous.getKey("/St").getIntValue() ==
+                outputIndex - previousIndex.getIntValue();
+        if (continuesPrevious) return;
+    }
+    nums.push_back(QPDFObjectHandle::newInteger(outputIndex));
+    nums.push_back(label);
+}
+
+// Lays the selected pages out in `primary` the way `qpdf <primary> --pages ... --` does, so the
+// primary keeps its document-level data (named destinations, viewer preferences, XMP, language,
+// optional content, document info) instead of ending up with a bare catalog. Form fields from
+// every input survive, page labels are rebuilt for the new page order, and primary pages left
+// out are nulled so nothing still pointing at them pulls them back into the file.
+//
+// Dropped, unlike qpdf: outlines, which the Java callers rebuild for each output from the source
+// bookmarks; the structure tree, which describes the source's page order and would carry every
+// removed page's elements; the XFA form, which viewers would show in place of the assembled
+// fields; and usage-rights signatures (/Perms), which any change invalidates.
+void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) {
+    std::vector<QPDFObjectHandle> primaryPages = primary.getAllPages();
+    for (auto const& page : primaryPages) primary.removePage(page);
+
+    bool anyLabels = false;
+    for (auto const& selection : selections) {
+        if (QPDFPageLabelDocumentHelper{*selection.source}.hasPageLabels()) anyLabels = true;
+    }
+
+    QPDFAcroFormDocumentHelper primaryForms{primary};
+    std::map<QPDF*, std::vector<bool>> copied;
+    copied[&primary].assign(primaryPages.size(), false);
+    std::set<QPDFObjGen> keptFields;
+    std::vector<QPDFObjectHandle> labelNums;
+    long long outputIndex = 0;
+
+    for (auto const& selection : selections) {
+        QPDF& source = *selection.source;
+        bool fromPrimary = &source == &primary;
+        std::vector<QPDFObjectHandle> sourcePages =
+            fromPrimary ? primaryPages : source.getAllPages();
+        std::vector<bool>& seen =
+            copied.try_emplace(&source, sourcePages.size(), false).first->second;
+        QPDFPageLabelDocumentHelper sourceLabels{source};
+        std::unique_ptr<QPDFAcroFormDocumentHelper> foreignForms;
+        if (!fromPrimary) foreignForms = std::make_unique<QPDFAcroFormDocumentHelper>(source);
+        QPDFAcroFormDocumentHelper& sourceForms = fromPrimary ? primaryForms : *foreignForms;
+
+        for (int32_t index : selection.pages) {
+            if (index < 0 || static_cast<size_t>(index) >= sourcePages.size()) continue;
+            QPDFPageObjectHelper page{sourcePages[static_cast<size_t>(index)]};
+            bool repeat = seen[static_cast<size_t>(index)];
+            if (repeat) {
+                page = page.shallowCopyPage();
+            } else {
+                seen[static_cast<size_t>(index)] = true;
+            }
+            primary.addPage(page.getObjectHandle(), false);
+            QPDFObjectHandle added = primary.getAllPages().back();
+            // A repeated page would otherwise share its widgets with the first copy.
+            if (repeat || (!fromPrimary && sourceForms.hasAcroForm())) {
+                try {
+                    primaryForms.fixCopiedAnnotations(added, page.getObjectHandle(), sourceForms,
+                                                      &keptFields);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr, "jpdfium qpdf: form fields on a copied page lost: %s\n",
+                                 e.what());
+                }
+            }
+            if (anyLabels) {
+                appendLabel(labelNums, outputIndex, labelFor(sourceLabels, index, outputIndex));
+            }
+            ++outputIndex;
+        }
+    }
+
+    QPDFObjectHandle root = primary.getRoot();
+    if (anyLabels) {
+        root.replaceKey("/PageLabels", QPDFObjectHandle::newDictionary(
+                                           {{"/Nums", QPDFObjectHandle::newArray(labelNums)}}));
+    }
+
+    std::vector<bool> const& primaryKept = copied[&primary];
+    for (size_t i = 0; i < primaryPages.size(); ++i) {
+        if (primaryKept[i]) {
+            for (auto& field :
+                 primaryForms.getFormFieldsForPage(QPDFPageObjectHelper{primaryPages[i]})) {
+                keptFields.insert(field.getObjectHandle().getObjGen());
+            }
+        } else {
+            primary.replaceObject(primaryPages[i].getObjGen(), QPDFObjectHandle::newNull());
+        }
+    }
+
+    QPDFObjectHandle acroForm = root.getKey("/AcroForm");
+    QPDFObjectHandle fields =
+        acroForm.isDictionary() ? acroForm.getKey("/Fields") : QPDFObjectHandle::newNull();
+    if (fields.isArray()) {
+        std::vector<QPDFObjectHandle> kept;
+        for (auto const& field : fields.getArrayAsVector()) {
+            if (keptFields.count(field.getObjGen())) kept.push_back(field);
+        }
+        if (kept.empty()) {
+            root.removeKey("/AcroForm");
+        } else {
+            QPDFObjectHandle keptArray = QPDFObjectHandle::newArray(kept);
+            acroForm.replaceKey(
+                "/Fields", fields.isIndirect() ? primary.makeIndirectObject(keptArray) : keptArray);
+        }
+    }
+    QPDFObjectHandle remainingForm = root.getKey("/AcroForm");
+    if (remainingForm.isDictionary()) remainingForm.removeKey("/XFA");
+
+    for (char const* key :
+         {"/Outlines", "/StructTreeRoot", "/MarkInfo", "/NeedsRendering", "/Perms"}) {
+        root.removeKey(key);
+    }
+}
+
+// Fast structural settings, not an optimization pass: optimize_file owns size tuning. The
+// primary's encryption is not carried over, matching the unencrypted output merge and extract
+// have always produced.
+void configureAssembledWriter(QPDFWriter& w) {
+    w.setPreserveEncryption(false);
+    w.setObjectStreamMode(qpdf_o_generate);
+    w.setCompressStreams(true);
+}
+
 QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int32_t count) {
     try {
         if (!inputs || !inputLens || count <= 0) {
             return {nullptr, "invalid merge inputs"};
         }
-        auto dest = QPDF::create();
-        dest->emptyPDF();
-        QPDFPageDocumentHelper dest_pdh{*dest};
-
         std::vector<std::shared_ptr<QPDF>> sources;
         sources.reserve(static_cast<size_t>(count));
+        std::vector<PageSelection> selections;
 
         for (int32_t i = 0; i < count; ++i) {
             const uint8_t* in = inputs[i];
@@ -148,16 +310,16 @@ QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int
             src->processMemoryFile("merge-src", reinterpret_cast<const char*>(in),
                                    static_cast<size_t>(len));
             sources.push_back(src);
-            QPDFPageDocumentHelper src_pdh{*src};
-            for (auto& page : src_pdh.getAllPages()) {
-                dest_pdh.addPage(page, false);
-            }
+            selections.push_back({src.get(), allPageIndices(*src)});
         }
+        if (sources.empty()) {
+            return {nullptr, "no readable merge inputs"};
+        }
+        assemblePages(*sources.front(), selections);
 
-        QPDFWriter w{*dest};
+        QPDFWriter w{*sources.front()};
         w.setOutputMemory();
-        w.setObjectStreamMode(qpdf_o_generate);
-        w.setCompressStreams(true);
+        configureAssembledWriter(w);
         w.write();
         return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
@@ -174,25 +336,12 @@ QpdfResult extractPages(std::span<const uint8_t> input, const int32_t* pageIndic
         auto src = QPDF::create();
         src->processMemoryFile("extract-src", reinterpret_cast<const char*>(input.data()),
                                input.size());
-        QPDFPageDocumentHelper src_pdh{*src};
-        auto allPages = src_pdh.getAllPages();
-        int32_t totalPages = static_cast<int32_t>(allPages.size());
+        assemblePages(*src,
+                      {{src.get(), std::vector<int32_t>(pageIndices, pageIndices + pageCount)}});
 
-        auto dest = QPDF::create();
-        dest->emptyPDF();
-        QPDFPageDocumentHelper dest_pdh{*dest};
-
-        for (int32_t i = 0; i < pageCount; ++i) {
-            int32_t idx = pageIndices[i];
-            if (idx >= 0 && idx < totalPages) {
-                dest_pdh.addPage(allPages[idx], false);
-            }
-        }
-
-        QPDFWriter w{*dest};
+        QPDFWriter w{*src};
         w.setOutputMemory();
-        w.setObjectStreamMode(qpdf_o_generate);
-        w.setCompressStreams(true);
+        configureAssembledWriter(w);
         w.write();
         return {w.getBufferSharedPointer(), ""};
     } catch (const std::exception& e) {
@@ -352,12 +501,9 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
                                                 const char* out_path) {
     if (!paths || count <= 0 || !out_path) return -1;
     try {
-        auto dest = QPDF::create();
-        dest->emptyPDF();
-        QPDFPageDocumentHelper dest_pdh{*dest};
-
         std::vector<std::shared_ptr<QPDF>> sources;
         sources.reserve(static_cast<size_t>(count));
+        std::vector<PageSelection> selections;
 
         for (int32_t i = 0; i < count; ++i) {
             const char* path = paths[i];
@@ -366,11 +512,14 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             auto src = QPDF::create();
             src->processFile(path);
             sources.push_back(src);
-            QPDFPageDocumentHelper src_pdh{*src};
-            for (auto& page : src_pdh.getAllPages()) {
-                dest_pdh.addPage(page, false);
-            }
+            selections.push_back({src.get(), allPageIndices(*src)});
         }
+        if (sources.empty()) {
+            std::fprintf(stderr, "jpdfium qpdf merge files: no readable inputs\n");
+            return -1;
+        }
+        auto& dest = sources.front();
+        assemblePages(*dest, selections);
 
         FILE* out = createOutputFile(out_path);
         if (!out) {
@@ -385,13 +534,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_merge_files(const char* const* paths, int32_
             QPDFWriter w{*dest};
             w.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
-            // Deliberate fast-structural setting (not an optimization pass):
-            // merged output always generates object streams + compresses
-            // streams. Use optimize_file for size/recompress tuning, sanitize
-            // for scrubbing, and recovery flows for repair, each operation is
-            // configured for its actual purpose.
-            w.setObjectStreamMode(qpdf_o_generate);
-            w.setCompressStreams(true);
+            configureAssembledWriter(w);
             w.write();
             return 0;
         } catch (...) {
@@ -413,22 +556,10 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
                                                        int32_t pageCount, const char* out_path) {
     if (!in_path || !pageIndices || pageCount <= 0 || !out_path) return -1;
     try {
-        auto src = QPDF::create();
-        src->processFile(in_path);
-        QPDFPageDocumentHelper src_pdh{*src};
-        auto allPages = src_pdh.getAllPages();
-        int32_t totalPages = static_cast<int32_t>(allPages.size());
-
         auto dest = QPDF::create();
-        dest->emptyPDF();
-        QPDFPageDocumentHelper dest_pdh{*dest};
-
-        for (int32_t i = 0; i < pageCount; ++i) {
-            int32_t idx = pageIndices[i];
-            if (idx >= 0 && idx < totalPages) {
-                dest_pdh.addPage(allPages[idx], false);
-            }
-        }
+        dest->processFile(in_path);
+        assemblePages(*dest,
+                      {{dest.get(), std::vector<int32_t>(pageIndices, pageIndices + pageCount)}});
 
         FILE* out = createOutputFile(out_path);
         if (!out) {
@@ -443,8 +574,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_extract_pages_file(const char* in_path,
             QPDFWriter w{*dest};
             w.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
-            w.setObjectStreamMode(qpdf_o_generate);
-            w.setCompressStreams(true);
+            configureAssembledWriter(w);
             w.write();
             return 0;
         } catch (...) {
