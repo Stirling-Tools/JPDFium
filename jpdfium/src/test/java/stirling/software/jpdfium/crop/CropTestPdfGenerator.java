@@ -266,6 +266,57 @@ public final class CropTestPdfGenerator {
         }
     }
 
+    /** One Form XObject, holding the two-tone image at (100,100)-(300,300), drawn on two pages. */
+    public static byte[] sharedFormAcrossPagesPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "inForm");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write("q 200 0 0 200 100 100 cm /ImF Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(LETTER);
+                doc.addPage(page);
+                page.setResources(new PDResources());
+                page.getResources().add(form, "Fm0");
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(form);
+                }
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * A Form XObject with BBox (100,100)-(300,300) and no text: a grey fill, the
+     * two-tone image at (200,100)-(300,300), then a stroked frame, so the image is
+     * sandwiched between earlier and later form content.
+     */
+    public static byte[] sandwichedImageInTextlessFormPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(100, 100, 200, 200));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "sandwiched");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write(("0.8 g 100 100 200 200 re f q 100 0 0 200 200 100 cm /ImF Do Q "
+                        + "0 G 2 w 101 101 198 198 re S").getBytes(StandardCharsets.US_ASCII));
+            }
+            page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
     /** One two-tone image XObject drawn at (100,100)-(300,300) on each of two pages. */
     public static byte[] sharedImageAcrossPagesPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {

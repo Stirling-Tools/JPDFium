@@ -109,35 +109,42 @@ struct ObjRef {
 // XObject share a single bitmap inside PDFium, so FPDFImageObj_SetBitmap on one
 // rewrites what every placement shows; equal keys flag that sharing. Identical
 // bytes in two separate streams also match, which only costs a refusal, never a
-// leak. Each image is read once; equal keys are confirmed byte for byte.
+// leak. A key keeps no image bytes: they are re-read only to confirm equal keys.
 struct ImageDataKey {
     unsigned int width = 0;
     unsigned int height = 0;
-    std::vector<uint8_t> data;
+    unsigned long length = 0;
     uint64_t hash = 0;
 };
 
-static ImageDataKey imageDataKey(FPDF_PAGEOBJECT image) {
+static bool readImageData(FPDF_PAGEOBJECT image, std::vector<uint8_t>& out) {
+    const unsigned long len = FPDFImageObj_GetImageDataRaw(image, nullptr, 0);
+    if (len == 0) return false;
+    out.resize(len);
+    return FPDFImageObj_GetImageDataRaw(image, out.data(), len) == len;
+}
+
+static ImageDataKey imageDataKey(FPDF_PAGEOBJECT image, std::vector<uint8_t>& scratch) {
     ImageDataKey key;
     if (!FPDFImageObj_GetImagePixelSize(image, &key.width, &key.height)) return key;
-    const unsigned long len = FPDFImageObj_GetImageDataRaw(image, nullptr, 0);
-    if (len == 0) return key;
-    key.data.resize(len);
-    if (FPDFImageObj_GetImageDataRaw(image, key.data.data(), len) != len) {
-        key.data.clear();
-        return key;
-    }
+    if (!readImageData(image, scratch)) return key;
     uint64_t h = 1469598103934665603ULL;  // FNV-1a 64
-    for (uint8_t byte : key.data) {
+    for (uint8_t byte : scratch) {
         h = (h ^ byte) * 1099511628211ULL;
     }
+    key.length = scratch.size();
     key.hash = h;
     return key;
 }
 
-static bool sameImageData(const ImageDataKey& a, const ImageDataKey& b) {
-    return !a.data.empty() && a.hash == b.hash && a.width == b.width && a.height == b.height &&
-           a.data == b.data;
+static bool sameImageData(FPDF_PAGEOBJECT a, const ImageDataKey& aKey, FPDF_PAGEOBJECT b,
+                          const ImageDataKey& bKey) {
+    if (aKey.length == 0 || aKey.length != bKey.length || aKey.hash != bKey.hash ||
+        aKey.width != bKey.width || aKey.height != bKey.height) {
+        return false;
+    }
+    std::vector<uint8_t> aData, bData;
+    return readImageData(a, aData) && readImageData(b, bData) && aData == bData;
 }
 
 // Crop mode (|cropRect| non-null): |matches| are the out-of-crop margins.
@@ -1076,6 +1083,20 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         }
     };
 
+    // True when a fission plan keeps text somewhere inside |form|.
+    auto formHasSurvivingText = [&](FPDF_PAGEOBJECT form) {
+        for (const auto& plan : plans) {
+            FPDF_PAGEOBJECT p = plan.originalObj;
+            while (p) {
+                auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(p));
+                if (it == objPtrToIndex.end()) break;
+                if (allObjs[it->second].parentForm == form) return true;
+                p = allObjs[it->second].parentForm;
+            }
+        }
+        return false;
+    };
+
     // Decide every pixel erase before mutating anything, so a request that
     // cannot be honoured fails with the page untouched.
     {
@@ -1092,13 +1113,54 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             }
             return false;
         };
+        // Mirrors the removal rules below: a page-level form goes whole when a
+        // match covers it, or most of it with no text surviving inside; a nested
+        // form when a match covers it or most of it. Its images go with it.
+        auto ancestorRemovedWhole = [&](const ObjRef& ref) {
+            if (cropRect) return false;
+            FPDF_PAGEOBJECT form = ref.parentForm;
+            while (form) {
+                auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(form));
+                if (it == objPtrToIndex.end()) return false;
+                const ObjRef& formRef = allObjs[it->second];
+                float l, b, r, t;
+                bool haveBounds;
+                if (!formRef.parentForm) {
+                    haveBounds = FPDFPageObj_GetBounds(form, &l, &b, &r, &t);
+                } else {
+                    auto pit = objPtrToIndex.find(reinterpret_cast<uintptr_t>(formRef.parentForm));
+                    if (pit == objPtrToIndex.end()) return false;
+                    const ObjRef& parentRef = allObjs[pit->second];
+                    FS_MATRIX parentToPage;
+                    if (parentRef.parentForm) {
+                        parentToPage = parentRef.toPage;
+                    } else if (!FPDFPageObj_GetMatrix(formRef.parentForm, &parentToPage)) {
+                        return false;
+                    }
+                    haveBounds = transformedBounds(form, parentToPage, l, b, r, t);
+                }
+                if (haveBounds) {
+                    const bool mostlyCoveredCounts =
+                        formRef.parentForm || !formHasSurvivingText(form);
+                    for (const auto& m : matches) {
+                        if (isFullyContained(l, b, r, t, m.bboxL, m.bboxB, m.bboxR, m.bboxT) ||
+                            (mostlyCoveredCounts && overlapRatio(l, b, r, t, m.bboxL, m.bboxB,
+                                                                 m.bboxR, m.bboxT) > 0.70f)) {
+                            return true;
+                        }
+                    }
+                }
+                form = formRef.parentForm;
+            }
+            return false;
+        };
         std::vector<FPDF_PAGEOBJECT> survivingImages;
         std::vector<FPDF_PAGEOBJECT> pixelErased;
         for (const ObjRef& ref : allObjs) {
             if (FPDFPageObj_GetType(ref.obj) != FPDF_PAGEOBJ_IMAGE) continue;
             float l, b, r, t;
             if (!transformedBounds(ref.obj, ref.toPage, l, b, r, t)) continue;
-            if (removedWhole(l, b, r, t)) continue;
+            if (removedWhole(l, b, r, t) || ancestorRemovedWhole(ref)) continue;
             survivingImages.push_back(ref.obj);
             for (const auto& m : matches) {
                 if (rectsOverlap(l, b, r, t, m.bboxL, m.bboxB, m.bboxR, m.bboxT)) {
@@ -1125,10 +1187,15 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         // placement where no match covers it.
         if (!pixelErased.empty() && survivingImages.size() > 1) {
             std::unordered_map<FPDF_PAGEOBJECT, ImageDataKey> keys;
-            for (FPDF_PAGEOBJECT image : survivingImages) keys.emplace(image, imageDataKey(image));
+            std::vector<uint8_t> scratch;
+            for (FPDF_PAGEOBJECT image : survivingImages) {
+                keys.emplace(image, imageDataKey(image, scratch));
+            }
+            scratch = {};
             for (FPDF_PAGEOBJECT erased : pixelErased) {
                 for (FPDF_PAGEOBJECT other : survivingImages) {
-                    if (other != erased && sameImageData(keys.at(erased), keys.at(other))) {
+                    if (other != erased &&
+                        sameImageData(erased, keys.at(erased), other, keys.at(other))) {
                         if (refusedUnmodified) *refusedUnmodified = true;
                         return JPDFIUM_ERR_REDACT_INCOMPLETE;
                     }
@@ -1382,20 +1449,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 continue;
             }
 
-            bool hasSurvivingText = false;
-            for (const auto& plan : plans) {
-                FPDF_PAGEOBJECT p = plan.originalObj;
-                while (p) {
-                    auto it = objPtrToIndex.find(reinterpret_cast<uintptr_t>(p));
-                    if (it == objPtrToIndex.end()) break;
-                    if (allObjs[it->second].parentForm == obj) {
-                        hasSurvivingText = true;
-                        break;
-                    }
-                    p = allObjs[it->second].parentForm;
-                }
-                if (hasSurvivingText) break;
-            }
+            const bool hasSurvivingText = formHasSurvivingText(obj);
 
             bool formFullyInside = false;
             for (auto& m : matches) {

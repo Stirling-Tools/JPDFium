@@ -108,6 +108,24 @@ class RegionImageRedactTest {
         assertPixels(other, 0, 100, 50, 100, BLUE, "second page bottom");
     }
 
+    @Test
+    void formSharedAcrossPagesIsErasedOnlyOnTheRedactedPage() throws Exception {
+        byte[] output = redact(CropTestPdfGenerator.sharedFormAcrossPagesPdf(), 0, TOP_LEFT_QUARTER);
+        assertTopLeftQuarterErased(onlyDrawnImage(output, 0));
+        BufferedImage other = onlyDrawnImage(output, 1);
+        assertPixels(other, 0, 100, 0, 50, RED, "second page top");
+        assertPixels(other, 0, 100, 50, 100, BLUE, "second page bottom");
+    }
+
+    @Test
+    void sandwichedImageGoesWithItsFormWhenTheFormIsRemovedWhole() throws Exception {
+        // Covers 75% of the text-free form, so the form goes whole, but only half
+        // the image: the image's draw order inside the form must not refuse it.
+        byte[] output = redact(CropTestPdfGenerator.sandwichedImageInTextlessFormPdf(), 0,
+                new Rect(100, 100, 150, 200));
+        assertEquals(0, drawnImages(output, 0).size(), "the image must go with its form");
+    }
+
     private static byte[] redact(byte[] input, int pageIndex, Rect rect) {
         try (PdfDocument doc = PdfDocument.open(input)) {
             try (PdfPage page = doc.page(pageIndex)) {
