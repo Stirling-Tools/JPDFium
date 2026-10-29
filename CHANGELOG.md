@@ -21,12 +21,11 @@ publishing workflows, not library releases, so they are not listed here.
 
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
+- `PdfPageGeometry.AUTO_CONTENT_MARGIN` and the `cropAndRemoveContent`
+  overloads that accept a content-removal margin.
 
 ### Fixed
 
-- Hard crop no longer deletes a word that only partly falls outside the crop:
-  words touching the crop edge survive whole, and the new content-removal
-  margin keeps content just outside the edge instead of cutting through it.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.
@@ -37,6 +36,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Hard crop retains the outside glyphs of words touching the crop edge. The
+  page boxes clip those glyphs. A content-removal margin also retains content
+  within the margin outside the crop, clipped by the page boxes.
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
   still reads them.

@@ -161,6 +161,7 @@ struct TextWord {
     float b = std::numeric_limits<float>::max();
     float r = std::numeric_limits<float>::lowest();
     float t = std::numeric_limits<float>::lowest();
+    bool reliable = true;  // false when a glyph box fell back to its origin
 };
 
 static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word) {
@@ -177,6 +178,7 @@ static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word) {
         if (!FPDFText_GetCharOrigin(textPage, ci, &ox, &oy)) return false;
         l = r = static_cast<float>(ox);
         b = t = static_cast<float>(oy);
+        word.reliable = false;
     }
     word.l = std::min(word.l, l);
     word.b = std::min(word.b, b);
@@ -399,11 +401,13 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
             }
         }
 
-        // EPDF removes glyphs whose boxes intersect a region. Use one region
-        // per wholly-outside word, minus any preserved straddling word box;
-        // the plain margins would also remove the outside half of a word that
-        // must survive. The margins remain the fission/erase regions.
-        std::vector<MarginBox> epdfRegions;
+        // EPDF removes glyphs whose boxes intersect a region. Build regions
+        // from the wholly-outside word boxes and merge same-line neighbours
+        // into bounded runs. Retained words split runs, so a straddling word's
+        // glyphs are never covered. The plain margins would remove the outside
+        // half of a word that must survive, so they remain only the
+        // fission/erase regions.
+        std::vector<MarginBox> redactedBoxes;
         auto subtractWordBox = [](std::vector<MarginBox>& regions, float wl, float wb, float wr,
                                   float wt) {
             std::vector<MarginBox> out;
@@ -422,8 +426,10 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
             }
             regions.swap(out);
         };
+        bool unreliableBounds = false;
         std::vector<const TextWord*> straddlingWords;
         for (const TextWord& word : words) {
+            if (!word.reliable) unreliableBounds = true;
             if (rectsOverlap(word.l, word.b, word.r, word.t, kL, kB, kR, kT) &&
                 !isFullyContained(word.l, word.b, word.r, word.t, kL, kB, kR, kT)) {
                 straddlingWords.push_back(&word);
@@ -431,6 +437,7 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
         }
         for (const TextWord& word : words) {
             if (!fullyOutside(word.l, word.b, word.r, word.t, keepRect)) continue;
+            if (!word.reliable) continue;
             std::vector<MarginBox> wordRegions{{word.l, word.b, word.r, word.t}};
             for (const TextWord* straddling : straddlingWords) {
                 if (!rectsOverlap(word.l, word.b, word.r, word.t, straddling->l, straddling->b,
@@ -441,8 +448,40 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
                                 straddling->t);
             }
             for (const MarginBox& region : wordRegions) {
-                if (region.r > region.l && region.t > region.b) epdfRegions.push_back(region);
+                if (region.r > region.l && region.t > region.b) redactedBoxes.push_back(region);
             }
+        }
+
+        std::sort(redactedBoxes.begin(), redactedBoxes.end(),
+                  [](const MarginBox& a, const MarginBox& b) {
+                      if (a.b != b.b) return a.b < b.b;
+                      return a.l < b.l;
+                  });
+        auto hitsRetained = [&](const MarginBox& box) {
+            for (const TextWord& word : words) {
+                if (fullyOutside(word.l, word.b, word.r, word.t, keepRect)) continue;
+                if (rectsOverlap(box.l, box.b, box.r, box.t, word.l, word.b, word.r, word.t)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::vector<MarginBox> epdfRegions;
+        epdfRegions.reserve(redactedBoxes.size());
+        constexpr float kMergeGap = 6.0f;
+        for (const MarginBox& box : redactedBoxes) {
+            bool merged = false;
+            for (MarginBox& region : epdfRegions) {
+                if (std::min(region.t, box.t) - std::max(region.b, box.b) <= 0.0f) continue;
+                if (box.l > region.r + kMergeGap || box.r < region.l - kMergeGap) continue;
+                MarginBox candidate{std::min(region.l, box.l), std::min(region.b, box.b),
+                                    std::max(region.r, box.r), std::max(region.t, box.t)};
+                if (hitsRetained(candidate)) continue;
+                region = candidate;
+                merged = true;
+                break;
+            }
+            if (!merged) epdfRegions.push_back(box);
         }
 
         std::vector<TextMatch> matches;
@@ -554,13 +593,13 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
         // EPDF handles text removal well; forms are left to the fission path
         // because their streams need write-back. Too many split regions is
         // worse than the fallback, so keep the region set bounded.
-        const bool epdfText = !hasForms && !epdfRegions.empty() && epdfRegions.size() <= 512;
+        const bool epdfText =
+            !hasForms && !unreliableBounds && !epdfRegions.empty() && epdfRegions.size() <= 512;
 
-        // Apply EPDF redactions on the margin regions (minus preserved
-        // straddling words). This uses EmbedPDF's native in-place TJ kerning
-        // and glyph removal to eliminate text outside the crop without font
-        // reconstruction degradation. Non-text content is then handled by
-        // fission with skipTextObjects=true.
+        // Apply EPDF redactions on the merged outside-word regions. This uses
+        // EmbedPDF's native in-place TJ kerning and glyph removal to eliminate
+        // text outside the crop without font reconstruction degradation.
+        // Non-text content is then handled by fission with skipTextObjects=true.
         bool epdfOk = epdfText;
         bool epdfMutated = false;
         if (epdfOk) {

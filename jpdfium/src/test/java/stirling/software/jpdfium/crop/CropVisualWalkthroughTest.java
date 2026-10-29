@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 /** Generates a self-contained visual walkthrough for the crop fixes. */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class CropVisualWalkthroughTest {
@@ -97,8 +99,10 @@ class CropVisualWalkthroughTest {
                         + "clip-only reference inside the crop (border band excluded); low difference means "
                         + "no visible content was lost.</p>");
 
+        List<String> failures = new ArrayList<>();
         for (Case c : cases) {
             html.append("<h2>").append(c.label).append("</h2>");
+            boolean fixedCase = !c.present.isEmpty() || !c.absent.isEmpty();
             try {
                 BufferedImage before = renderMarked(c.input, c.crop);
                 BufferedImage reference = render(c.input, c.crop, 10000f);
@@ -132,16 +136,25 @@ class CropVisualWalkthroughTest {
                 html.append("</p>");
                 html.append("<p>Extracted text: <code>").append(escape(shorten(text, 240)))
                         .append("</code></p>");
+
+                if (!presentOk) failures.add(c.id + " missing expected text " + c.present);
+                if (!absentOk) failures.add(c.id + " retained unexpected text " + c.absent);
+                if (fixedCase && (m.mean > 1.0 || m.changedPct > 1.0)) {
+                    failures.add(c.id + " visible content diverged from clip-only: mean " + fmt(m.mean)
+                            + ", changed " + fmt(m.changedPct) + "%");
+                }
             } catch (Exception e) {
                 html.append("<p class='bad'>Crop refused: ").append(escape(e.getMessage()))
                         .append("</p><p class='note'>The audit failure is the safe outcome: the file "
                                 + "was not silently left half-removed.</p>");
+                if (fixedCase) failures.add(c.id + " failed: " + e);
             }
         }
 
         html.append("</body></html>");
         Files.writeString(outDir.resolve("index.html"), html.toString());
         System.out.println("WALKTHROUGH: " + outDir.toAbsolutePath().resolve("index.html"));
+        assertTrue(failures.isEmpty(), "walkthrough regressions: " + String.join("; ", failures));
     }
 
     private record Case(String id, String label, byte[] input, Rect crop, float margin,

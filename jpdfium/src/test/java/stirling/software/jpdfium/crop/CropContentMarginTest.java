@@ -56,6 +56,21 @@ class CropContentMarginTest {
     }
 
     @Test
+    void marginVarargsOverloadUsesTheMarginNotPageIndices() throws Exception {
+        byte[] input = CropTestPdfGenerator.boundaryWordColumnsPdf();
+        byte[] output;
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            PdfPageGeometry.cropAndRemoveContentWithMargin(doc, LEFT_HALF, 10f, 0);
+            output = doc.saveBytes();
+        }
+        try (PDDocument pdf = Loader.loadPDF(output)) {
+            String text = new PDFTextStripper().getText(pdf);
+            assertTrue(text.contains("NEAR"), "10pt margin was not applied: " + text);
+            assertFalse(text.contains("FAR"), "word outside the 10pt margin survived: " + text);
+        }
+    }
+
+    @Test
     void invalidMarginIsRejected() throws Exception {
         byte[] input = CropTestPdfGenerator.boundaryWordColumnsPdf();
         for (float margin : new float[] {-1f, Float.NaN, Float.POSITIVE_INFINITY}) {

@@ -209,12 +209,13 @@ public final class PdfPageGeometry {
      *                                   indices were given
      */
     public static void cropAndRemoveContent(PdfDocument doc, Rect rect, int... pageIndices) {
-        cropAndRemoveContent(doc, rect, AUTO_CONTENT_MARGIN, pageIndices);
+        cropAndRemoveContentWithMargin(doc, rect, AUTO_CONTENT_MARGIN, pageIndices);
     }
 
     /**
      * Hard crop applied to an explicit set of pages, with a content-removal
-     * margin.
+     * margin. This has a distinct name because Java would otherwise resolve
+     * an integral first argument as a page index rather than a margin.
      *
      * @param doc                  open PDF document
      * @param rect                 crop rectangle in PDF points
@@ -226,8 +227,9 @@ public final class PdfPageGeometry {
      * @throws IllegalArgumentException  if {@code rect} or the margin is invalid,
      *                                   or no page indices were given
      */
-    public static void cropAndRemoveContent(PdfDocument doc, Rect rect,
-                                            float contentRemovalMargin, int... pageIndices) {
+    public static void cropAndRemoveContentWithMargin(PdfDocument doc, Rect rect,
+                                                      float contentRemovalMargin,
+                                                      int... pageIndices) {
         requireValidCrop(rect);
         requireValidMargin(contentRemovalMargin);
         if (pageIndices == null || pageIndices.length == 0) {
