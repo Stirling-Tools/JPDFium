@@ -113,7 +113,7 @@ struct ObjRef {
 struct ImageDataKey {
     unsigned int width = 0;
     unsigned int height = 0;
-    unsigned long length = 0;
+    size_t length = 0;
     uint64_t hash = 0;
 };
 
