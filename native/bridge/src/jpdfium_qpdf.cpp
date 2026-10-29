@@ -177,8 +177,9 @@ void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
 // Lays the selected pages out in `primary` the way `qpdf <primary> --pages ... --` does, so the
 // primary keeps its document-level data (named destinations, viewer preferences, XMP, language,
 // optional content, document info) instead of ending up with a bare catalog. Form fields from
-// every input survive, page labels are rebuilt for the new page order, and primary pages left
-// out are nulled so nothing still pointing at them pulls them back into the file.
+// every input survive, page labels are rebuilt for the new page order, and every page object
+// left outside the output's page tree is nulled, so a destination or annotation still pointing
+// at one cannot pull it, and everything it draws, back into the file.
 //
 // Dropped, unlike qpdf: outlines, which the Java callers rebuild for each output from the source
 // bookmarks; the structure tree, which describes the source's page order and would carry every
@@ -248,13 +249,19 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
 
     std::vector<bool> const& primaryKept = copied[&primary];
     for (size_t i = 0; i < primaryPages.size(); ++i) {
-        if (primaryKept[i]) {
-            for (auto& field :
-                 primaryForms.getFormFieldsForPage(QPDFPageObjectHelper{primaryPages[i]})) {
-                keptFields.insert(field.getObjectHandle().getObjGen());
-            }
-        } else {
-            primary.replaceObject(primaryPages[i].getObjGen(), QPDFObjectHandle::newNull());
+        if (!primaryKept[i]) continue;
+        for (auto& field :
+             primaryForms.getFormFieldsForPage(QPDFPageObjectHelper{primaryPages[i]})) {
+            keptFields.insert(field.getObjectHandle().getObjGen());
+        }
+    }
+
+    std::set<QPDFObjGen> placed;
+    for (auto const& page : primary.getAllPages()) placed.insert(page.getObjGen());
+    for (auto& object : primary.getAllObjects()) {
+        if (object.isDictionary() && object.getKey("/Type").isNameAndEquals("/Page") &&
+            !placed.count(object.getObjGen())) {
+            primary.replaceObject(object.getObjGen(), QPDFObjectHandle::newNull());
         }
     }
 
