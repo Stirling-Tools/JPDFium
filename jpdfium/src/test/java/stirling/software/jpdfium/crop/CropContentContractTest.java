@@ -115,8 +115,8 @@ class CropContentContractTest {
         byte[] output = crop(CropTestPdfGenerator.formStraddleUnderRectPdf(), LEFT_HALF);
         BufferedImage img = render(output, 72);
         // The yellow rect spans x 270..360 and must stay visible inside the
-        // crop. Sample left of the fissioned "EDG" survivors (promoted from
-        // the form, they keep their page position and stay under the rect).
+        // crop. Sample left of the preserved straddling word (promoted from
+        // the form, it keeps its page position and stays under the rect).
         try (PdfDocument doc = PdfDocument.open(output); PdfPage page = doc.page(0)) {
             Rect mb = page.boxes().mediaBox();
             int col = Math.round(275 - mb.x());

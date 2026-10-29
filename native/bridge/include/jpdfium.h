@@ -205,8 +205,16 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
+// A text word or object that only partly falls outside the crop is preserved whole.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
+// Hard crop with a content-removal margin in PDF points. A non-negative margin
+// expands the region whose content is kept: content is removed only when it lies
+// wholly outside [x-margin, y-margin, x+w+margin, y+h+margin]. A margin of zero
+// preserves every word/object that touches the crop and removes wholly outside
+// content (AUTO).
+JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w,
+                                                      float h, float margin) JPDFIUM_NOEXCEPT;
 // Content redaction. These entry points mutate the page content stream, so a
 // failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
 // original content in place: while such an incomplete redaction is pending, every

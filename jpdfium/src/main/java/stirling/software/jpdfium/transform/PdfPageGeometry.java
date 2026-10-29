@@ -38,6 +38,12 @@ import java.util.Set;
  */
 public final class PdfPageGeometry {
 
+    /**
+     * AUTO content-removal margin: remove only content wholly outside the
+     * crop. Words and objects that straddle the crop edge survive whole.
+     */
+    public static final float AUTO_CONTENT_MARGIN = 0.0f;
+
     private PdfPageGeometry() {}
 
     /**
@@ -87,16 +93,24 @@ public final class PdfPageGeometry {
      * Hard crop: set all five page boxes to {@code rect} and physically remove
      * everything outside it.
      *
-     * <p>Text is split at character level (a glyph survives when its origin is
-     * inside the crop); straddling images keep their visible part and are
-     * pixel-erased outside, including images nested in Form XObjects (soft
-     * masks kept when the image can be rendered); fully outside paths,
-     * shadings and forms are removed.
+     * <p>Text is handled at word level: a word that is only partly inside the
+     * crop survives whole, including glyphs that fall outside it. Only words
+     * wholly outside the crop are removed. Straddling images keep their
+     * visible part and are pixel-erased outside, including images nested in
+     * Form XObjects (soft masks kept when the image can be rendered); fully
+     * outside paths, shadings and forms are removed.
      * Text with a single survivor run is edited in place; a form child is
      * first promoted to the page because PDFium regenerates a form stream
      * only when a child is removed from it. Outside annotations are
      * removed, straddling ones are clipped. Metadata, structure and signatures
      * are untouched.
+     *
+     * <p>The {@link #AUTO_CONTENT_MARGIN} overload preserves any word or
+     * object touching the crop. Overloads accepting a margin keep content
+     * within that many PDF points outside the crop edge too; content is
+     * removed only when it lies wholly outside the expanded rectangle. The
+     * page boxes are still set to the unexpanded crop, so margin-kept content
+     * is clipped from view.
      *
      * <p>A post-pass audit fails loudly with
      * {@link stirling.software.jpdfium.exception.RedactIncompleteException} or
@@ -111,9 +125,26 @@ public final class PdfPageGeometry {
      *                                  or non-positive size
      */
     public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
+        cropAndRemoveContent(doc, pageIndex, rect, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop with a content-removal margin.
+     *
+     * @param doc                  open PDF document
+     * @param pageIndex            zero-based page index
+     * @param rect                 crop rectangle in PDF points
+     * @param contentRemovalMargin PDF points of content kept outside the crop
+     *                             edge; {@link #AUTO_CONTENT_MARGIN} removes
+     *                             only content wholly outside
+     * @throws IllegalArgumentException if {@code rect} or the margin is invalid
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect,
+                                            float contentRemovalMargin) {
         requireValidCrop(rect);
+        requireValidMargin(contentRemovalMargin);
         Set<Integer> removedWidgets = new HashSet<>();
-        cropSingle(doc, pageIndex, rect, removedWidgets);
+        cropSingle(doc, pageIndex, rect, contentRemovalMargin, removedWidgets);
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
 
@@ -129,7 +160,27 @@ public final class PdfPageGeometry {
      *                                   or non-positive size
      */
     public static void cropAndRemoveContent(PdfDocument doc, int fromPage, int toPage, Rect rect) {
+        cropAndRemoveContent(doc, fromPage, toPage, rect, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop applied to a contiguous, inclusive page range, with a
+     * content-removal margin.
+     *
+     * @param doc                  open PDF document
+     * @param fromPage             first page index (inclusive, zero-based)
+     * @param toPage               last page index (inclusive, zero-based)
+     * @param rect                 crop rectangle in PDF points
+     * @param contentRemovalMargin PDF points of content kept outside the crop
+     *                             edge; {@link #AUTO_CONTENT_MARGIN} removes
+     *                             only content wholly outside
+     * @throws IndexOutOfBoundsException if the range is outside the document
+     * @throws IllegalArgumentException  if {@code rect} or the margin is invalid
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, int fromPage, int toPage, Rect rect,
+                                            float contentRemovalMargin) {
         requireValidCrop(rect);
+        requireValidMargin(contentRemovalMargin);
         int pageCount = doc.pageCount();
         if (fromPage < 0 || toPage < fromPage || toPage >= pageCount) {
             throw new IndexOutOfBoundsException(
@@ -138,7 +189,7 @@ public final class PdfPageGeometry {
         }
         Set<Integer> removedWidgets = new HashSet<>();
         for (int i = fromPage; i <= toPage; i++) {
-            cropSingle(doc, i, rect, removedWidgets);
+            cropSingle(doc, i, rect, contentRemovalMargin, removedWidgets);
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
@@ -158,7 +209,27 @@ public final class PdfPageGeometry {
      *                                   indices were given
      */
     public static void cropAndRemoveContent(PdfDocument doc, Rect rect, int... pageIndices) {
+        cropAndRemoveContent(doc, rect, AUTO_CONTENT_MARGIN, pageIndices);
+    }
+
+    /**
+     * Hard crop applied to an explicit set of pages, with a content-removal
+     * margin.
+     *
+     * @param doc                  open PDF document
+     * @param rect                 crop rectangle in PDF points
+     * @param contentRemovalMargin PDF points of content kept outside the crop
+     *                             edge; {@link #AUTO_CONTENT_MARGIN} removes
+     *                             only content wholly outside
+     * @param pageIndices          zero-based page indices to crop
+     * @throws IndexOutOfBoundsException if any index is outside the document
+     * @throws IllegalArgumentException  if {@code rect} or the margin is invalid,
+     *                                   or no page indices were given
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, Rect rect,
+                                            float contentRemovalMargin, int... pageIndices) {
         requireValidCrop(rect);
+        requireValidMargin(contentRemovalMargin);
         if (pageIndices == null || pageIndices.length == 0) {
             throw new IllegalArgumentException("at least one page index is required");
         }
@@ -171,7 +242,7 @@ public final class PdfPageGeometry {
         }
         Set<Integer> removedWidgets = new HashSet<>();
         for (int index : pageIndices) {
-            cropSingle(doc, index, rect, removedWidgets);
+            cropSingle(doc, index, rect, contentRemovalMargin, removedWidgets);
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
     }
@@ -190,9 +261,27 @@ public final class PdfPageGeometry {
      *                                  non-positive size
      */
     public static void cropAndRemoveContent(PdfDocument doc, List<Rect> rects) {
+        cropAndRemoveContent(doc, rects, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop with a per-page rectangle and a content-removal margin.
+     *
+     * @param doc                  open PDF document
+     * @param rects                per-page crop rectangles, may contain
+     *                             {@code null} entries to skip pages
+     * @param contentRemovalMargin PDF points of content kept outside each crop
+     *                             edge; {@link #AUTO_CONTENT_MARGIN} removes
+     *                             only content wholly outside
+     * @throws IllegalArgumentException if {@code rects} is empty, a non-null
+     *                                  entry is invalid, or the margin is invalid
+     */
+    public static void cropAndRemoveContent(PdfDocument doc, List<Rect> rects,
+                                            float contentRemovalMargin) {
         if (rects == null || rects.isEmpty()) {
             throw new IllegalArgumentException("rects must not be empty");
         }
+        requireValidMargin(contentRemovalMargin);
         for (Rect r : rects) {
             if (r != null) {
                 requireValidCrop(r);
@@ -203,7 +292,7 @@ public final class PdfPageGeometry {
         for (int i = 0; i < pages; i++) {
             Rect targetRect = rects.get(i);
             if (targetRect != null) {
-                cropSingle(doc, i, targetRect, removedWidgets);
+                cropSingle(doc, i, targetRect, contentRemovalMargin, removedWidgets);
             }
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
@@ -338,10 +427,10 @@ public final class PdfPageGeometry {
 
     /** The shared single-page hard-crop implementation. */
     private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect,
-                                   Set<Integer> removedWidgets) {
+                                   float contentRemovalMargin, Set<Integer> removedWidgets) {
         try (PdfPage page = doc.page(pageIndex)) {
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
-                    rect.x(), rect.y(), rect.width(), rect.height());
+                    rect.x(), rect.y(), rect.width(), rect.height(), contentRemovalMargin);
             for (int objectNumber : PdfAnnotations.clipToRect(page.rawHandle(), rect)) {
                 removedWidgets.add(objectNumber);
             }
@@ -362,10 +451,26 @@ public final class PdfPageGeometry {
      *                                  or non-positive size
      */
     public static void cropAllAndRemoveContent(PdfDocument doc, Rect rect) {
+        cropAllAndRemoveContent(doc, rect, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop applied to every page, with a content-removal margin.
+     *
+     * @param doc                  open PDF document
+     * @param rect                 crop rectangle in PDF points
+     * @param contentRemovalMargin PDF points of content kept outside the crop
+     *                             edge; {@link #AUTO_CONTENT_MARGIN} removes
+     *                             only content wholly outside
+     * @throws IllegalArgumentException if {@code rect} or the margin is invalid
+     */
+    public static void cropAllAndRemoveContent(PdfDocument doc, Rect rect,
+                                               float contentRemovalMargin) {
         requireValidCrop(rect);
+        requireValidMargin(contentRemovalMargin);
         int pageCount = doc.pageCount();
         if (pageCount > 0) {
-            cropAndRemoveContent(doc, 0, pageCount - 1, rect);
+            cropAndRemoveContent(doc, 0, pageCount - 1, rect, contentRemovalMargin);
         }
     }
 
@@ -382,6 +487,15 @@ public final class PdfPageGeometry {
                 || rect.width() <= 0.0f || rect.height() <= 0.0f) {
             throw new IllegalArgumentException(
                     "crop rect must have finite coordinates and positive width/height: " + rect);
+        }
+    }
+
+    /** A negative or non-finite removal margin would make the keep region unusable. */
+    private static void requireValidMargin(float contentRemovalMargin) {
+        if (!Float.isFinite(contentRemovalMargin) || contentRemovalMargin < 0.0f) {
+            throw new IllegalArgumentException(
+                    "content removal margin must be finite and non-negative: "
+                            + contentRemovalMargin);
         }
     }
 

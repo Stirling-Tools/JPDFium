@@ -24,6 +24,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Hard crop no longer deletes a word that only partly falls outside the crop:
+  words touching the crop edge survive whole, and the new content-removal
+  margin keeps content just outside the edge instead of cutting through it.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.

@@ -73,6 +73,42 @@ public final class CropTestPdfGenerator {
     }
 
     /**
+     * Words at known distances from the right edge of a left-half crop (x=306):
+     * INSIDE@(100,700), NEAR@(310,700) and FAR@(330,600). AUTO removes NEAR
+     * and FAR; a 10pt margin keeps NEAR; a 40pt margin keeps FAR too.
+     */
+    public static byte[] boundaryWordColumnsPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "INSIDE", 100, 700);
+                placeWord(cs, "NEAR", 310, 700);
+                placeWord(cs, "FAR", 330, 600);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * Word "BOTTOM" with its baseline at y=100, so a crop whose bottom edge is
+     * y=105 cuts through the glyph boxes. The origin is outside the crop but
+     * the glyphs reach inside; the word must survive whole under AUTO.
+     */
+    public static byte[] bottomStraddlingWordPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "BOTTOM", 100, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
      * One page with three solid-colour images at known bounds:
      * <pre>
      *   inside     x 100-200  y 600-700   (fully inside left-half crop)
@@ -527,8 +563,12 @@ public final class CropTestPdfGenerator {
         }
     }
 
-    /** Form-nested text "SECRETKEEP" at (100,700), single text object. */
-    public static byte[] formNestedSingleWordPdf() throws IOException {
+    /**
+     * Form-nested text "SECRET KEEP" at (100,700), two words. A crop that starts
+     * between them must remove SECRET and keep KEEP; a single straddling word
+     * would be preserved whole under the word-level crop contract.
+     */
+    public static byte[] formNestedSplitWordPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage(LETTER);
             doc.addPage(page);
@@ -538,7 +578,7 @@ public final class CropTestPdfGenerator {
             form.getResources().put(COSName.getPDFName("F1"),
                     new PDType1Font(Standard14Fonts.FontName.HELVETICA));
             try (var os = form.getContentStream().createOutputStream()) {
-                os.write("q BT /F1 14 Tf 100 700 Td (SECRETKEEP) Tj ET Q"
+                os.write("q BT /F1 14 Tf 100 700 Td (SECRET KEEP) Tj ET Q"
                         .getBytes(StandardCharsets.US_ASCII));
             }
             if (page.getResources() == null) page.setResources(new PDResources());
