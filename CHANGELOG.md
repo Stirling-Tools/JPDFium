@@ -30,7 +30,7 @@ publishing workflows, not library releases, so they are not listed here.
 - Redacting or cropping part of an image that is drawn more than once on a page
   also erased the same pixels in the other placements, which nothing covered.
   Such a request now fails with `RedactIncompleteException` before the page
-  changes.
+  changes, and the document can still be saved.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.

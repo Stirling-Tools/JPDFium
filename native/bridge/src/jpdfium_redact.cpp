@@ -176,13 +176,17 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         matches.push_back(std::move(tm));
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
+        bool refusedUnmodified = false;
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                         &paintedCovers, nullptr, false, &refusedUnmodified);
         FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) {
             // objectFissionRedact mutates the page before it audits, so a
-            // half-finished region redaction has already destroyed content.
-            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+            // half-finished region redaction has already destroyed content. A
+            // refusal before any change leaves nothing half-done to protect.
+            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE && !refusedUnmodified) {
+                markRedactionIncomplete(pw, matches);
+            }
             return rc;
         }
 
@@ -389,13 +393,17 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             }
         } else {
             // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            bool refusedUnmodified = false;
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                             nullptr, nullptr, false, &refusedUnmodified);
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) {
                 // The fission engine mutates the page before it audits: a
                 // half-finished fallback redaction must fail every save closed.
-                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE && !refusedUnmodified) {
+                    markRedactionIncomplete(pw, matches);
+                }
                 return rc;
             }
         }
@@ -623,13 +631,17 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
                 }
             }
         } else {
-            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core);
+            bool refusedUnmodified = false;
+            int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                             nullptr, nullptr, false, &refusedUnmodified);
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) {
                 // Same contract as jpdfium_redact_pattern: the engine already
                 // mutated the page, so a half-finished redaction is not savable.
-                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+                if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE && !refusedUnmodified) {
+                    markRedactionIncomplete(pw, matches);
+                }
                 return rc;
             }
         }

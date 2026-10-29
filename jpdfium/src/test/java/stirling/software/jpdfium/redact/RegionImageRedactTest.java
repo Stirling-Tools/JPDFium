@@ -62,6 +62,25 @@ class RegionImageRedactTest {
     }
 
     @Test
+    void refusedSharedImageRedactionLeavesTheDocumentSavableAndUnchanged() throws Exception {
+        byte[] output;
+        try (PdfDocument doc = PdfDocument.open(CropTestPdfGenerator.sharedImagePdf())) {
+            try (PdfPage page = doc.page(0)) {
+                assertThrows(
+                    RedactIncompleteException.class,
+                    () -> page.redactRegion(new Rect(100, 625, 25, 25), OPAQUE_BLACK, true));
+            }
+            output = doc.saveBytes();
+        }
+        List<BufferedImage> images = drawnImages(output, 0);
+        assertEquals(2, images.size(), "both placements must still be drawn");
+        for (BufferedImage image : images) {
+            assertPixels(image, 0, 100, 0, 50, RED, "untouched placement top");
+            assertPixels(image, 0, 100, 50, 100, BLUE, "untouched placement bottom");
+        }
+    }
+
+    @Test
     void sharedImageWhollyCoveredPlacementIsRemovedAndTheOtherKept() throws Exception {
         byte[] output = redact(CropTestPdfGenerator.sharedImagePdf(), 0, new Rect(95, 595, 60, 60));
         BufferedImage kept = onlyDrawnImage(output, 0);
@@ -121,11 +140,21 @@ class RegionImageRedactTest {
 
     /** The single image the page's content actually draws, following forms. */
     private static BufferedImage onlyDrawnImage(byte[] pdf, int pageIndex) throws IOException {
+        List<BufferedImage> images = drawnImages(pdf, pageIndex);
+        assertEquals(1, images.size(), "expected exactly one image drawn on the page");
+        return images.get(0);
+    }
+
+    /** Every image the page's content draws, in paint order, following forms. */
+    private static List<BufferedImage> drawnImages(byte[] pdf, int pageIndex) throws IOException {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             DrawnImages drawn = new DrawnImages();
             drawn.processPage(doc.getPage(pageIndex));
-            assertEquals(1, drawn.images.size(), "expected exactly one image drawn on the page");
-            return drawn.images.get(0).getImage();
+            List<BufferedImage> images = new ArrayList<>();
+            for (PDImageXObject image : drawn.images) {
+                images.add(image.getImage());
+            }
+            return images;
         }
     }
 

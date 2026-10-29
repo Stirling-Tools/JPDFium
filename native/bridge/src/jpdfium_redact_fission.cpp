@@ -105,25 +105,39 @@ struct ObjRef {
     int depth = 0;
 };
 
-// True when two image objects carry the same encoded image. Placements of one
-// image XObject share a single bitmap inside PDFium, so FPDFImageObj_SetBitmap on
-// one rewrites what every placement shows. Identical bytes in two separate
-// streams also compare equal, which only costs a refusal, never a leak.
-static bool sameImageData(FPDF_PAGEOBJECT a, FPDF_PAGEOBJECT b) {
-    unsigned int aw = 0, ah = 0, bw = 0, bh = 0;
-    if (!FPDFImageObj_GetImagePixelSize(a, &aw, &ah) ||
-        !FPDFImageObj_GetImagePixelSize(b, &bw, &bh) || aw != bw || ah != bh) {
-        return false;
+// An image object's encoded data, reduced to a key. Placements of one image
+// XObject share a single bitmap inside PDFium, so FPDFImageObj_SetBitmap on one
+// rewrites what every placement shows; equal keys flag that sharing. Identical
+// bytes in two separate streams also match, which only costs a refusal, never a
+// leak. Each image is read once; equal keys are confirmed byte for byte.
+struct ImageDataKey {
+    unsigned int width = 0;
+    unsigned int height = 0;
+    std::vector<uint8_t> data;
+    uint64_t hash = 0;
+};
+
+static ImageDataKey imageDataKey(FPDF_PAGEOBJECT image) {
+    ImageDataKey key;
+    if (!FPDFImageObj_GetImagePixelSize(image, &key.width, &key.height)) return key;
+    const unsigned long len = FPDFImageObj_GetImageDataRaw(image, nullptr, 0);
+    if (len == 0) return key;
+    key.data.resize(len);
+    if (FPDFImageObj_GetImageDataRaw(image, key.data.data(), len) != len) {
+        key.data.clear();
+        return key;
     }
-    const unsigned long aLen = FPDFImageObj_GetImageDataRaw(a, nullptr, 0);
-    const unsigned long bLen = FPDFImageObj_GetImageDataRaw(b, nullptr, 0);
-    if (aLen == 0 || aLen != bLen) return false;
-    std::vector<uint8_t> aData(aLen), bData(bLen);
-    if (FPDFImageObj_GetImageDataRaw(a, aData.data(), aLen) != aLen ||
-        FPDFImageObj_GetImageDataRaw(b, bData.data(), bLen) != bLen) {
-        return false;
+    uint64_t h = 1469598103934665603ULL;  // FNV-1a 64
+    for (uint8_t byte : key.data) {
+        h = (h ^ byte) * 1099511628211ULL;
     }
-    return aData == bData;
+    key.hash = h;
+    return key;
+}
+
+static bool sameImageData(const ImageDataKey& a, const ImageDataKey& b) {
+    return !a.data.empty() && a.hash == b.hash && a.width == b.width && a.height == b.height &&
+           a.data == b.data;
 }
 
 // Crop mode (|cropRect| non-null): |matches| are the out-of-crop margins.
@@ -134,7 +148,7 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                             const std::vector<TextMatch>& matches, uint32_t argb,
                             const std::shared_ptr<DocCore>& core,
                             std::vector<FPDF_PAGEOBJECT>* paintedCovers, const FS_RECTF* cropRect,
-                            bool skipTextObjects) {
+                            bool skipTextObjects, bool* refusedUnmodified) {
     if (matches.empty()) return JPDFIUM_OK;
 
     unsigned int alf = (argb >> 24) & 0xFF;
@@ -1102,14 +1116,22 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
             bool hasEarlier = false;
             bool hasLater = false;
             classifyPaintPosition(allObjs[cit->second], hasEarlier, hasLater);
-            if (hasEarlier && hasLater) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            if (hasEarlier && hasLater) {
+                if (refusedUnmodified) *refusedUnmodified = true;
+                return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            }
         }
         // Erasing a bitmap another surviving placement shares would blank that
         // placement where no match covers it.
-        for (FPDF_PAGEOBJECT erased : pixelErased) {
-            for (FPDF_PAGEOBJECT other : survivingImages) {
-                if (other != erased && sameImageData(erased, other)) {
-                    return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (!pixelErased.empty() && survivingImages.size() > 1) {
+            std::unordered_map<FPDF_PAGEOBJECT, ImageDataKey> keys;
+            for (FPDF_PAGEOBJECT image : survivingImages) keys.emplace(image, imageDataKey(image));
+            for (FPDF_PAGEOBJECT erased : pixelErased) {
+                for (FPDF_PAGEOBJECT other : survivingImages) {
+                    if (other != erased && sameImageData(keys.at(erased), keys.at(other))) {
+                        if (refusedUnmodified) *refusedUnmodified = true;
+                        return JPDFIUM_ERR_REDACT_INCOMPLETE;
+                    }
                 }
             }
         }

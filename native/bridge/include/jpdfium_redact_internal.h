@@ -158,7 +158,8 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                             const std::vector<TextMatch>& matches, uint32_t argb,
                             const std::shared_ptr<DocCore>& core,
                             std::vector<FPDF_PAGEOBJECT>* paintedCovers = nullptr,
-                            const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false);
+                            const FS_RECTF* cropRect = nullptr, bool skipTextObjects = false,
+                            bool* refusedUnmodified = nullptr);
 bool compilePcre2(const std::u32string& pattern, bool caseless, Pcre2Pattern& out,
                   std::string& err);
 // The page whose scan OCR covers are fitted to, for the lifetime of the scope.
