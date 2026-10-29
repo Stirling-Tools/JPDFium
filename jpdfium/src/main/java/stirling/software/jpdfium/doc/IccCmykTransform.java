@@ -16,7 +16,8 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * sRGB image pixel with identical components produce identical ink values.
  *
  * <p>Instances are immutable after construction and can be shared between
- * threads; the source-profile cache is thread-local.
+ * threads. The one-entry source-profile cache is process-wide; it is bounded
+ * so a long-lived server does not retain one profile per worker thread.
  */
 final class IccCmykTransform {
 
@@ -26,8 +27,10 @@ final class IccCmykTransform {
     private static final int LUT_LAST = LUT_GRID - 1;
     private static final int LUT_BYTES = LUT_GRID * LUT_GRID * LUT_GRID * 4;
 
-    private static final ThreadLocal<SourceCache> SOURCE_CACHE =
-            ThreadLocal.withInitial(SourceCache::new);
+    private static final Object SOURCE_CACHE_LOCK = new Object();
+    private static byte[] cachedSourceIcc;
+    private static int cachedSourceComponents;
+    private static ICC_ColorSpace cachedSourceSpace;
 
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
@@ -85,7 +88,7 @@ final class IccCmykTransform {
      * PDFium's image rendering, then passed through the same LUT.
      */
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
-        ICC_ColorSpace source = sourceSpace(sourceIcc, components.length);
+        ICC_ColorSpace source = staticSourceSpace(sourceIcc, components.length);
         float[] xyz = source.toCIEXYZ(components);
         if (components.length == 1 || components.length == 4) {
             // Gray and CMYK source profiles already carry ink information.
@@ -172,10 +175,6 @@ final class IccCmykTransform {
         return (((r * LUT_GRID) + g) * LUT_GRID + b) * 4;
     }
 
-    private ICC_ColorSpace sourceSpace(byte[] sourceIcc, int expectedComponents) {
-        return staticSourceSpace(sourceIcc, expectedComponents);
-    }
-
     /**
      * Reject malformed ICC bytes before handing them to the JDK. This mirrors
      * the native IccComponentCount structural checks and keeps a hostile
@@ -209,9 +208,12 @@ final class IccCmykTransform {
 
     private static ICC_ColorSpace staticSourceSpace(byte[] sourceIcc, int expectedComponents) {
         validateIccStructure(sourceIcc);
-        SourceCache cache = SOURCE_CACHE.get();
-        if (cache.space != null && Arrays.equals(cache.icc, sourceIcc)) {
-            return cache.space;
+        synchronized (SOURCE_CACHE_LOCK) {
+            if (cachedSourceSpace != null
+                    && cachedSourceComponents == expectedComponents
+                    && Arrays.equals(cachedSourceIcc, sourceIcc)) {
+                return cachedSourceSpace;
+            }
         }
         ICC_Profile profile;
         try {
@@ -224,14 +226,12 @@ final class IccCmykTransform {
                     + profile.getNumComponents() + " components=" + expectedComponents);
         }
         ICC_ColorSpace space = new ICC_ColorSpace(profile);
-        cache.icc = sourceIcc.clone();
-        cache.space = space;
+        synchronized (SOURCE_CACHE_LOCK) {
+            cachedSourceIcc = sourceIcc.clone();
+            cachedSourceComponents = expectedComponents;
+            cachedSourceSpace = space;
+        }
         return space;
-    }
-
-    private static final class SourceCache {
-        private byte[] icc;
-        private ICC_ColorSpace space;
     }
 
     private static int clampByte(int v) {

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.VisualDiff;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.PdfRenderer;
 import stirling.software.jpdfium.model.FlattenMode;
@@ -187,13 +188,13 @@ class FlattenVisualCorpusTest {
                 BufferedImage actual = b.renderImageWithDPI(page, DPI);
                 assertEquals(expected.getWidth(), actual.getWidth(), label + " page width changed");
                 assertEquals(expected.getHeight(), actual.getHeight(), label + " page height changed");
-                double mae = meanAbsoluteError(expected, actual);
+                double mae = VisualDiff.meanAbsoluteError(expected, actual);
                 System.out.printf("%s page %d: %s (MAE %.4f, max %.1f)%n",
                         label, page + 1, mae <= threshold ? "PASS" : "FAIL", mae, threshold);
                 assertTrue(mae <= threshold,
                         label + " page " + (page + 1) + " changed: MAE " + mae);
                 if (checkLocalized) {
-                    double tileMae = maxTileMae(expected, actual, 16);
+                    double tileMae = VisualDiff.maxTileMae(expected, actual, 16);
                     assertTrue(tileMae <= ANNOTATION_TILE_MAE,
                             label + " page " + (page + 1)
                                     + " lost a localized annotation region: tile MAE " + tileMae);
@@ -217,41 +218,5 @@ class FlattenVisualCorpusTest {
 
     private static Path resource(String path) throws Exception {
         return Path.of(FlattenVisualCorpusTest.class.getResource(path).toURI());
-    }
-
-    private static double maxTileMae(BufferedImage a, BufferedImage b, int tile) {
-        double max = 0;
-        for (int y = 0; y + tile <= a.getHeight(); y += tile) {
-            for (int x = 0; x + tile <= a.getWidth(); x += tile) {
-                long sum = 0;
-                for (int yy = y; yy < y + tile; yy++) {
-                    for (int xx = x; xx < x + tile; xx++) {
-                        int pa = a.getRGB(xx, yy);
-                        int pb = b.getRGB(xx, yy);
-                        sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                        sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                        sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
-                    }
-                }
-                max = Math.max(max, (double) sum / (tile * tile * 3));
-            }
-        }
-        return max;
-    }
-
-    private static double meanAbsoluteError(BufferedImage a, BufferedImage b) {
-        long sum = 0;
-        long count = 0;
-        for (int y = 0; y < a.getHeight(); y++) {
-            for (int x = 0; x < a.getWidth(); x++) {
-                int pa = a.getRGB(x, y);
-                int pb = b.getRGB(x, y);
-                sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
-                count += 3;
-            }
-        }
-        return count == 0 ? 0.0d : (double) sum / count;
     }
 }

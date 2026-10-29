@@ -219,6 +219,8 @@ void runColorChecks() {
         CHECK(jpdfium_has_rust() == 1, "cmyk image capability requires rust");
     }
     if (jpdfium_has_rust() == 1) {
+        CHECK((caps & JPDFIUM_COLOR_CAP_CMYK_IMAGE) != 0u,
+              "rust build must report cmyk image capability");
         // 2x2 RGB: red, green, blue, white.
         const uint8_t rgb[12] = {255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255};
         uint8_t* jpeg = nullptr;

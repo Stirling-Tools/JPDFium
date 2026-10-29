@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.VisualDiff;
 import stirling.software.jpdfium.PdfRenderer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -64,7 +65,7 @@ class EciAltonaSuiteTest {
                     BufferedImage actual = b.renderImageWithDPI(page, DPI);
                     assertEquals(expected.getWidth(), actual.getWidth(), "page width changed");
                     assertEquals(expected.getHeight(), actual.getHeight(), "page height changed");
-                    double mae = meanAbsoluteError(expected, actual);
+                    double mae = VisualDiff.meanAbsoluteError(expected, actual);
                     System.out.printf("%s page %d: %s (MAE %.4f)%n",
                             input.getFileName(), page + 1, mae <= MAX_MAE ? "PASS" : "FAIL", mae);
                     assertTrue(mae <= MAX_MAE,
@@ -74,21 +75,5 @@ class EciAltonaSuiteTest {
         } finally {
             Files.deleteIfExists(out);
         }
-    }
-
-    private static double meanAbsoluteError(BufferedImage a, BufferedImage b) {
-        long sum = 0;
-        long count = 0;
-        for (int y = 0; y < a.getHeight(); y++) {
-            for (int x = 0; x < a.getWidth(); x++) {
-                int pa = a.getRGB(x, y);
-                int pb = b.getRGB(x, y);
-                sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
-                count += 3;
-            }
-        }
-        return count == 0 ? 0.0d : (double) sum / count;
     }
 }
