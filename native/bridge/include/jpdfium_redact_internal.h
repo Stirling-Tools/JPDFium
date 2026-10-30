@@ -148,7 +148,12 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
 bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
                       const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects, uint32_t argb,
                       bool* pixelsChanged = nullptr);
-bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt);
+// Share of a glyph box that must lie inside a redaction rectangle for the glyph to go.
+static constexpr double kDefaultGlyphCoverage = 0.5;
+// True when at least |coverage| of the glyph box lies inside the rectangle; 0 means any
+// overlap. A degenerate (zero-size) box counts when its centre is inside.
+bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt,
+                double coverage = kDefaultGlyphCoverage);
 std::u32string decomposeLigatures(const std::u32string& input);
 uint32_t unicodeToWinAnsiCharcode(uint32_t unicode);
 FS_MATRIX concatMatrix(const FS_MATRIX& m, const FS_MATRIX& t);
@@ -186,6 +191,9 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
 void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>& unicodeSeq,
                              std::vector<TextMatch>& matches);
 void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+// |glyphAudited|, when given, is the post-redaction text page whose characters were
+// already checked glyph by glyph: text objects it fully maps are left to that check.
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
-                              const std::vector<FPDF_PAGEOBJECT>& exclude);
+                              const std::vector<FPDF_PAGEOBJECT>& exclude,
+                              FPDF_TEXTPAGE glyphAudited = nullptr);
 void deletePatternCache(void* p);

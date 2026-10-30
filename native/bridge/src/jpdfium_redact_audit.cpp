@@ -38,9 +38,32 @@
 #include "jpdfium_redact_internal.h"
 
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
-                              const std::vector<FPDF_PAGEOBJECT>& exclude) {
+                              const std::vector<FPDF_PAGEOBJECT>& exclude,
+                              FPDF_TEXTPAGE glyphAudited) {
     if (regions.empty()) return true;
     std::unordered_set<FPDF_PAGEOBJECT> excluded(exclude.begin(), exclude.end());
+
+    // Text objects whose every character on |glyphAudited| has a glyph box were
+    // already judged glyph by glyph with the removal rule. Their object bounds are
+    // not those glyph boxes, so a second, object-level verdict could refuse a
+    // letter the rule kept. Objects the text page misses keep the object rule.
+    std::unordered_set<FPDF_PAGEOBJECT> glyphChecked;
+    if (glyphAudited) {
+        std::unordered_set<FPDF_PAGEOBJECT> unboxed;
+        int n = FPDFText_CountChars(glyphAudited);
+        for (int ci = 0; ci < n; ++ci) {
+            if (FPDFText_IsGenerated(glyphAudited, ci) == 1) continue;
+            FPDF_PAGEOBJECT owner = FPDFText_GetTextObject(glyphAudited, ci);
+            if (!owner) continue;
+            double l, r, b, t;
+            if (FPDFText_GetCharBox(glyphAudited, ci, &l, &r, &b, &t)) {
+                glyphChecked.insert(owner);
+            } else {
+                unboxed.insert(owner);
+            }
+        }
+        for (FPDF_PAGEOBJECT o : unboxed) glyphChecked.erase(o);
+    }
 
     auto checkObj = [&](auto& self, FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage,
                         int depth) -> bool {
@@ -49,6 +72,7 @@ bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regio
         if (type != FPDF_PAGEOBJ_TEXT && type != FPDF_PAGEOBJ_IMAGE && type != FPDF_PAGEOBJ_PATH &&
             type != FPDF_PAGEOBJ_SHADING && type != FPDF_PAGEOBJ_FORM)
             return true;
+        if (type == FPDF_PAGEOBJ_TEXT && glyphChecked.count(obj)) return true;
 
         if (type == FPDF_PAGEOBJ_PATH) {
             int fillMode = 0;

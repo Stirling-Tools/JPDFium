@@ -847,10 +847,15 @@ bool stub_rect_invalid(float x, float y, float w, float h) {
 }
 }  // namespace
 
-int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t,
+int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
                               int32_t remove_content) noexcept {
+    return jpdfium_redact_region_ex(page, x, y, w, h, argb, remove_content, 0.5f);
+}
+int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t,
+                                 int32_t remove_content, float glyph_coverage) noexcept {
     if (remove_content == 0 || stub_rect_invalid(x, y, w, h))
         return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
+    if (!(glyph_coverage >= 0.0f && glyph_coverage <= 1.0f)) return JPDFIUM_ERR_INVALID;
     if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
         g_docs[dit->second].hasMutatedRedaction = true;
     }

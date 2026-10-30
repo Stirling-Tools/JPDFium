@@ -133,14 +133,48 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch
     }
 }
 
+namespace {
+
+// A glyph box and its codepoint, recorded before a region redaction for its audit.
+struct GlyphBox {
+    unsigned int unicode;
+    double l, b, r, t;
+};
+
+// How far (points) a kept glyph may move when the fission re-emits its surviving run
+// from the run's first origin: character spacing and TJ adjustments it judges uniform
+// are not re-applied, so later glyphs in the run land slightly off.
+constexpr double kSurvivorDrift = 1.0;
+
+bool nearGlyph(const std::vector<GlyphBox>& refs, unsigned int unicode, double l, double b,
+               double r, double t) {
+    for (const auto& g : refs) {
+        if (g.unicode == unicode && std::abs(g.l - l) <= kSurvivorDrift &&
+            std::abs(g.r - r) <= kSurvivorDrift && std::abs(g.b - b) <= kSurvivorDrift &&
+            std::abs(g.t - t) <= kSurvivorDrift) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
                               int32_t remove_content) noexcept {
+    return jpdfium_redact_region_ex(page, x, y, w, h, argb, remove_content,
+                                    static_cast<float>(kDefaultGlyphCoverage));
+}
+
+int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t argb,
+                                 int32_t remove_content, float glyph_coverage) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
         w <= 0.0f || h <= 0.0f) {
         return JPDFIUM_ERR_INVALID;
     }
+    if (!(glyph_coverage >= 0.0f && glyph_coverage <= 1.0f)) return JPDFIUM_ERR_INVALID;  // NaN too
     if (remove_content == 0) {
         // Doctrine: visual-only "cover" redaction is banned in the public
         // API. Content must be verified-gone, never painted over.
@@ -158,18 +192,31 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         int charCount = FPDFText_CountChars(tp);
 
         // One match per region: its bbox IS the region rect (so the
-        // painted cover matches the requested area exactly), plus
-        // every character whose glyph box overlaps it significantly.
+        // painted cover and any image erase match the requested area
+        // exactly), plus every character the coverage rule removes whole.
         TextMatch tm;
         tm.bboxL = x;
         tm.bboxB = y;
         tm.bboxR = x + w;
         tm.bboxT = y + h;
+        // Real glyphs the rule removes, and those it keeps within drift of the
+        // rectangle: audit 1 tells a re-emitted kept glyph from a survivor by them.
+        std::vector<GlyphBox> removed;
+        std::vector<GlyphBox> keptNear;
+        const float d = static_cast<float>(kSurvivorDrift);
         for (int ci = 0; ci < charCount; ++ci) {
             double l, r, b, t;
             if (!FPDFText_GetCharBox(tp, ci, &l, &r, &b, &t)) continue;
-            if (charInRect(l, b, r, t, x, y, x + w, y + h)) {
-                tm.charIndices.push_back(ci);
+            bool remove = charInRect(l, b, r, t, x, y, x + w, y + h, glyph_coverage);
+            if (remove) tm.charIndices.push_back(ci);
+            if (FPDFText_IsGenerated(tp, ci) == 1) continue;
+            GlyphBox g{FPDFText_GetUnicode(tp, ci), l, b, r, t};
+            if (remove) {
+                removed.push_back(g);
+            } else if (rectsOverlap(static_cast<float>(l), static_cast<float>(b),
+                                    static_cast<float>(r), static_cast<float>(t), x - d, y - d,
+                                    x + w + d, y + h + d)) {
+                keptNear.push_back(g);
             }
         }
         std::vector<TextMatch> matches;
@@ -186,9 +233,15 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
             return rc;
         }
 
-        // Audit 1 (text): reload the text page and confirm no glyph box
-        // still intersects the redaction region. An audit that cannot even
-        // run is a loud unverifiable error - never a silent pass.
+        // Audit 1 (text): reload the text page and confirm no glyph the
+        // coverage rule removes is still there. Generated characters are the
+        // extractor's own spaces between objects, not content: their empty box
+        // sits at the previous glyph's advance end, so they are skipped like the
+        // fission skips them. A glyph that now meets the rule only because the
+        // fission re-emitted a kept glyph slightly shifted matches that kept
+        // glyph, and passes unless a removed glyph of the same codepoint is just
+        // as close. An audit that cannot even run is a loud unverifiable error -
+        // never a silent pass.
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
         std::vector<FS_RECTF> regions;
@@ -202,15 +255,19 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         bool remaining = false;
         int n = FPDFText_CountChars(audit);
         for (int ci = 0; ci < n; ++ci) {
+            if (FPDFText_IsGenerated(audit, ci) == 1) continue;
             double l, r2, b, t;
             if (!FPDFText_GetCharBox(audit, ci, &l, &r2, &b, &t)) continue;
-            if (charInRect(l, b, r2, t, x, y, x + w, y + h)) {
-                remaining = true;
-                break;
+            if (!charInRect(l, b, r2, t, x, y, x + w, y + h, glyph_coverage)) continue;
+            unsigned int u = FPDFText_GetUnicode(audit, ci);
+            if (nearGlyph(keptNear, u, l, b, r2, t) && !nearGlyph(removed, u, l, b, r2, t)) {
+                continue;
             }
+            remaining = true;
+            break;
         }
-        FPDFText_ClosePage(audit);
         if (remaining) {
+            FPDFText_ClosePage(audit);
             // The fission engine already removed content in this region while
             // glyphs that must be gone are still extractable, so record the page
             // as half-redacted: every save fails until a later commit resolves it.
@@ -218,8 +275,12 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 
-        // Audit 2 (objects): see auditNoSurvivorsInRegion.
-        if (!auditNoSurvivorsInRegion(pw->page, regions, paintedCovers)) {
+        // Audit 2 (objects): see auditNoSurvivorsInRegion. Text that audit 1
+        // already checked glyph by glyph is left to it, so a letter the rule
+        // kept can never fail the object check.
+        bool survivors = !auditNoSurvivorsInRegion(pw->page, regions, paintedCovers, audit);
+        FPDFText_ClosePage(audit);
+        if (survivors) {
             markRedactionIncomplete(pw, regions);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
