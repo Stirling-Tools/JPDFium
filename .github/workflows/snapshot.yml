@@ -660,7 +660,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel   }
           - { platform: darwin-arm64, runner: macos-14         }
@@ -825,6 +825,10 @@ jobs:
           # different dependency set (librsvg/X11) and feature set.
           JPDFIUM_REQUIRE_SOURCE_VIPS: '1'
         run: bash native/build-vips.sh ${{ matrix.platform }}
+
+      - name: Check glibc floor
+        if: (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64') && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success')
+        run: bash native/ci/check-glibc-floor.sh native/dist/vips-${{ matrix.platform }}
 
       - name: Build vips natives jar
         if: steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success'
