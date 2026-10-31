@@ -181,6 +181,44 @@ Whether an existing signature remains valid across a save is not determined by J
 
 `SaveOptions` exposes `maxOutputBytes` and `verifyReopen`. There are no flags for encryption, PDF version, linearization, or signature handling.
 
+## Color conversion
+
+`PdfColorConverter` rewrites fill and stroke colours on text and path objects.
+Grayscale and DeviceRGB always work. DeviceCMYK and CMYK image conversion need
+the JPDFium PDFium patch, so probe before use:
+
+```java
+if (PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)) {
+    PdfColorConverter.toCmyk(doc);
+}
+```
+
+- Existing DeviceCMYK, DeviceGray, ICC, Separation, DeviceN, Indexed and pattern
+  colours are preserved by default.
+- `ColorConvertOptions` can opt into ICC/spot conversion. Form XObjects are
+  traversed by default when the patched PDFium supports write-back
+  (`convertForms(false)` disables it).
+- DeviceRGB images whose source stream is DCT/JPEG are re-encoded as CMYK
+  JPEGs. Plain Flate line art and screenshots are left untouched unless
+  `convertLosslessImages(true)` is explicitly requested. Images with visible
+  transparency are skipped, and a fully opaque mask is dropped. Builds without
+  `EPDFImageObj_SetJpeg` convert no images
+  (`PdfColorConverter.supportsImageConversion()` returns false).
+- When an ICC profile is supplied, vectors and images share one 33x33x33
+  RGB-to-CMYK lookup table, so identical sRGB components produce identical ink
+  values. Without a profile both use naive black generation.
+- Output intents are written with QPDF, which rewrites the full file. Existing
+  intents with a different `/S` (for example PDF/A `GTS_PDFA1`) are preserved;
+  only intents of the same subtype are replaced. Recheck rendering after
+  changing the print condition.
+
+`PdfXConverter` applies PDF/X-3/-4 metadata and output intents through
+`applyMetadata`. It is not a PDF/X validator or a converter for PDF/X-1a/6; it
+rejects transparency for standards that forbid it but does not flatten it.
+Supply a real printing-condition ICC for production output; the bundled compact
+profile is only a fallback. Run veraPDF or Acrobat preflight before claiming
+compliance.
+
 ## What is not supported
 
 | Capability | Status |

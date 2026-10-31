@@ -19,7 +19,7 @@ fi
 
 [ -f "$BUDGETS" ] || exit 0
 
-if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then
+if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep . >/dev/null; then
     echo "FAIL: subdirectories found in $DIST_DIR" >&2
     exit 1
 fi
@@ -78,6 +78,31 @@ fi
 
 if [ "$TOTAL" -gt "$WARN_AT" ]; then
     echo "WARNING: $PLATFORM bundle is past 75% of budget ($(mb "$WARN_AT") MB)" >&2
+fi
+
+# Per-library guardrails: catch one dependency growing even when the total
+# bundle still fits. See library-size-budgets.txt.
+LIBRARY_BUDGETS="$SCRIPT_DIR/library-size-budgets.txt"
+if [ -f "$LIBRARY_BUDGETS" ]; then
+    while read -r pattern limit _; do
+        [ -n "${pattern:-}" ] || continue
+        [ -n "${limit:-}" ] || continue
+        case "$limit" in
+            *[!0-9]*)
+                echo "FAIL: invalid budget '$limit' for '$pattern' in $LIBRARY_BUDGETS" >&2
+                exit 1
+                ;;
+        esac
+        for lib in "$DIST_DIR"/$pattern; do
+            [ -f "$lib" ] || continue
+            [ -L "$lib" ] && continue
+            lib_bytes=$(wc -c < "$lib" | tr -d ' ')
+            if [ "$lib_bytes" -gt "$limit" ]; then
+                echo "FAIL: $(basename "$lib") is $lib_bytes B, exceeding per-library budget $limit B" >&2
+                exit 1
+            fi
+        done
+    done < <(grep -v '^#' "$LIBRARY_BUDGETS" | grep -v '^$')
 fi
 
 # Diagnostic binary size and section breakdown report

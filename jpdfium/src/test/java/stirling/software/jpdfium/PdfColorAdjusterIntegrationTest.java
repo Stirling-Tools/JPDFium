@@ -58,12 +58,12 @@ class PdfColorAdjusterIntegrationTest {
                 int identityLuma;
                 try (PdfDocument rendered = PdfDocument.open(identity)) {
                     BufferedImage img = rendered.renderImage(0);
-                    identityLuma = luma(img.getRGB(8, img.getHeight() / 2));
+                    identityLuma = luma(img.getRGB(img.getWidth() / 4, img.getHeight() / 2));
                 }
                 int strongerLuma;
                 try (PdfDocument rendered = PdfDocument.open(stronger)) {
                     BufferedImage img = rendered.renderImage(0);
-                    strongerLuma = luma(img.getRGB(8, img.getHeight() / 2));
+                    strongerLuma = luma(img.getRGB(img.getWidth() / 4, img.getHeight() / 2));
                 }
                 assertTrue(
                         strongerLuma < identityLuma,

@@ -128,6 +128,59 @@ public final class VisualDiff {
         return count;
     }
 
+    /** Mean absolute RGB error per channel, in the range 0-255. */
+    public static double meanAbsoluteError(BufferedImage a, BufferedImage b) {
+        requireSameSize(a, b);
+        long sum = 0;
+        long count = 0;
+        for (int y = 0; y < a.getHeight(); y++) {
+            for (int x = 0; x < a.getWidth(); x++) {
+                int pa = a.getRGB(x, y);
+                int pb = b.getRGB(x, y);
+                sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
+                sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
+                sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
+                count += 3;
+            }
+        }
+        return count == 0 ? 0.0d : (double) sum / count;
+    }
+
+    /**
+     * Highest mean absolute RGB error over the fully covered {@code tile} x
+     * {@code tile} blocks. Used to catch a localized visual loss that a
+     * page-wide average would hide.
+     */
+    public static double maxTileMae(BufferedImage a, BufferedImage b, int tile) {
+        requireSameSize(a, b);
+        if (tile <= 0) throw new IllegalArgumentException("tile must be positive");
+        double max = 0;
+        for (int y = 0; y + tile <= a.getHeight(); y += tile) {
+            for (int x = 0; x + tile <= a.getWidth(); x += tile) {
+                long sum = 0;
+                for (int yy = y; yy < y + tile; yy++) {
+                    for (int xx = x; xx < x + tile; xx++) {
+                        int pa = a.getRGB(xx, yy);
+                        int pb = b.getRGB(xx, yy);
+                        sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
+                        sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
+                        sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
+                    }
+                }
+                max = Math.max(max, (double) sum / (tile * tile * 3));
+            }
+        }
+        return max;
+    }
+
+    private static void requireSameSize(BufferedImage a, BufferedImage b) {
+        if (a.getWidth() != b.getWidth() || a.getHeight() != b.getHeight()) {
+            throw new IllegalArgumentException("Images must have equal dimensions: "
+                    + a.getWidth() + "x" + a.getHeight() + " vs "
+                    + b.getWidth() + "x" + b.getHeight());
+        }
+    }
+
     /** Write a {@link BufferedImage} as PNG, creating parent directories as needed. */
     public static void save(BufferedImage image, Path path) throws IOException {
         Files.createDirectories(path.getParent());

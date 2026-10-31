@@ -6,7 +6,7 @@ DIST_DIR="${1:?usage: check-bundle-lean.sh <dist-dir> [platform]}"
 PLATFORM="${2:-}"
 
 case "$PLATFORM" in
-    linux-*|vips-linux-*|freebsd-*|openbsd-*)   OS=linux ;;
+    linux-*|vips-linux-*|freebsd-*|vips-freebsd-*|openbsd-*)   OS=linux ;;
     darwin-*|vips-darwin-*) OS=darwin ;;
     windows-*|vips-windows-*) OS=windows ;;
     *)
@@ -33,7 +33,7 @@ find "$DIST_DIR" -maxdepth 1 -type f -exec basename {} \; | tr 'A-Z' 'a-z' | whi
 done
 [ ! -f "$WORK/failed" ] || exit 1
 
-if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then
+if find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep . >/dev/null; then
     echo "FAIL: subdirectories found in bundle:" >&2
     find "$DIST_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed 's/^/    /' >&2
     exit 1
@@ -65,7 +65,7 @@ case "$OS" in
         find "$DIST_DIR" -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' \) \
             -exec sh -c '
                 for f do
-                    if readelf -S "$f" 2>/dev/null | grep -qE "\.(symtab|z?debug_)"; then
+                    if readelf -S "$f" 2>/dev/null | grep -E "\.(symtab|z?debug_)" >/dev/null; then
                         echo "FAIL: $f carries debug sections - not stripped" >&2
                         exit 1
                     fi
@@ -75,20 +75,20 @@ case "$OS" in
     darwin)
         find "$DIST_DIR" -maxdepth 1 -type f -name '*.dylib' -exec sh -c '
             for f do
-                if otool -l "$f" 2>/dev/null | grep -q "__DWARF"; then
+                if otool -l "$f" 2>/dev/null | grep "__DWARF" >/dev/null; then
                     echo "FAIL: $f carries DWARF debug info - not stripped" >&2
                     exit 1
                 fi
             done
         ' sh {} + || exit 1
-        if find "$DIST_DIR" -maxdepth 1 \( -name '*.dSYM' -o -name '*.pdb' \) 2>/dev/null | grep -q .; then
+        if find "$DIST_DIR" -maxdepth 1 \( -name '*.dSYM' -o -name '*.pdb' \) 2>/dev/null | grep . >/dev/null; then
             echo "FAIL: debug symbol artifacts (.dSYM/.pdb) found in bundle" >&2
             exit 1
         fi
         ;;
     windows)
         if find "$DIST_DIR" -maxdepth 1 \
-            \( -name '*.pdb' -o -name '*.lib' -o -name '*.exp' -o -name '*.ilk' \) 2>/dev/null | grep -q .; then
+            \( -name '*.pdb' -o -name '*.lib' -o -name '*.exp' -o -name '*.ilk' \) 2>/dev/null | grep . >/dev/null; then
             echo "FAIL: debug/import artifacts (.pdb/.lib/.exp/.ilk) found in bundle" >&2
             exit 1
         fi

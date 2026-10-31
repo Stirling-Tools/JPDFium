@@ -1,0 +1,158 @@
+name: Ghent CMYK
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'native/setup-pdfium.sh'
+      - 'native/bridge/src/jpdfium_stub.cpp'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/panama/PageEditBindings.java'
+      - 'jpdfium/src/main/resources/icc/**'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfIccProfiles.java'
+      - 'native/rust/jpdfium-impl/**'
+      - 'native/CMakeLists.txt'
+      - 'native/bridge/src/jpdfium_color.cpp'
+      - 'native/bridge/include/jpdfium.h'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfDocument.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfPage.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfRenderer.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfAnnotations.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfColorConverter.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfPageObjects.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfRecolor.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfOutputIntent.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/IccCmykTransform.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfXConverter.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfXOptions.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfXStandard.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/panama/ColorBindings.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/GhentOutputSuiteTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/EciAltonaSuiteTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/FlattenVisualCorpusTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/PdfXConverterTest.java'
+      - '.github/scripts/verify-ghent-inkcov.sh'
+      - '.github/workflows/ghent.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ghent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ghent:
+    name: Build patched PDFium and run Ghent V50
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config libqpdf-dev qpdf unzip ghostscript \
+            libpcre2-dev libfreetype6-dev libharfbuzz-dev libicu-dev libpugixml-dev libunibreak-dev
+          # Optional system CMYK profile; tests fall back to the bundled
+          # compact profile when it is unavailable.
+          sudo apt-get install -y --no-install-recommends icc-profiles-free || true
+
+      - name: Build patched PDFium
+        run: bash native/setup-pdfium.sh
+
+      - name: Build JPDFium bridge against patched PDFium
+        id: build-native
+        run: bash native/build-real.sh
+
+      # A missing corpus must fail the job: otherwise an outage or a checksum
+      # mismatch silently skips the corpus tests. The download-free tests below
+      # still run and their reports are uploaded.
+      - name: Download Ghent PDF Output Suite V50
+        id: ghent-download
+        run: |
+          GHENT_SHA256=52d271ddd97dcb5778d1da2bdb3b86a66b96083b7f57ee3fd8ed2b5e5a5d7d29
+          if curl -fsSL --connect-timeout 20 --max-time 600 --retry 3 --retry-max-time 120 \
+            'https://gwg.org/wp-content/uploads/2026/05/Ghent_PDF_Output_Suite_V50_Testpages.zip' \
+            -o /tmp/ghent.zip; then
+            echo "${GHENT_SHA256}  /tmp/ghent.zip" | sha256sum -c -
+            unzip -q /tmp/ghent.zip -d /tmp/ghent
+            test -f /tmp/ghent/Ghent_PDF_Output_Suite_V50_Testpages/Ghent_PDF-Output-Test-V50_ALL_X4.pdf
+          else
+            echo "::warning::Ghent PDF Output Suite is unavailable; skipping the Ghent gate for this run."
+            exit 1
+          fi
+
+      - name: Download ECI Altona fixtures
+        id: eci-download
+        run: |
+          # ECI permits use but not redistribution; download it for this run only.
+          mkdir -p /tmp/eci
+          for entry in \
+            "altona_measure_1v1a.pdf:6b230db4c2ca9e235b450107e92fbaec61bf391b6d0a405bbdb14d769bed3b67" \
+            "altona_visual_1v2a_x3.pdf:6b73ff0186bbc19b8896eff545d4102216987bb34af62794fa0844b611031727" \
+            "altona_technical_1v2_x3.pdf:06b980fa09cd45f35a1fc9a2b907911201e91c0fcc2ee5a67820f6bb7818e630" \
+            "altona2_technical_x4.pdf:57233105f699c6110bbeeeca769587ccfc8e543f1e58b791c812607bfefe294f"; do
+            name="${entry%%:*}"
+            expected="${entry#*:}"
+            if [[ "${name}" == altona2_* ]]; then
+              url="https://eci.org/lib/exe/eci_altona-test-suite-v2_technical2_x4.pdf"
+            else
+              url="https://eci.org/lib/exe/${name}"
+            fi
+            if curl -fsSL --connect-timeout 20 --max-time 900 --retry 3 --retry-max-time 180 \
+              "${url}" -o "/tmp/eci/${name}"; then
+              echo "${expected}  /tmp/eci/${name}" | sha256sum -c -
+            else
+              echo "::warning::ECI Altona ${name} is unavailable; skipping the ECI gate for this run."
+              exit 1
+            fi
+          done
+
+      # These tests need no downloads. Run them even when a corpus download
+      # failed, so a network outage still exercises the flatten and PDF/X paths.
+      - name: Run download-free visual and PDF/X gate
+        if: always() && steps.build-native.outcome == 'success'
+        run: |
+          ./gradlew :jpdfium:integrationTest \
+            --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
+            --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
+            --no-daemon --stacktrace
+
+      - name: Run Ghent and ECI conversion gate
+        id: conversion-gate
+        if: steps.ghent-download.outcome == 'success' && steps.eci-download.outcome == 'success'
+        env:
+          GHENT_DIR: /tmp/ghent/Ghent_PDF_Output_Suite_V50_Testpages
+          GHENT_OUTPUT_DIR: /tmp
+          ECI_DIR: /tmp/eci
+        run: |
+          ./gradlew :jpdfium:integrationTest \
+            --tests 'stirling.software.jpdfium.doc.GhentOutputSuiteTest' \
+            --tests 'stirling.software.jpdfium.doc.EciAltonaSuiteTest' \
+            --no-daemon --stacktrace
+
+      - name: Verify Ghent process ink coverage
+        if: steps.conversion-gate.outcome == 'success'
+        env:
+          GHENT_DIR: /tmp/ghent/Ghent_PDF_Output_Suite_V50_Testpages
+        run: bash .github/scripts/verify-ghent-inkcov.sh "$GHENT_DIR" /tmp
+
+      - name: Upload Ghent output
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ghent-cmyk-output
+          path: |
+            /tmp/jpdfium-ghent-*.pdf
+            jpdfium/build/reports/tests/integrationTest
+          if-no-files-found: ignore

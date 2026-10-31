@@ -1,0 +1,37 @@
+# Per-library ceilings for staged native bundles (bytes).
+#
+# The total bundle budget in size-budgets.txt still applies; these entries catch
+# a single dependency regressing (for example a codec growing because a decoder
+# or an optional feature came back) even when the total remains under budget.
+# Patterns are matched against the basename with shell globbing. Keep ~15-20%
+# headroom over the largest current platform so compiler/toolchain variation
+# does not make the gate flaky.
+
+libaom*          7000000
+# The currently pinned Windows vips prebuild still carries the larger vcpkg
+# AOM (10.2 MB). The codec contract check verifies the decoder is gone once a
+# newly built asset is pinned; keep the size gate permissive for that asset.
+aom.dll         11000000
+libdav1d*        2500000
+dav1d.dll        2500000
+libdeflate*       250000
+libheif*         3000000
+heif.dll         3000000
+libjxl*          4000000
+jxl.dll          4000000
+libglib*         1700000
+glib-2.0-*.dll   1700000
+libgio*          2300000
+gio-2.0-*.dll    2300000
+libgobject*       650000
+gobject-2.0-*.dll 650000
+libtiff*          900000
+tiff.dll          900000
+libvips*         3500000
+vips-42.dll      3500000
+libskia*         8000000
+skia.dll         8000000
+libpdfium*       9000000
+pdfium.dll       9000000
+libjpdfium*     13500000
+jpdfium.dll     13500000

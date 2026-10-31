@@ -147,6 +147,8 @@ bool isRealBridge() {
     return rc != JPDFIUM_ERR_NATIVE;
 }
 
+void runColorChecks();
+
 void runPositivePath() {
     int32_t rc = JPDFIUM_OK;
     int64_t doc = 0;
@@ -204,6 +206,39 @@ void runPositivePath() {
     jpdfium_doc_close(doc);
 
     runCropEngineChecks();
+    runColorChecks();
+}
+
+// DeviceCMYK pipeline: the capability probe must agree with the compiled-in
+// backends; the stub reports none, so these checks are no-ops there.
+void runColorChecks() {
+    const uint32_t caps = jpdfium_color_capabilities();
+    std::printf("native_smoke: colour capabilities = 0x%02x\n", caps);
+
+    if ((caps & JPDFIUM_COLOR_CAP_CMYK_IMAGE) != 0u) {
+        CHECK(jpdfium_has_rust() == 1, "cmyk image capability requires rust");
+    }
+    if (jpdfium_has_rust() == 1) {
+        CHECK((caps & JPDFIUM_COLOR_CAP_CMYK_IMAGE) != 0u,
+              "rust build must report cmyk image capability");
+        // 2x2 RGB: red, green, blue, white.
+        const uint8_t rgb[12] = {255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255};
+        uint8_t* jpeg = nullptr;
+        int64_t jpegLen = 0;
+        const int32_t rc = jpdfium_color_samples_to_cmyk_jpeg(
+            rgb, static_cast<int64_t>(sizeof(rgb)), 2, 2, 3, 90, 0, &jpeg, &jpegLen);
+        CHECK(rc == JPDFIUM_OK, "jpdfium_color_samples_to_cmyk_jpeg");
+        if (rc == JPDFIUM_OK && jpeg != nullptr && jpegLen > 4) {
+            CHECK(jpeg[0] == 0xFF && jpeg[1] == 0xD8, "cmyk jpeg SOI marker");
+            CHECK(jpeg[jpegLen - 2] == 0xFF && jpeg[jpegLen - 1] == 0xD9, "cmyk jpeg EOI marker");
+        }
+        jpdfium_free_buffer(jpeg);
+    }
+
+    // Output intents are injected with QPDF; the capability must track the ABI.
+    if (jpdfium_abi_query(JPDFIUM_ABI_QUERY_HAS_QPDF) == 1) {
+        CHECK((caps & JPDFIUM_COLOR_CAP_OUTPUT_INTENT) != 0u, "output intent capability");
+    }
 }
 
 void runBoundaryChecks() {

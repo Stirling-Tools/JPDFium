@@ -40,20 +40,20 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Validate Gradle Wrapper checksum
-        uses: gradle/actions/wrapper-validation@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+        uses: gradle/actions/wrapper-validation@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config libicu-dev icu-devtools
 
       - name: Install build deps (macOS)
         if: runner.os == 'macOS'
@@ -106,6 +106,25 @@ jobs:
       - name: Compile main and test sources
         run: ./gradlew :jpdfium:compileJava :jpdfium:compileTestJava :jpdfium:processResources :jpdfium-vips:compileJava :jpdfium-vips:compileTestJava :jpdfium-vips:processResources --no-daemon --stacktrace
 
+      - name: Full JDK with jmods for ProGuard
+        if: runner.os == 'Linux'
+        # Temurin 25 is a jmod-less runtime under JEP 493. ProGuard still needs
+        # Java library class files, so use GraalVM's full JDK for this
+        # measurement only; the production build stays on Temurin.
+        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ProGuard jar size experiment (non-publishing)
+        if: runner.os == 'Linux'
+        # Production jars remain unmodified: ProGuard's safe shrink-only mode
+        # saves only a few percent and its optimized/obfuscated modes alter
+        # public signatures or reflection/native-image metadata. Keep the
+        # experiment visible in CI instead of letting the trade-off drift.
+        run: bash native/proguard-jars.sh
+
   # -------------------------------------------------------------------------
   # Job 1b: Validate musl native detection on a real Alpine/musl JVM
   # -------------------------------------------------------------------------
@@ -145,16 +164,17 @@ jobs:
             echo "FAIL: could not pull an Alpine JDK image from any registry"; exit 1
           fi
           echo "Using Alpine JDK image: $IMG"
-          docker run --rm -i -v "$PWD":/src -w /src "$IMG" sh -s <<'INNER'
+          cp buildSrc/libs/xz-1.10.jar /tmp/xz.jar
+          docker run --rm -i -v "$PWD":/src -v /tmp/xz.jar:/tmp/xz.jar:ro -w /src "$IMG" sh -s <<'INNER'
           set -e
           mkdir -p /tmp/m
           # Compile the whole main source tree: NativeLoader calls
           # JpdfiumLib.checkAbiCompatible(), so a hand-picked file list breaks
           # the moment the loader gains another intra-module reference.
-          javac -d /tmp/m \
+          javac -cp /tmp/xz.jar --module-path /tmp/xz.jar -d /tmp/m \
             $(find jpdfium/src/main/java -name '*.java')
           OUT=$(echo 'System.out.println(stirling.software.jpdfium.panama.NativeLoader.detectPlatform());' \
-            | jshell -q --class-path /tmp/m -)
+            | jshell -q --class-path /tmp/m:/tmp/xz.jar -)
           echo "detectPlatform() on Alpine => $OUT"
           echo "$OUT" | grep -q 'linux-musl-' || { echo "FAIL: expected linux-musl-*, got: $OUT"; exit 1; }
           echo "OK: musl detection works"
@@ -169,12 +189,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -199,12 +219,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install system libvips and codec dependencies
         run: |
@@ -243,12 +263,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -295,12 +315,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -327,20 +347,25 @@ jobs:
           path: jpdfium/build/reports/tests/test/
 
   # -------------------------------------------------------------------------
-  # Job 5: JMH microbenchmarks (FFM downcall overhead gate)
+  # Job 5: JMH microbenchmarks (advisory trend report, not a gate)
+  #
+  # Shared runners cannot reproduce absolute scores closely enough to gate a
+  # PR: the same commit can measure 20-40% apart across `ubuntu-latest`
+  # instances. This job still fails if JMH itself cannot run, but a baseline
+  # regression is reported without failing the build.
   # -------------------------------------------------------------------------
   jmh-benchmarks:
-    name: JMH Benchmarks (FFM Downcall Overhead Gate)
+    name: JMH Benchmarks (advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -369,7 +394,12 @@ jobs:
           key: jmh-baseline-v3-${{ github.base_ref || 'main' }}-${{ github.run_id }}
           restore-keys: jmh-baseline-v3-${{ github.base_ref || 'main' }}-
 
-      - name: Compare results against baseline (warn if regressed >15%)
+      - name: Compare results against baseline (advisory only)
+        # Advisory, never blocking. Absolute JMH scores from two different
+        # `ubuntu-latest` runner instances routinely differ by 20-40% on the
+        # same commit, so a cached cross-run baseline cannot support a
+        # regression gate. The comparison stays for trend visibility, but its
+        # exit code must not decide whether the job passes.
         run: |
           RESULTS="jpdfium/build/results/jmh/results.json"
           BASELINE="jpdfium/build/results/jmh/baseline.json"
@@ -379,21 +409,7 @@ jobs:
             cp "$RESULTS" "$BASELINE"
             exit 0
           fi
-          if python3 .github/scripts/compare-jmh.py; then
-            exit 0
-          fi
-          echo ""
-          echo "Regressions detected - re-running benchmarks once to rule out"
-          echo "transient runner noise before failing the job..."
-          # --rerun-tasks forces a fresh measurement: without it Gradle sees the
-          # first :jpdfium:jmh output as UP-TO-DATE and the retry just re-reads
-          # the same results.json, so a noisy first pass can never be recovered.
-          ./gradlew :jpdfium:jmh \
-            -Pjmh.warmupIterations=4 \
-            -Pjmh.iterations=5 \
-            --rerun-tasks \
-            --no-daemon
-          python3 .github/scripts/compare-jmh.py
+          python3 .github/scripts/compare-jmh.py --advisory
 
       - name: Update baseline cache on main push
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -419,12 +435,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -449,12 +465,12 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -485,6 +501,23 @@ jobs:
               fi
             done
           done
+          # Consumers must choose their platform. The core artifact must never
+          # publish a jpdfium-natives-* dependency (that used to force Linux
+          # x64 onto every macOS/Windows/ARM user).
+          meta_count=0
+          for meta in $(find ~/.m2/repository/com/stirling/jpdfium -maxdepth 2 \
+              \( -name 'jpdfium-*.pom' -o -name 'jpdfium-*.module' \)); do
+            meta_count=$((meta_count + 1))
+            if grep -q 'jpdfium-natives' "$meta"; then
+              echo "ERROR: published metadata contains a native dependency: $meta"
+              grep -n 'jpdfium-natives' "$meta" || true
+              missing=1
+            fi
+          done
+          if [ "$meta_count" -eq 0 ]; then
+            echo "ERROR: no jpdfium POM/module metadata found to inspect"
+            missing=1
+          fi
           exit $missing
 
   # -------------------------------------------------------------------------
@@ -496,14 +529,14 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
-      - uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+      - uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
           java-version: '25'
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
 
-      - uses: gradle/actions/setup-gradle@ecf8cf2dcee84990dee44a7479c2b268de61e38d # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -530,12 +563,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@2a69be27b0baa8a7ec1c0ba665dc022b180664c5 # v5.7.0
+      - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@f9f39a915cd0648dca917c72880100a59df96944 # v6.3.0
+      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
 
       - name: Run the README example against the published artifacts
         run: ./gradlew -p examples/render-first-page run --args="sample.pdf page-1.png" --no-daemon

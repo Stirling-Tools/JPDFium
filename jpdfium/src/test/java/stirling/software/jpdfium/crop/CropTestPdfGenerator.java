@@ -13,6 +13,8 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationLink;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationSquare;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationText;
 import org.apache.pdfbox.pdmodel.interactive.form.PDAcroForm;
+import org.apache.pdfbox.pdmodel.interactive.form.PDCheckBox;
+import org.apache.pdfbox.pdmodel.interactive.form.PDPushButton;
 import org.apache.pdfbox.pdmodel.interactive.form.PDSignatureField;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
@@ -661,6 +663,53 @@ public final class CropTestPdfGenerator {
         acroForm.getFields().add(field);
         // After the widget rectangle: setValue generates the visible appearance.
         field.setValue(value);
+    }
+
+    /** Checkbox field with a checked widget at (400,600,150,50). */
+    public static byte[] checkboxWidgetPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDAcroForm acroForm = new PDAcroForm(doc);
+            PDResources formResources = new PDResources();
+            formResources.put(COSName.getPDFName("Helv"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            acroForm.setDefaultResources(formResources);
+            acroForm.setDefaultAppearance("/Helv 12 Tf 0 g");
+            doc.getDocumentCatalog().setAcroForm(acroForm);
+            PDCheckBox field = new PDCheckBox(acroForm);
+            field.setPartialName("Checkbox1");
+            var widget = field.getWidgets().get(0);
+            widget.setRectangle(new PDRectangle(400, 600, 150, 50));
+            widget.setPage(page);
+            page.getAnnotations().add(widget);
+            acroForm.getFields().add(field);
+            field.check();
+            return save(doc);
+        }
+    }
+
+    /** Push-button field with its widget at (400,600,150,50); buttons carry no value. */
+    public static byte[] pushButtonWidgetPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDAcroForm acroForm = new PDAcroForm(doc);
+            PDResources formResources = new PDResources();
+            formResources.put(COSName.getPDFName("Helv"),
+                    new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            acroForm.setDefaultResources(formResources);
+            acroForm.setDefaultAppearance("/Helv 12 Tf 0 g");
+            doc.getDocumentCatalog().setAcroForm(acroForm);
+            PDPushButton field = new PDPushButton(acroForm);
+            field.setPartialName("Button1");
+            var widget = field.getWidgets().get(0);
+            widget.setRectangle(new PDRectangle(400, 600, 150, 50));
+            widget.setPage(page);
+            page.getAnnotations().add(widget);
+            acroForm.getFields().add(field);
+            return save(doc);
+        }
     }
 
     /** Signature field with its widget at (400,600,150,50). */
