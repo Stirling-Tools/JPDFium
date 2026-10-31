@@ -19,10 +19,9 @@ import java.util.regex.Pattern;
  * are set to the crop rectangle AND every page object lying outside it is physically
  * removed from the content stream:
  * <ul>
- *   <li><b>Text</b> - character-level Object Fission: characters whose placement
- *       origin lies outside the crop rect are destroyed; a line straddling the
- *       boundary is split so only the glyphs inside the crop area survive (pinned
- *       to their coordinates).</li>
+ *   <li><b>Text</b> - word-level Object Fission: a word that only partly falls
+ *       outside the crop is preserved whole, including glyphs outside the crop
+ *       (the page box clips them). Only words wholly outside are destroyed.</li>
  *   <li><b>Pictures / paths / shading / form XObjects</b> - removed when fully outside
  *       the crop rect; objects partially overlapping are kept and clipped by the CropBox
  *       (Ghostscript crop-and-clip behaviour - the visible part is never dropped).</li>
@@ -35,12 +34,11 @@ import java.util.regex.Pattern;
  *       cut visible text and pictures. This is the aggressive Ghostscript case.</li>
  * </ol>
  *
- * <p><b>Known limitation (Ghostscript-equivalent clip):</b> re-creating a split text
- * object flattens it to a single {@code Tj}, which drops kerning and can make glyphs
- * near the crop edge drift a few points, and text objects whose font cannot be
- * re-encoded at all (rare RTL/CID calligraphy fonts) are kept whole. In both cases
- * the out-of-crop part is clipped by the page CropBox, so nothing is visible outside
- * the crop - but such glyphs still exist in the file (pdftotext may see them).
+ * <p><b>Known limitation (intentional):</b> a word that touches the crop edge is
+ * preserved whole, including glyphs outside the crop, so its outside part still
+ * exists in the file (the page CropBox clips it from view; pdftotext may see it).
+ * Text objects whose font cannot be re-encoded at all (rare RTL/CID calligraphy
+ * fonts) are likewise kept whole rather than dropped.
  *
  * <h3>How to manually check it works</h3>
  * <ol>
@@ -48,10 +46,11 @@ import java.util.regex.Pattern;
  *       (text and pictures) is gone, the page size is the crop rectangle, and the
  *       surviving text did not move or re-flow.</li>
  *   <li>Compare the {@code before-*.png} / {@code after-*.png} renders side by side.</li>
- *   <li>Confirm the crop area is truly emptied (not just hidden) - every surviving word
- *       bbox must stay inside the cropped page size:
+ *   <li>Confirm fully-outside words are gone and boundary words were not cut in
+ *       half. Boundary words intentionally keep glyphs outside the page box, so
+ *       a bbox-inside-the-page check is no longer the contract:
  *       <pre>{@code
- *       pdftotext -bbox *-hardcrop.pdf - | grep -o 'width="[0-9.]*" height="[0-9.]*"'
+ *       pdftotext *-hardcrop.pdf - | grep -E 'DROP|KEEP'
  *       }</pre></li>
  *   <li>Confirm the output is structurally valid:
  *       <pre>{@code
@@ -192,9 +191,10 @@ public class S93_CropRemoveContent {
 
     /**
      * Apply {@link PdfPageGeometry#cropAndRemoveContent} then verify that every
-     * character that was OUTSIDE the crop rect is really gone from the content
-     * stream (position-matched against the original - a re-encoded glyph that
-     * drifted is not counted as leftover). Returns true if the check failed.
+     * word that was WHOLLY outside the crop rect is really gone from the content
+     * stream (position-matched against the original). Words that touch the crop
+     * edge are preserved whole by design, so their outside glyphs are expected
+     * survivors. Returns true if the check failed.
      */
     private static boolean cropPageAndVerify(PdfDocument doc, int pageIndex, Rect crop,
                                              List<CharPos> before, String label) {
@@ -210,58 +210,81 @@ public class S93_CropRemoveContent {
         System.out.printf("  chars: %d -> %d; visible glyphs %d -> %d%n",
                 before.size(), after.size(), visibleBefore, visibleAfter);
 
-        // Removal check: every original glyph that was outside the crop rect must
-        // no longer exist at its original position in the output. (Glyphs that
-        // survive the crop re-encode and drift are covered by the drift note.)
-        List<CharPos> beforeOutside = before.stream()
-                .filter(c -> c.unicode() >= 0x20)
-                .filter(c -> outsideOrigin(c, crop))
-                .toList();
-        long stillPresent = beforeOutside.stream()
+        // Removal check: glyphs belonging to wholly-outside words must no longer
+        // exist at their original position. Straddling words are kept whole.
+        List<CharPos> beforeRemovable = fullyOutsideWordChars(before, crop);
+        long stillPresent = beforeRemovable.stream()
                 .filter(orig -> after.stream().anyMatch(a -> sameGlyph(a, orig)))
                 .count();
-        long removed = beforeOutside.size() - stillPresent;
-
-        // Drift note: surviving glyphs that now sit outside the crop rect (their
-        // text object was re-encoded with flat Tj, dropping kerning) are clipped
-        // by the page CropBox - a fidelity artifact, not leftover outside content.
-        long drifted = after.stream()
-                .filter(c -> c.unicode() >= 0x20)
-                .filter(c -> outsideOrigin(c, crop))
-                .filter(a -> beforeOutside.stream().noneMatch(orig -> sameGlyph(a, orig)))
-                .count();
+        long removed = beforeRemovable.size() - stillPresent;
 
         if (removed > 0) {
-            System.out.printf("  removal: %d/%d outside glyphs removed%n", removed, beforeOutside.size());
+            System.out.printf("  removal: %d/%d wholly-outside glyphs removed%n",
+                    removed, beforeRemovable.size());
         }
-        if (drifted > 0) {
-            System.out.printf("  drift:   %d surviving glyph(s) clipped at crop edge " +
-                    "(flat-Tj re-encode dropped kerning - Ghostscript-equivalent clip)%n", drifted);
+        long preservedBoundary = before.stream()
+                .filter(c -> c.unicode() >= 0x20)
+                .filter(c -> !beforeRemovable.contains(c))
+                .filter(c -> outsideBBox(c, crop))
+                .count();
+        if (preservedBoundary > 0) {
+            System.out.printf("  kept:    %d glyph(s) in words touching the crop edge%n",
+                    preservedBoundary);
         }
 
-        // Kept-clipped glyphs are the documented font-re-encode failure: a text
-        // object straddling the crop edge whose font cannot be split (rare
-        // RTL/CID calligraphy fonts) is kept whole and clipped by the page
-        // CropBox - what Ghostscript's pdfwrite does. Only a large fraction of
-        // un-removed glyphs indicates a real removal regression.
-        long threshold = Math.max(RESIDUAL_TOLERANCE, beforeOutside.size() / 5);
+        // Kept-clipped glyphs from a wholly-outside word indicate a font
+        // re-encode failure. Only a large fraction is a real removal regression.
+        long threshold = Math.max(RESIDUAL_TOLERANCE, beforeRemovable.size() / 5);
         if (stillPresent > threshold) {
-            System.err.printf("  FAIL [%s]: %d outside characters were NOT removed%n",
+            System.err.printf("  FAIL [%s]: %d wholly-outside characters were NOT removed%n",
                     label, stillPresent);
             return true;
         }
         if (stillPresent > 0) {
-            System.out.printf("  WARN: [%s] %d outside glyph(s) kept-clipped " +
+            System.out.printf("  WARN: [%s] %d wholly-outside glyph(s) kept-clipped " +
                     "(font re-encode failed - Ghostscript-equivalent clip)%n", label, stillPresent);
         }
-        System.out.printf("  OK:   [%s] page resized to %s, outside content removed, PDF valid%n",
+        System.out.printf("  OK:   [%s] page resized to %s, outside words removed, PDF valid%n",
                 label, crop);
         return false;
     }
 
-    private static boolean outsideOrigin(CharPos c, Rect crop) {
-        return c.ox() < crop.x() - 0.5 || c.ox() > crop.x() + crop.width() + 0.5
-            || c.oy() < crop.y() - 0.5 || c.oy() > crop.y() + crop.height() + 0.5;
+    /** Characters belonging to words whose entire bbox is outside the crop. */
+    private static List<CharPos> fullyOutsideWordChars(List<CharPos> chars, Rect crop) {
+        List<CharPos> out = new ArrayList<>();
+        int i = 0;
+        while (i < chars.size()) {
+            CharPos first = chars.get(i);
+            if (isWordBoundary(first)) {
+                i++;
+                continue;
+            }
+            int start = i;
+            float l = Float.MAX_VALUE, b = Float.MAX_VALUE;
+            float r = -Float.MAX_VALUE, t = -Float.MAX_VALUE;
+            while (i < chars.size() && !isWordBoundary(chars.get(i))) {
+                CharPos c = chars.get(i);
+                l = Math.min(l, (float) c.l());
+                b = Math.min(b, (float) c.b());
+                r = Math.max(r, (float) c.r());
+                t = Math.max(t, (float) c.t());
+                i++;
+            }
+            if (r < crop.x() || l > crop.x() + crop.width()
+                    || t < crop.y() || b > crop.y() + crop.height()) {
+                out.addAll(chars.subList(start, i));
+            }
+        }
+        return out;
+    }
+
+    private static boolean isWordBoundary(CharPos c) {
+        return c.unicode() < 0x21 || c.unicode() == 0xA0;
+    }
+
+    private static boolean outsideBBox(CharPos c, Rect crop) {
+        return c.r() < crop.x() || c.l() > crop.x() + crop.width()
+                || c.t() < crop.y() || c.b() > crop.y() + crop.height();
     }
 
     private static boolean sameGlyph(CharPos a, CharPos b) {

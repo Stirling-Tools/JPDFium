@@ -859,6 +859,12 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
 int32_t jpdfium_crop_remove_content(int64_t, float x, float y, float w, float h) noexcept {
     return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
+int32_t jpdfium_crop_remove_content_ex(int64_t, float x, float y, float w, float h,
+                                       float margin) noexcept {
+    return (!std::isfinite(margin) || margin < 0.0f || stub_rect_invalid(x, y, w, h))
+               ? JPDFIUM_ERR_INVALID
+               : JPDFIUM_OK;
+}
 int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t,
                                int32_t remove_content) noexcept {
     if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned

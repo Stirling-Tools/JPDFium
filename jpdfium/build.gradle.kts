@@ -187,6 +187,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_text_get_char_positions",
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
     "jpdfium_redact_words_ex", "jpdfium_crop_remove_content",
+    "jpdfium_crop_remove_content_ex",
     "jpdfium_page_flatten", "jpdfium_page_to_image",
     // Advanced Pattern Engine (PCRE2 JIT)
     "jpdfium_pcre2_compile", "jpdfium_pcre2_match_all", "jpdfium_pcre2_free",

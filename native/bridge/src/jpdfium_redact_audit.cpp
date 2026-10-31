@@ -152,21 +152,87 @@ static bool pageContentInsideCrop(FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage, 
     return isFullyContained(tl, tb, tr, tt, l, b, r, t);
 }
 
-// After the fission pass nothing may remain fully outside the crop: checks
-// every non-generated char origin and every content-bearing object (clip
-// paths exempt). A false result is a loud REDACT_INCOMPLETE at the call site.
-static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& crop,
+// A word is a run of printable, non-generated characters. Removal decisions use
+// the word's aggregate bounds, not individual glyph origins: a word that is
+// only partly outside the keep region survives whole.
+struct TextWord {
+    std::vector<int> charIndices;
+    float l = std::numeric_limits<float>::max();
+    float b = std::numeric_limits<float>::max();
+    float r = std::numeric_limits<float>::lowest();
+    float t = std::numeric_limits<float>::lowest();
+    bool reliable = true;  // false when a glyph box fell back to its origin
+};
+
+static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word) {
+    double dl, dr, db, dt;
+    float l, r, b, t;
+    bool haveBox = FPDFText_GetCharBox(textPage, ci, &dl, &dr, &db, &dt);
+    if (haveBox) {
+        l = static_cast<float>(dl);
+        r = static_cast<float>(dr);
+        b = static_cast<float>(db);
+        t = static_cast<float>(dt);
+    } else {
+        double ox, oy;
+        if (!FPDFText_GetCharOrigin(textPage, ci, &ox, &oy)) return false;
+        l = r = static_cast<float>(ox);
+        b = t = static_cast<float>(oy);
+        word.reliable = false;
+    }
+    word.l = std::min(word.l, l);
+    word.b = std::min(word.b, b);
+    word.r = std::max(word.r, r);
+    word.t = std::max(word.t, t);
+    word.charIndices.push_back(ci);
+    return true;
+}
+
+static std::vector<TextWord> buildTextWords(FPDF_TEXTPAGE textPage) {
+    std::vector<TextWord> words;
+    if (!textPage) return words;
+    const int count = FPDFText_CountChars(textPage);
+    TextWord current;
+    FPDF_PAGEOBJECT currentObject = nullptr;
+    auto flush = [&] {
+        if (!current.charIndices.empty()) {
+            words.push_back(std::move(current));
+            current = TextWord();
+        }
+        currentObject = nullptr;
+    };
+    for (int ci = 0; ci < count; ci++) {
+        const unsigned int unicode = FPDFText_GetUnicode(textPage, ci);
+        if (FPDFText_IsGenerated(textPage, ci) == 1 || unicode <= 0x20 || unicode == 0xA0) {
+            flush();
+            continue;
+        }
+        // A new text object starts a new word: separate BT/ET blocks without
+        // an explicit space must not merge into one huge bbox.
+        FPDF_PAGEOBJECT object = FPDFText_GetTextObject(textPage, ci);
+        if (currentObject && object != currentObject) flush();
+        currentObject = object;
+        if (!addCharToWord(textPage, ci, current)) flush();
+    }
+    flush();
+    return words;
+}
+
+static bool fullyOutside(float l, float b, float r, float t, const FS_RECTF& keep) {
+    return !rectsOverlap(l, b, r, t, keep.left, keep.bottom, keep.right, keep.top);
+}
+
+// After the fission pass nothing may remain fully outside the keep region:
+// every word must intersect it and every content-bearing object (clip paths
+// exempt) must too. A false result is a loud REDACT_INCOMPLETE at the call site.
+static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& keep,
                                       FPDF_TEXTPAGE textPage) {
-    // 1. Characters: every real (non-generated) char origin must be inside the crop.
+    // 1. Words: a word that touches the keep region may retain glyphs outside
+    //    it (straddling words are preserved whole); a word wholly outside must
+    //    be gone.
     if (textPage) {
-        int n = FPDFText_CountChars(textPage);
-        for (int ci = 0; ci < n; ci++) {
-            if (FPDFText_IsGenerated(textPage, ci) == 1) continue;
-            double ox, oy;
-            if (!FPDFText_GetCharOrigin(textPage, ci, &ox, &oy)) continue;
-            if (ox < crop.left || ox > crop.right || oy < crop.bottom || oy > crop.top) {
-                return false;
-            }
+        for (const TextWord& word : buildTextWords(textPage)) {
+            if (fullyOutside(word.l, word.b, word.r, word.t, keep)) return false;
         }
     }
 
@@ -206,7 +272,12 @@ static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& crop,
             return true;
         }
         float l, b, r, t;
-        if (FPDFPageObj_GetBounds(obj, &l, &b, &r, &t) && !((r - l) <= 0.01f && (t - b) <= 0.01f)) {
+        if (!FPDFPageObj_GetBounds(obj, &l, &b, &r, &t)) return true;
+        // A text object with a zero-width or zero-height box has no painted
+        // glyphs left (EPDF can leave an empty shell after removing its
+        // chars). The word audit above covers every real character.
+        if (type == FPDF_PAGEOBJ_TEXT && ((r - l) <= 0.01f || (t - b) <= 0.01f)) return true;
+        if (!((r - l) <= 0.01f && (t - b) <= 0.01f)) {
             const float corners[4][2] = {{l, b}, {r, b}, {r, t}, {l, t}};
             float tMinX = std::numeric_limits<float>::max();
             float tMinY = std::numeric_limits<float>::max();
@@ -220,8 +291,8 @@ static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& crop,
                 if (tx > tMaxX) tMaxX = tx;
                 if (ty > tMaxY) tMaxY = ty;
             }
-            if (!rectsOverlap(tMinX, tMinY, tMaxX, tMaxY, crop.left, crop.bottom, crop.right,
-                              crop.top)) {
+            if (!rectsOverlap(tMinX, tMinY, tMaxX, tMaxY, keep.left, keep.bottom, keep.right,
+                              keep.top)) {
                 return false;
             }
         }
@@ -237,23 +308,29 @@ static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& crop,
     return true;
 }
 
-int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h) noexcept {
+int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h,
+                                       float margin) noexcept {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w) || !std::isfinite(h) ||
-        w <= 0.0f || h <= 0.0f)
+        w <= 0.0f || h <= 0.0f || !std::isfinite(margin) || margin < 0.0f)
         return JPDFIUM_ERR_INVALID;
 
     try {
         const float cL = x, cB = y, cR = x + w, cT = y + h;
-        const FS_RECTF cropRect = makePageRect(cL, cB, cR, cT);
+        // Content whose bounds touch this region is kept; only content wholly
+        // outside it is removed. AUTO (margin 0) protects every word or object
+        // that straddles the crop edge.
+        const float kL = cL - margin, kB = cB - margin;
+        const float kR = cR + margin, kT = cT + margin;
+        const FS_RECTF keepRect = makePageRect(kL, kB, kR, kT);
 
         const int fastObjCount = FPDFPage_CountObjects(pw->page);
         bool allInside = true;
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
-            if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
+            if (!pageContentInsideCrop(obj, kIdentityMatrix, kL, kB, kR, kT, 0)) {
                 allInside = false;
                 break;
             }
@@ -275,8 +352,8 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         float pageMinX = 0.0f, pageMinY = 0.0f;
         float pageMaxX = static_cast<float>(FPDF_GetPageWidth(pw->page));
         float pageMaxY = static_cast<float>(FPDF_GetPageHeight(pw->page));
-        if (pageMaxX <= 0.0f) pageMaxX = cR + 1000.0f;
-        if (pageMaxY <= 0.0f) pageMaxY = cT + 1000.0f;
+        if (pageMaxX <= 0.0f) pageMaxX = kR + 1000.0f;
+        if (pageMaxY <= 0.0f) pageMaxY = kT + 1000.0f;
 
         for (int i = 0; i < fastObjCount; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
@@ -296,23 +373,119 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
         pageMaxX += 100.0f;
         pageMaxY += 100.0f;
 
-        // Define the 4 outer margin bounding boxes around the crop rect. They
-        // partition everything outside the crop, so they also double as the
-        // erase regions for partially visible images.
+        // Define the 4 outer margin bounding boxes around the keep region. They
+        // partition everything outside it, so they also double as the erase
+        // regions for partially visible images.
         struct MarginBox {
             float l, b, r, t;
         };
         MarginBox margins[4];
         int marginCount = 0;
-        if (cL > pageMinX) margins[marginCount++] = {pageMinX, pageMinY, cL, pageMaxY};
-        if (cR < pageMaxX) margins[marginCount++] = {cR, pageMinY, pageMaxX, pageMaxY};
-        if (cB > pageMinY) margins[marginCount++] = {cL, pageMinY, cR, cB};
-        if (cT < pageMaxY) margins[marginCount++] = {cL, cT, cR, pageMaxY};
+        if (kL > pageMinX) margins[marginCount++] = {pageMinX, pageMinY, kL, pageMaxY};
+        if (kR < pageMaxX) margins[marginCount++] = {kR, pageMinY, pageMaxX, pageMaxY};
+        if (kB > pageMinY) margins[marginCount++] = {kL, pageMinY, kR, kB};
+        if (kT < pageMaxY) margins[marginCount++] = {kL, kT, kR, pageMaxY};
 
-        // One pass: a char is removed when its origin is outside the crop.
+        // Select whole words: a word that touches the keep region survives,
+        // including glyphs that fall outside it. Only words wholly outside are
+        // redacted. This is what keeps a half-out word (or a glyph whose origin
+        // is outside but whose box reaches inside) intact.
         const int count = FPDFText_CountChars(tp.get());
+        std::vector<char> redactChar(static_cast<size_t>(count), 0);
+        const std::vector<TextWord> words = buildTextWords(tp.get());
+        for (const TextWord& word : words) {
+            if (fullyOutside(word.l, word.b, word.r, word.t, keepRect)) {
+                for (int ci : word.charIndices) {
+                    if (ci >= 0 && ci < count) redactChar[static_cast<size_t>(ci)] = 1;
+                }
+            }
+        }
+
+        // EPDF removes glyphs whose boxes intersect a region. Build regions
+        // from the wholly-outside word boxes and merge same-line neighbours
+        // into bounded runs. Retained words split runs, so a straddling word's
+        // glyphs are never covered. The plain margins would remove the outside
+        // half of a word that must survive, so they remain only the
+        // fission/erase regions.
+        std::vector<MarginBox> redactedBoxes;
+        auto subtractWordBox = [](std::vector<MarginBox>& regions, float wl, float wb, float wr,
+                                  float wt) {
+            std::vector<MarginBox> out;
+            out.reserve(regions.size() + 4);
+            for (const MarginBox& r : regions) {
+                if (!rectsOverlap(r.l, r.b, r.r, r.t, wl, wb, wr, wt)) {
+                    out.push_back(r);
+                    continue;
+                }
+                if (wl > r.l) out.push_back({r.l, r.b, std::min(r.r, wl), r.t});
+                if (wr < r.r) out.push_back({std::max(r.l, wr), r.b, r.r, r.t});
+                const float midL = std::max(r.l, wl);
+                const float midR = std::min(r.r, wr);
+                if (wt < r.t) out.push_back({midL, std::max(r.b, wt), midR, r.t});
+                if (wb > r.b) out.push_back({midL, r.b, midR, std::min(r.t, wb)});
+            }
+            regions.swap(out);
+        };
+        bool unreliableBounds = false;
+        std::vector<const TextWord*> straddlingWords;
+        for (const TextWord& word : words) {
+            if (!word.reliable) unreliableBounds = true;
+            if (rectsOverlap(word.l, word.b, word.r, word.t, kL, kB, kR, kT) &&
+                !isFullyContained(word.l, word.b, word.r, word.t, kL, kB, kR, kT)) {
+                straddlingWords.push_back(&word);
+            }
+        }
+        for (const TextWord& word : words) {
+            if (!fullyOutside(word.l, word.b, word.r, word.t, keepRect)) continue;
+            if (!word.reliable) continue;
+            std::vector<MarginBox> wordRegions{{word.l, word.b, word.r, word.t}};
+            for (const TextWord* straddling : straddlingWords) {
+                if (!rectsOverlap(word.l, word.b, word.r, word.t, straddling->l, straddling->b,
+                                  straddling->r, straddling->t)) {
+                    continue;
+                }
+                subtractWordBox(wordRegions, straddling->l, straddling->b, straddling->r,
+                                straddling->t);
+            }
+            for (const MarginBox& region : wordRegions) {
+                if (region.r > region.l && region.t > region.b) redactedBoxes.push_back(region);
+            }
+        }
+
+        std::sort(redactedBoxes.begin(), redactedBoxes.end(),
+                  [](const MarginBox& a, const MarginBox& b) {
+                      if (a.b != b.b) return a.b < b.b;
+                      return a.l < b.l;
+                  });
+        auto hitsRetained = [&](const MarginBox& box) {
+            for (const TextWord& word : words) {
+                if (fullyOutside(word.l, word.b, word.r, word.t, keepRect)) continue;
+                if (rectsOverlap(box.l, box.b, box.r, box.t, word.l, word.b, word.r, word.t)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        std::vector<MarginBox> epdfRegions;
+        epdfRegions.reserve(redactedBoxes.size());
+        constexpr float kMergeGap = 6.0f;
+        for (const MarginBox& box : redactedBoxes) {
+            bool merged = false;
+            for (MarginBox& region : epdfRegions) {
+                if (std::min(region.t, box.t) - std::max(region.b, box.b) <= 0.0f) continue;
+                if (box.l > region.r + kMergeGap || box.r < region.l - kMergeGap) continue;
+                MarginBox candidate{std::min(region.l, box.l), std::min(region.b, box.b),
+                                    std::max(region.r, box.r), std::max(region.t, box.t)};
+                if (hitsRetained(candidate)) continue;
+                region = candidate;
+                merged = true;
+                break;
+            }
+            if (!merged) epdfRegions.push_back(box);
+        }
+
         std::vector<TextMatch> matches;
-        matches.reserve(static_cast<size_t>(marginCount));
+        matches.reserve(static_cast<size_t>(marginCount) + 1);
         for (int mi = 0; mi < marginCount; mi++) {
             TextMatch m;
             m.bboxL = margins[mi].l;
@@ -321,16 +494,44 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             m.bboxT = margins[mi].t;
             matches.push_back(std::move(m));
         }
+        std::vector<int> unassigned;
         for (int i = 0; i < count; ++i) {
+            if (!redactChar[static_cast<size_t>(i)]) continue;
             double ox, oy;
-            if (!FPDFText_GetCharOrigin(tp.get(), i, &ox, &oy)) continue;
+            if (!FPDFText_GetCharOrigin(tp.get(), i, &ox, &oy)) {
+                unassigned.push_back(i);
+                continue;
+            }
+            bool assigned = false;
             for (int mi = 0; mi < marginCount; mi++) {
                 const MarginBox& mb = margins[mi];
                 if (ox >= mb.l && ox <= mb.r && oy >= mb.b && oy <= mb.t) {
                     matches[mi].charIndices.push_back(i);
+                    assigned = true;
                     break;
                 }
             }
+            if (!assigned) unassigned.push_back(i);
+        }
+        if (!unassigned.empty()) {
+            // Rotated or degenerate glyph boxes can miss the margin partitions;
+            // keep a fallback box so the selected chars are still redacted.
+            TextMatch m;
+            m.bboxL = std::numeric_limits<float>::max();
+            m.bboxB = std::numeric_limits<float>::max();
+            m.bboxR = std::numeric_limits<float>::lowest();
+            m.bboxT = std::numeric_limits<float>::lowest();
+            for (int ci : unassigned) {
+                double l, r, b, t;
+                if (FPDFText_GetCharBox(tp.get(), ci, &l, &r, &b, &t)) {
+                    m.bboxL = std::min(m.bboxL, static_cast<float>(l));
+                    m.bboxB = std::min(m.bboxB, static_cast<float>(b));
+                    m.bboxR = std::max(m.bboxR, static_cast<float>(r));
+                    m.bboxT = std::max(m.bboxT, static_cast<float>(t));
+                }
+            }
+            m.charIndices = std::move(unassigned);
+            matches.push_back(std::move(m));
         }
 
         bool anythingToRemove = false;
@@ -346,7 +547,7 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
                 FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
                 if (!obj) continue;
                 if (FPDFPageObj_GetType(obj) == FPDF_PAGEOBJ_TEXT) continue;
-                if (!pageContentInsideCrop(obj, kIdentityMatrix, cL, cB, cR, cT, 0)) {
+                if (!pageContentInsideCrop(obj, kIdentityMatrix, kL, kB, kR, kT, 0)) {
                     anythingToRemove = true;
                     break;
                 }
@@ -356,29 +557,32 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             return JPDFIUM_OK;
         }
 
-        // Detect whether the page contains Form XObjects or straddling non-text objects (images,
-        // paths). EmbedPDF's redact annotation application destroys whole objects whose bounding
-        // box intersects the annotation rect. For straddling images (which must be pixel-erased
-        // outside while surviving inside) or straddling paths (which must be subpath-clipped) or
-        // Form XObjects (which must be recursively searched), Object Fission must be used.
-        // For text (and fully contained/outside elements), EPDF redaction provides pristine font
-        // preservation.
+        // Detect whether the page contains Form XObjects or straddling text /
+        // images / paths. EmbedPDF's redact annotation application destroys
+        // whole objects whose bounding box intersects the annotation rect.
+        // Straddling words must be fissioned so their outside glyphs survive;
+        // straddling images need pixel erase, paths need clipping, and forms
+        // need recursive descent. For fully inside/outside text, EPDF
+        // redaction provides pristine font preservation.
         bool requiresFission = false;
-        for (int i = 0; i < fastObjCount; ++i) {
+        bool hasForms = false;
+        for (int i = 0; i < fastObjCount && !requiresFission; ++i) {
             FPDF_PAGEOBJECT obj = FPDFPage_GetObject(pw->page, i);
             if (!obj) continue;
             int type = FPDFPageObj_GetType(obj);
             if (type == FPDF_PAGEOBJ_FORM) {
+                hasForms = true;
                 requiresFission = true;
                 break;
             }
             if (type == FPDF_PAGEOBJ_IMAGE || type == FPDF_PAGEOBJ_PATH) {
                 float ol, ob, or_, ot;
                 if (FPDFPageObj_GetBounds(obj, &ol, &ob, &or_, &ot)) {
-                    // Check if it straddles the crop: intersects both inside and outside
-                    bool overlapsCrop = rectsOverlap(ol, ob, or_, ot, cL, cB, cR, cT);
-                    bool fullyInside = isFullyContained(ol, ob, or_, ot, cL, cB, cR, cT);
-                    if (overlapsCrop && !fullyInside) {
+                    // Check if it straddles the keep region: intersects both
+                    // the inside and the outside.
+                    bool overlaps = rectsOverlap(ol, ob, or_, ot, kL, kB, kR, kT);
+                    bool fullyInside = isFullyContained(ol, ob, or_, ot, kL, kB, kR, kT);
+                    if (overlaps && !fullyInside) {
                         requiresFission = true;
                         break;
                     }
@@ -386,14 +590,20 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             }
         }
 
-        // Apply EPDF redactions on the 4 margin rectangles when there are no straddling
-        // images/forms. This uses EmbedPDF's native in-place TJ kerning and glyph removal to
-        // eliminate text outside the crop without font reconstruction degradation.
-        bool epdfOk = !requiresFission;
+        // EPDF handles text removal well; forms are left to the fission path
+        // because their streams need write-back. Too many split regions is
+        // worse than the fallback, so keep the region set bounded.
+        const bool epdfText =
+            !hasForms && !unreliableBounds && !epdfRegions.empty() && epdfRegions.size() <= 512;
+
+        // Apply EPDF redactions on the merged outside-word regions. This uses
+        // EmbedPDF's native in-place TJ kerning and glyph removal to eliminate
+        // text outside the crop without font reconstruction degradation.
+        // Non-text content is then handled by fission with skipTextObjects=true.
+        bool epdfOk = epdfText;
         bool epdfMutated = false;
         if (epdfOk) {
-            for (int mi = 0; mi < marginCount; mi++) {
-                const MarginBox& mb = margins[mi];
+            for (const MarginBox& mb : epdfRegions) {
                 if (mb.r <= mb.l || mb.t <= mb.b) continue;
 
                 FPDF_ANNOTATION annot = FPDFPage_CreateAnnot(pw->page, FPDF_ANNOT_REDACT);
@@ -440,24 +650,28 @@ int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, flo
             // (pixel-erasing images outside crop, clipping path vectors)
             int32_t rc =
                 objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0x00000000, pw->core,
-                                    nullptr, &cropRect, /*skipTextObjects=*/true);
+                                    nullptr, &keepRect, /*skipTextObjects=*/true);
             if (rc != JPDFIUM_OK) return rc;
         } else {
             // Fallback: full Object Fission if EPDF redactions were not available
             int32_t rc =
                 objectFissionRedact(pw->doc, pw->page, tp.get(), matches, 0x00000000, pw->core,
-                                    nullptr, &cropRect, /*skipTextObjects=*/false);
+                                    nullptr, &keepRect, /*skipTextObjects=*/false);
             if (rc != JPDFIUM_OK) return rc;
         }
 
-        // Audit that nothing content-bearing remains fully outside the crop.
+        // Audit that nothing content-bearing remains fully outside the keep region.
         FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
         if (!audit) return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
-        bool auditOk = auditNoContentOutsideCrop(pw->page, cropRect, audit);
+        bool auditOk = auditNoContentOutsideCrop(pw->page, keepRect, audit);
         FPDFText_ClosePage(audit);
         if (!auditOk) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         return JPDFIUM_OK;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
+}
+
+int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w, float h) noexcept {
+    return jpdfium_crop_remove_content_ex(page, x, y, w, h, 0.0f);
 }

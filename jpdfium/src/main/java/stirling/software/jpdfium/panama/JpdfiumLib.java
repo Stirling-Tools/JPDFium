@@ -1336,12 +1336,13 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Hard crop: physically remove everything outside the crop rectangle.
-     * Straddling text is split per character, straddling images are
+     * Hard crop: physically remove content wholly outside the crop rectangle.
+     * Words touching the crop edge keep their outside glyphs, and margin-kept
+     * content remains in the file; both are clipped only by the page boxes.
+     * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
-     * nested images promoted),
-     * fully outside objects are removed. A post-pass audit returns
-     * {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * nested images promoted), fully outside objects are removed. A post-pass
+     * audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
      * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
      * audit cannot run.
      *
@@ -1352,11 +1353,32 @@ public final class JpdfiumLib {
      * @param h    crop rect height
      */
     public static void cropRemoveContent(long page, float x, float y, float w, float h) {
+        cropRemoveContent(page, x, y, w, h, 0.0f);
+    }
+
+    /**
+     * Hard crop with a content-removal margin. A zero margin is AUTO: only
+     * content wholly outside the crop is removed; anything touching the crop
+     * survives. A positive margin keeps content within that many PDF points of
+     * the crop edge, so content is removed only once it is wholly outside the
+     * expanded rectangle. The page boxes are still set to the unexpanded crop,
+     * so margin-kept content remains clipped from view.
+     *
+     * @param page   bridge page handle
+     * @param x      crop rect left (PDF points)
+     * @param y      crop rect bottom (PDF points)
+     * @param w      crop rect width
+     * @param h      crop rect height
+     * @param margin content-removal margin in PDF points; {@code 0} is AUTO
+     */
+    public static void cropRemoveContent(long page, float x, float y, float w, float h,
+                                         float margin) {
         // Leaf admission: five captured arguments made this one of the hottest
         // allocating call sites (see docPageCount).
         PdfiumRuntime.enterLeaf();
         try {
-            check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
+            check(JpdfiumH.jpdfium_crop_remove_content_ex(page, x, y, w, h, margin),
+                    "cropRemoveContent");
         } finally {
             PdfiumRuntime.exitLeaf();
         }
