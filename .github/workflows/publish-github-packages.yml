@@ -70,7 +70,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest,    target_cpu: x64   }
+          - { platform: linux-x64,    runner: ubuntu-24.04,     target_cpu: x64   }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm, target_cpu: arm64 }
           # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
           # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
@@ -460,6 +460,12 @@ jobs:
 
           SIZE_GATE_STRICT=1 bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
+
+      - name: Check glibc floor
+        # The natives must load on the oldest supported glibc distribution,
+        # not just the runner that linked them.
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/${{ matrix.platform }}
 
       - name: Sanity check
         # Skipped musl legs (no musl PDFium prebuild yet) or freebsd have no dist dir.

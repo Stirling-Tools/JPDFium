@@ -89,7 +89,7 @@ jobs:
       matrix:
         include:
           - platform: linux-x64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             shell: bash
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
@@ -491,6 +491,12 @@ jobs:
           echo "--- staged ---"
           ls -la native/dist/${{ matrix.platform }}/
 
+      - name: Check glibc floor
+        # The natives must load on the oldest supported glibc distribution,
+        # not just the runner that linked them.
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/${{ matrix.platform }}
+
       - name: Sanity check
         # Skipped musl legs (no musl PDFium prebuild yet) or freebsd have no dist dir.
         if: (matrix.libc != 'musl' && (matrix.platform != 'freebsd-x64' || steps.fetch.outputs.freebsd_missing != 'true')) || steps.musl.outcome == 'success'
@@ -603,7 +609,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
@@ -670,7 +676,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           # darwin-x64 runs on an Intel runner: the keg-only deps resolve
           # from /usr/local and the bundler asserts x86_64.
@@ -890,6 +896,10 @@ jobs:
           [ "$bad" -eq 0 ] || { echo "ERROR: non-x86_64 binaries staged for darwin-x64" >&2; exit 1; }
 
 
+      - name: Check glibc floor
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/vips-${{ matrix.platform }}
+
       - name: Build vips natives jar
         run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
 
@@ -1065,7 +1075,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }
@@ -1113,7 +1123,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-14         }

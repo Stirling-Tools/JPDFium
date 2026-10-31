@@ -101,9 +101,9 @@ jobs:
         id: set-matrix
         run: |
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-24.04"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-24.04"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
@@ -577,6 +577,12 @@ jobs:
           bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
+      - name: Check glibc floor
+        # The natives must load on the oldest supported glibc distribution,
+        # not just the runner that linked them.
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/${{ matrix.platform }}
+
       # Functionally verify the freshly-built native instead of trusting that a
       # file was produced: load it via the production NativeLoader and open a
       # PDF. Skips: darwin-x64 (cross-compiled on an arm64 host, can't run here),
@@ -674,7 +680,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel   }
           - { platform: darwin-arm64, runner: macos-14         }
@@ -872,6 +878,11 @@ jobs:
           JPDFIUM_REQUIRE_SOURCE_VIPS: '1'
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
+      - name: Check glibc floor
+        id: glibc_floor
+        if: (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64') && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success')
+        run: bash native/ci/check-glibc-floor.sh native/dist/vips-${{ matrix.platform }}
+
       - name: Build vips natives jar
         if: steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success'
         continue-on-error: true
@@ -905,7 +916,7 @@ jobs:
           retention-days: 7
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success')
+        if: always() && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success') && steps.glibc_floor.outcome != 'failure'
         with:
           name: natives-vips-${{ matrix.platform }}
           path: native/dist/vips-${{ matrix.platform }}/
