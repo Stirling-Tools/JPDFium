@@ -225,9 +225,9 @@ jobs:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           brew install cmake ninja \
-            pcre2 freetype harfbuzz icu4c qpdf pugixml libunibreak \
+            pcre2 freetype harfbuzz icu4c@78 qpdf pugixml libunibreak \
             pkg-config
-          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c@78)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       # Keep the x86_64 kegs across runs; a cold runner reinstalls them.
       - name: Cache x86_64 Homebrew deps (macOS)
@@ -284,15 +284,15 @@ jobs:
           # qpdf and harfbuzz are rebuilt from source below, so brew only
           # needs the bridge deps plus qpdf's zlib/libjpeg inputs.
           if arch -x86_64 /usr/local/bin/brew list --versions \
-              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo \
+              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo \
               >/dev/null 2>&1; then
             echo "x86_64 Homebrew deps restored from cache"
           else
             arch -x86_64 /usr/local/bin/brew install \
-              pcre2 freetype icu4c pugixml libunibreak pkg-config zlib jpeg-turbo
+              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo
           fi
           {
-            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c@78/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
