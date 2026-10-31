@@ -106,7 +106,7 @@ jobs:
             echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-15"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           fi
 
-  # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
+  # Cross-build a trimmed Windows icudt79.dll on Linux ahead of the matrix
   # so the windows-x64 job can download it as an artifact during its own
   # build. The matrix can't have per-cell needs:, so we do this as a
   # separate prep job that the matrix depends on. ~5-7 min CI overhead;
@@ -133,15 +133,17 @@ jobs:
             sleep 30
           done
           exit 1
-      - name: Cross-build minimal Windows icudt78.dll
+      - name: Cross-build minimal Windows icudt79.dll
+        env:
+          ICU_VER: "79"
         run: bash native/build-minimal-icu-windows.sh
-      - name: Upload trimmed Windows icudt78.dll
+      - name: Upload trimmed Windows icudt79.dll
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-icu-trimmed
           path: |
-            native/dist/windows-x64/icudt78.dll
-            native/dist/windows-arm64/icudt78.dll
+            native/dist/windows-x64/icudt79.dll
+            native/dist/windows-arm64/icudt79.dll
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
@@ -191,7 +193,7 @@ jobs:
         # Also retry 3x in case the Azure mirror has its own glitch.
         #
         # mingw-w64 + binutils-mingw-w64 lets the Linux x64 job cross-build
-        # a Windows icudt78.dll (Task #7 - drops ~28 MB of unused ICU data
+        # a Windows icudt79.dll (Task #7 - drops ~28 MB of unused ICU data
         # from the windows-x64 natives jar). meson + ninja-build for the
         # harfbuzz-without-glib rebuild (drops libglib).
         run: |
@@ -225,9 +227,9 @@ jobs:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
         run: |
           brew install cmake ninja \
-            pcre2 freetype harfbuzz icu4c@78 qpdf pugixml libunibreak \
+            pcre2 freetype harfbuzz icu4c@79 qpdf pugixml libunibreak \
             pkg-config
-          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c@78)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix icu4c@79)/lib/pkgconfig:$(brew --prefix)/lib/pkgconfig" >> "$GITHUB_ENV"
 
       # Keep the x86_64 kegs across runs; a cold runner reinstalls them.
       - name: Cache x86_64 Homebrew deps (macOS)
@@ -284,15 +286,15 @@ jobs:
           # qpdf and harfbuzz are rebuilt from source below, so brew only
           # needs the bridge deps plus qpdf's zlib/libjpeg inputs.
           if arch -x86_64 /usr/local/bin/brew list --versions \
-              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo \
+              pcre2 freetype icu4c@79 pugixml libunibreak pkg-config zlib jpeg-turbo \
               >/dev/null 2>&1; then
             echo "x86_64 Homebrew deps restored from cache"
           else
             arch -x86_64 /usr/local/bin/brew install \
-              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo
+              pcre2 freetype icu4c@79 pugixml libunibreak pkg-config zlib jpeg-turbo
           fi
           {
-            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c@78/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c@79/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
@@ -488,7 +490,7 @@ jobs:
         run: bash native/build-minimal-icu.sh
 
       - name: Download bare trimmed ICU .dat (macOS)
-        # brew icu4c@78 doesn't ship icupkg/pkgdata, so we don't trim
+        # brew icu4c@79 doesn't ship icupkg/pkgdata, so we don't trim
         # locally; we download the pre-trimmed .dat produced once on Linux
         # by the prep-windows-icu job and wrap it on macOS via clang. The
         # .dat is platform-agnostic.
@@ -500,11 +502,11 @@ jobs:
 
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        # Wraps the downloaded icudt78l.dat into a libicudata.<MAJ>.dylib
+        # Wraps the downloaded icudt79l.dat into a libicudata.<MAJ>.dylib
         # via a clang .incbin asm stub. Pre-stages into native/dist/<platform>/
         # so the bundler picks it up instead of brew's full 33 MB copy. Also
         # fixes a latent gap on darwin-arm64 where bundle_macos couldn't
-        # resolve libicudata through brew's keg-only icu4c@78 path.
+        # resolve libicudata through brew's keg-only icu4c@79 path.
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
@@ -545,14 +547,14 @@ jobs:
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
 
-      - name: Override icudt78.dll with trimmed copy (Windows only)
+      - name: Override icudt79.dll with trimmed copy (Windows only)
         # Run AFTER the PDFium-siblings find above (which would copy PDFium's
-        # 33 MB icudt78.dll) and BEFORE the bundler so the small trimmed copy
+        # 33 MB icudt79.dll) and BEFORE the bundler so the small trimmed copy
         # wins. download-artifact@v4 extracts on top, overwriting the larger
         # one.
         if: startsWith(matrix.platform, 'windows-')
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
-        continue-on-error: true        # missing artifact -> stay with PDFium's full 33 MB icudt78.dll
+        continue-on-error: true        # missing artifact -> stay with PDFium's full 33 MB icudt79.dll
         with:
           name: windows-icu-trimmed
           path: native/dist/
@@ -573,7 +575,7 @@ jobs:
           # only what's actually referenced, skipping system libs. Also
           # strips debug symbols from the bridge. Bundler's "skip if dest
           # exists" guard preserves any pre-staged trimmed files (Linux
-          # libicudata.so.74 / Windows icudt78.dll).
+          # libicudata.so.74 / Windows icudt79.dll).
           bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
