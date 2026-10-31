@@ -156,7 +156,8 @@ static bool pageContentInsideCrop(FPDF_PAGEOBJECT obj, const FS_MATRIX& toPage, 
 // the word's aggregate bounds, not individual glyph origins: a word that is
 // only partly outside the keep region survives whole.
 struct TextWord {
-    std::vector<int> charIndices;
+    int firstChar = 0;
+    int charCount = 0;
     float l = std::numeric_limits<float>::max();
     float b = std::numeric_limits<float>::max();
     float r = std::numeric_limits<float>::lowest();
@@ -164,7 +165,14 @@ struct TextWord {
     bool reliable = true;  // false when a glyph box fell back to its origin
 };
 
-static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word) {
+// Char indices live in one contiguous vector rather than one vector per word:
+// a page with hundreds of words otherwise allocates once per word.
+struct TextWords {
+    std::vector<TextWord> words;
+    std::vector<int> charIndices;
+};
+
+static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word, TextWords& all) {
     double dl, dr, db, dt;
     float l, r, b, t;
     bool haveBox = FPDFText_GetCharBox(textPage, ci, &dl, &dr, &db, &dt);
@@ -184,19 +192,23 @@ static bool addCharToWord(FPDF_TEXTPAGE textPage, int ci, TextWord& word) {
     word.b = std::min(word.b, b);
     word.r = std::max(word.r, r);
     word.t = std::max(word.t, t);
-    word.charIndices.push_back(ci);
+    all.charIndices.push_back(ci);
+    ++word.charCount;
     return true;
 }
 
-static std::vector<TextWord> buildTextWords(FPDF_TEXTPAGE textPage) {
-    std::vector<TextWord> words;
-    if (!textPage) return words;
+static void buildTextWords(FPDF_TEXTPAGE textPage, TextWords& all) {
+    all.words.clear();
+    all.charIndices.clear();
+    if (!textPage) return;
     const int count = FPDFText_CountChars(textPage);
+    all.words.reserve(static_cast<size_t>(count) / 8 + 1);
+    all.charIndices.reserve(static_cast<size_t>(count));
     TextWord current;
     FPDF_PAGEOBJECT currentObject = nullptr;
     auto flush = [&] {
-        if (!current.charIndices.empty()) {
-            words.push_back(std::move(current));
+        if (current.charCount > 0) {
+            all.words.push_back(current);
             current = TextWord();
         }
         currentObject = nullptr;
@@ -212,10 +224,10 @@ static std::vector<TextWord> buildTextWords(FPDF_TEXTPAGE textPage) {
         FPDF_PAGEOBJECT object = FPDFText_GetTextObject(textPage, ci);
         if (currentObject && object != currentObject) flush();
         currentObject = object;
-        if (!addCharToWord(textPage, ci, current)) flush();
+        if (current.charCount == 0) current.firstChar = static_cast<int>(all.charIndices.size());
+        if (!addCharToWord(textPage, ci, current, all)) flush();
     }
     flush();
-    return words;
 }
 
 static bool fullyOutside(float l, float b, float r, float t, const FS_RECTF& keep) {
@@ -231,7 +243,9 @@ static bool auditNoContentOutsideCrop(FPDF_PAGE page, const FS_RECTF& keep,
     //    it (straddling words are preserved whole); a word wholly outside must
     //    be gone.
     if (textPage) {
-        for (const TextWord& word : buildTextWords(textPage)) {
+        TextWords textWords;
+        buildTextWords(textPage, textWords);
+        for (const TextWord& word : textWords.words) {
             if (fullyOutside(word.l, word.b, word.r, word.t, keep)) return false;
         }
     }
@@ -392,10 +406,13 @@ int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, 
         // is outside but whose box reaches inside) intact.
         const int count = FPDFText_CountChars(tp.get());
         std::vector<char> redactChar(static_cast<size_t>(count), 0);
-        const std::vector<TextWord> words = buildTextWords(tp.get());
+        TextWords textWords;
+        buildTextWords(tp.get(), textWords);
+        const std::vector<TextWord>& words = textWords.words;
         for (const TextWord& word : words) {
             if (fullyOutside(word.l, word.b, word.r, word.t, keepRect)) {
-                for (int ci : word.charIndices) {
+                for (int k = 0; k < word.charCount; ++k) {
+                    const int ci = textWords.charIndices[word.firstChar + k];
                     if (ci >= 0 && ci < count) redactChar[static_cast<size_t>(ci)] = 1;
                 }
             }

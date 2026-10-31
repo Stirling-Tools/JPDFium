@@ -470,16 +470,19 @@ public final class PdfPageGeometry {
     private static void cropSingle(PdfDocument doc, int pageIndex, Rect rect,
                                    float contentRemovalMargin, Set<Integer> removedWidgets) {
         try (PdfPage page = doc.page(pageIndex)) {
+            // One raw handle for the whole page: every rawHandle() call marks
+            // the document modified and rechecks liveness.
+            MemorySegment raw = page.rawHandle();
             JpdfiumLib.cropRemoveContent(page.nativeHandle(),
                     rect.x(), rect.y(), rect.width(), rect.height(), contentRemovalMargin);
-            for (int objectNumber : PdfAnnotations.clipToRect(page.rawHandle(), rect)) {
+            for (int objectNumber : PdfAnnotations.clipToRect(raw, rect)) {
                 removedWidgets.add(objectNumber);
             }
-            PdfPageBoxes.setMediaBox(page.rawHandle(), rect);
-            PdfPageBoxes.setCropBox(page.rawHandle(), rect);
-            PdfPageBoxes.setTrimBox(page.rawHandle(), rect);
-            PdfPageBoxes.setBleedBox(page.rawHandle(), rect);
-            PdfPageBoxes.setArtBox(page.rawHandle(), rect);
+            PdfPageBoxes.setMediaBox(raw, rect);
+            PdfPageBoxes.setCropBox(raw, rect);
+            PdfPageBoxes.setTrimBox(raw, rect);
+            PdfPageBoxes.setBleedBox(raw, rect);
+            PdfPageBoxes.setArtBox(raw, rect);
         }
     }
 
