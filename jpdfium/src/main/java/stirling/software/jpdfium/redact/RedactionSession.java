@@ -190,7 +190,8 @@ public final class RedactionSession implements AutoCloseable {
                     }
                     if (charCount == 0) continue;
                     pageMatches.clear();
-                    kwIndex.findMatches(scratch.charBuffer(), charCount, wholeWord, pageMatches);
+                    // Substring screen only: this text can lack word gaps the native matcher sees.
+                    kwIndex.findMatches(scratch.charBuffer(), charCount, false, pageMatches);
                     if (pageMatches.isEmpty()) continue;
 
                     String[] matchedWords = pageMatches.toArray(String[]::new);

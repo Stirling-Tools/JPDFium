@@ -24,6 +24,18 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Whole-word redaction skipped pages where words are separated by control
+  characters (some fonts map the space glyph to U+0002): the keyword prefilter
+  reads text without those characters and saw the words joined. The prefilter
+  now screens pages by substring and leaves the whole-word test to the native
+  matcher.
+- Region and text redaction left an image nested in a Form XObject intact under
+  the painted cover when the redaction covered only part of it. The covered
+  pixels are now erased and the image is moved to the page, as crop already did.
+- Redacting or cropping part of an image that is drawn more than once on a page
+  also erased the same pixels in the other placements, which nothing covered.
+  Such a request now fails with `RedactIncompleteException` before the page
+  changes, and the document can still be saved.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.
