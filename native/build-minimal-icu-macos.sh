@@ -98,6 +98,21 @@ if [ -n "${BREW_BIN:-}" ]; then
         fi
     done
 fi
+# The bridge links the ICU that pkg-config resolves, which can be newer than
+# the prepared data (release uses unversioned brew icu4c). Wrapping a
+# different major would produce a dylib libicuuc never loads, so skip rather
+# than stage a useless file.
+PKG_ICU_VERSION=$(pkg-config --modversion icu-uc 2>/dev/null || true)
+if [ -n "$PKG_ICU_VERSION" ]; then
+    PKG_ICU_VER=${PKG_ICU_VERSION%%.*}
+    if [ "$PKG_ICU_VER" != "$ICU_VER" ]; then
+        echo "build-minimal-icu-macos.sh: skipping: bridge ICU $PKG_ICU_VER" \
+             "≠ prepared data ICU $ICU_VER" >&2
+        exit 0
+    fi
+    echo "  pkg-config  : ICU $PKG_ICU_VERSION - matches"
+fi
+
 if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/lib" ]; then
     BREW_SONAME=""
     for cand in "$BREW_PREFIX/lib/"libicudata.*.dylib; do

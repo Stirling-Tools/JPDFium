@@ -1336,7 +1336,9 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Hard crop: physically remove everything outside the crop rectangle.
+     * Hard crop: physically remove content wholly outside the crop rectangle.
+     * Words touching the crop edge keep their outside glyphs, and margin-kept
+     * content remains in the file; both are clipped only by the page boxes.
      * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
      * nested images promoted), fully outside objects are removed. A post-pass

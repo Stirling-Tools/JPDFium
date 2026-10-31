@@ -91,7 +91,9 @@ public final class PdfPageGeometry {
 
     /**
      * Hard crop: set all five page boxes to {@code rect} and physically remove
-     * everything outside it.
+     * content wholly outside it. Words that touch the crop edge keep their
+     * outside glyphs, and margin-kept content stays in the file; both are
+     * clipped only by the page boxes.
      *
      * <p>Text is handled at word level: a word that is only partly inside the
      * crop survives whole, including glyphs that fall outside it. Only words
