@@ -18,9 +18,14 @@ on:
         required: false
         default: 'false'
         type: boolean
+      dryRun:
+        description: 'Build everything and publish to Maven Local instead of Central Portal'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -333,7 +338,11 @@ jobs:
               xfa)       SUFFIX="-xfa" ;;
             esac
             ASSET="pdfium-${TARGET_PLATFORM}${SUFFIX}.tar.gz"
-            if ! gh release view "$TAG" --repo Stirling-Tools/JPDFium --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+            RELEASE_REPO="${GITHUB_REPOSITORY:-Stirling-Tools/JPDFium}"
+            if ! gh release view "$TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+              RELEASE_REPO="Stirling-Tools/JPDFium"
+            fi
+            if ! gh release view "$TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
               if [ "$TARGET_LIBC" = "musl" ]; then
                 echo "musl_missing=true" >> "$GITHUB_OUTPUT"
                 echo "musl prebuild missing for $TARGET_PLATFORM; skipping musl natives"
@@ -508,7 +517,7 @@ jobs:
         # builds. musl + windows-arm64 + the darwin-x64 Intel leg use the
         # committed FFM bindings instead (generateBindings is skipped when
         # jextract is absent).
-        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && !startsWith(matrix.platform, 'freebsd-') && matrix.libc != 'musl'
+        if: matrix.platform != 'darwin-x64' && matrix.platform != 'freebsd-x64' && matrix.platform != 'windows-arm64' && !startsWith(matrix.platform, 'freebsd-') && matrix.libc != 'musl'
         shell: bash
         run: |
           case "$RUNNER_OS" in
@@ -616,7 +625,7 @@ jobs:
         if: matrix.platform == 'darwin-x64'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
 
-      - uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+      - uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
           java-version: '25'
           distribution: 'graalvm'
@@ -711,44 +720,76 @@ jobs:
           fi
           ASSET="vips-${{ matrix.platform }}.tar.gz"
           rm -rf /tmp/vips-pinned && mkdir -p /tmp/vips-pinned
-          gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ASSET" --dir /tmp/vips-pinned
+          # The pinned release is produced by the upstream Prebuild libvips
+          # workflow. Forks do not carry it, so fall back to the parent
+          # repository before giving up: the assets are public and identical.
+          RELEASE_REPO="$GITHUB_REPOSITORY"
+          has_asset() {
+            local assets
+            assets=$(gh release view "$PIN" --repo "$1" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            grep -Fx "$ASSET" <<<"$assets" >/dev/null && \
+              grep -Fx "$ASSET.sha256" <<<"$assets" >/dev/null
+          }
+          if ! has_asset "$RELEASE_REPO"; then
+            UPSTREAM_REPO=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.parent.full_name // empty' 2>/dev/null || true)
+            if [ -n "$UPSTREAM_REPO" ] && has_asset "$UPSTREAM_REPO"; then
+              echo "Pinned libvips assets are missing from $GITHUB_REPOSITORY; using $UPSTREAM_REPO."
+              RELEASE_REPO="$UPSTREAM_REPO"
+            fi
+          fi
+          gh release download "$PIN" --repo "$RELEASE_REPO" \
+            --pattern "$ASSET" --pattern "$ASSET.sha256" --dir /tmp/vips-pinned
+          (cd /tmp/vips-pinned && { sha256sum -c "$ASSET.sha256" 2>/dev/null || shasum -a 256 -c "$ASSET.sha256"; })
           DIST="native/dist/vips-${{ matrix.platform }}"
           rm -rf "$DIST" && mkdir -p "$DIST"
           tar -xf "/tmp/vips-pinned/$ASSET" -C "$DIST"
           if [[ "${{ matrix.platform }}" == darwin-* ]]; then
-            # The pinned vips prebuild embeds a PDFium snapshot from an older
-            # native/pdfium.version. Both bundles use the same install names for
-            # PDFium's component dylibs, and dyld resolves dependencies by
-            # install name, so in one JVM (jpdfium + vips) the older vips copy
-            # binds against the jpdfium component set and fails on missing
-            # symbols. Replace the vips bundle's PDFium set with the core
-            # natives built for this pin; the stable FPDF API vips uses is
-            # unchanged. Rebuild the vips prebuild to drop this substitution.
-            CORE_NATIVES="native/dist/${{ matrix.platform }}"
-            cp "$CORE_NATIVES"/libpdfium.dylib \
-               "$CORE_NATIVES"/libbase_allocator*.dylib \
-               "$CORE_NATIVES"/libchrome_zlib.dylib \
-               "$CORE_NATIVES"/libicuuc.dylib \
-               "$CORE_NATIVES"/libskia.dylib \
-               "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
-               "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
-               "$DIST/"
+            # Older vips prebuilds embedded a PDFium snapshot from a
+            # different native/pdfium.version. Both bundles use the same install
+            # names for PDFium's component dylibs, and dyld resolves
+            # dependencies by install name, so in one JVM (jpdfium + vips) the
+            # older vips copy would bind against the jpdfium component set and
+            # fail on missing symbols. Only older prebuilds need the
+            # substitution; current vips bundles have no pdfload/PDFium.
+            if [ -f "$DIST/libpdfium.dylib" ]; then
+              CORE_NATIVES="native/dist/${{ matrix.platform }}"
+              cp "$CORE_NATIVES"/libpdfium.dylib \
+                 "$CORE_NATIVES"/libbase_allocator*.dylib \
+                 "$CORE_NATIVES"/libchrome_zlib.dylib \
+                 "$CORE_NATIVES"/libicuuc*.dylib \
+                 "$CORE_NATIVES"/libicudata*.dylib \
+                 "$CORE_NATIVES"/libskia.dylib \
+                 "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
+                 "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
+                 "$DIST/"
+              # Keep the unversioned PDFium ICU when core dedupe was skipped
+              # (major-version mismatch), and also when old vips dylibs still
+              # import it. Removing it while any import remains would leave the
+              # bundle unloadable on macOS.
+              if [ ! -f "$CORE_NATIVES/libicuuc.dylib" ]; then
+                icu_refs=0
+                for f in "$DIST"/*.dylib; do
+                  [ -f "$f" ] || continue
+                  [ "$f" = "$DIST/libicuuc.dylib" ] && continue
+                  if otool -L "$f" 2>/dev/null | grep -E '@(loader_path|rpath)/libicuuc\.dylib' >/dev/null; then
+                    icu_refs=1
+                    break
+                  fi
+                done
+                if [ "$icu_refs" -eq 0 ]; then
+                  rm -f "$DIST/libicuuc.dylib"
+                else
+                  echo "WARNING: retaining unversioned vips ICU; dylibs still import it" >&2
+                fi
+              fi
+              rm -f "$DIST"/libthird_party_harfbuzz-ng.dylib
+            fi
           fi
           # Same gates as the source path: denylist, lean layout, size budget.
           bash native/check-bundle-lean.sh "$DIST" "vips-${{ matrix.platform }}"
           bash native/check-bundle-size.sh "$DIST" "vips-${{ matrix.platform }}"
           echo "pinned=true" >> "$GITHUB_OUTPUT"
 
-
-      - name: Fetch prebuilt PDFium (vips pdfload)
-        # Only needed for the source-build path; a pinned prebuild already has
-        # its codec chain (and Windows has no vips pdfload).
-        if: steps.vips_fetch.outputs.pinned != 'true' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: x86_64 brew bootstrap (darwin-x64)
         if: steps.vips_fetch.outputs.pinned != 'true' && matrix.platform == 'darwin-x64'
@@ -896,6 +937,8 @@ jobs:
   publish:
     needs: [build-natives, build-vips-natives, cli-binaries]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
@@ -947,9 +990,11 @@ jobs:
 
       - name: Resolve version
         id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           else
             REF="${GITHUB_REF_NAME}"
             VERSION="${REF#v}"
@@ -962,20 +1007,28 @@ jobs:
           echo "Publishing version: $VERSION"
 
       - name: Publish to Central Portal
+        if: inputs.dryRun != true
         env:
           CENTRAL_PORTAL_USERNAME: ${{ secrets.CENTRAL_PORTAL_USERNAME }}
           CENTRAL_PORTAL_PASSWORD: ${{ secrets.CENTRAL_PORTAL_PASSWORD }}
           GPG_SIGNING_KEY: ${{ secrets.GPG_SIGNING_KEY }}
           GPG_SIGNING_PASSWORD: ${{ secrets.GPG_SIGNING_PASSWORD }}
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          ARGS=(publishAllToCentralPortal -Pjpdfium.version=${{ steps.v.outputs.version }})
+          ARGS=(publishAllToCentralPortal "-Pjpdfium.version=$VERSION")
           if [ "${{ inputs.autoRelease }}" = "true" ]; then
             ARGS+=(-PautoRelease=true)
           fi
           ./gradlew "${ARGS[@]}" --no-daemon --stacktrace
 
+      - name: Publish to Maven Local (dry run)
+        if: inputs.dryRun == true
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: ./gradlew publishToMavenLocal "-Pjpdfium.version=$VERSION" --no-daemon --stacktrace
+
       - name: Attach CLI binaries to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dryRun != true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -997,13 +1050,19 @@ jobs:
           fi
 
       - name: Summary
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          echo "### Published com.stirling:*:${{ steps.v.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.autoRelease }}" = "true" ]; then
-            echo "Auto-release enabled - artifacts will land on Maven Central in 10–30 min." >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.dryRun }}" = "true" ]; then
+            echo "### Dry run: published com.stirling:*:$VERSION to Maven Local" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> $GITHUB_STEP_SUMMARY
+            echo "### Published com.stirling:*:$VERSION" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            if [ "${{ inputs.autoRelease }}" = "true" ]; then
+              echo "Auto-release enabled - artifacts will land on Maven Central in 10–30 min." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Review and click **Publish** at https://central.sonatype.com/publishing/deployments" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
 
@@ -1011,7 +1070,7 @@ jobs:
   verify-staging:
     name: Verify staged artifacts (${{ matrix.platform }})
     needs: publish
-    if: startsWith(github.ref, 'refs/tags/') || inputs.version != ''
+    if: inputs.dryRun != true && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
     strategy:
       fail-fast: false
       matrix:
@@ -1034,9 +1093,11 @@ jobs:
       - name: Resolve version
         id: v
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           else
             REF="${GITHUB_REF_NAME}"
             VERSION="${REF#v}"
@@ -1057,7 +1118,7 @@ jobs:
   verify-released:
     name: Verify Maven Central (${{ matrix.platform }})
     needs: publish
-    if: inputs.autoRelease == true || inputs.verifyReleased == true
+    if: inputs.dryRun != true && (inputs.autoRelease == true || inputs.verifyReleased == true)
     strategy:
       fail-fast: false
       matrix:
@@ -1080,9 +1141,11 @@ jobs:
       - name: Resolve version
         id: v
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
           else
             REF="${GITHUB_REF_NAME}"
             VERSION="${REF#v}"

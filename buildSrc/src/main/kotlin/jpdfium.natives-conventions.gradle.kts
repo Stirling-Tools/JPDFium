@@ -1,6 +1,10 @@
 // Resource-only JAR - ships the platform-specific native library.
 import java.security.MessageDigest
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.tukaani.xz.ARM64Options
+import org.tukaani.xz.LZMA2Options
+import org.tukaani.xz.X86Options
+import org.tukaani.xz.XZOutputStream
 
 plugins {
     `java-library`
@@ -35,6 +39,22 @@ val stagedPlatformDir = stagedRoot.map { it.dir("natives/$platform") } // real f
 val stagedLicensesDir = stagedRoot.map { it.dir("licenses") }
 val licensesDir = rootProject.layout.projectDirectory.dir("native/licenses")
 
+// Keep the packaged NOTICE internally consistent: every notice it references
+// must travel with both native jar families. The notices are small text files,
+// and shipping the complete set prevents a family from naming a license that
+// was filtered out of its jar.
+val allLicenses = licensesDir.asFile.listFiles()
+    ?.filter { it.isFile }
+    ?.map { it.name }
+    ?.sorted()
+    ?: emptyList()
+val coreLicenses = allLicenses
+val vipsLicenses = allLicenses
+val bundledLicenses = when {
+    platform.startsWith("vips-") -> vipsLicenses
+    else -> coreLicenses
+}
+
 val stageNatives = tasks.register<Copy>("stageNatives") {
     description = "Copy pre-built native libraries and license notices into the jar resource tree"
     group = "build"
@@ -48,6 +68,7 @@ val stageNatives = tasks.register<Copy>("stageNatives") {
         into("natives/$platform")
     }
     from(licensesDir) {
+        include(bundledLicenses)
         into("licenses")
     }
     into(stagedRoot)
@@ -101,7 +122,11 @@ val writeNativeManifest = tasks.register("writeNativeManifest") {
 }
 
 sourceSets.named("main") {
-    resources.setSrcDirs(listOf(stagedRoot, "src/main/resources"))
+    // native/dist is the only source of truth: CMake still drops a legacy
+    // copy of the PDFium component libs into src/main/resources, and mixing
+    // that with the stripped/bundled dist set could publish unstripped or
+    // already-deduped-away libraries. Stub builds stage into native/dist too.
+    resources.setSrcDirs(listOf(stagedRoot))
 }
 
 // Resource-only jars, so the module name would otherwise be derived from the
@@ -117,24 +142,71 @@ tasks.withType<AbstractCopyTask>().configureEach {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-tasks.named("processResources") {
+// Native payloads are deflated once by the jar already; xz adds a second,
+// content-aware reduction (typically 20-35% on ELF/Mach-O/PE libraries). Keep
+// the published jar smaller without changing the extracted cache layout or the
+// raw checksums in native-libs.txt/sha256.
+val nativePattern = Regex(""".*\.(so|dylib|dll)(\..*)?$""")
+val xzNatives = (project.findProperty("jpdfium.natives.xz") ?: "true")
+    .toString()
+    .toBoolean()
+val compressStagedNatives = tasks.register("compressStagedNatives") {
+    description = "xz-compress staged native payloads for the published jars"
+    group = "build"
+    enabled = xzNatives
     dependsOn(writeNativeManifest)
+    // Compression is deliberately cheap enough to run on every build; the
+    // staged tree itself is the cache, so no separate output directory.
+    outputs.upToDateWhen { false }
+    doLast {
+        val dir = stagedPlatformDir.get().asFile
+        if (!dir.isDirectory) return@doLast
+        dir.listFiles()
+            ?.filter { it.isFile && nativePattern.matches(it.name) }
+            ?.forEach { raw ->
+                val packed = File(raw.parentFile, raw.name + ".xz")
+                // BCJ converts relative branch targets before LZMA2. It is
+                // lossless and transparent to XZInputStream, and saves another
+                // 3-6% on these shared libraries versus plain LZMA2.
+                val filters = when {
+                    platform.endsWith("-x64") -> arrayOf(X86Options(), LZMA2Options(9))
+                    platform.endsWith("-arm64") -> arrayOf(ARM64Options(), LZMA2Options(9))
+                    else -> arrayOf(LZMA2Options(9))
+                }
+                XZOutputStream(packed.outputStream().buffered(), filters).use { out ->
+                    raw.inputStream().use { it.copyTo(out) }
+                }
+                raw.delete()
+            }
+    }
+}
+
+tasks.named("processResources") {
+    dependsOn(compressStagedNatives)
 }
 
 // A platform leg can be intentionally skipped (see the release workflow
 // matrix NOTE). Publishing its natives jar anyway would resolve for
 // consumers while containing no binaries, so skip those publications with
 // a loud warning instead of failing the whole release.
-tasks.matching { it.name.startsWith("publish") && it.name.endsWith("Repository") }.configureEach {
+tasks.matching {
+    it.name.startsWith("publish") &&
+        (it.name.endsWith("Repository") || it.name.contains("MavenLocal"))
+}.configureEach {
     onlyIf("natives bundle present, skipped otherwise (see release.yml matrix NOTE)") {
-        val ok = stagedPlatformDir.get().asFile.listFiles()?.isNotEmpty() == true
+        val nativePattern = Regex(""".*\.(so|dylib|dll)(\..*)?(\.xz)?$""")
+        val ok = stagedPlatformDir.get().asFile.listFiles()
+            ?.any { it.isFile && nativePattern.matches(it.name) } == true
         if (!ok) logger.warn("Skipping ${it.name}: no staged natives for $platform")
         ok
     }
 }
 
-tasks.named("sourcesJar") {
+tasks.named<Jar>("sourcesJar") {
     dependsOn(writeNativeManifest)
+    eachFile {
+        if (relativePath.pathString.startsWith("natives/")) exclude()
+    }
 }
 tasks.named("javadocJar") {
     dependsOn(writeNativeManifest)

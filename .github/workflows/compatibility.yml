@@ -166,7 +166,12 @@ jobs:
           JAR=$(find jpdfium/build/libs -name 'jpdfium-*.jar' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | head -n1)
           echo "Describing module from $JAR"
           jar --describe-module --file="$JAR"
-          jdeps --module-path "$JAR" -s "$JAR" 2>&1 | tee /tmp/jdeps.txt
+          XZ_JAR="$GITHUB_WORKSPACE/buildSrc/libs/xz-1.10.jar"
+          if [ ! -f "$XZ_JAR" ]; then
+            echo "::error::vendored xz runtime jar is missing"
+            exit 1
+          fi
+          jdeps --multi-release 25 --module-path "$JAR:$XZ_JAR" -s "$JAR" 2>&1 | tee /tmp/jdeps.txt
           if grep -q "not found" /tmp/jdeps.txt; then
             echo "::error::Module descriptor has missing dependencies"
             exit 1

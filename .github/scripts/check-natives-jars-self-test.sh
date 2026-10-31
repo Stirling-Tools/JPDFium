@@ -72,6 +72,8 @@ COMPONENT = component(platform)
 payloads = {
     "core": [at(BRIDGE, 4096), at(COMPONENT, 8192),
              at("native-libs.txt", 128), at("native-libs.sha256", 64)],
+    "core-xz": [at(BRIDGE + ".xz", 4096), at(COMPONENT + ".xz", 8192),
+                at("native-libs.txt", 128), at("native-libs.sha256", 64)],
     "vips": [at(BRIDGE, 4096), at("libvips.so", 8192),
              at("native-libs.txt", 128), at("native-libs.sha256", 64)],
     "vips-plain": [at("libvips.so", 8192),
@@ -128,6 +130,10 @@ echo "Native jar checker regression tests"
 jar="$WORK/jpdfium-natives-linux-x64-1.2.1.jar"
 make_jar "$jar" core linux-x64
 expect "$jar" 0 "ships 2 libraries for linux-x64" "stable core jar"
+
+jar="$WORK/jpdfium-natives-linux-x64-1.2.1-xz.jar"
+make_jar "$jar" core-xz linux-x64
+expect "$jar" 0 "ships 2 libraries for linux-x64" "xz-compressed core jar"
 
 jar="$WORK/jpdfium-natives-linux-x64-1.2.1-SNAPSHOT.jar"
 make_jar "$jar" core linux-x64

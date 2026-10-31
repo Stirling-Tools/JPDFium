@@ -142,7 +142,7 @@ if [ -z "$ICUPKG_INC" ]; then
 fi
 OUT_DIR="$WORK/out"
 mkdir -p "$OUT_DIR" "$WORK/pkg-tmp"
-pkgdata -m archive -p icudata -e "icudt${ICU_VER}_dat" \
+pkgdata -m archive -p "icudt${ICU_VER}l" -e "icudt${ICU_VER}_dat" \
         -O "$ICUPKG_INC" -T "$WORK/pkg-tmp" -d "$OUT_DIR" \
         -s "$EXTRACT" "$WORK/keep.lst" \
     || { echo "build-minimal-icu-windows.sh: pkgdata archive failed; skipping" >&2; exit 0; }

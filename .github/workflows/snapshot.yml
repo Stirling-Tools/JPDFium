@@ -44,13 +44,29 @@ jobs:
       - name: Verify prebuilt PDFium assets exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           TAG=$(grep -v '^#' native/pdfium.version | grep -v '^$' | head -n1 || true)
           [ -n "$TAG" ] || { echo "::error::native/pdfium.version is empty - run the Prebuild PDFium workflow first"; exit 1; }
           echo "Pinned PDFium prebuild: $TAG"
-          # Only check upstream repository for prebuild release assets
-          ASSETS=$(gh release view "$TAG" --repo "Stirling-Tools/JPDFium" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          # Prefer the fork's own prebuild release (needed to validate trims
+          # before they are merged upstream), but let each missing asset fall
+          # back to the parent repo independently. A fork release can exist
+          # while still lacking one platform, and fetch-prebuilt-pdfium.sh
+          # already performs that per-asset fallback.
+          REPOS=("$GITHUB_REPOSITORY")
+          if [ "$GITHUB_REPOSITORY" != "Stirling-Tools/JPDFium" ]; then
+            REPOS+=("Stirling-Tools/JPDFium")
+          fi
+          ASSETS=""
+          for repo in "${REPOS[@]}"; do
+            repo_assets=$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            if [ -n "$repo_assets" ]; then
+              echo "PDFium assets from: $repo"
+              ASSETS+="$repo_assets"$'\n'
+            fi
+          done
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo "$ASSETS" | grep -qx "pdfium-linux-x64-${{ inputs.build_mode }}.tar.gz" || {
               echo "::error::missing prebuild asset pdfium-linux-x64-${{ inputs.build_mode }}.tar.gz in release $TAG"; exit 1;
@@ -362,7 +378,11 @@ jobs:
               xfa)       SUFFIX="-xfa" ;;
             esac
             ASSET="pdfium-${TARGET_PLATFORM}${SUFFIX}.tar.gz"
-            if ! gh release view "$TAG" --repo Stirling-Tools/JPDFium --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+            RELEASE_REPO="${GITHUB_REPOSITORY:-Stirling-Tools/JPDFium}"
+            if ! gh release view "$TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
+              RELEASE_REPO="Stirling-Tools/JPDFium"
+            fi
+            if ! gh release view "$TAG" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET"; then
               if [ "$TARGET_LIBC" = "musl" ]; then
                 echo "musl_missing=true" >> "$GITHUB_OUTPUT"
                 echo "musl prebuild missing for $TARGET_PLATFORM; skipping musl natives"
@@ -576,7 +596,7 @@ jobs:
         # musl: jextract only ships glibc builds, so the musl smoke uses the
         # committed bindings (generateBindings is skipped when jextract is
         # absent).
-        if: matrix.platform != 'darwin-x64' && matrix.platform != 'windows-arm64' && !startsWith(matrix.platform, 'freebsd-') && matrix.libc != 'musl' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
+        if: matrix.platform != 'darwin-x64' && matrix.platform != 'freebsd-x64' && matrix.platform != 'windows-arm64' && !startsWith(matrix.platform, 'freebsd-') && matrix.libc != 'musl' && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         shell: bash
         run: |
           case "$RUNNER_OS" in
@@ -706,44 +726,76 @@ jobs:
           fi
           ASSET="vips-${{ matrix.platform }}.tar.gz"
           rm -rf /tmp/vips-pinned && mkdir -p /tmp/vips-pinned
-          gh release download "$PIN" --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ASSET" --dir /tmp/vips-pinned
+          # The pinned release is produced by the upstream Prebuild libvips
+          # workflow. Forks do not carry it, so fall back to the parent
+          # repository before giving up: the assets are public and identical.
+          RELEASE_REPO="$GITHUB_REPOSITORY"
+          has_asset() {
+            local assets
+            assets=$(gh release view "$PIN" --repo "$1" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            grep -Fx "$ASSET" <<<"$assets" >/dev/null && \
+              grep -Fx "$ASSET.sha256" <<<"$assets" >/dev/null
+          }
+          if ! has_asset "$RELEASE_REPO"; then
+            UPSTREAM_REPO=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.parent.full_name // empty' 2>/dev/null || true)
+            if [ -n "$UPSTREAM_REPO" ] && has_asset "$UPSTREAM_REPO"; then
+              echo "Pinned libvips release $PIN is missing from $GITHUB_REPOSITORY; using $UPSTREAM_REPO."
+              RELEASE_REPO="$UPSTREAM_REPO"
+            fi
+          fi
+          gh release download "$PIN" --repo "$RELEASE_REPO" \
+            --pattern "$ASSET" --pattern "$ASSET.sha256" --dir /tmp/vips-pinned
+          (cd /tmp/vips-pinned && { sha256sum -c "$ASSET.sha256" 2>/dev/null || shasum -a 256 -c "$ASSET.sha256"; })
           DIST="native/dist/vips-${{ matrix.platform }}"
           rm -rf "$DIST" && mkdir -p "$DIST"
           tar -xf "/tmp/vips-pinned/$ASSET" -C "$DIST"
           if [[ "${{ matrix.platform }}" == darwin-* ]]; then
-            # The pinned vips prebuild embeds a PDFium snapshot from an older
-            # native/pdfium.version. Both bundles use the same install names for
-            # PDFium's component dylibs, and dyld resolves dependencies by
-            # install name, so in one JVM (jpdfium + vips) the older vips copy
-            # binds against the jpdfium component set and fails on missing
-            # symbols. Replace the vips bundle's PDFium set with the core
-            # natives built for this pin; the stable FPDF API vips uses is
-            # unchanged. Rebuild the vips prebuild to drop this substitution.
-            CORE_NATIVES="native/dist/${{ matrix.platform }}"
-            cp "$CORE_NATIVES"/libpdfium.dylib \
-               "$CORE_NATIVES"/libbase_allocator*.dylib \
-               "$CORE_NATIVES"/libchrome_zlib.dylib \
-               "$CORE_NATIVES"/libicuuc.dylib \
-               "$CORE_NATIVES"/libskia.dylib \
-               "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
-               "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
-               "$DIST/"
+            # Older vips prebuilds embedded a PDFium snapshot from a
+            # different native/pdfium.version. Both bundles use the same install
+            # names for PDFium's component dylibs, and dyld resolves
+            # dependencies by install name, so in one JVM (jpdfium + vips) the
+            # older vips copy would bind against the jpdfium component set and
+            # fail on missing symbols. Only older prebuilds need the
+            # substitution; current vips bundles have no pdfload/PDFium.
+            if [ -f "$DIST/libpdfium.dylib" ]; then
+              CORE_NATIVES="native/dist/${{ matrix.platform }}"
+              cp "$CORE_NATIVES"/libpdfium.dylib \
+                 "$CORE_NATIVES"/libbase_allocator*.dylib \
+                 "$CORE_NATIVES"/libchrome_zlib.dylib \
+                 "$CORE_NATIVES"/libicuuc*.dylib \
+                 "$CORE_NATIVES"/libicudata*.dylib \
+                 "$CORE_NATIVES"/libskia.dylib \
+                 "$CORE_NATIVES"/libthird_party_abseil-cpp_absl.dylib \
+                 "$CORE_NATIVES"/libthird_party_harfbuzz.dylib \
+                 "$DIST/"
+              # Keep the unversioned PDFium ICU when core dedupe was skipped
+              # (major-version mismatch), and also when old vips dylibs still
+              # import it. Removing it while any import remains would leave the
+              # bundle unloadable on macOS.
+              if [ ! -f "$CORE_NATIVES/libicuuc.dylib" ]; then
+                icu_refs=0
+                for f in "$DIST"/*.dylib; do
+                  [ -f "$f" ] || continue
+                  [ "$f" = "$DIST/libicuuc.dylib" ] && continue
+                  if otool -L "$f" 2>/dev/null | grep -E '@(loader_path|rpath)/libicuuc\.dylib' >/dev/null; then
+                    icu_refs=1
+                    break
+                  fi
+                done
+                if [ "$icu_refs" -eq 0 ]; then
+                  rm -f "$DIST/libicuuc.dylib"
+                else
+                  echo "WARNING: retaining unversioned vips ICU; dylibs still import it" >&2
+                fi
+              fi
+              rm -f "$DIST"/libthird_party_harfbuzz-ng.dylib
+            fi
           fi
           # Same gates as the source path: denylist, lean layout, size budget.
           bash native/check-bundle-lean.sh "$DIST" "vips-${{ matrix.platform }}"
           bash native/check-bundle-size.sh "$DIST" "vips-${{ matrix.platform }}"
           echo "pinned=true" >> "$GITHUB_OUTPUT"
 
-
-      - name: Fetch prebuilt PDFium (vips pdfload)
-        # Only needed for the source-build path; a pinned prebuild already has
-        # its codec chain (and Windows has no vips pdfload).
-        if: steps.vips_fetch.outputs.pinned != 'true' && (startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'darwin-'))
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash native/fetch-prebuilt-pdfium.sh ${{ matrix.platform }}
 
       - name: x86_64 brew bootstrap (darwin-x64)
         if: steps.vips_fetch.outputs.pinned != 'true' && matrix.platform == 'darwin-x64'

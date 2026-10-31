@@ -11,6 +11,13 @@ This distribution bundles binary forms of the following open-source projects:
    - Copyright (c) 2005-2024 Jay Berkenbilt
    - License: Apache License 2.0 (see QPDF-APACHE-2.0.txt)
 
+2a. Abseil
+    - Copyright (c) 2017 The Abseil Authors
+    - License: Apache License 2.0 (see ABSEIL-APACHE-2.0.txt)
+
+2b. JPDFium compact CMYK profile
+    - See JPDFiumCompactCmyk.NOTICE.txt
+
 3. libvips
    - Copyright (c) 1991-2024 The libvips Open Source Project
    - License: GNU Lesser General Public License v2.1 or later (see LIBVIPS-LGPL-2.1.txt)
@@ -26,6 +33,10 @@ This distribution bundles binary forms of the following open-source projects:
 6. libjxl (JPEG XL reference implementation)
    - Copyright (c) 2019-2024 JPEG XL Project Authors
    - License: BSD 3-Clause License (see LIBJXL-BSD-3.txt)
+
+6a. Lerc
+    - Copyright (c) 2015-2024 Esri
+    - License: Apache License 2.0 (see LERC-APACHE-2.0.txt)
 
 7. libwebp
    - Copyright (c) 2010 Google Inc.
@@ -135,45 +146,43 @@ This distribution bundles binary forms of the following open-source projects:
 
 31. jpeg-encoder (CMYK JPEG encoder in the Rust helper)
     - Copyright (c) 2019-2024 the jpeg-encoder contributors
-    - License: MIT OR Apache-2.0 (Apache-2.0 text in HIGHWAY-APACHE-2.0.txt,
-      MIT in HARFBUZZ.txt)
+    - License: (MIT OR Apache-2.0) AND IJG (Apache-2.0 text in
+      HIGHWAY-APACHE-2.0.txt, MIT in HARFBUZZ.txt, IJG in
+      JPEG-ENCODER-IJG.txt)
+    - This software is based in part on the work of the Independent JPEG Group.
 
 32. Skia (PDFium's rendering backend)
     - Copyright (c) 2011 Google Inc. All rights reserved.
     - License: BSD 3-Clause License (see SKIA-BSD-3.txt)
 
-33. Abseil (C++ support library used by PDFium)
-    - Copyright The Abseil Authors
-    - License: Apache License 2.0 (see QPDF-APACHE-2.0.txt)
-
-34. PCRE2 (pattern matching for redaction)
+33. PCRE2 (pattern matching for redaction)
     - Copyright (c) 1997-2007 University of Cambridge
     - Copyright (c) 2007-2024 Philip Hazel
     - Copyright (c) 2009-2024 Zoltan Herczeg (just-in-time compiler)
     - License: BSD 3-Clause License with the PCRE2 exception (see PCRE2-BSD-3.txt)
 
-35. pugixml (XML parsing)
+34. pugixml (XML parsing)
     - Copyright (c) 2006-2026 Arseny Kapoulkine
     - License: MIT License (see PUGIXML-MIT.txt)
 
-36. libunibreak (line and word breaking)
+35. libunibreak (line and word breaking)
     - Copyright (C) Wu Yongwei, Tom Hacohen, Petr Filipsky, Andreas Röver
     - License: zlib License (see LIBUNIBREAK-ZLIB.txt)
 
-37. Expat (XML parser used by fontconfig; Linux)
+36. Expat (XML parser used by fontconfig; Linux)
     - Copyright (c) 1998-2000 Thai Open Source Software Center Ltd and Clark Cooper
     - Copyright (c) 2001-2025 Expat maintainers
-    - License: MIT License (see EXPAT-MIT.txt)
+    - License: MIT License (see LIBEXPAT-MIT.txt)
 
-38. Brotli (decoder used by FreeType; Linux)
+37. Brotli (decoder used by FreeType; Linux)
     - Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors.
     - License: MIT License (see BROTLI-MIT.txt)
 
-39. bzip2 / libbzip2 (decompressor used by FreeType; Linux)
-    - Copyright (C) 1996-2010 Julian R Seward. All rights reserved.
+38. bzip2 / libbzip2 (decompressor used by FreeType; Linux)
+    - Copyright (C) 1996-2019 Julian R Seward. All rights reserved.
     - License: bzip2 License, BSD-style (see BZIP2.txt)
 
-40. LLVM libc++ (C++ standard library PDFium is built against; linux-arm64)
+39. LLVM libc++ (C++ standard library PDFium is built against; linux-arm64)
     - Copyright the LLVM Project contributors
     - License: Apache License 2.0 with LLVM Exceptions
       (see LLVM-LIBCXX-APACHE-2.0-WITH-LLVM-EXCEPTION.txt)

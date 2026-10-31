@@ -187,6 +187,36 @@ class CropAnnotationTest {
         assertQpdfClean(out);
     }
 
+    @Test
+    void checkboxWidgetOutsideCropDoesNotFailTheCrop() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.checkboxWidgetPdf(), LEFT_HALF);
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            for (PDAnnotation a : doc.getPage(0).getAnnotations()) {
+                assertNotEquals("Widget", a.getSubtype(),
+                        "outside checkbox widget must be removed");
+            }
+            var form = doc.getDocumentCatalog().getAcroForm();
+            assertNotNull(form, "AcroForm must survive the crop");
+            var field = form.getField("Checkbox1");
+            if (field != null) {
+                assertTrue(field.getValueAsString().isEmpty()
+                                || "Off".equals(field.getValueAsString()),
+                        "checkbox value must be cleared when its only widget is cropped");
+            }
+        }
+    }
+
+    @Test
+    void pushButtonWidgetOutsideCropDoesNotFailTheCrop() throws Exception {
+        byte[] output = crop(CropTestPdfGenerator.pushButtonWidgetPdf(), LEFT_HALF);
+        try (PDDocument doc = Loader.loadPDF(output)) {
+            for (PDAnnotation a : doc.getPage(0).getAnnotations()) {
+                assertNotEquals("Widget", a.getSubtype(),
+                        "outside push-button widget must be removed");
+            }
+        }
+    }
+
     // helpers
 
     /**

@@ -1,34 +1,22 @@
-# Per-platform max total size (bytes) of the staged natives bundle at
-# native/dist/<platform>/ - the source of the published jpdfium-natives-* jars.
-#
-# Enforced by native/check-bundle-size.sh (warns at 75%, fails when exceeded)
-# as part of bundle-runtime-deps.sh on every native build. These are ~2.5x the
-# expected shipped size, so they catch gross bloat - debug symbols, bundling
-# the full 30 MB libicudata instead of the trimmed one, an accidental huge
-# dependency - without flaking on normal build-to-build variance. If a growth
-# is legitimate and reviewed, bump the value deliberately (don't widen it to
-# silence the check).
-#
-# Rough current sizes (Aug 2026): core bundles ~10-12 MB; vips bundles
-# ~13 MB (darwin) / ~37 MB (linux). Skia is the default renderer now and the
-# static release link pulls its code in, so the core budgets carry headroom
-# for it; tighten them once a Skia prebuild has been measured.
+# Maximum staged bundle size in bytes for native/dist/<platform>.
+# Enforced by native/check-bundle-size.sh (warns at 75%).
 
-linux-x64      64000000
-linux-arm64    64000000
-linux-musl-x64 64000000
-linux-musl-arm64 64000000
-darwin-x64     66000000  # largest core bundle; tighten after a measured build
-darwin-arm64   64000000
-windows-x64    64000000  # plus an explicit trimmed-icudt*.dll presence gate in check-bundle-size.sh
-windows-arm64  64000000  # ditto
+linux-x64      48000000
+linux-arm64    48000000
+linux-musl-x64 48000000
+linux-musl-arm64 48000000
+darwin-x64     48000000
+darwin-arm64   48000000
+windows-x64    64000000
+windows-arm64  64000000
 freebsd-x64    64000000
 
-# vips bundles grew with the PDFium pdfload link plus the librsvg/spng/highway
-# loaders (ImageMagick too on macOS/Windows; OpenEXR/libraw dropped for size).
-vips-linux-x64   140000000
-vips-linux-arm64 140000000
-vips-darwin-x64  80000000
-vips-darwin-arm64 80000000
+vips-linux-x64   64000000
+vips-linux-arm64 64000000
+vips-linux-musl-x64 64000000
+vips-linux-musl-arm64 64000000
+vips-darwin-x64  56000000
+vips-darwin-arm64 56000000
 vips-windows-x64 100000000
 vips-windows-arm64 100000000
+vips-freebsd-x64 64000000

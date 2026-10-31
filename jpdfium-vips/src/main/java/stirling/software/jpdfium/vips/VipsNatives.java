@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
+import org.tukaani.xz.XZInputStream;
 import stirling.software.jpdfium.panama.NativeLoader;
 
 /**
@@ -98,9 +99,19 @@ public final class VipsNatives {
         }
     }
 
+
+    /** Opens a native resource, falling back to the xz-packed form when staged. */
+    private static InputStream openResource(String resource) throws IOException {
+        InputStream raw = VipsNatives.class.getResourceAsStream(resource);
+        if (raw != null) return raw;
+        if (resource.endsWith(".xz")) return null;
+        InputStream packed = VipsNatives.class.getResourceAsStream(resource + ".xz");
+        return packed == null ? null : new XZInputStream(packed);
+    }
+
     private static List<String> readIndex(String resource) {
         List<String> out = new ArrayList<>();
-        try (InputStream is = VipsNatives.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) {
                 return out;
             }
@@ -234,7 +245,7 @@ public final class VipsNatives {
     }
 
     private static Path extract(String resource, Path dir) throws IOException {
-        try (InputStream is = VipsNatives.class.getResourceAsStream(resource)) {
+        try (InputStream is = openResource(resource)) {
             if (is == null) {
                 return null;
             }
