@@ -879,6 +879,7 @@ jobs:
         run: bash native/build-vips.sh ${{ matrix.platform }}
 
       - name: Check glibc floor
+        id: glibc_floor
         if: (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64') && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success')
         run: bash native/ci/check-glibc-floor.sh native/dist/vips-${{ matrix.platform }}
 
@@ -915,7 +916,7 @@ jobs:
           retention-days: 7
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success')
+        if: always() && (steps.vips_fetch.outputs.pinned == 'true' || steps.stage.outcome == 'success') && steps.glibc_floor.outcome != 'failure'
         with:
           name: natives-vips-${{ matrix.platform }}
           path: native/dist/vips-${{ matrix.platform }}/

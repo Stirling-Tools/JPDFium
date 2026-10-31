@@ -160,6 +160,8 @@ This distribution bundles binary forms of the following open-source projects:
     - Copyright (c) 2007-2024 Philip Hazel
     - Copyright (c) 2009-2024 Zoltan Herczeg (just-in-time compiler)
     - License: BSD 3-Clause License with the PCRE2 exception (see PCRE2-BSD-3.txt)
+    - The JIT compiler bundles SLJIT, Copyright Zoltan Herczeg: BSD 2-Clause License
+      (see SLJIT-BSD-2.txt)
 
 34. pugixml (XML parsing)
     - Copyright (c) 2006-2026 Arseny Kapoulkine

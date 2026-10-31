@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSDictionary;
@@ -30,6 +31,7 @@ import org.apache.pdfbox.pdmodel.interactive.viewerpreferences.PDViewerPreferenc
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -47,6 +49,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * viewer preferences and the document language.
  */
 class PdfMergeSplitPreservationTest {
+
+    private static final StorageOptions FILE_ONLY = StorageOptions.builder().file().build();
+    private static final StorageOptions MEMORY_ONLY = StorageOptions.builder().memory().build();
 
     private static Path fixture(String name) {
         return Path.of("src/test/resources/pdfs/general", name);
@@ -128,15 +133,16 @@ class PdfMergeSplitPreservationTest {
     void mergeKeepsFieldsFromEveryInputAndTheFirstInputsCatalog(@TempDir Path tmp) throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isMergeSupported(), "needs in-memory qpdf merge symbol");
         Path a = tmp.resolve("a.pdf");
         Path b = tmp.resolve("b.pdf");
         Files.write(a, catalogRichPdf(4, "A"));
         Files.write(b, catalogRichPdf(3, "B"));
 
         Path fileOut = tmp.resolve("merged.pdf");
-        PdfMerge.mergeFilesToFile(List.of(a, b), fileOut);
+        PdfMerge.mergeFilesToFile(List.of(a, b), fileOut, FILE_ONLY);
         byte[] bytesPath;
-        try (PdfDocument merged = PdfMerge.mergeFiles(List.of(a, b))) {
+        try (PdfDocument merged = PdfMerge.mergeFiles(List.of(a, b), MEMORY_ONLY)) {
             bytesPath = merged.saveBytes();
         }
 
@@ -144,8 +150,9 @@ class PdfMergeSplitPreservationTest {
             try (PDDocument doc = Loader.loadPDF(merged)) {
                 PDDocumentCatalog catalog = doc.getDocumentCatalog();
                 assertEquals(7, doc.getNumberOfPages());
-                assertEquals(List.of("Name", "Name+1"), fieldNames(catalog.getAcroForm()),
-                        "both inputs' fields survive, the clashing name renamed");
+                assertEquals(Map.of("Name", "A value", "Name+1", "B value"),
+                        fieldValues(catalog.getAcroForm()),
+                        "both inputs' fields and values survive, the clashing name renamed");
                 assertArrayEquals(new String[] {"i", "ii", "1", "2", "i", "ii", "1"},
                         catalog.getPageLabels().getLabelsByPageIndices(),
                         "each input's page labels restart where its pages land");
@@ -161,19 +168,28 @@ class PdfMergeSplitPreservationTest {
     void extractKeepsOnlyTheFieldsOfItsPagesAndRenumbersLabels(@TempDir Path tmp) throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+        assumeTrue(QpdfLib.isExtractSupported(), "needs in-memory qpdf extract symbol");
         Path source = tmp.resolve("source.pdf");
         Files.write(source, catalogRichPdf(4, "A"));
 
         Path withField = tmp.resolve("with-field.pdf");
-        PdfSplit.extractPageRangeToFile(source, 1, 2, withField);
-        try (PDDocument doc = Loader.loadPDF(withField.toFile())) {
-            assertEquals(List.of("Name"), fieldNames(doc.getDocumentCatalog().getAcroForm()));
-            assertArrayEquals(new String[] {"ii", "1"},
-                    doc.getDocumentCatalog().getPageLabels().getLabelsByPageIndices());
+        PdfSplit.extractPageRangeToFile(source, 1, 2, withField, FILE_ONLY);
+        byte[] memoryPart;
+        try (PdfDocument doc = PdfDocument.open(source);
+             PdfDocument part = PdfSplit.extractPageRange(doc, 1, 2, MEMORY_ONLY)) {
+            memoryPart = part.saveBytes();
+        }
+        for (byte[] part : List.of(Files.readAllBytes(withField), memoryPart)) {
+            try (PDDocument doc = Loader.loadPDF(part)) {
+                PDDocumentCatalog catalog = doc.getDocumentCatalog();
+                assertEquals(Map.of("Name", "A value"), fieldValues(catalog.getAcroForm()));
+                assertArrayEquals(new String[] {"ii", "1"}, catalog.getPageLabels().getLabelsByPageIndices());
+                assertEquals("en-GB", catalog.getLanguage());
+            }
         }
 
         Path withoutField = tmp.resolve("without-field.pdf");
-        PdfSplit.extractPageRangeToFile(source, 3, 3, withoutField);
+        PdfSplit.extractPageRangeToFile(source, 3, 3, withoutField, FILE_ONLY);
         try (PDDocument doc = Loader.loadPDF(withoutField.toFile())) {
             assertNull(doc.getDocumentCatalog().getAcroForm(),
                     "a part with no field pages has no form");
@@ -182,8 +198,9 @@ class PdfMergeSplitPreservationTest {
         }
     }
 
-    private static List<String> fieldNames(PDAcroForm form) {
-        return form == null ? List.of() : form.getFields().stream().map(PDField::getFullyQualifiedName).toList();
+    private static Map<String, String> fieldValues(PDAcroForm form) {
+        return form == null ? Map.of() : form.getFields().stream()
+                .collect(Collectors.toMap(PDField::getFullyQualifiedName, PDField::getValueAsString));
     }
 
     /**

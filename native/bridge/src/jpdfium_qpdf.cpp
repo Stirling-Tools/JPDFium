@@ -174,6 +174,39 @@ void appendLabel(std::vector<QPDFObjectHandle>& nums, long long outputIndex,
     nums.push_back(label);
 }
 
+void nullPagesOutsideTree(QPDF& qpdf) {
+    std::set<QPDFObjGen> placed;
+    for (auto const& page : qpdf.getAllPages()) placed.insert(page.getObjGen());
+    for (auto& object : qpdf.getAllObjects()) {
+        if (object.isDictionary() && object.getKey("/Type").isNameAndEquals("/Page") &&
+            !placed.count(object.getObjGen())) {
+            qpdf.replaceObject(object.getObjGen(), QPDFObjectHandle::newNull());
+        }
+    }
+}
+
+void keepOnlyFields(QPDF& qpdf, std::set<QPDFObjGen> const& keptFields) {
+    QPDFObjectHandle root = qpdf.getRoot();
+    QPDFObjectHandle acroForm = root.getKey("/AcroForm");
+    QPDFObjectHandle fields =
+        acroForm.isDictionary() ? acroForm.getKey("/Fields") : QPDFObjectHandle::newNull();
+    if (fields.isArray()) {
+        std::vector<QPDFObjectHandle> kept;
+        for (auto const& field : fields.getArrayAsVector()) {
+            if (keptFields.count(field.getObjGen())) kept.push_back(field);
+        }
+        if (kept.empty()) {
+            root.removeKey("/AcroForm");
+        } else {
+            QPDFObjectHandle keptArray = QPDFObjectHandle::newArray(kept);
+            acroForm.replaceKey(
+                "/Fields", fields.isIndirect() ? qpdf.makeIndirectObject(keptArray) : keptArray);
+        }
+    }
+    QPDFObjectHandle remainingForm = root.getKey("/AcroForm");
+    if (remainingForm.isDictionary()) remainingForm.removeKey("/XFA");
+}
+
 // Lays the selected pages out in `primary` the way `qpdf <primary> --pages ... --` does, so the
 // primary keeps its document-level data (named destinations, viewer preferences, XMP, language,
 // optional content, document info) instead of ending up with a bare catalog. Form fields from
@@ -256,33 +289,9 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
         }
     }
 
-    std::set<QPDFObjGen> placed;
-    for (auto const& page : primary.getAllPages()) placed.insert(page.getObjGen());
-    for (auto& object : primary.getAllObjects()) {
-        if (object.isDictionary() && object.getKey("/Type").isNameAndEquals("/Page") &&
-            !placed.count(object.getObjGen())) {
-            primary.replaceObject(object.getObjGen(), QPDFObjectHandle::newNull());
-        }
-    }
+    nullPagesOutsideTree(primary);
 
-    QPDFObjectHandle acroForm = root.getKey("/AcroForm");
-    QPDFObjectHandle fields =
-        acroForm.isDictionary() ? acroForm.getKey("/Fields") : QPDFObjectHandle::newNull();
-    if (fields.isArray()) {
-        std::vector<QPDFObjectHandle> kept;
-        for (auto const& field : fields.getArrayAsVector()) {
-            if (keptFields.count(field.getObjGen())) kept.push_back(field);
-        }
-        if (kept.empty()) {
-            root.removeKey("/AcroForm");
-        } else {
-            QPDFObjectHandle keptArray = QPDFObjectHandle::newArray(kept);
-            acroForm.replaceKey(
-                "/Fields", fields.isIndirect() ? primary.makeIndirectObject(keptArray) : keptArray);
-        }
-    }
-    QPDFObjectHandle remainingForm = root.getKey("/AcroForm");
-    if (remainingForm.isDictionary()) remainingForm.removeKey("/XFA");
+    keepOnlyFields(primary, keptFields);
 
     for (char const* key :
          {"/Outlines", "/StructTreeRoot", "/MarkInfo", "/NeedsRendering", "/Perms"}) {

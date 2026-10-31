@@ -222,15 +222,11 @@ publishing {
                 description.set("Prebuilt JPDFium native libraries for ${project.name.removePrefix("jpdfium-natives-")}")
                 url.set("https://github.com/Stirling-Tools/JPDFium")
 
-                // MIT covers only the JPDFium bridge. License scanners read this block, so the
-                // bundled third-party libraries need their own entry or they report as MIT too.
+                // Maven reads several <license> entries as alternatives, so the MIT bridge and the
+                // bundled third-party libraries share one entry that points at the full notice.
                 licenses {
                     license {
-                        name.set("MIT License")
-                        url.set("https://opensource.org/licenses/MIT")
-                    }
-                    license {
-                        name.set("Bundled third-party libraries: see licenses/NOTICE.txt in this jar")
+                        name.set("MIT License (JPDFium bridge) AND the licenses of the bundled third-party libraries in licenses/NOTICE.txt")
                         url.set("https://github.com/Stirling-Tools/JPDFium/blob/main/native/licenses/NOTICE.txt")
                     }
                 }

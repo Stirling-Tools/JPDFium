@@ -45,20 +45,12 @@ publishing workflows, not library releases, so they are not listed here.
   renamed), and page labels are rebuilt for the new page order. The structure
   tree, XFA form and usage-rights signatures are still dropped, because they
   describe the source document and are wrong once its pages are rearranged.
-- `NOTICE.txt` and the `licenses/` folder in the natives jars now cover Skia,
-  Abseil, PCRE2, pugixml, libunibreak, Expat, Brotli, bzip2 and LLVM libc++,
-  which were bundled without a notice, and the natives POMs list the bundled
+- `NOTICE.txt` in the natives jars now credits Skia, PCRE2 and its SLJIT JIT
+  compiler, pugixml, libunibreak, Expat, Brotli, bzip2 and LLVM libc++, which
+  were bundled without a notice, and the natives POMs name the bundled
   libraries' licenses alongside MIT.
 
 ### Changed
-
-- The `jpdfium` POM and Gradle module metadata no longer declare a runtime
-  dependency on `jpdfium-natives-<platform>`. The dependency named whichever
-  platform ran the publish (linux-x64 for releases), so every consumer
-  downloaded those natives whatever platform it ran on. Declare the natives
-  module for your platform, as [installation.md](docs/installation.md) already
-  describes; an application that relied on the leaked linux-x64 natives without
-  declaring them must now add `jpdfium-natives-linux-x64`.
 
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
