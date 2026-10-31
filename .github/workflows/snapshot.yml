@@ -134,20 +134,17 @@ jobs:
           done
           exit 1
       - name: Cross-build minimal Windows ICU data
-        # Windows uses vcpkg's ICU 79; the darwin-x64 runner's Homebrew has
-        # only ICU 78. Build both data majors, then keep only the 79 DLLs
-        # for Windows (the macOS wrapper selects its matching .dat).
+        # Windows runners ship either vcpkg ICU 78 or 79, and the
+        # darwin-x64 runner's Homebrew has only 78. Build both data majors;
+        # each platform selects the matching DLL/data after download.
         run: |
           ICU_VER=78 bash native/build-minimal-icu-windows.sh
           ICU_VER=79 bash native/build-minimal-icu-windows.sh
-          rm -f native/dist/windows-x64/icudt78.dll native/dist/windows-arm64/icudt78.dll
-      - name: Upload trimmed Windows icudt79.dll
+      - name: Upload trimmed Windows ICU data DLLs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-icu-trimmed
-          path: |
-            native/dist/windows-x64/icudt79.dll
-            native/dist/windows-arm64/icudt79.dll
+          path: native/dist/windows-*/icudt*.dll
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
@@ -562,6 +559,28 @@ jobs:
         with:
           name: windows-icu-trimmed
           path: native/dist/
+
+      - name: Select ICU data DLL matching vcpkg
+        if: startsWith(matrix.platform, 'windows-')
+        shell: bash
+        run: |
+          for dir in native/dist/windows-*; do
+            [ -d "$dir" ] || continue
+            major=""
+            for f in "$dir"/icuuc[0-9]*.dll; do
+              [ -f "$f" ] || continue
+              major=$(basename "$f" | sed -n 's/^icuuc\([0-9][0-9]*\)\.dll$/\1/p')
+              [ -n "$major" ] && break
+            done
+            [ -n "$major" ] || continue
+            for f in "$dir"/icudt[0-9]*.dll; do
+              [ -f "$f" ] || continue
+              case "$(basename "$f")" in
+                "icudt${major}.dll") ;;
+                *) rm -f "$f" ;;
+              esac
+            done
+          done
 
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
