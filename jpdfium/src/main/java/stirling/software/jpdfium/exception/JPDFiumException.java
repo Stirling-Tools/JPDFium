@@ -18,6 +18,9 @@ public class JPDFiumException extends RuntimeException {
     /** Native code {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} (-8). */
     public static final int REDACT_UNVERIFIABLE = -8;
 
+    /** Native code {@code JPDFIUM_ERR_CONTENT_MUTATED} (-10). */
+    public static final int CONTENT_MUTATED = -10;
+
     private final int nativeCode;
 
     public JPDFiumException(String msg) {
@@ -63,5 +66,10 @@ public class JPDFiumException extends RuntimeException {
     /** True when redaction could not run or could not be verified (no silent fallback). */
     public boolean isRedactUnverifiable() {
         return nativeCode == REDACT_UNVERIFIABLE;
+    }
+
+    /** True when the call modified native content before it failed. */
+    public boolean isContentMutated() {
+        return nativeCode == CONTENT_MUTATED;
     }
 }

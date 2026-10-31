@@ -62,6 +62,7 @@ These bound concurrent admission, not memory. Two operations admitted together m
 | Property | Default | Description |
 |---|---|---|
 | `jpdfium.flatten.dpi` | `150` | DPI used by full-page rasterization during `flatten()`. |
+| `JPDFIUM_FLATTEN_JPEG_QUALITY` | unset (lossless bitmap) | Environment-only, read once on the first `FlattenMode.FULL` pass. `1`–`100` embeds FULL rasters as baseline JPEG instead of the raw bitmap; any other value or an unset variable keeps the lossless raw embed. Requires a native build with TurboJPEG; without it the setting is ignored. |
 
 ## Diagnostics
 
