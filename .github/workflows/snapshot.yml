@@ -103,7 +103,7 @@ jobs:
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-14"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-15"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   # Cross-build a trimmed Windows icudt78.dll on Linux ahead of the matrix
@@ -276,7 +276,7 @@ jobs:
             tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
             sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
           fi
-          # /usr/local/share/man pre-exists root-owned on macos-14 runners;
+          # /usr/local/share/man pre-exists root-owned on macos-15 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
           # Build tools only generate files; native bottles are fine.
@@ -614,7 +614,7 @@ jobs:
         if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && !startsWith(matrix.platform, 'freebsd-') && (github.event_name != 'pull_request' || !startsWith(matrix.platform, 'darwin-'))
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
-      # darwin-x64 is cross-compiled on this arm64 (macos-14) host; on push /
+      # darwin-x64 is cross-compiled on this arm64 (macos-15) host; on push /
       # release the dylib is signed, so run its x86_64 smoke with an x86_64
       # JDK (skipped on PRs where macOS rejects the unsigned dylib).
       - name: Functional smoke test - darwin-x64 (Intel)
@@ -677,7 +677,7 @@ jobs:
           - { platform: linux-x64,    runner: ubuntu-latest    }
           - { platform: linux-arm64,   runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel   }
-          - { platform: darwin-arm64, runner: macos-14         }
+          - { platform: darwin-arm64, runner: macos-15         }
           # GPL-free source prebuild (native/vips.version): vcpkg deps, no
           # poppler/fftw/imagequant/x265. Windows has no HEVC encoder (x265 is
           # GPL; kvazaar is not a vcpkg libheif feature) and no vips pdfload
