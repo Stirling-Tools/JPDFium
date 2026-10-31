@@ -42,9 +42,10 @@ publishing workflows, not library releases, so they are not listed here.
   preferences, XMP metadata, the document language and the document
   information dictionary. The first input now keeps its document-level data,
   form fields from every input are carried over (a clashing field name is
-  renamed), and page labels are rebuilt for the new page order. The structure
-  tree, XFA form and usage-rights signatures are still dropped, because they
-  describe the source document and are wrong once its pages are rearranged.
+  renamed), and page labels are rebuilt for the new page order. Bookmarks, the
+  structure tree, XFA form and usage-rights signatures are still dropped,
+  because they describe the source document and are wrong once its pages are
+  rearranged, and the output is still written unencrypted.
 - `NOTICE.txt` in the natives jars now credits Skia, PCRE2 and its SLJIT JIT
   compiler, pugixml, libunibreak, Expat, Brotli, bzip2 and LLVM libc++, which
   were bundled without a notice, and the natives POMs name the bundled
