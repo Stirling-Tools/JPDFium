@@ -11,6 +11,10 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.ImageTypeSpecifier;
+import javax.imageio.stream.ImageInputStream;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -140,6 +144,48 @@ class PdfImageIOTest {
         assertTrue(tiffBytes.length > 0);
         List<BufferedImage> fromBytes = PdfImageIO.readAllFrames(tiffBytes);
         assertEquals(2, fromBytes.size());
+    }
+
+    @Test
+    void multiPageTiffPreservesGrayAndBinary() throws Exception {
+        BufferedImage gray = new BufferedImage(64, 64, BufferedImage.TYPE_BYTE_GRAY);
+        BufferedImage binary = new BufferedImage(64, 64, BufferedImage.TYPE_BYTE_BINARY);
+        Graphics2D grayGraphics = gray.createGraphics();
+        Graphics2D binaryGraphics = binary.createGraphics();
+        try {
+            grayGraphics.setColor(new Color(128, 128, 128));
+            grayGraphics.fillRect(0, 0, 64, 64);
+            binaryGraphics.setColor(Color.BLACK);
+            binaryGraphics.fillRect(0, 0, 64, 64);
+            binaryGraphics.setColor(Color.WHITE);
+            binaryGraphics.fillRect(0, 0, 32, 64);
+        } finally {
+            grayGraphics.dispose();
+            binaryGraphics.dispose();
+        }
+
+        assertTiffType(PdfImageIO.writeMultiPageTiffToBytes(List.of(gray, gray)), 1, 8);
+        assertTiffType(PdfImageIO.writeMultiPageTiffToBytes(List.of(binary, binary)), 1, 1);
+    }
+
+    private static void assertTiffType(byte[] tiff, int bands, int pixelBits) throws Exception {
+        try (ImageInputStream input = ImageIO.createImageInputStream(new ByteArrayInputStream(tiff))) {
+            assertNotNull(input);
+            var readers = ImageIO.getImageReaders(input);
+            assertTrue(readers.hasNext(), "JDK TIFF reader unavailable");
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(input);
+                ImageTypeSpecifier type = reader.getRawImageType(0);
+                if (type == null) {
+                    type = reader.getImageTypes(0).next();
+                }
+                assertEquals(bands, type.getNumBands());
+                assertEquals(pixelBits, type.getColorModel().getPixelSize());
+            } finally {
+                reader.dispose();
+            }
+        }
     }
 
     @Test

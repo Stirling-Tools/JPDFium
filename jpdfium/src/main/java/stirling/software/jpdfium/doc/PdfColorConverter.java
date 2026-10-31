@@ -347,8 +347,9 @@ public final class PdfColorConverter {
     }
 
     private static final class ConversionState {
-        // Shared across pages so a shared form is converted once.
+        // Positive object numbers are stable across pages; addresses are not.
         private final Set<Long> visitedForms;
+        private final Set<Long> pageLocalForms = new HashSet<>();
         private int converted;
         private int edits;
         private boolean dirty;
@@ -398,7 +399,12 @@ public final class PdfColorConverter {
 
         if (type == 5) {
             if (!options.convertForms() || !PageEditBindings.formConversionAvailable()) return;
-            if (!state.visitedForms.add(PageEditBindings.formIdentity(obj))) return;
+            long objectNumber = PageEditBindings.formObjectNumber(obj);
+            if (objectNumber > 0) {
+                if (!state.visitedForms.add(objectNumber)) return;
+            } else if (!state.pageLocalForms.add(obj.address())) {
+                return;
+            }
 
             int beforeEdits = state.edits;
             scanFormObjects(obj, options, xform, r, g, b, a, cmyk, state);
@@ -449,8 +455,7 @@ public final class PdfColorConverter {
         for (int i = 0; i < count; i++) {
             MemorySegment child;
             try {
-                child = (MemorySegment) PageEditBindings.FPDFFormObj_GetObject.invokeExact(
-                        form, (long) i);
+                child = PageEditBindings.formObject(form, i);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 continue;

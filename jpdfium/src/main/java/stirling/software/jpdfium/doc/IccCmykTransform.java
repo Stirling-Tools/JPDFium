@@ -15,9 +15,9 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * colours and image pixels go through that same table, so an sRGB fill and an
  * sRGB image pixel with identical components produce identical ink values.
  *
- * <p><strong>Not thread-safe.</strong> The instance keeps a one-entry source
- * profile cache; use one instance per conversion (as {@link PdfColorConverter}
- * does) or create a separate instance for each thread.
+ * <p>Instances are immutable after construction and can be shared between
+ * threads. The one-entry source-profile cache is process-wide; it is bounded
+ * so a long-lived server does not retain one profile per worker thread.
  */
 final class IccCmykTransform {
 
@@ -27,12 +27,15 @@ final class IccCmykTransform {
     private static final int LUT_LAST = LUT_GRID - 1;
     private static final int LUT_BYTES = LUT_GRID * LUT_GRID * LUT_GRID * 4;
 
+    private static final Object SOURCE_CACHE_LOCK = new Object();
+    private static byte[] cachedSourceIcc;
+    private static int cachedSourceComponents;
+    private static ICC_ColorSpace cachedSourceSpace;
+
     private final ColorSpace srgb = ColorSpace.getInstance(ColorSpace.CS_sRGB);
     private final ICC_ColorSpace cmyk;
     private final byte[] lut = new byte[LUT_BYTES];
     private final float[] rgb = new float[3];
-    private byte[] lastSourceIcc;
-    private ICC_ColorSpace lastSourceSpace;
 
     /** Build from a 4-component CMYK ICC profile. */
     IccCmykTransform(byte[] iccProfile) {
@@ -85,7 +88,7 @@ final class IccCmykTransform {
      * PDFium's image rendering, then passed through the same LUT.
      */
     void toCmykFromIcc(byte[] sourceIcc, float[] components, int[] out) {
-        ICC_ColorSpace source = sourceSpace(sourceIcc, components.length);
+        ICC_ColorSpace source = staticSourceSpace(sourceIcc, components.length);
         float[] xyz = source.toCIEXYZ(components);
         if (components.length == 1 || components.length == 4) {
             // Gray and CMYK source profiles already carry ink information.
@@ -172,18 +175,6 @@ final class IccCmykTransform {
         return (((r * LUT_GRID) + g) * LUT_GRID + b) * 4;
     }
 
-    private ICC_ColorSpace sourceSpace(byte[] sourceIcc, int expectedComponents) {
-        if (lastSourceSpace != null && lastSourceIcc != null
-                && lastSourceIcc.length == sourceIcc.length
-                && Arrays.equals(lastSourceIcc, sourceIcc)) {
-            return lastSourceSpace;
-        }
-        ICC_ColorSpace space = staticSourceSpace(sourceIcc, expectedComponents);
-        lastSourceIcc = sourceIcc.clone();
-        lastSourceSpace = space;
-        return space;
-    }
-
     /**
      * Reject malformed ICC bytes before handing them to the JDK. This mirrors
      * the native IccComponentCount structural checks and keeps a hostile
@@ -217,6 +208,13 @@ final class IccCmykTransform {
 
     private static ICC_ColorSpace staticSourceSpace(byte[] sourceIcc, int expectedComponents) {
         validateIccStructure(sourceIcc);
+        synchronized (SOURCE_CACHE_LOCK) {
+            if (cachedSourceSpace != null
+                    && cachedSourceComponents == expectedComponents
+                    && Arrays.equals(cachedSourceIcc, sourceIcc)) {
+                return cachedSourceSpace;
+            }
+        }
         ICC_Profile profile;
         try {
             profile = ICC_Profile.getInstance(sourceIcc);
@@ -227,7 +225,13 @@ final class IccCmykTransform {
             throw new JPDFiumException("Source ICC component count mismatch: profile="
                     + profile.getNumComponents() + " components=" + expectedComponents);
         }
-        return new ICC_ColorSpace(profile);
+        ICC_ColorSpace space = new ICC_ColorSpace(profile);
+        synchronized (SOURCE_CACHE_LOCK) {
+            cachedSourceIcc = sourceIcc.clone();
+            cachedSourceComponents = expectedComponents;
+            cachedSourceSpace = space;
+        }
+        return space;
     }
 
     private static int clampByte(int v) {

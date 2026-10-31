@@ -17,11 +17,20 @@ dependencies {
         api(project(":jpdfium-natives:jpdfium-natives-darwin-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-windows-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-windows-arm64"))
-        api(project(":jpdfium-natives:jpdfium-natives-freebsd-x64"))
+        if (rootProject.file("native/dist/freebsd-x64").walkTopDown().any {
+                it.isFile && it.name.matches(Regex(""".*\.(so|dylib|dll)(\..*)?$"""))
+            }) {
+            api(project(":jpdfium-natives:jpdfium-natives-freebsd-x64"))
+        }
         api(project(":jpdfium-natives:jpdfium-natives-vips-linux-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-linux-arm64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-darwin-x64"))
         api(project(":jpdfium-natives:jpdfium-natives-vips-darwin-arm64"))
+        if (rootProject.file("native/dist/vips-freebsd-x64").walkTopDown().any {
+                it.isFile && it.name.matches(Regex(""".*\.(so|dylib|dll)(\..*)?$"""))
+            }) {
+            api(project(":jpdfium-natives:jpdfium-natives-vips-freebsd-x64"))
+        }
         if (rootProject.file("native/vips.version").let { pin ->
                 pin.exists() && pin.readLines().any { it.isNotBlank() && !it.trimStart().startsWith("#") }
             }) {

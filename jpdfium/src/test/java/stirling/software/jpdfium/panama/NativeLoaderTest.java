@@ -96,7 +96,7 @@ class NativeLoaderTest {
             assertFalse(checksums.isEmpty(), "natives jar ships libraries without checksums");
             for (String lib : libs) {
                 assertTrue(checksums.containsKey(lib), "library not in checksum manifest: " + lib);
-                assertNotNull(NativeLoader.class.getResource(base + lib), "missing: " + lib);
+                assertNotNull(NativeLoader.findResource(base + lib), "missing: " + lib);
             }
         }
     }

@@ -4,9 +4,11 @@ import java.awt.color.ColorSpace;
 import java.awt.color.ICC_Profile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 /**
@@ -14,30 +16,83 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  * metadata.
  *
  * <p>This is <strong>not a PDF/X validator</strong>. It does not check or repair
- * transparency, embedded fonts, trim/art boxes, trapping, /ID, or all remaining
- * RGB content. Use an external preflight (veraPDF or Acrobat) before claiming
- * PDF/X conformance; {@link #checkMetadata(byte[], PdfXOptions)} only checks the
- * intent/ICC/version wiring written here.
+ * embedded fonts, trim/art boxes, trapping, /ID, or all remaining RGB content.
+ * It rejects transparency for standards that forbid it and leaves the rest to
+ * an external preflight (veraPDF or Acrobat) before claiming PDF/X conformance;
+ * {@link #checkMetadata(byte[], PdfXOptions)} only checks the intent/ICC/version
+ * wiring written here.
  */
 public final class PdfXConverter {
 
     private PdfXConverter() {}
 
-    /** True when the loaded native library can run the implemented pipeline. */
+    /** True when the loaded native library can run the implemented metadata pipeline. */
     public static boolean isSupported() {
         return PdfOutputIntent.pdfxSupported()
                 && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK);
     }
 
-    /** True when {@code standard} is wired into this initial implementation. */
+    /** True when {@code standard}'s intent/XMP metadata is wired into this build. */
     public static boolean supports(PdfXStandard standard) {
         return standard != null && standard.metadataSupported();
     }
 
     /** Convert colours in place and apply PDF/X intent metadata. */
     public static PdfDocument applyMetadata(PdfDocument doc, PdfXOptions options) {
-        if (doc == null) throw new JPDFiumException("PDF/X metadata application requires a document");
-        if (options == null) throw new JPDFiumException("PDF/X metadata application requires options");
+        prepare(doc, options);
+        PdfXStandard standard = options.standard();
+        byte[] converted = PdfOutputIntent.applyPdfxMetadata(doc.saveBytes(),
+                options.outputIntentProfile(),
+                PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
+                standard.gtsVersion(), standard.gtsConformance());
+        return PdfDocument.open(converted);
+    }
+
+    /** Apply PDF/X metadata while converting a PDF file without holding it in Java bytes. */
+    public static void applyMetadata(Path input, Path output, PdfXOptions options)
+            throws IOException {
+        if (input == null || output == null) {
+            throw new IllegalArgumentException("input and output paths are required");
+        }
+        requireSupported(options);
+        Path staging = Files.createTempFile(
+                output.toAbsolutePath().getParent(), "jpdfium-pdfx-", ".pdf");
+        try {
+            try (PdfDocument source = PdfDocument.open(input)) {
+                prepare(source, options);
+                source.save(staging);
+            }
+            PdfXStandard standard = options.standard();
+            if (!PdfOutputIntent.applyPdfxMetadata(staging, output,
+                    options.outputIntentProfile(),
+                    PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
+                    standard.gtsVersion(), standard.gtsConformance())) {
+                throw new JPDFiumException("PDF/X metadata application failed");
+            }
+        } finally {
+            Files.deleteIfExists(staging);
+        }
+    }
+
+    /** Apply PDF/X metadata and return the new PDF bytes. */
+    public static byte[] applyMetadata(byte[] input, PdfXOptions options) {
+        if (input == null || input.length == 0) {
+            throw new JPDFiumException("PDF/X metadata requires non-empty PDF bytes");
+        }
+        requireSupported(options);
+        try (PdfDocument source = PdfDocument.open(input);
+                PdfDocument converted = applyMetadata(source, options)) {
+            return converted.saveBytes();
+        }
+    }
+
+    private static void prepare(PdfDocument doc, PdfXOptions options) {
+        if (doc == null) {
+            throw new JPDFiumException("PDF/X metadata application requires a document");
+        }
+        if (options == null) {
+            throw new JPDFiumException("PDF/X metadata application requires options");
+        }
         PdfXStandard standard = options.standard();
         if (!supports(standard)) {
             throw new JPDFiumException("PDF/X metadata is not supported for " + standard
@@ -47,43 +102,31 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata application requires vector CMYK support,"
                     + " source colour-space probes and the QPDF PDF/X metadata bootstrap");
         }
-
         byte[] profile = options.outputIntentProfile();
         if (profile == null || profile.length == 0) {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
-
+        requireNoTransparency(doc, standard);
         if (options.convertColors()) {
             PdfColorConverter.convert(doc, options.colorOptions());
         }
-        byte[] pdf = doc.saveBytes();
-        byte[] converted = PdfOutputIntent.applyPdfxMetadata(pdf, profile,
-                PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
-                standard.gtsVersion(), standard.gtsConformance());
-        return PdfDocument.open(converted);
     }
 
-    /** Apply PDF/X metadata while converting a PDF file to another file. */
-    public static void applyMetadata(Path input, Path output, PdfXOptions options)
-            throws IOException {
-        if (input == null || output == null) {
-            throw new IllegalArgumentException("input and output paths are required");
-        }
-        try (PdfDocument source = PdfDocument.open(input);
-                PdfDocument converted = applyMetadata(source, options)) {
-            converted.save(output);
-        }
-    }
-
-    /** Apply PDF/X metadata and return the new PDF bytes. */
-    public static byte[] applyMetadata(byte[] input, PdfXOptions options) {
-        if (input == null || input.length == 0) {
-            throw new JPDFiumException("PDF/X metadata requires non-empty PDF bytes");
-        }
-        try (PdfDocument source = PdfDocument.open(input);
-                PdfDocument converted = applyMetadata(source, options)) {
-            return converted.saveBytes();
+    /**
+     * Reject transparent page content for standards whose PDF version forbids
+     * it. Package-private so the read-only probe can be tested without a
+     * native CMYK build.
+     */
+    static void requireNoTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return;
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (PdfPage page = doc.page(i)) {
+                if (PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) {
+                    throw new JPDFiumException(standard + " forbids transparency;"
+                            + " page " + i + " requires flattening");
+                }
+            }
         }
     }
 
@@ -104,6 +147,14 @@ public final class PdfXConverter {
                 || !text.contains(options.standard().gtsVersion())) {
             throw new JPDFiumException("PDF/X metadata check: missing or mismatched"
                     + " GTS_PDFXVersion metadata");
+        }
+    }
+
+    private static void requireSupported(PdfXOptions options) {
+        if (options == null || !supports(options.standard())) {
+            throw new JPDFiumException("PDF/X metadata is not supported for "
+                    + (options == null ? "null" : options.standard())
+                    + " (supported: PDF/X-3 and PDF/X-4)");
         }
     }
 
@@ -145,5 +196,4 @@ public final class PdfXConverter {
     public static void validate(byte[] pdf, PdfXOptions options) {
         checkMetadata(pdf, options);
     }
-
 }

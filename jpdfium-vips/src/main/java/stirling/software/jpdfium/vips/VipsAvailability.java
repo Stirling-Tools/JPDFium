@@ -149,6 +149,7 @@ public final class VipsAvailability {
     static String installGuidance(String platform) {
         if (platform.contains("darwin")) return "brew install vips";
         if (platform.contains("linux")) return "apt install libvips-dev  or  dnf install vips-devel";
+        if (platform.contains("freebsd")) return "pkg install vips";
         if (platform.contains("windows")) return "download libvips Windows binaries from https://github.com/libvips/build-win64-mxe/releases";
         return "install libvips (https://www.libvips.org/install.html)";
     }
