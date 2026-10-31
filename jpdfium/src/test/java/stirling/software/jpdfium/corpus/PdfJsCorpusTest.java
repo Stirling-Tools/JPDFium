@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfRenderer;
+import stirling.software.jpdfium.VisualDiff;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.model.FlattenMode;
 
@@ -40,6 +41,7 @@ class PdfJsCorpusTest {
             "poppler-85140-0.pdf",
             "poppler-937-0-fuzzed.pdf");
     private static final float DPI = 36.0f;
+    private static final double REOPEN_MAE = 2.0d;
     private static final AtomicInteger PROBED = new AtomicInteger();
 
     @TestFactory
@@ -89,17 +91,26 @@ class PdfJsCorpusTest {
                     }
                 }
             }
-            byte[] output = source.saveBytes();
-            assertTrue(output.length > 0, "empty save");
-            try (PdfDocument reopened = PdfDocument.open(output)) {
-                assertEquals(pages, reopened.pageCount(), "page count changed");
-                if (annotations > 0) {
-                    assertEquals(0, annotationCount(reopened),
-                            "annotation flattening left interactive annotations behind");
+            Path output = Files.createTempFile("jpdfium-corpus-", ".pdf");
+            try {
+                source.save(output);
+                assertTrue(Files.size(output) > 0, "empty save");
+                try (PdfDocument reopened = PdfDocument.open(output)) {
+                    assertEquals(pages, reopened.pageCount(), "page count changed");
+                    if (annotations > 0) {
+                        assertEquals(0, annotationCount(reopened),
+                                "annotation flattening left interactive annotations behind");
+                    }
+                    BufferedImage reopenedImage =
+                            new PdfRenderer(reopened).renderImageWithDPI(0, DPI);
+                    if (!flattenAnnotations) {
+                        double mae = VisualDiff.meanAbsoluteError(image, reopenedImage);
+                        assertTrue(mae <= REOPEN_MAE,
+                                "reopened page changed: MAE " + mae);
+                    }
                 }
-                if (reopened.pageCount() > 0) {
-                    new PdfRenderer(reopened).renderImageWithDPI(0, DPI);
-                }
+            } finally {
+                Files.deleteIfExists(output);
             }
             PROBED.incrementAndGet();
         }

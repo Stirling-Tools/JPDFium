@@ -114,7 +114,7 @@ jobs:
           rm -rf /tmp/skcms-src
           if git init -q /tmp/skcms-src \
             && git -C /tmp/skcms-src remote add origin https://skia.googlesource.com/skcms \
-            && git -C /tmp/skcms-src fetch -q --depth=1 origin f0bbebbebb50851813e4f11d3d4b9edd2878a056 \
+            && timeout 900s git -C /tmp/skcms-src fetch -q --depth=1 origin f0bbebbebb50851813e4f11d3d4b9edd2878a056 \
             && git -C /tmp/skcms-src checkout -q FETCH_HEAD; then
             test "$(git -C /tmp/skcms-src rev-parse HEAD)" = "f0bbebbebb50851813e4f11d3d4b9edd2878a056"
             test -d /tmp/skcms-src/profiles
@@ -195,7 +195,7 @@ jobs:
           exit $rc
 
       - name: Run expanded PDF.js, ICC and veraPDF corpus gate
-        if: steps.corpus-download.outcome == 'success'
+        if: ${{ !cancelled() && steps.corpus-download.outcome == 'success' }}
         env:
           PDFJS_DIR: /tmp/pdfjs/pdf.js-c53f395e4057b501f478a7e98ed03d47c7c62a04/test/pdfs
           ICC_PROFILE_DIR: /tmp/skcms-src/profiles
@@ -214,7 +214,7 @@ jobs:
           exit $rc
 
       - name: Verify Ghent process ink coverage
-        if: steps.conversion-gate.outcome == 'success'
+        if: ${{ !cancelled() && steps.conversion-gate.outcome == 'success' }}
         env:
           GHENT_DIR: /tmp/ghent/Ghent_PDF_Output_Suite_V50_Testpages
         run: bash .github/scripts/verify-ghent-inkcov.sh "$GHENT_DIR" /tmp

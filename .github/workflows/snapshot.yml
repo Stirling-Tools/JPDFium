@@ -560,28 +560,6 @@ jobs:
           name: windows-icu-trimmed
           path: native/dist/
 
-      - name: Select ICU data DLL matching vcpkg
-        if: startsWith(matrix.platform, 'windows-')
-        shell: bash
-        run: |
-          for dir in native/dist/windows-*; do
-            [ -d "$dir" ] || continue
-            major=""
-            for f in "$dir"/icuuc[0-9]*.dll; do
-              [ -f "$f" ] || continue
-              major=$(basename "$f" | sed -n 's/^icuuc\([0-9][0-9]*\)\.dll$/\1/p')
-              [ -n "$major" ] && break
-            done
-            [ -n "$major" ] || continue
-            for f in "$dir"/icudt[0-9]*.dll; do
-              [ -f "$f" ] || continue
-              case "$(basename "$f")" in
-                "icudt${major}.dll") ;;
-                *) rm -f "$f" ;;
-              esac
-            done
-          done
-
       - name: Bundle runtime deps + strip
         if: matrix.libc != 'musl' && steps.fetch.outputs.freebsd_missing != 'true'
         env:

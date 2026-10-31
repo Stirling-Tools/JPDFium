@@ -56,17 +56,30 @@ class IccProfileCorpusTest {
             }
             try {
                 IccCmykTransform transform = new IccCmykTransform(bytes);
-                int[] ink = new int[4];
-                transform.toCmyk(0, 0, 0, ink);
-                float[] expected = new ICC_ColorSpace(ICC_Profile.getInstance(bytes))
-                        .fromCIEXYZ(SRGB.toCIEXYZ(new float[] {0f, 0f, 0f}));
-                for (int i = 0; i < ink.length; i++) {
-                    assertTrue(ink[i] >= 0 && ink[i] <= 255,
-                            file + " produced an out-of-range ink component");
-                    int expectedInk = Math.round(expected[i] * 255f);
-                    assertTrue(Math.abs(ink[i] - expectedInk) <= INK_TOLERANCE,
-                            file + " black ink mismatch at component " + i
-                                    + ": got " + ink[i] + ", expected " + expectedInk);
+                ICC_ColorSpace reference =
+                        new ICC_ColorSpace(ICC_Profile.getInstance(bytes));
+                int[][] samples = {
+                    {0, 0, 0},
+                    {51, 128, 204},
+                    {230, 26, 102},
+                    {13, 179, 77}
+                };
+                for (int[] rgb : samples) {
+                    int[] ink = new int[4];
+                    transform.toCmyk(rgb[0], rgb[1], rgb[2], ink);
+                    float[] components = {
+                        rgb[0] / 255f, rgb[1] / 255f, rgb[2] / 255f
+                    };
+                    float[] expected = reference.fromCIEXYZ(SRGB.toCIEXYZ(components));
+                    for (int i = 0; i < ink.length; i++) {
+                        assertTrue(ink[i] >= 0 && ink[i] <= 255,
+                                file + " produced an out-of-range ink component");
+                        int expectedInk = Math.round(expected[i] * 255f);
+                        assertTrue(Math.abs(ink[i] - expectedInk) <= INK_TOLERANCE,
+                                file + " ink mismatch at RGB " + java.util.Arrays.toString(rgb)
+                                        + " component " + i + ": got " + ink[i]
+                                        + ", expected " + expectedInk);
+                    }
                 }
                 validCmyk++;
             } catch (JPDFiumException e) {

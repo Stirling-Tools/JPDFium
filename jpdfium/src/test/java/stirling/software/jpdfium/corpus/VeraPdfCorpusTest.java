@@ -71,18 +71,24 @@ class VeraPdfCorpusTest {
             assumeTrue(pages > 0, "no pages");
             BufferedImage image = new PdfRenderer(source).renderImageWithDPI(0, DPI);
             assertTrue(image.getWidth() > 0 && image.getHeight() > 0);
-            byte[] output = source.saveBytes();
-            assertTrue(output.length > 0, "empty save");
-            try (PdfDocument reopened = PdfDocument.open(output)) {
-                assertEquals(pages, reopened.pageCount(), "page count changed");
-                BufferedImage reopenedImage = new PdfRenderer(reopened).renderImageWithDPI(0, DPI);
-                assertEquals(image.getWidth(), reopenedImage.getWidth(),
-                        "reopened page width changed");
-                assertEquals(image.getHeight(), reopenedImage.getHeight(),
-                        "reopened page height changed");
-                double mae = VisualDiff.meanAbsoluteError(image, reopenedImage);
-                assertTrue(mae <= REOPEN_MAE,
-                        "reopened page changed: MAE " + mae);
+            Path output = Files.createTempFile("jpdfium-verapdf-", ".pdf");
+            try {
+                source.save(output);
+                assertTrue(Files.size(output) > 0, "empty save");
+                try (PdfDocument reopened = PdfDocument.open(output)) {
+                    assertEquals(pages, reopened.pageCount(), "page count changed");
+                    BufferedImage reopenedImage =
+                            new PdfRenderer(reopened).renderImageWithDPI(0, DPI);
+                    assertEquals(image.getWidth(), reopenedImage.getWidth(),
+                            "reopened page width changed");
+                    assertEquals(image.getHeight(), reopenedImage.getHeight(),
+                            "reopened page height changed");
+                    double mae = VisualDiff.meanAbsoluteError(image, reopenedImage);
+                    assertTrue(mae <= REOPEN_MAE,
+                            "reopened page changed: MAE " + mae);
+                }
+            } finally {
+                Files.deleteIfExists(output);
             }
             PROBED.incrementAndGet();
         }
