@@ -71,13 +71,13 @@ class PdfBinaryFreeApiTest {
     void colorConverterCapabilityProbes() {
         assertTrue(PdfColorConverter.supportsColorSpace(ColorSpace.GRAYSCALE));
         assertTrue(PdfColorConverter.supportsColorSpace(ColorSpace.RGB));
-        // CMYK needs the PDFium CMYK setters added by the JPDFium colour patch:
-        // it is available exactly when the native library exposes them.
-        assertEquals(ColorBindings.vectorCmykAvailable(),
-                PdfColorConverter.supportsColorSpace(ColorSpace.CMYK),
-                "CMYK support must track the native capability probe");
+        boolean cmyk = ColorBindings.vectorCmykAvailable()
+                && ColorBindings.colorSpaceAvailable()
+                && ColorBindings.iccConversionAvailable();
+        assertEquals(cmyk, PdfColorConverter.supportsColorSpace(ColorSpace.CMYK),
+                "CMYK support must track the full native colour pipeline");
 
-        Set<ColorSpace> expected = ColorBindings.vectorCmykAvailable()
+        Set<ColorSpace> expected = cmyk
                 ? Set.of(ColorSpace.GRAYSCALE, ColorSpace.RGB, ColorSpace.CMYK)
                 : Set.of(ColorSpace.GRAYSCALE, ColorSpace.RGB);
         assertEquals(expected, PdfColorConverter.supportedColorSpaces());

@@ -135,5 +135,7 @@ This distribution bundles binary forms of the following open-source projects:
 
 31. jpeg-encoder (CMYK JPEG encoder in the Rust helper)
     - Copyright (c) 2019-2024 the jpeg-encoder contributors
-    - License: MIT OR Apache-2.0 (Apache-2.0 text in HIGHWAY-APACHE-2.0.txt,
-      MIT in HARFBUZZ.txt)
+    - License: (MIT OR Apache-2.0) AND IJG (Apache-2.0 text in
+      HIGHWAY-APACHE-2.0.txt, MIT in HARFBUZZ.txt, IJG in
+      JPEG-ENCODER-IJG.txt)
+    - This software is based in part on the work of the Independent JPEG Group.
