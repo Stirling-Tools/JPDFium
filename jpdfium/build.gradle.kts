@@ -184,7 +184,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_init_ex", "jpdfium_active_renderer", "jpdfium_destroy",
     "jpdfium_doc_open", "jpdfium_doc_open_bytes", "jpdfium_doc_open_bytes_protected", "jpdfium_doc_open_protected",
     "jpdfium_doc_create",
-    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_save_to_file", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
+    "jpdfium_doc_page_count", "jpdfium_doc_save", "jpdfium_doc_save_bytes", "jpdfium_doc_save_to_file", "jpdfium_doc_save_incremental_to_file", "jpdfium_doc_save_working_to_file", "jpdfium_doc_set_sanitize_on_save", "jpdfium_doc_close",
     "jpdfium_page_open", "jpdfium_page_width", "jpdfium_page_height", "jpdfium_page_info",
     "jpdfium_page_close",
     "jpdfium_render_page", "jpdfium_render_page_flags", "jpdfium_render_page_into", "jpdfium_render_page_form_into",
@@ -210,6 +210,7 @@ val jpdfiumFunctions = listOf(
     "jpdfium_redact_glyph_aware",
     // XMP Metadata Redaction
     "jpdfium_xmp_redact_patterns", "jpdfium_metadata_strip", "jpdfium_metadata_strip_all",
+    "jpdfium_metadata_set_xmp", "jpdfium_metadata_set_xmp_ex", "jpdfium_metadata_get_xmp",
     // ICU4C Text Processing
     "jpdfium_icu_normalize_nfc", "jpdfium_icu_break_sentences", "jpdfium_icu_bidi_reorder",
     // Annotation-Based Redaction (Mark → Commit pattern)

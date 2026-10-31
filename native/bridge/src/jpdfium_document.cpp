@@ -400,7 +400,7 @@ int32_t jpdfium_doc_open_bytes_protected(const uint8_t* data, int64_t len, const
         }
 
         auto w = std::make_unique<DocWrapper>();
-        w->core = makeDocCore(doc, copy, len);
+        w->core = makeDocCore(doc, copy, len, nullptr, password);
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
@@ -421,7 +421,7 @@ int32_t jpdfium_doc_open_protected(const char* path, const char* password, int64
         // Record the source path like jpdfium_doc_open so a later save refuses
         // to overwrite its own backing file (O_TRUNC would destroy the input
         // PDFium is still reading).
-        w->core = makeDocCore(doc, nullptr, 0, path);
+        w->core = makeDocCore(doc, nullptr, 0, path, password);
         auto* raw = w.release();
         DocHandleRegistry::instance().add(raw);
         *handle = encodeHandle(raw);
@@ -491,8 +491,8 @@ bool isSaveAlias(const std::string& sourcePath, const char* destPath) {
 }
 }  // namespace
 
-int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
-                                 int64_t* out_bytes) {
+static int32_t doc_save_to_file_impl(int64_t doc, const char* path, int64_t max_bytes,
+                                     int64_t* out_bytes, FPDF_DWORD save_flags) {
     try {
         DocWrapper* w = decodeDoc(doc);
         if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
@@ -504,6 +504,11 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // guard so the caller sees the more specific error.
         if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
         if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        // Incremental save appends a revision, so the original objects (and
+        // any redacted content they still hold) survive. The same refusal the
+        // in-memory incremental saver makes must apply here.
+        if (save_flags == FPDF_INCREMENTAL && w->core->contentRedacted)
+            return JPDFIUM_ERR_REDACTED_SAVE;
         if (out_bytes) *out_bytes = 0;
 
         // Alias protection first: both the sanitize branch (staging + rename
@@ -515,7 +520,8 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
 
         // Opt-in sanitize pass needs the whole serialization post-hoc, so it
         // keeps the buffered path. The common case streams with no large buffer.
-        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+        if (save_flags == FPDF_NO_INCREMENTAL && w->core->contentRedacted &&
+            w->core->sanitizeOnSave) {
             struct BufWriter : FPDF_FILEWRITE {
                 std::vector<uint8_t> buf;
                 static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
@@ -570,7 +576,7 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         // PDFium's own outcome and the sink's are recorded separately: a save can
         // return true while the sink failed, or fail while everything written so
         // far was fine. Reporting only one of them would misattribute the cause.
-        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, FPDF_NO_INCREMENTAL);
+        const int pdfium_ok = FPDF_SaveAsCopy(w->core->doc, &ctx, save_flags);
         const int flushRc = std::fflush(f);
         const int closeRc = std::fclose(f);
         ctx.file = nullptr;
@@ -601,6 +607,92 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
         return JPDFIUM_OK;
     } catch (...) {
         // Never let a C++ exception cross the FFM boundary.
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                 int64_t* out_bytes) {
+    return doc_save_to_file_impl(doc, path, max_bytes, out_bytes, FPDF_NO_INCREMENTAL);
+}
+
+int32_t jpdfium_doc_save_incremental_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                             int64_t* out_bytes) {
+    return doc_save_to_file_impl(doc, path, max_bytes, out_bytes, FPDF_INCREMENTAL);
+}
+
+int32_t jpdfium_doc_save_working_to_file(int64_t doc, const char* path, int64_t max_bytes,
+                                         int64_t* out_bytes) {
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (!path || !*path || max_bytes < 0) return JPDFIUM_ERR_INVALID;
+        if (w->core->hasIncompleteRedaction()) return JPDFIUM_ERR_REDACT_INCOMPLETE;
+        if (w->core->hasUnappliedRedactMarks()) return JPDFIUM_ERR_UNCOMMITTED_MARKS;
+        // The working revision is not sanitized. Let the caller use the
+        // regular save path, which runs the opt-in sanitize stage.
+        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+            return JPDFIUM_ERR_NOT_FOUND;
+        }
+        if (w->core->workingPath.empty()) return JPDFIUM_ERR_INVALID;
+        if (isSaveAlias(w->core->sourcePath, path) || isSaveAlias(w->core->workingPath, path)) {
+            return JPDFIUM_ERR_INVALID;
+        }
+        if (out_bytes) *out_bytes = 0;
+
+        std::error_code ec;
+        const auto sourceSize = std::filesystem::file_size(w->core->workingPath, ec);
+        if (ec) return JPDFIUM_ERR_IO;
+        if (max_bytes > 0 && sourceSize > static_cast<uint64_t>(max_bytes)) {
+            return JPDFIUM_ERR_TOO_LARGE;
+        }
+
+        UniqueFile input(std::fopen(w->core->workingPath.c_str(), "rb"));
+        if (!input) return JPDFIUM_ERR_IO;
+
+        std::string staging;
+        UniqueFile output(open_staging_sibling(path, staging));
+        if (!output) return JPDFIUM_ERR_IO;
+
+        char buffer[64 * 1024];
+        int64_t written = 0;
+        for (;;) {
+            size_t n = std::fread(buffer, 1, sizeof(buffer), input.get());
+            if (n > 0) {
+                if (max_bytes > 0 && written + static_cast<int64_t>(n) > max_bytes) {
+                    output.reset();
+                    std::remove(staging.c_str());
+                    return JPDFIUM_ERR_TOO_LARGE;
+                }
+                if (std::fwrite(buffer, 1, n, output.get()) != n) {
+                    output.reset();
+                    std::remove(staging.c_str());
+                    return JPDFIUM_ERR_IO;
+                }
+                written += static_cast<int64_t>(n);
+            }
+            if (n < sizeof(buffer)) {
+                if (std::ferror(input.get())) {
+                    output.reset();
+                    std::remove(staging.c_str());
+                    return JPDFIUM_ERR_IO;
+                }
+                break;
+            }
+        }
+        if (written == 0 || std::fflush(output.get()) != 0) {
+            output.reset();
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        output.reset();
+        if (!publish_staged(staging, path)) {
+            std::remove(staging.c_str());
+            return JPDFIUM_ERR_IO;
+        }
+        if (out_bytes) *out_bytes = written;
+        return JPDFIUM_OK;
+    } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }
 }

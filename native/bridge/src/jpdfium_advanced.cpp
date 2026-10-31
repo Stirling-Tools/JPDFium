@@ -794,11 +794,79 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
 
 #ifdef JPDFIUM_HAS_QPDF
 
+#include <filesystem>
 #include <qpdf/Buffer.hh>
 #include <qpdf/QPDF.hh>
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
+#include <random>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+// Own a temporary path until a successful reload takes it over.
+class TempFilePath {
+   public:
+    explicit TempFilePath(std::string path) : path_(std::move(path)) {}
+    ~TempFilePath() {
+        if (!path_.empty()) std::remove(path_.c_str());
+    }
+    TempFilePath(const TempFilePath&) = delete;
+    TempFilePath& operator=(const TempFilePath&) = delete;
+
+    const std::string& path() const {
+        return path_;
+    }
+    void release() noexcept {
+        path_.clear();
+    }
+
+   private:
+    std::string path_;
+};
+
+// Create an owner-only file outside the document-sized memory path. O_EXCL
+// makes the random name authoritative even when two threads race.
+static bool create_private_temp_file(std::string& path) {
+    std::error_code ec;
+    std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+    if (ec) return false;
+
+    std::random_device rd;
+    std::mt19937_64 gen((static_cast<uint64_t>(rd()) << 32) ^ rd());
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "jpdfium-xmp-%016llx-%016llx.pdf",
+                      static_cast<unsigned long long>(gen()),
+                      static_cast<unsigned long long>(gen()));
+        std::string candidate = (dir / name).string();
+#ifdef _WIN32
+        int fd = _open(candidate.c_str(), _O_CREAT | _O_EXCL | _O_WRONLY | _O_BINARY,
+                       _S_IREAD | _S_IWRITE);
+        if (fd >= 0) {
+            _close(fd);
+            path = std::move(candidate);
+            return true;
+        }
+#else
+        int fd = ::open(candidate.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+        if (fd >= 0) {
+            ::close(fd);
+            path = std::move(candidate);
+            return true;
+        }
+#endif
+    }
+    return false;
+}
 
 // Save an FPDF_DOCUMENT to a byte vector.
 static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
@@ -821,6 +889,84 @@ static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
     return FPDF_SaveAsCopy(doc, &bw, FPDF_NO_INCREMENTAL) != 0;
 }
 
+// Save an FPDF_DOCUMENT directly to a file. Keep the callback buffer small;
+// PDFium streams blocks through it instead of materializing the whole PDF.
+static bool qpdf_save_fpdf_file(FPDF_DOCUMENT doc, const std::string& path) {
+    // The path was created with owner-only permissions by
+    // create_private_temp_file(); open it without O_CREAT so the mode cannot be
+    // widened to the process default.
+#ifdef _WIN32
+    int fd = _open(path.c_str(), _O_WRONLY | _O_TRUNC | _O_BINARY);
+    UniqueFile file(fd >= 0 ? _fdopen(fd, "wb") : nullptr);
+    if (fd >= 0 && !file) _close(fd);
+#else
+    int fd = ::open(path.c_str(), O_WRONLY | O_TRUNC);
+    UniqueFile file(fd >= 0 ? fdopen(fd, "wb") : nullptr);
+    if (fd >= 0 && !file) ::close(fd);
+#endif
+    if (!file) return false;
+
+    struct FileWriter : FPDF_FILEWRITE {
+        std::FILE* file;
+        static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
+            auto* fw = static_cast<FileWriter*>(self);
+            return std::fwrite(data, 1, size, fw->file) == size ? 1 : 0;
+        }
+    } writer;
+    writer.version = 1;
+    writer.WriteBlock = FileWriter::Write;
+    writer.file = file.get();
+
+    if (FPDF_SaveAsCopy(doc, &writer, FPDF_NO_INCREMENTAL) == 0) return false;
+    return std::fflush(file.get()) == 0 && std::ferror(file.get()) == 0;
+}
+
+// Load the bytes PDFium already holds, without asking it to serialize the live
+// document. File-backed documents are parsed straight from their source path;
+// memory-backed documents use the buffer owned by DocCore. Only documents with
+// neither source (e.g. an empty document) need the full-save fallback.
+static const char* qpdf_password(DocWrapper* w) {
+    return w && w->core && !w->core->openPassword.empty() ? w->core->openPassword.c_str() : nullptr;
+}
+
+static bool qpdf_load_source(DocWrapper* w, QPDF& pdf) {
+    if (!w || !w->core) return false;
+    const char* password = qpdf_password(w);
+    if (w->core->buf && w->core->blen > 0) {
+        pdf.processMemoryFile("get_xmp_source", reinterpret_cast<const char*>(w->core->buf),
+                              static_cast<size_t>(w->core->blen), password);
+        return true;
+    }
+    const std::string& path =
+        !w->core->workingPath.empty() ? w->core->workingPath : w->core->sourcePath;
+    if (!path.empty()) {
+        pdf.processFile(path.c_str(), password);
+        return true;
+    }
+    return false;
+}
+
+// Extract the catalog XMP stream from an already-parsed QPDF document.
+static int32_t qpdf_xmp(QPDF& pdf, uint8_t** xmp, int32_t* xmp_len) {
+    QPDFObjectHandle root = pdf.getRoot();
+    QPDFObjectHandle trailer = pdf.getTrailer();
+    QPDFObjectHandle metadata =
+        root.hasKey("/Metadata") ? root.getKey("/Metadata") : trailer.getKey("/Metadata");
+    if (!metadata.isStream()) return JPDFIUM_ERR_NOT_FOUND;
+
+    std::shared_ptr<Buffer> data = metadata.getStreamData(qpdf_dl_generalized);
+    if (!data || data->getSize() == 0) return JPDFIUM_ERR_NOT_FOUND;
+    if (data->getSize() > static_cast<size_t>(INT32_MAX)) return JPDFIUM_ERR_TOO_LARGE;
+
+    auto size = static_cast<int32_t>(data->getSize());
+    auto* copy = static_cast<uint8_t*>(malloc(static_cast<size_t>(size)));
+    if (!copy) return JPDFIUM_ERR_NATIVE;
+    memcpy(copy, data->getBuffer(), static_cast<size_t>(size));
+    *xmp = copy;
+    *xmp_len = size;
+    return JPDFIUM_OK;
+}
+
 // Write a QPDF document to a byte vector.
 static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     QPDFWriter writer(pdf);
@@ -832,6 +978,20 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     std::vector<uint8_t> result(buf->getSize());
     memcpy(result.data(), buf->getBuffer(), buf->getSize());
     return result;
+}
+
+static void qpdf_write_compressed_to_file(QPDF& pdf, const std::string& path) {
+    QPDFWriter writer(pdf);
+    writer.setOutputFilename(path.c_str());
+    writer.setLinearization(false);
+    writer.setCompressStreams(true);
+    int major = 0;
+    int minor = 0;
+    if (sscanf(pdf.getPDFVersion().c_str(), "%d.%d", &major, &minor) == 2 &&
+        (major > 1 || (major == 1 && minor >= 5))) {
+        writer.setObjectStreamMode(qpdf_o_generate);
+    }
+    writer.write();
 }
 
 // Replace the FPDF_DOCUMENT inside a DocWrapper with a document loaded from new
@@ -852,7 +1012,7 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     if (!copy) return JPDFIUM_ERR_NATIVE;
     memcpy(copy, newBytes.data(), sz);
 
-    FPDF_DOCUMENT candidate = FPDF_LoadMemDocument(copy, static_cast<int>(sz), nullptr);
+    FPDF_DOCUMENT candidate = FPDF_LoadMemDocument(copy, static_cast<int>(sz), qpdf_password(w));
     if (!candidate) {
         free(copy);
         return JPDFIUM_ERR_NATIVE;
@@ -880,14 +1040,47 @@ static int32_t docwrapper_reload(DocWrapper* w, const std::vector<uint8_t>& newB
     w->core->touchedFontNames.clear();
     w->core->sanitizeReport.clear();
     w->core->sourcePath.clear();
+    std::string staleWorking = std::move(w->core->workingPath);
+    w->core->workingPath.clear();
 
     FPDF_CloseDocument(w->core->doc);
     free(w->core->buf);  // free() ignores NULL
+    if (!staleWorking.empty()) std::remove(staleWorking.c_str());
     w->core->doc = candidate;
     w->core->buf = copy;
     w->core->blen = static_cast<int64_t>(sz);
     // Replacement committed: previously opened pages now point into the freed
     // document. Their wrappers detect the mismatch and refuse use and release.
+    ++w->core->generation;
+    return JPDFIUM_OK;
+}
+
+// Reload from a file-backed replacement. The file remains owned by DocCore
+// until close, so large XMP rewrites never require a document-sized allocation.
+static int32_t docwrapper_reload_file(DocWrapper* w, const std::string& newPath) {
+    if (!w || !w->core || !w->core->doc || newPath.empty()) return JPDFIUM_ERR_INVALID;
+
+    FPDF_DOCUMENT candidate = FPDF_LoadDocument(newPath.c_str(), qpdf_password(w));
+    if (!candidate) return JPDFIUM_ERR_NATIVE;
+
+    for (FPDF_FONT f : w->core->loadedFonts) {
+        FPDFFont_Close(f);
+    }
+    w->core->loadedFonts.clear();
+    w->core->clearRedactPatternCache();
+    w->core->touchedFontsSet.clear();
+    w->core->touchedFontNames.clear();
+    w->core->sanitizeReport.clear();
+
+    FPDF_CloseDocument(w->core->doc);
+    free(w->core->buf);  // free() ignores NULL
+    if (!w->core->workingPath.empty() && w->core->workingPath != newPath) {
+        std::remove(w->core->workingPath.c_str());
+    }
+    w->core->doc = candidate;
+    w->core->buf = nullptr;
+    w->core->blen = 0;
+    w->core->workingPath = newPath;
     ++w->core->generation;
     return JPDFIUM_OK;
 }
@@ -904,7 +1097,7 @@ int32_t jpdfium_metadata_strip(int64_t doc, const char** keys, int32_t key_count
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
         pdf.processMemoryFile("strip", reinterpret_cast<const char*>(pdfBytes.data()),
-                              pdfBytes.size());
+                              pdfBytes.size(), qpdf_password(w));
 
         QPDFObjectHandle trailer = pdf.getTrailer();
         if (trailer.hasKey("/Info")) {
@@ -935,7 +1128,7 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
         pdf.processMemoryFile("strip_all", reinterpret_cast<const char*>(pdfBytes.data()),
-                              pdfBytes.size());
+                              pdfBytes.size(), qpdf_password(w));
 
         QPDFObjectHandle trailer = pdf.getTrailer();
         if (trailer.hasKey("/Info")) trailer.removeKey("/Info");
@@ -945,6 +1138,117 @@ int32_t jpdfium_metadata_strip_all(int64_t doc) {
         if (root.hasKey("/MarkInfo")) root.removeKey("/MarkInfo");
 
         return docwrapper_reload(w, qpdf_write(pdf));
+    } catch (std::exception&) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_metadata_set_xmp_ex(int64_t doc, const uint8_t* xmp, int32_t xmp_len,
+                                    int32_t source_current) {
+    try {
+        DocWrapper* w = decodeDoc(doc);
+        if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+        if (xmp_len < 0 || (xmp_len > 0 && !xmp)) return JPDFIUM_ERR_INVALID;
+
+        // When the caller has no live PDFium changes, QPDF can read the existing
+        // file-backed source directly. This avoids a document-sized PDFium save
+        // for the common metadata-only path. Otherwise stream the live revision to
+        // a temporary file first so /Info changes are included.
+        bool memoryInput = false;
+        std::string sourceInput;
+        if (source_current) {
+            if (!w->core->workingPath.empty()) {
+                sourceInput = w->core->workingPath;
+            } else if (!w->core->sourcePath.empty()) {
+                sourceInput = w->core->sourcePath;
+            } else if (w->core->buf && w->core->blen > 0) {
+                memoryInput = true;
+            }
+        }
+
+        std::string tempInput;
+        if (!memoryInput && sourceInput.empty()) {
+            if (!create_private_temp_file(tempInput)) return JPDFIUM_ERR_NATIVE;
+            if (!qpdf_save_fpdf_file(w->core->doc, tempInput)) {
+                std::remove(tempInput.c_str());
+                return JPDFIUM_ERR_IO;
+            }
+        }
+        TempFilePath inputGuard(tempInput);
+        const std::string inputPath = !tempInput.empty() ? tempInput : sourceInput;
+
+        std::string outputPath;
+        if (!create_private_temp_file(outputPath)) return JPDFIUM_ERR_NATIVE;
+        TempFilePath outputGuard(outputPath);
+
+        try {
+            QPDF pdf;
+            pdf.setSuppressWarnings(true);
+            pdf.setAttemptRecovery(true);
+            if (memoryInput) {
+                pdf.processMemoryFile("set_xmp", reinterpret_cast<const char*>(w->core->buf),
+                                      static_cast<size_t>(w->core->blen), qpdf_password(w));
+            } else {
+                pdf.processFile(inputPath.c_str(), qpdf_password(w));
+            }
+
+            QPDFObjectHandle root = pdf.getRoot();
+            if (xmp_len > 0) {
+                auto buf = std::make_shared<Buffer>(static_cast<size_t>(xmp_len));
+                memcpy(buf->getBuffer(), xmp, static_cast<size_t>(xmp_len));
+                QPDFObjectHandle metadata = QPDFObjectHandle::newStream(&pdf, buf);
+                metadata.getDict().replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
+                metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
+                root.replaceKey("/Metadata", metadata);
+            } else {
+                if (root.hasKey("/Metadata")) root.removeKey("/Metadata");
+                QPDFObjectHandle trailer = pdf.getTrailer();
+                if (trailer.hasKey("/Metadata")) trailer.removeKey("/Metadata");
+            }
+
+            qpdf_write_compressed_to_file(pdf, outputPath);
+            int32_t rc = docwrapper_reload_file(w, outputPath);
+            if (rc == JPDFIUM_OK) outputGuard.release();
+            return rc;
+        } catch (std::exception&) {
+            return JPDFIUM_ERR_NATIVE;
+        }
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+int32_t jpdfium_metadata_set_xmp(int64_t doc, const uint8_t* xmp, int32_t xmp_len) {
+    return jpdfium_metadata_set_xmp_ex(doc, xmp, xmp_len, 0);
+}
+
+int32_t jpdfium_metadata_get_xmp(int64_t doc, uint8_t** xmp, int32_t* xmp_len) {
+    if (!xmp || !xmp_len) return JPDFIUM_ERR_INVALID;
+    *xmp = nullptr;
+    *xmp_len = 0;
+
+    DocWrapper* w = decodeDoc(doc);
+    if (!w || !w->core->doc) return JPDFIUM_ERR_INVALID;
+
+    try {
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        if (qpdf_load_source(w, pdf)) return qpdf_xmp(pdf, xmp, xmp_len);
+    } catch (std::exception&) {
+        // Source parsing failed; fall through to the fully serialized document.
+    }
+
+    try {
+        std::vector<uint8_t> pdfBytes;
+        if (!qpdf_save_fpdf(w->core->doc, pdfBytes)) return JPDFIUM_ERR_IO;
+
+        QPDF pdf;
+        pdf.setSuppressWarnings(true);
+        pdf.setAttemptRecovery(true);
+        pdf.processMemoryFile("get_xmp", reinterpret_cast<const char*>(pdfBytes.data()),
+                              pdfBytes.size(), qpdf_password(w));
+        return qpdf_xmp(pdf, xmp, xmp_len);
     } catch (std::exception&) {
         return JPDFIUM_ERR_NATIVE;
     }
@@ -962,7 +1266,7 @@ int32_t jpdfium_strip_fonts(int64_t doc, int32_t* fonts_removed) {
         pdf.setSuppressWarnings(true);
         pdf.setAttemptRecovery(true);
         pdf.processMemoryFile("strip_fonts", reinterpret_cast<const char*>(pdfBytes.data()),
-                              pdfBytes.size());
+                              pdfBytes.size(), qpdf_password(w));
 
         int count = 0;
         std::set<int> processed;  // object IDs of shared resource dicts already stripped
