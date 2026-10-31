@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# Wrap the pre-trimmed ICU 78 .dat (produced once on Linux by
+# Wrap the pre-trimmed ICU .dat (produced once on Linux by
 # build-minimal-icu-windows.sh - same data file, OS-agnostic) into a
-# macOS libicudata.<MAJ>.dylib via a clang .incbin asm stub.
+# macOS libicudata.<major>.dylib via a clang .incbin asm stub.
 #
-# Why not trim locally on macOS: brew's icu4c@78 bottle doesn't ship
-# icupkg / pkgdata, and we'd otherwise have to build ICU 78 from source
+# Why not trim locally on macOS: brew's versioned icu4c bottle doesn't ship
+# icupkg / pkgdata, and we'd otherwise have to build ICU from source
 # on the runner just to get those two tools. The Linux prep job has apt's
-# icu-devtools already, AND downloads upstream ICU 78's pre-assembled
+# icu-devtools already, AND downloads upstream ICU's pre-assembled
 # .dat from the github.com/unicode-org/icu release. We let it do the
 # heavy lifting; this script just wraps the bytes in a Mach-O dylib.
 #
-# Input  : native/dist/icu-data/icudt78l.dat  (downloaded as artifact)
-# Output : native/dist/<darwin-*>/libicudata.<MAJ>.dylib  (pre-staged so
+# Input  : native/dist/icu-data/icudt<major>l.dat  (downloaded as artifact)
+# Output : native/dist/<darwin-*>/libicudata.<major>.dylib  (pre-staged so
 #          the bundler picks it up instead of brew's full 33 MB copy)
 #
 # Best-effort: any failure exits 0 - bundle falls back to brew's full
 # icudata (or, on arm64 where bundle_macos's rpath resolver doesn't
-# search icu4c@78's keg-only path, to current "no libicudata" state).
+# search icu4c@<major>'s keg-only path, to current "no libicudata" state).
 
 echo "build-minimal-icu-macos.sh: start  ($(uname -s) $(uname -m))"
 
@@ -41,7 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHARED_DAT_DIR="$SCRIPT_DIR/dist/icu-data"
 PLATFORM_DIST="$SCRIPT_DIR/dist/$PLATFORM"
 
-# Find the prepared .dat. The Linux prep job names it icudt<MAJ>l.dat
+# Find the prepared .dat. The Linux prep job names it icudt<major>l.dat
 # under native/dist/icu-data/; the workflow downloads it before this step.
 TRIMMED_DAT=""
 for cand in "$SHARED_DAT_DIR"/icudt*l.dat; do
@@ -50,13 +50,13 @@ for cand in "$SHARED_DAT_DIR"/icudt*l.dat; do
     break
 done
 if [ -z "$TRIMMED_DAT" ]; then
-    echo "build-minimal-icu-macos.sh: ERROR: no prepared icudt<MAJ>l.dat under $SHARED_DAT_DIR" >&2
+    echo "build-minimal-icu-macos.sh: ERROR: no prepared icudt<major>l.dat under $SHARED_DAT_DIR" >&2
     echo "  Trimmed ICU data is required to meet macOS bundle size budget." >&2
     ls -la "$SHARED_DAT_DIR" 2>/dev/null >&2 || true
     exit 1
 fi
 
-# Parse "icudt78l.dat" → MAJ.
+# Parse "icudt<major>l.dat" → MAJ.
 DAT_BASE=$(basename "$TRIMMED_DAT")
 ICU_VER=$(echo "$DAT_BASE" | sed -n 's/^icudt\([0-9][0-9]*\)l\.dat$/\1/p')
 if [ -z "$ICU_VER" ]; then
@@ -151,7 +151,7 @@ fi
 # macOS branch checks dest existence before cp'ing in its rpath/loader-path
 # walk; if our trimmed copy is already there, brew's 33 MB one is left out.
 # On darwin-arm64 (where bundle_macos's rpath resolver doesn't search
-# /opt/homebrew/opt/icu4c@78/lib and currently SKIPS libicudata.78.dylib
+# /opt/homebrew/opt/icu4c@<major>/lib and currently SKIPS libicudata.<major>.dylib
 # entirely), this pre-stage still gets uploaded as part of native/dist/<plat>/
 # via the upload-artifact step - so the final natives jar contains a working
 # libicudata that libicuuc.78.dylib's @loader_path lookup will resolve at
