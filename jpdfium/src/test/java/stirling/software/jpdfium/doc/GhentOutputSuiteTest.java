@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.VisualDiff;
 import stirling.software.jpdfium.PdfRenderer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -103,7 +104,7 @@ class GhentOutputSuiteTest {
                 assertEquals(expected.getWidth(), actual.getWidth(), "page width changed");
                 assertEquals(expected.getHeight(), actual.getHeight(), "page height changed");
 
-                double mae = meanAbsoluteError(expected, actual);
+                double mae = VisualDiff.meanAbsoluteError(expected, actual);
                 System.out.printf("%s page %d: %s (MAE %.4f, max %.1f)%n",
                         input.getFileName(), page + 1,
                         mae <= threshold ? "PASS" : "FAIL", mae, threshold);
@@ -122,21 +123,5 @@ class GhentOutputSuiteTest {
         Path nested = dir.resolve("Ghent_PDF_Output_Suite_V50_Testpages");
         if (Files.isDirectory(nested)) return nested;
         return dir;
-    }
-
-    private static double meanAbsoluteError(BufferedImage a, BufferedImage b) {
-        long sum = 0;
-        long count = 0;
-        for (int y = 0; y < a.getHeight(); y++) {
-            for (int x = 0; x < a.getWidth(); x++) {
-                int pa = a.getRGB(x, y);
-                int pb = b.getRGB(x, y);
-                sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
-                count += 3;
-            }
-        }
-        return count == 0 ? 0 : (double) sum / count;
     }
 }

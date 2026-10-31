@@ -18,6 +18,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.tukaani.xz.XZInputStream;
 
 public final class NativeLoader {
 
@@ -180,6 +181,13 @@ public final class NativeLoader {
      * same flag so manifests, checksums, and binaries come from one bundle.
      */
     static URL findResource(String absolutePath, boolean requireSupplemental) {
+        URL raw = findRawResource(absolutePath, requireSupplemental);
+        if (raw != null) return raw;
+        if (absolutePath.endsWith(".xz")) return null;
+        return findRawResource(absolutePath + ".xz", requireSupplemental);
+    }
+
+    private static URL findRawResource(String absolutePath, boolean requireSupplemental) {
         String stripped = absolutePath.startsWith("/") ? absolutePath.substring(1) : absolutePath;
         ClassLoader extra = supplementalLoader;
         if (extra != null) {
@@ -200,7 +208,9 @@ public final class NativeLoader {
     static InputStream openResource(String absolutePath, boolean requireSupplemental)
             throws IOException {
         URL url = findResource(absolutePath, requireSupplemental);
-        return url == null ? null : url.openStream();
+        if (url == null) return null;
+        InputStream in = url.openStream();
+        return url.getPath().endsWith(".xz") ? new XZInputStream(in) : in;
     }
 
     private static void tryLoadFromClasspath() {

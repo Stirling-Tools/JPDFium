@@ -18,6 +18,7 @@ on:
       - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfRenderer.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfAnnotations.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfColorConverter.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfPageObjects.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfRecolor.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfOutputIntent.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/IccCmykTransform.java'
@@ -73,11 +74,14 @@ jobs:
         run: bash native/setup-pdfium.sh
 
       - name: Build JPDFium bridge against patched PDFium
+        id: build-native
         run: bash native/build-real.sh
 
+      # A missing corpus must fail the job: otherwise an outage or a checksum
+      # mismatch silently skips the corpus tests. The download-free tests below
+      # still run and their reports are uploaded.
       - name: Download Ghent PDF Output Suite V50
         id: ghent-download
-        continue-on-error: true
         run: |
           GHENT_SHA256=52d271ddd97dcb5778d1da2bdb3b86a66b96083b7f57ee3fd8ed2b5e5a5d7d29
           if curl -fsSL --connect-timeout 20 --max-time 600 --retry 3 --retry-max-time 120 \
@@ -129,7 +133,6 @@ jobs:
 
       - name: Download ECI Altona fixtures
         id: eci-download
-        continue-on-error: true
         run: |
           # ECI permits use but not redistribution; download it for this run only.
           mkdir -p /tmp/eci
@@ -154,6 +157,16 @@ jobs:
             fi
           done
 
+      # These tests need no downloads. Run them even when a corpus download
+      # failed, so a network outage still exercises the flatten and PDF/X paths.
+      - name: Run download-free visual and PDF/X gate
+        if: always() && steps.build-native.outcome == 'success'
+        run: |
+          ./gradlew :jpdfium:integrationTest \
+            --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
+            --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
+            --no-daemon --stacktrace
+
       - name: Run Ghent and ECI conversion gate
         id: conversion-gate
         if: steps.ghent-download.outcome == 'success' && steps.eci-download.outcome == 'success'
@@ -165,8 +178,6 @@ jobs:
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.GhentOutputSuiteTest' \
             --tests 'stirling.software.jpdfium.doc.EciAltonaSuiteTest' \
-            --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
-            --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
             --no-daemon --stacktrace
 
       - name: Run expanded PDF.js, ICC and veraPDF corpus gate
@@ -189,7 +200,7 @@ jobs:
         run: bash .github/scripts/verify-ghent-inkcov.sh "$GHENT_DIR" /tmp
 
       - name: Upload Ghent output
-        if: always() && steps.conversion-gate.outcome == 'success'
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ghent-cmyk-output

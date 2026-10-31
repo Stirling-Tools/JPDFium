@@ -6,9 +6,12 @@ import org.apache.pdfbox.cos.COSObject;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.graphics.color.PDOutputIntent;
+import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -26,9 +29,11 @@ import java.util.stream.Stream;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -396,6 +401,76 @@ class PdfXConverterTest {
                 assertEquals(pages, reopened.pageCount(),
                         input.getFileName() + " page count changed");
             }
+        }
+    }
+
+    @Test
+    void constantAlphaIsVisibleToTheStrictProbeButNotThePageFlag() throws Exception {
+        byte[] input = pageWithConstantAlpha();
+        try (PdfDocument doc = PdfDocument.open(input);
+                PdfPage page = doc.page(0)) {
+            assertFalse(PdfPageObjects.summarize(page.rawHandleForRead()).hasTransparency(),
+                    "PDFium's page-level flag does not report /ca 0.5; this is the regression");
+            assertTrue(PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead()),
+                    "strict probe must see constant alpha in the object graphics state");
+            JPDFiumException error = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.requireNoTransparency(doc, PdfXStandard.PDF_X_3));
+            assertTrue(error.getMessage().contains("forbids transparency"), error.getMessage());
+            assertTrue(error.getMessage().contains("page 0"), error.getMessage());
+            assertFalse(doc.isContentModified(),
+                    "a read-only transparency probe must not mark the document modified");
+        }
+    }
+
+    @Test
+    void pdfx3RejectsConstantAlphaEvenWhenThePageFlagIsClear() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha();
+
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .build();
+        JPDFiumException error = assertThrows(JPDFiumException.class,
+                () -> PdfXConverter.applyMetadata(input, options));
+        assertTrue(error.getMessage().contains("forbids transparency"), error.getMessage());
+        assertTrue(error.getMessage().contains("page 0"), error.getMessage());
+    }
+
+    @Test
+    void transparencyProbeDoesNotMarkTheDocumentModified() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = pageWithConstantAlpha();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_3)
+                .useCompactCmyk()
+                .build();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertFalse(doc.isContentModified(),
+                    "a read-only transparency preflight must not mark the document modified");
+        }
+    }
+
+    private static byte[] pageWithConstantAlpha() throws Exception {
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+            PDResources resources = new PDResources();
+            PDExtendedGraphicsState state = new PDExtendedGraphicsState();
+            state.setNonStrokingAlphaConstant(0.5f);
+            resources.put(COSName.getPDFName("gs1"), state);
+            try (PDPageContentStream content = new PDPageContentStream(
+                    pdfbox, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
+                content.setGraphicsStateParameters(state);
+                content.addRect(100, 100, 100, 100);
+                content.fill();
+            }
+            page.setResources(resources);
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            return bytes.toByteArray();
         }
     }
 

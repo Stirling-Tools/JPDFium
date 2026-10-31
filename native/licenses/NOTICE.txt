@@ -11,6 +11,13 @@ This distribution bundles binary forms of the following open-source projects:
    - Copyright (c) 2005-2024 Jay Berkenbilt
    - License: Apache License 2.0 (see QPDF-APACHE-2.0.txt)
 
+2a. Abseil
+    - Copyright (c) 2017 The Abseil Authors
+    - License: Apache License 2.0 (see ABSEIL-APACHE-2.0.txt)
+
+2b. JPDFium compact CMYK profile
+    - See JPDFiumCompactCmyk.NOTICE.txt
+
 3. libvips
    - Copyright (c) 1991-2024 The libvips Open Source Project
    - License: GNU Lesser General Public License v2.1 or later (see LIBVIPS-LGPL-2.1.txt)
@@ -26,6 +33,10 @@ This distribution bundles binary forms of the following open-source projects:
 6. libjxl (JPEG XL reference implementation)
    - Copyright (c) 2019-2024 JPEG XL Project Authors
    - License: BSD 3-Clause License (see LIBJXL-BSD-3.txt)
+
+6a. Lerc
+    - Copyright (c) 2015-2024 Esri
+    - License: Apache License 2.0 (see LERC-APACHE-2.0.txt)
 
 7. libwebp
    - Copyright (c) 2010 Google Inc.

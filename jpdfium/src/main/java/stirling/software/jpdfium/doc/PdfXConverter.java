@@ -107,18 +107,26 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata requires an output intent ICC profile");
         }
         validateCmykProfile(profile);
-        if (!standard.allowsTransparency()) {
-            for (int i = 0; i < doc.pageCount(); i++) {
-                try (PdfPage page = doc.page(i)) {
-                    if (PdfPageObjects.summarize(page.rawHandle()).hasTransparency()) {
-                        throw new JPDFiumException(standard + " forbids transparency;"
-                                + " page " + i + " requires flattening");
-                    }
-                }
-            }
-        }
+        requireNoTransparency(doc, standard);
         if (options.convertColors()) {
             PdfColorConverter.convert(doc, options.colorOptions());
+        }
+    }
+
+    /**
+     * Reject transparent page content for standards whose PDF version forbids
+     * it. Package-private so the read-only probe can be tested without a
+     * native CMYK build.
+     */
+    static void requireNoTransparency(PdfDocument doc, PdfXStandard standard) {
+        if (standard.allowsTransparency()) return;
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (PdfPage page = doc.page(i)) {
+                if (PdfPageObjects.hasTransparencyStrict(page.rawHandleForRead())) {
+                    throw new JPDFiumException(standard + " forbids transparency;"
+                            + " page " + i + " requires flattening");
+                }
+            }
         }
     }
 

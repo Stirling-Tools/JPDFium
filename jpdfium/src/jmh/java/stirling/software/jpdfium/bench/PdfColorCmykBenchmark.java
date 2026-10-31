@@ -1,4 +1,4 @@
-package stirling.software.jpdfium.doc;
+package stirling.software.jpdfium.bench;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -19,6 +19,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.Warmup;
 
 import stirling.software.jpdfium.PdfDocument;
+import stirling.software.jpdfium.doc.PdfColorConverter;
 import stirling.software.jpdfium.panama.ColorBindings;
 
 /** Image-heavy CMYK conversion benchmark: PDF image object path and JPEG encode path. */
@@ -35,9 +36,15 @@ public class PdfColorCmykBenchmark {
 
     private byte[] pdf;
     private byte[] rgb;
+    private boolean vectorCmyk;
+    private boolean imageCmyk;
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
+        vectorCmyk = PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK);
+        imageCmyk = ColorBindings.imageConversionAvailable();
+        if (!vectorCmyk && !imageCmyk) return;
+
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         try {
@@ -61,6 +68,7 @@ public class PdfColorCmykBenchmark {
     /** Full document path: open + image XObject decode + CMYK JPEG replacement. */
     @Benchmark
     public int imagePdfToCmyk() {
+        if (!vectorCmyk) return -1;
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             return PdfColorConverter.toCmyk(doc);
         }
@@ -69,6 +77,7 @@ public class PdfColorCmykBenchmark {
     /** Native samples -> CMYK JPEG encoder, including the Java-to-native copy. */
     @Benchmark
     public int samplesToCmykJpeg() {
+        if (!imageCmyk) return -1;
         byte[] jpeg = ColorBindings.samplesToCmykJpeg(rgb, size, size, 3, 90, 0);
         return jpeg == null ? -1 : jpeg.length;
     }

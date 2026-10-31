@@ -16,14 +16,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class PageGeometryRotationTest {
 
     @Test
-    void rotateAllIsAdditiveAndRoundTrips() throws Exception {
+    void rotateAllSetsAbsoluteRotation() throws Exception {
         Path input = Path.of(getClass().getResource("/pdfs/general/minimal.pdf").toURI());
         try (PdfDocument doc = PdfDocument.open(input)) {
             PdfPageGeometry.rotateAll(doc, 90);
             assertEquals(90, PdfPageGeometry.getRotation(doc, 0));
             PdfPageGeometry.rotateAll(doc, 270);
-            assertEquals(0, PdfPageGeometry.getRotation(doc, 0),
-                    "90 + 270 degrees must return the page to its original rotation");
+            assertEquals(270, PdfPageGeometry.getRotation(doc, 0),
+                    "rotateAll sets the requested angle instead of adding to the current one");
+            PdfPageGeometry.rotateAll(doc, 0);
+            assertEquals(0, PdfPageGeometry.getRotation(doc, 0));
         }
     }
 
@@ -41,7 +43,7 @@ class PageGeometryRotationTest {
         try (PdfDocument doc = PdfDocument.open(input)) {
             PdfPageGeometry.rotateAll(doc, -90);
             assertEquals(270, PdfPageGeometry.getRotation(doc, 0));
-            PdfPageGeometry.rotateAll(doc, 90);
+            PdfPageGeometry.rotateAll(doc, 360);
             assertEquals(0, PdfPageGeometry.getRotation(doc, 0));
         }
     }

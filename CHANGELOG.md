@@ -45,9 +45,21 @@ publishing workflows, not library releases, so they are not listed here.
   reconciles every documented version reference on every run, never moves the
   development version backwards, and updates its own branch in place instead of
   deleting it.
+- The `jpdfium` artifact no longer depends on TwelveMonkeys `imageio-tiff`.
+  Baseline TIFF, including multi-page output, uses the JDK ImageIO implementation;
+  `jpdfium-vips` handles advanced TIFF variants and multi-page TIFF through
+  libvips. Add TwelveMonkeys explicitly if you need BigTIFF, CMYK, or compression
+  variants without libvips.
+- The `jpdfium` artifact no longer publishes a transitive
+  `jpdfium-natives-linux-x64` dependency. Add the native module for your target
+  platform explicitly; this keeps unrelated platform binaries out of the
+  dependency graph and image.
 
 ### Removed
 
+- 10/12-bit AVIF **encoding**. The source-built AOM is encoder-only and
+  high-bit-depth support is disabled for payload size; 8-bit AVIF remains, and
+  dav1d still decodes high-bit-depth AVIF.
 - `stirling.software.jpdfium.text.edit` and its `TextEditor` placeholder, which
   had no members and could not be instantiated, and which nothing in the API, the
   tests, or the documentation referred to. The package and the class were public

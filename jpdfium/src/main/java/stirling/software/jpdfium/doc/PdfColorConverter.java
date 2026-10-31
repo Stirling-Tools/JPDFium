@@ -328,7 +328,7 @@ public final class PdfColorConverter {
             throw new JPDFiumException("Unsupported color conversion target: " + target);
         }
 
-        ConversionState state = new ConversionState(formIds, new HashSet<>());
+        ConversionState state = new ConversionState(formIds);
         // One arena and four int slots are reused for every object on the page.
         // Allocating them per fill/stroke call dominated the allocation profile.
         try (Arena arena = Arena.ofConfined()) {
@@ -349,14 +349,13 @@ public final class PdfColorConverter {
     private static final class ConversionState {
         // Positive object numbers are stable across pages; addresses are not.
         private final Set<Long> visitedForms;
-        private final Set<Long> pageLocalForms;
+        private final Set<Long> pageLocalForms = new HashSet<>();
         private int converted;
         private int edits;
         private boolean dirty;
 
-        private ConversionState(Set<Long> visitedForms, Set<Long> pageLocalForms) {
+        private ConversionState(Set<Long> visitedForms) {
             this.visitedForms = visitedForms;
-            this.pageLocalForms = pageLocalForms;
         }
     }
 

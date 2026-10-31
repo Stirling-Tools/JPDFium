@@ -5,10 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 
-import app.photofox.vipsffm.VImage;
-import app.photofox.vipsffm.VipsOption;
 import java.io.InputStream;
-import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -82,23 +79,8 @@ class VipsSmokeTest {
             Files.copy(in, pdf, StandardCopyOption.REPLACE_EXISTING);
         }
 
-        // libvips itself must load PDFs through PDFium on the source-built
-        // platforms (Linux/macOS). The Windows bundle is the upstream prebuilt
-        // and ships no PDF loader; VipsImageConverter covers that path.
-        if (!state.platform().startsWith("windows")) {
-            try (Arena arena = Arena.ofConfined()) {
-                VImage pdfImage = VImage.pdfload(
-                        arena,
-                        pdf.toString(),
-                        VipsOption.Int("page", 0),
-                        VipsOption.Double("dpi", (double) RENDER_DPI));
-                assertTrue(pdfImage.getWidth() > 0 && pdfImage.getHeight() > 0,
-                        "pdfload must render page 0 through PDFium, got "
-                                + pdfImage.getWidth() + "x" + pdfImage.getHeight());
-                System.out.println("PDFium pdfload dimensions: "
-                        + pdfImage.getWidth() + "x" + pdfImage.getHeight());
-            }
-        }
+        // PDF rendering stays in the core bridge (VipsImageConverter); the
+        // vips bundle deliberately carries no pdfload/PDFium copy.
 
         // SVG must round-trip through the core resvg rasterizer + vips encoder
         // (the source-built vips ships no librsvg, so this is the SVG path).

@@ -671,6 +671,19 @@ class PdfColorPipelineTest {
     }
 
     @Test
+    void sourceIccCacheStillValidatesComponentCountOnARepeatedProfile() {
+        IccCmykTransform transform = new IccCmykTransform(PdfIccProfiles.compactCmyk());
+        byte[] srgb = ICC_Profile.getInstance(ColorSpace.CS_sRGB).getData();
+        int[] out = new int[4];
+
+        transform.toCmykFromIcc(srgb, new float[] {0.5f, 0.5f, 0.5f}, out);
+        JPDFiumException error = assertThrows(JPDFiumException.class,
+                () -> transform.toCmykFromIcc(srgb, new float[] {0f, 0f, 0f, 0f}, out),
+                "a cached profile must not bypass the expected-component check");
+        assertTrue(error.getMessage().contains("component count"), error.getMessage());
+    }
+
+    @Test
     void iccTransformRejectsNonCmykProfile() {
         byte[] srgb = ICC_Profile.getInstance(ColorSpace.CS_sRGB).getData();
         JPDFiumException ex = assertThrows(JPDFiumException.class,
