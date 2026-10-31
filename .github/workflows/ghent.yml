@@ -12,6 +12,8 @@ on:
       - 'native/rust/jpdfium-impl/**'
       - 'native/CMakeLists.txt'
       - 'native/bridge/src/jpdfium_color.cpp'
+      - 'native/bridge/src/jpdfium_document.cpp'
+      - 'native/bridge/src/jpdfium_render.cpp'
       - 'native/bridge/include/jpdfium.h'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfDocument.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfPage.java'
@@ -162,10 +164,16 @@ jobs:
       - name: Run download-free visual and PDF/X gate
         if: always() && steps.build-native.outcome == 'success'
         run: |
+          set +e
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
             --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
-            --no-daemon --stacktrace
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/download-free
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/download-free/ 2>/dev/null || true
+          exit $rc
 
       - name: Run Ghent and ECI conversion gate
         id: conversion-gate
@@ -175,10 +183,16 @@ jobs:
           GHENT_OUTPUT_DIR: /tmp
           ECI_DIR: /tmp/eci
         run: |
+          set +e
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.GhentOutputSuiteTest' \
             --tests 'stirling.software.jpdfium.doc.EciAltonaSuiteTest' \
-            --no-daemon --stacktrace
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/ghent-eci
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/ghent-eci/ 2>/dev/null || true
+          exit $rc
 
       - name: Run expanded PDF.js, ICC and veraPDF corpus gate
         if: steps.corpus-download.outcome == 'success'
@@ -187,11 +201,17 @@ jobs:
           ICC_PROFILE_DIR: /tmp/skcms-src/profiles
           VERAPDF_DIR: /tmp/verapdf/veraPDF-corpus-bb75f4f0073d9350dfd058c0162a367e6fadf25e
         run: |
+          set +e
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.corpus.PdfJsCorpusTest' \
             --tests 'stirling.software.jpdfium.doc.IccProfileCorpusTest' \
             --tests 'stirling.software.jpdfium.corpus.VeraPdfCorpusTest' \
-            --no-daemon --stacktrace
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/corpus
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/corpus/ 2>/dev/null || true
+          exit $rc
 
       - name: Verify Ghent process ink coverage
         if: steps.conversion-gate.outcome == 'success'
@@ -206,5 +226,6 @@ jobs:
           name: ghent-cmyk-output
           path: |
             /tmp/jpdfium-ghent-*.pdf
+            /tmp/jpdfium-reports/**
             jpdfium/build/reports/tests/integrationTest
           if-no-files-found: ignore

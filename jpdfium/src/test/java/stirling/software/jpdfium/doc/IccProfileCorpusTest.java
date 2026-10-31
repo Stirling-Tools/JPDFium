@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.awt.color.ColorSpace;
+import java.awt.color.ICC_ColorSpace;
 import java.awt.color.ICC_Profile;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,7 +16,6 @@ import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * ICC corpus smoke test for CMYK profile validation and transforms.
@@ -27,6 +27,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class IccProfileCorpusTest {
 
     private static final int LIMIT = Integer.getInteger("jpdfium.icc.limit", 200);
+    private static final ColorSpace SRGB = ColorSpace.getInstance(ColorSpace.CS_sRGB);
+    private static final int INK_TOLERANCE = 16;
 
     @Test
     void validCmykProfilesTransformAndInvalidProfilesAreRejected() throws Exception {
@@ -39,7 +41,7 @@ class IccProfileCorpusTest {
                     .limit(LIMIT)
                     .toList();
         }
-        assumeTrue(!files.isEmpty(), "no ICC profiles found under " + dir);
+        assertTrue(!files.isEmpty(), "no ICC profiles found under " + dir);
 
         int validCmyk = 0;
         int rejected = 0;
@@ -56,9 +58,15 @@ class IccProfileCorpusTest {
                 IccCmykTransform transform = new IccCmykTransform(bytes);
                 int[] ink = new int[4];
                 transform.toCmyk(0, 0, 0, ink);
-                for (int component : ink) {
-                    assertTrue(component >= 0 && component <= 255,
+                float[] expected = new ICC_ColorSpace(ICC_Profile.getInstance(bytes))
+                        .fromCIEXYZ(SRGB.toCIEXYZ(new float[] {0f, 0f, 0f}));
+                for (int i = 0; i < ink.length; i++) {
+                    assertTrue(ink[i] >= 0 && ink[i] <= 255,
                             file + " produced an out-of-range ink component");
+                    int expectedInk = Math.round(expected[i] * 255f);
+                    assertTrue(Math.abs(ink[i] - expectedInk) <= INK_TOLERANCE,
+                            file + " black ink mismatch at component " + i
+                                    + ": got " + ink[i] + ", expected " + expectedInk);
                 }
                 validCmyk++;
             } catch (JPDFiumException e) {

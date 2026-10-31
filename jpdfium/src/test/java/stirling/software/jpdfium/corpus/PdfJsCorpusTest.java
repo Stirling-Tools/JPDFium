@@ -16,6 +16,7 @@ import java.util.stream.Stream;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfRenderer;
+import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.model.FlattenMode;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,7 +53,7 @@ class PdfJsCorpusTest {
                     .limit(LIMIT)
                     .toList();
         }
-        assumeTrue(!files.isEmpty(), "no PDF.js files found under " + dir);
+        assertTrue(!files.isEmpty(), "no PDF.js files found under " + dir);
         return files.stream().map(path -> DynamicTest.dynamicTest(
                 path.getFileName().toString(), () -> probe(path)));
     }
@@ -78,7 +79,10 @@ class PdfJsCorpusTest {
             assumeTrue(pages > 0, "no pages");
             BufferedImage image = new PdfRenderer(source).renderImageWithDPI(0, DPI);
             assertTrue(image.getWidth() > 0 && image.getHeight() > 0);
-            if (input.getFileName().toString().matches(".*(annotation|form|widget).*")) {
+            boolean flattenAnnotations =
+                    input.getFileName().toString().matches(".*(annotation|form|widget).*");
+            int annotations = flattenAnnotations ? annotationCount(source) : 0;
+            if (flattenAnnotations) {
                 for (int i = 0; i < pages; i++) {
                     try (var page = source.page(i)) {
                         page.flatten(FlattenMode.ANNOTATIONS);
@@ -89,11 +93,25 @@ class PdfJsCorpusTest {
             assertTrue(output.length > 0, "empty save");
             try (PdfDocument reopened = PdfDocument.open(output)) {
                 assertEquals(pages, reopened.pageCount(), "page count changed");
+                if (annotations > 0) {
+                    assertEquals(0, annotationCount(reopened),
+                            "annotation flattening left interactive annotations behind");
+                }
                 if (reopened.pageCount() > 0) {
                     new PdfRenderer(reopened).renderImageWithDPI(0, DPI);
                 }
             }
             PROBED.incrementAndGet();
         }
+    }
+
+    private static int annotationCount(PdfDocument doc) {
+        int total = 0;
+        for (int i = 0; i < doc.pageCount(); i++) {
+            try (var page = doc.page(i)) {
+                total += PdfAnnotations.count(page.rawHandleForRead());
+            }
+        }
+        return total;
     }
 }
