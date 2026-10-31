@@ -103,7 +103,7 @@ jobs:
           if [ "${{ inputs.build_mode }}" = "v8" ] || [ "${{ inputs.build_mode }}" = "xfa" ]; then
             echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel"},{"platform":"darwin-arm64","runner":"macos-15"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[{"platform":"linux-x64","runner":"ubuntu-latest"},{"platform":"linux-arm64","runner":"ubuntu-24.04-arm"},{"platform":"linux-musl-x64","runner":"ubuntu-latest","libc":"musl"},{"platform":"linux-musl-arm64","runner":"ubuntu-24.04-arm","libc":"musl"},{"platform":"darwin-x64","runner":"macos-15-intel","icu_major":"78"},{"platform":"darwin-arm64","runner":"macos-15","icu_major":"79"},{"platform":"windows-x64","runner":"windows-latest"},{"platform":"windows-arm64","runner":"windows-11-arm"},{"platform":"freebsd-x64","runner":"ubuntu-latest"}]}' >> "$GITHUB_OUTPUT"
           fi
 
   # Cross-build a trimmed Windows icudt79.dll on Linux ahead of the matrix
@@ -133,10 +133,14 @@ jobs:
             sleep 30
           done
           exit 1
-      - name: Cross-build minimal Windows icudt79.dll
-        env:
-          ICU_VER: "79"
-        run: bash native/build-minimal-icu-windows.sh
+      - name: Cross-build minimal Windows ICU data
+        # Windows uses vcpkg's ICU 79; the darwin-x64 runner's Homebrew has
+        # only ICU 78. Build both data majors, then keep only the 79 DLLs
+        # for Windows (the macOS wrapper selects its matching .dat).
+        run: |
+          ICU_VER=78 bash native/build-minimal-icu-windows.sh
+          ICU_VER=79 bash native/build-minimal-icu-windows.sh
+          rm -f native/dist/windows-x64/icudt78.dll native/dist/windows-arm64/icudt78.dll
       - name: Upload trimmed Windows icudt79.dll
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -286,15 +290,15 @@ jobs:
           # qpdf and harfbuzz are rebuilt from source below, so brew only
           # needs the bridge deps plus qpdf's zlib/libjpeg inputs.
           if arch -x86_64 /usr/local/bin/brew list --versions \
-              pcre2 freetype icu4c@79 pugixml libunibreak pkg-config zlib jpeg-turbo \
+              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo \
               >/dev/null 2>&1; then
             echo "x86_64 Homebrew deps restored from cache"
           else
             arch -x86_64 /usr/local/bin/brew install \
-              pcre2 freetype icu4c@79 pugixml libunibreak pkg-config zlib jpeg-turbo
+              pcre2 freetype icu4c@78 pugixml libunibreak pkg-config zlib jpeg-turbo
           fi
           {
-            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c@79/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
+            echo "PKG_CONFIG_PATH=/usr/local/opt/icu4c@78/lib/pkgconfig:/usr/local/opt/zlib/lib/pkgconfig:/usr/local/opt/jpeg-turbo/lib/pkgconfig:/usr/local/lib/pkgconfig"
             echo "PKG_CONFIG=/usr/local/bin/pkg-config"
             echo "CMAKE_OSX_ARCHITECTURES=x86_64"
           } >> "$GITHUB_ENV"
@@ -502,11 +506,11 @@ jobs:
 
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        # Wraps the downloaded icudt79l.dat into a libicudata.<MAJ>.dylib
+        # Wraps the matching icudt<major>l.dat into a libicudata.<major>.dylib
         # via a clang .incbin asm stub. Pre-stages into native/dist/<platform>/
-        # so the bundler picks it up instead of brew's full 33 MB copy. Also
-        # fixes a latent gap on darwin-arm64 where bundle_macos couldn't
-        # resolve libicudata through brew's keg-only icu4c@79 path.
+        # so the bundler picks it up instead of brew's full 33 MB copy.
+        env:
+          ICU_VER: ${{ matrix.icu_major }}
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate

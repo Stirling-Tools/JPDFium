@@ -44,12 +44,16 @@ PLATFORM_DIST="$SCRIPT_DIR/dist/$PLATFORM"
 # Find the prepared .dat. The Linux prep job names it icudt<major>l.dat
 # under native/dist/icu-data/; the workflow downloads it before this step.
 TRIMMED_DAT=""
-for cand in "$SHARED_DAT_DIR"/icudt*l.dat; do
-    [ -f "$cand" ] || continue
-    TRIMMED_DAT="$cand"
-    break
-done
-if [ -z "$TRIMMED_DAT" ]; then
+if [ -n "${ICU_VER:-}" ]; then
+    TRIMMED_DAT="$SHARED_DAT_DIR/icudt${ICU_VER}l.dat"
+else
+    for cand in "$SHARED_DAT_DIR"/icudt*l.dat; do
+        [ -f "$cand" ] || continue
+        TRIMMED_DAT="$cand"
+        break
+    done
+fi
+if [ -z "$TRIMMED_DAT" ] || [ ! -f "$TRIMMED_DAT" ]; then
     echo "build-minimal-icu-macos.sh: ERROR: no prepared icudt<major>l.dat under $SHARED_DAT_DIR" >&2
     echo "  Trimmed ICU data is required to meet macOS bundle size budget." >&2
     ls -la "$SHARED_DAT_DIR" 2>/dev/null >&2 || true
