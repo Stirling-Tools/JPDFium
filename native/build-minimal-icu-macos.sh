@@ -78,9 +78,21 @@ fi
 # skip to avoid shipping a useless lib.
 BREW_PREFIX=""
 if [ "$TARGET_ARCH" = "x86_64" ] && [ -x /usr/local/bin/brew ]; then
-    BREW_PREFIX=$(/usr/local/bin/brew --prefix icu4c 2>/dev/null || true)
+    BREW_BIN=/usr/local/bin/brew
 elif command -v brew >/dev/null 2>&1; then
-    BREW_PREFIX=$(brew --prefix icu4c 2>/dev/null || true)
+    BREW_BIN=$(command -v brew)
+fi
+if [ -n "${BREW_BIN:-}" ]; then
+    # Prefer the versioned keg matching the prepared data. Homebrew's
+    # unversioned icu4c follows the latest release and is often newer than
+    # the ICU major used by the prebuilt PDFium.
+    for formula in "icu4c@${ICU_VER}" icu4c; do
+        candidate=$("$BREW_BIN" --prefix "$formula" 2>/dev/null || true)
+        if [ -n "$candidate" ] && [ -d "$candidate/lib" ]; then
+            BREW_PREFIX="$candidate"
+            break
+        fi
+    done
 fi
 if [ -n "$BREW_PREFIX" ] && [ -d "$BREW_PREFIX/lib" ]; then
     BREW_SONAME=""
