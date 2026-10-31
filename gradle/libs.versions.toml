@@ -6,6 +6,7 @@ graalvm-buildtools = "1.1.17"
 reachability-metadata = "1.1.12"
 jmh = "1.37"
 jmh-plugin = "0.7.3"
+xz = "1.10"
 
 [libraries]
 vips-ffm       = { module = "app.photofox.vips-ffm:vips-ffm-core",            version = "1.9.9" }
@@ -16,6 +17,7 @@ imageio-webp   = { module = "com.twelvemonkeys.imageio:imageio-webp",           
 imageio-tiff   = { module = "com.twelvemonkeys.imageio:imageio-tiff",            version.ref = "twelvemonkeys" }
 jmh-core       = { module = "org.openjdk.jmh:jmh-core",                         version.ref = "jmh" }
 jmh-annproc    = { module = "org.openjdk.jmh:jmh-generator-annprocess",         version.ref = "jmh" }
+xz              = { module = "org.tukaani:xz",                                   version.ref = "xz" }
 
 [plugins]
 graalvm-native = { id = "org.graalvm.buildtools.native", version.ref = "graalvm-buildtools" }

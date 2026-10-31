@@ -1,3 +1,5 @@
+import jpdfium.HostPlatform
+
 plugins {
     id("jpdfium.library-conventions")
 }
@@ -22,10 +24,10 @@ publishing {
 }
 
 // The vips natives platform for tests: -Pjpdfium.testVipsNatives=vips-<platform>,
-// defaulting to the same platform as -Pjpdfium.testNatives (used by jpdfium's
-// runtimeOnly natives dependency).
-val testVipsNatives = (findProperty("jpdfium.testVipsNatives") as String?)
-    ?: "vips-${findProperty("jpdfium.testNatives") ?: "linux-x64"}"
+// defaulting to the same host platform as -Pjpdfium.testNatives.
+val hostPlatform = HostPlatform.detect()
+val testNatives = (findProperty("jpdfium.testNatives") ?: hostPlatform).toString()
+val testVipsNatives = (findProperty("jpdfium.testVipsNatives") ?: "vips-$testNatives").toString()
 
 // The vips tests read a sample PDF from the classpath. jpdfium leaves its
 // GraalVM smoke fixtures out of the published jar, so this module carries its own
@@ -33,11 +35,15 @@ val testVipsNatives = (findProperty("jpdfium.testVipsNatives") as String?)
 dependencies {
     api(project(":jpdfium"))
     implementation(libs.vips.ffm)
+    implementation(libs.xz)
     // Bring the bundled vips natives onto the TEST runtime classpath only, so
     // VipsNatives finds /natives/vips-<platform>/ and the vipsSmokeTest (and
     // the other vips tests) exercise the exact bundled libvips being shipped.
     // Resolved lazily by Gradle; a no-op when the dist dir is empty (tests then
     // fall back to a system libvips or skip).
+    findProject(":jpdfium-natives:jpdfium-natives-$testNatives")?.let {
+        testRuntimeOnly(it)
+    }
     findProject(":jpdfium-natives:jpdfium-natives-$testVipsNatives")?.let {
         testRuntimeOnly(it)
     }

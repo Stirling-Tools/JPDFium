@@ -46,7 +46,7 @@ bundle_linux() {
             [ -e "$f" ] || continue
             [ -L "$f" ] && continue
             patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep "RWE" >/dev/null; then
                 echo "Clearing executable stack on $f" >&2
                 patchelf --clear-execstack "$f" || {
                     echo "ERROR: $f requires an executable stack and patchelf could not clear it" >&2
@@ -59,16 +59,21 @@ bundle_linux() {
     fi
 
     bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
-    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR" "$PLATFORM"
 }
 
 bundle_freebsd() {
     local bridge="${BUNDLE_ROOT:-$DIST_DIR/libjpdfium.so}"
     [ -f "$bridge" ] || { echo "no libjpdfium.so found to bundle"; return 0; }
 
-    local sysroot="${FREEBSD_SYSROOT:-native/freebsd-sysroot}"
-    local sys_lib="$sysroot/usr/lib"
-    local skip_regex='^(libc|libm|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|librt|libutil)\.so'
+    local sysroot="${FREEBSD_SYSROOT:-}"
+    local -a search_dirs
+    if [ -n "$sysroot" ]; then
+        search_dirs=("$sysroot/lib" "$sysroot/usr/lib" "$DIST_DIR")
+    else
+        search_dirs=("/lib" "/usr/lib" "/usr/local/lib" "$DIST_DIR")
+    fi
+    local skip_regex='^(libc|libm|libthr|libc\+\+|libcxxrt|libz|libelf|libexecinfo|libgcc_s|librt|libutil|libmd|libcrypt|libssp)\.so'
 
     declare -A visited=()
     local queue=("$bridge")
@@ -97,7 +102,7 @@ bundle_freebsd() {
             local dest="$DIST_DIR/$dep"
             if [ ! -e "$dest" ]; then
                 local found=""
-                for dir in "$sys_lib" "$sysroot/lib" "$DIST_DIR"; do
+                for dir in "${search_dirs[@]}"; do
                     if [ -e "$dir/$dep" ]; then
                         found="$dir/$dep"
                         break
@@ -120,7 +125,7 @@ bundle_freebsd() {
             [ -e "$f" ] || continue
             [ -L "$f" ] && continue
             patchelf --set-rpath '$ORIGIN' "$f" 2>/dev/null || true
-            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+            if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep "RWE" >/dev/null; then
                 echo "Clearing executable stack on $f" >&2
                 patchelf --clear-execstack "$f" || {
                     echo "ERROR: $f requires an executable stack and patchelf could not clear it" >&2
@@ -131,7 +136,7 @@ bundle_freebsd() {
     fi
 
     bash "$(dirname "${BASH_SOURCE[0]}")/check-no-execstack.sh" "$DIST_DIR"
-    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR"
+    bash "$(dirname "${BASH_SOURCE[0]}")/check-bundle-hermetic.sh" "$DIST_DIR" "$PLATFORM"
 }
 
 
@@ -251,6 +256,69 @@ bundle_macos() {
             install_name_tool -change "$orig_dep" "@loader_path/$base" "$target" 2>/dev/null || true
         done <<<"$deps"
     done
+
+    # @rpath is only safe when one of the dylib's LC_RPATH entries resolves
+    # the dependency to a bundled file (or a rewrite can replace it).
+    rpath_resolves() {
+        local file="$1" base="$2" rp dir
+        while IFS= read -r rp; do
+            case "$rp" in
+                @loader_path) dir=. ;;
+                @loader_path/*) dir="${rp#@loader_path/}" ;;
+                *) continue ;;
+            esac
+            if [ -e "$DIST_DIR/$dir/$base" ]; then
+                return 0
+            fi
+        done < <(otool -l "$file" 2>/dev/null \
+            | awk '/cmd LC_RPATH/{getline; getline; print $2}')
+        return 1
+    }
+
+    local failed=0
+    for f in "$DIST_DIR"/*.dylib; do
+        [ -e "$f" ] || continue
+        while IFS= read -r dep; do
+            case "$dep" in
+                /System/*|/usr/lib/*) ;;
+                @loader_path/*)
+                    if [ ! -e "$DIST_DIR/${dep#@loader_path/}" ]; then
+                        echo "FAIL: $(basename "$f") references missing $dep" >&2
+                        failed=1
+                    fi
+                    ;;
+                @executable_path/*)
+                    echo "FAIL: $(basename "$f") uses unsupported @executable_path dependency $dep" >&2
+                    failed=1
+                    ;;
+                @rpath/*)
+                    local base
+                    base=$(basename "$dep")
+                    if [ "$base" = "$(basename "$f")" ]; then
+                        continue
+                    fi
+                    if [ -e "$DIST_DIR/$base" ]; then
+                        if ! rpath_resolves "$f" "$base"; then
+                            chmod u+w "$f" 2>/dev/null || true
+                            if ! install_name_tool -change "$dep" "@loader_path/$base" "$f" 2>/dev/null; then
+                                echo "FAIL: $(basename "$f") could not resolve or rewrite $dep" >&2
+                                failed=1
+                            fi
+                        fi
+                    elif [ "$base" != "libjpdfium.dylib" ]; then
+                        echo "FAIL: $(basename "$f") references missing $dep" >&2
+                        failed=1
+                    fi
+                    ;;
+                *)
+                    [ "$(basename "$dep")" = "$(basename "$f")" ] && continue
+                    echo "FAIL: $(basename "$f") has non-relocatable dependency $dep" >&2
+                    failed=1
+                    ;;
+            esac
+        done <<<"$(otool -L "$f" 2>/dev/null | tail -n +2 | awk '{print $1}')"
+    done
+    [ "$failed" -eq 0 ] || { echo "ERROR: macOS bundle is not hermetic" >&2; exit 1; }
 }
 
 sign_macos() {
@@ -436,7 +504,7 @@ assert_bundle_arch() {
         *) echo "FAIL: cannot derive arch from platform $PLATFORM" >&2; exit 1 ;;
     esac
     case "$PLATFORM" in
-        linux-*|vips-linux-*) [ "$unix_arch" = arm64 ] && unix_arch=aarch64 ;;
+        linux-*|vips-linux-*|freebsd-*|vips-freebsd-*|openbsd-*) [ "$unix_arch" = arm64 ] && unix_arch=aarch64 ;;
     esac
     case "$PLATFORM" in
         darwin-*|vips-darwin-*)
@@ -449,15 +517,17 @@ assert_bundle_arch() {
                 esac
             done
             ;;
-        linux-*|vips-linux-*|freebsd-*|openbsd-*)
+        linux-*|vips-linux-*|freebsd-*|vips-freebsd-*|openbsd-*)
             for f in "$DIST_DIR"/lib*.so "$DIST_DIR"/lib*.so.*; do
                 [ -e "$f" ] || continue
                 machine=$(readelf -h "$f" 2>/dev/null | awk -F: '/Machine:/{print $2}' | xargs)
-                case "$unix_arch:$machine" in
-                    x86_64:"Advanced Micro Devices X86-64") ;;
-                    aarch64:"AArch64") ;;
-                    *) echo "FAIL: $(basename "$f") is [$machine], expected $unix_arch" >&2; failed=1 ;;
-                esac
+                if { [ "$unix_arch" = x86_64 ] && printf '%s' "$machine" | grep -qi 'x86-64'; } ||
+                   { [ "$unix_arch" = aarch64 ] && printf '%s' "$machine" | grep -qi 'aarch64'; }; then
+                    :
+                else
+                    echo "FAIL: $(basename "$f") is [$machine], expected $unix_arch" >&2
+                    failed=1
+                fi
             done
             ;;
         windows-*|vips-windows-*)
@@ -505,7 +575,7 @@ swap_full_icudata() {
     # Only swap same-major ICU versions: the vips build links the distro/
     # brew ICU, whose major must match the trimmed core data's.
     icu_major() {
-        echo "$1" | grep -oE '(icudata\.so\.|icudata\.|icudt)([0-9]+)' | grep -oE '[0-9]+$' | head -1
+        echo "$1" | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*/\1/p'
     }
     local trimmed_major
     trimmed_major=$(icu_major "$(basename "$trimmed")")
@@ -522,11 +592,84 @@ swap_full_icudata() {
     done
 }
 
+# PDFium ships its own ICU (libicuuc.dylib/.so, data compiled in). When the
+# distro/brew ICU already in the bundle is the same major version, the two
+# libraries are ABI-compatible and one copy is enough - rewrite PDFium's
+# imports to the versioned distro library and drop the unversioned duplicate
+# (~1.7 MB per bundle). A version mismatch leaves both copies alone.
+dedupe_icu() {
+    local unversioned="" versioned="" f
+    case "$PLATFORM" in
+        darwin-*|vips-darwin-*)
+            unversioned="$DIST_DIR/libicuuc.dylib"
+            for f in "$DIST_DIR"/libicuuc.*.dylib; do
+                [ -f "$f" ] || continue
+                case "$(basename "$f")" in libicuuc.[0-9]*.dylib) versioned="$f";; esac
+                [ -n "$versioned" ] && break
+            done
+            [ -f "$unversioned" ] && [ -f "$versioned" ] || return 0
+            local um vm
+            um=$(nm -gU "$unversioned" 2>/dev/null | awk 'match($0, /_[0-9]+$/) { if (m == "") m = substr($0, RSTART, RLENGTH) } END { print m }')
+            vm=$(nm -gU "$versioned" 2>/dev/null | awk 'match($0, /_[0-9]+$/) { if (m == "") m = substr($0, RSTART, RLENGTH) } END { print m }')
+            if [ -z "$um" ] || [ "$um" != "$vm" ]; then
+                echo "  ICU dedupe skipped: PDFium ${um:-?} vs bundle ${vm:-?}" >&2
+                return 0
+            fi
+            # A matching suffix is not enough: verify the versioned library
+            # exports every symbol the rest of the bundle imports from the
+            # unversioned PDFium ICU.
+            local required missing unversioned_exports
+            required=$(
+                for f in "$DIST_DIR"/*.dylib; do
+                    if [[ "$f" == */libicuuc.* ]]; then continue; fi
+                    nm -u "$f" 2>/dev/null | awk '{print $NF}'
+                done | sort -u
+            )
+            unversioned_exports=$(nm -gU "$unversioned" 2>/dev/null | awk '{print $NF}' | sort -u)
+            missing=$(
+                comm -23 <(printf '%s\n' "$required") \
+                    <(nm -gU "$versioned" 2>/dev/null | awk '{print $NF}' | sort -u) \
+                    | comm -12 - <(printf '%s\n' "$unversioned_exports")
+            )
+            if [ -n "$missing" ]; then
+                echo "  ICU dedupe skipped: bundle ICU is missing imported symbols:" >&2
+                printf '%s\n' "$missing" | sed 's/^/    /' >&2
+                return 0
+            fi
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -f "$f" ] || continue
+                install_name_tool -change "@loader_path/libicuuc.dylib" \
+                    "@loader_path/$(basename "$versioned")" "$f" 2>/dev/null || true
+                install_name_tool -change "@rpath/libicuuc.dylib" \
+                    "@loader_path/$(basename "$versioned")" "$f" 2>/dev/null || true
+            done
+            for f in "$DIST_DIR"/*.dylib; do
+                [ -f "$f" ] || continue
+                [ "$f" = "$unversioned" ] && continue
+                if otool -L "$f" 2>/dev/null | grep -E '@(loader_path|rpath)/libicuuc\.dylib' >/dev/null; then
+                    echo "ERROR: failed to rewrite ICU dependency in $(basename "$f")" >&2
+                    return 1
+                fi
+            done
+            rm -f "$unversioned"
+            echo "  Deduped PDFium ICU into $(basename "$versioned") (major ${um#_})"
+            ;;
+        linux-*|vips-linux-*)
+            # Kept separate on Linux: PDFium's ICU bundle carries the data its
+            # layout/font code expects. Ubuntu 26.04's matching major was not
+            # enough - nativeSmokeTest SIGABRTed after the swap. macOS was
+            # verified against 171 PDFs and keeps the dedupe below.
+            return 0
+            ;;
+    esac
+}
+
 case "$PLATFORM" in
     linux-*|vips-linux-*)
         bundle_linux
         assert_bundle_arch
         swap_full_icudata
+        dedupe_icu
         find "$DIST_DIR" -maxdepth 1 -type f -name '*allocator_shim*' -print -delete
         if command -v strip >/dev/null 2>&1; then
             strip --strip-unneeded "$DIST_DIR/libjpdfium.so" 2>/dev/null || true
@@ -558,14 +701,15 @@ case "$PLATFORM" in
         bundle_macos
         assert_bundle_arch
         swap_full_icudata
+        dedupe_icu
         if command -v strip >/dev/null 2>&1; then
             # -x drops local symbols too (the static harfbuzz contributes
             # thousands); exports and the dynamic symbol table stay.
-            strip -x "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
+            strip -x -S "$DIST_DIR/libjpdfium.dylib" 2>/dev/null || true
             for f in "$DIST_DIR"/*.dylib; do
                 [ -L "$f" ] && continue
                 [ -e "$f" ] || continue
-                strip -x "$f" 2>/dev/null || true
+                strip -x -S "$f" 2>/dev/null || true
             done
         fi
         sign_macos
