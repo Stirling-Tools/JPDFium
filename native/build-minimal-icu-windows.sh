@@ -44,8 +44,8 @@ for tool in icupkg pkgdata x86_64-w64-mingw32-gcc x86_64-w64-mingw32-objcopy pyt
     fi
 done
 
-ICU_VER=78
-ICU_MINOR=1
+ICU_VER="${ICU_VER:-78}"
+ICU_MINOR="${ICU_MINOR:-1}"
 # ICU's release-tag and asset-name conventions vary across ICU major
 # versions: ICU 74 uses release-74-2 + icu4c-74_2-..., ICU 78 uses
 # release-78.1 + icu4c-78.1-.... Try the newer format first, fall back

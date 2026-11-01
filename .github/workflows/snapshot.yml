@@ -133,15 +133,17 @@ jobs:
             sleep 30
           done
           exit 1
-      - name: Cross-build minimal Windows icudt78.dll
-        run: bash native/build-minimal-icu-windows.sh
-      - name: Upload trimmed Windows icudt78.dll
+      - name: Cross-build minimal Windows ICU data (78 + 79)
+        run: |
+          ICU_VER=78 ICU_MINOR=1 bash native/build-minimal-icu-windows.sh
+          ICU_VER=79 ICU_MINOR=1 bash native/build-minimal-icu-windows.sh
+      - name: Upload trimmed Windows ICU DLLs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-icu-trimmed
           path: |
-            native/dist/windows-x64/icudt78.dll
-            native/dist/windows-arm64/icudt78.dll
+            native/dist/windows-x64/icudt*.dll
+            native/dist/windows-arm64/icudt*.dll
           if-no-files-found: error
           retention-days: 1
       - name: Upload bare trimmed ICU .dat (for macOS wrap step)
@@ -545,7 +547,7 @@ jobs:
                -exec cp -v {} native/dist/${{ matrix.platform }}/ \;
           fi
 
-      - name: Override icudt78.dll with trimmed copy (Windows only)
+      - name: Override icudt* with trimmed copy (Windows only)
         # Run AFTER the PDFium-siblings find above (which would copy PDFium's
         # 33 MB icudt78.dll) and BEFORE the bundler so the small trimmed copy
         # wins. download-artifact@v4 extracts on top, overwriting the larger
