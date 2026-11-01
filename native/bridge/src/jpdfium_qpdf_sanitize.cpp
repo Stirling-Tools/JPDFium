@@ -35,7 +35,11 @@
 #include <qpdf/QPDFPageDocumentHelper.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_writer_lock.h"
+
 namespace {
+
+using jpdfium_qpdf_internal::WriterLock;
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -142,6 +146,7 @@ QpdfResult sanitize(std::span<const uint8_t> input, int32_t flags) {
 
         QPDFWriter w(*qpdf);
         w.setOutputMemory();
+        WriterLock lock{-1};
         w.write();
 
         return {w.getBufferSharedPointer(), ""};
@@ -177,6 +182,7 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
             QPDFWriter w(*qpdf);
             w.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
+            WriterLock lock{-1};
             w.write();
             return 0;
         } catch (const std::exception& e) {

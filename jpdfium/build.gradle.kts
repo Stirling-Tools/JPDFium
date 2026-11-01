@@ -236,7 +236,13 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_optimize_ex",
     "jpdfium_qpdf_optimize_file",
+    "jpdfium_qpdf_optimize_ex_file",
+    "jpdfium_qpdf_inspect",
+    "jpdfium_qpdf_inspect_file",
+    "jpdfium_qpdf_set_docinfo",
+    "jpdfium_qpdf_set_docinfo_file",
     "jpdfium_qpdf_sanitize",
     "jpdfium_qpdf_sanitize_file",
     "jpdfium_qpdf_merge",
@@ -352,7 +358,10 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
 
             // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
             val qpdfFuncs = listOf(
-                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_file",
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_ex",
+                "jpdfium_qpdf_optimize_file", "jpdfium_qpdf_optimize_ex_file",
+                "jpdfium_qpdf_inspect", "jpdfium_qpdf_inspect_file",
+                "jpdfium_qpdf_set_docinfo", "jpdfium_qpdf_set_docinfo_file",
                 "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
                 "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
             )
