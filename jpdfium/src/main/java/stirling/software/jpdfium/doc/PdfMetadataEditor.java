@@ -10,8 +10,9 @@ import java.nio.file.Path;
 import java.util.Map;
 
 /**
- * Lossless {@code /Info} editing through qpdf. Values are written as UTF-16
- * strings; XMP metadata is untouched.
+ * Rewrites the {@code /Info} dictionary through {@code QPDFWriter}. Values use
+ * PDFDocEncoding when possible and UTF-16 otherwise; XMP metadata is untouched.
+ * Existing digital signatures are not preserved.
  */
 public final class PdfMetadataEditor {
 
@@ -58,7 +59,10 @@ public final class PdfMetadataEditor {
     /** Update or remove {@code /Info} entries file-to-file with a password. */
     public static void update(Path input, Path output, Map<String, String> fields,
             String password) throws IOException {
-        if (QpdfLib.setDocInfoToFile(input, output, fields, password)) {
+        if (QpdfLib.isSetDocInfoFileSupported()) {
+            if (!QpdfLib.setDocInfoToFile(input, output, fields, password)) {
+                throw new JPDFiumException("qpdf metadata update failed for " + input);
+            }
             return;
         }
         byte[] result = update(Files.readAllBytes(input), fields, password);

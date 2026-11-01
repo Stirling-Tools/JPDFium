@@ -1,9 +1,12 @@
 package stirling.software.jpdfium.doc;
 
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.SyntheticPdfFactory;
+import stirling.software.jpdfium.panama.NativeRuntime;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,16 +17,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Covers the qpdf surface added for Stirling-PDF integration: structural
  * inspection, lossless /Info editing, and the combined QDF repair cascade.
  */
+@EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class QpdfApiSurfaceTest {
+
+    @BeforeAll
+    static void requireFullNative() {
+        assumeTrue(NativeRuntime.isFull(), "requires a full native build");
+    }
 
     @Test
     void inspectionReportsStructureAndLinearization() throws Exception {
-        if (!PdfStructuralInspector.isSupported()) return;
+        assumeTrue(PdfStructuralInspector.isSupported(), "qpdf inspection unavailable");
         byte[] input = SyntheticPdfFactory.createDiverse(2);
 
         String report = PdfStructuralInspector.inspect(input);
@@ -44,7 +54,7 @@ class QpdfApiSurfaceTest {
 
     @Test
     void inspectionHandlesEncryptedDocuments() throws Exception {
-        if (!PdfStructuralInspector.isSupported()) return;
+        assumeTrue(PdfStructuralInspector.isSupported(), "qpdf inspection unavailable");
         byte[] input = SyntheticPdfFactory.createDiverse(1);
         byte[] encrypted = PdfSecurity.encryptBytes(input, "user", "owner", PdfSecurity.PERM_ALL);
         assertNotNull(encrypted);
@@ -59,7 +69,7 @@ class QpdfApiSurfaceTest {
 
     @Test
     void metadataEditorSetsAndRemovesInfoEntries(@TempDir Path tempDir) throws Exception {
-        if (!PdfMetadataEditor.isSupported()) return;
+        assumeTrue(PdfMetadataEditor.isSupported(), "qpdf metadata editor unavailable");
         byte[] input = SyntheticPdfFactory.createDiverse(1);
 
         byte[] withAuthor = PdfMetadataEditor.update(input, Map.of(
@@ -90,7 +100,7 @@ class QpdfApiSurfaceTest {
 
     @Test
     void qdfRepairCascadeProducesOpenableOutput() throws Exception {
-        if (!PdfRepair.isSupported()) return;
+        assumeTrue(PdfRepair.isSupported(), "qpdf repair unavailable");
         RepairResult result = PdfRepair.repairQdf(SyntheticPdfFactory.createDiverse(2));
         assertTrue(result.isUsable(), result.status().toString());
         try (PdfDocument doc = PdfDocument.open(result.repairedPdf())) {
