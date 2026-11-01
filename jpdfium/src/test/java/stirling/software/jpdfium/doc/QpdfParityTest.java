@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -114,6 +115,17 @@ class QpdfParityTest {
         }
     }
 
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(60, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("timed out waiting for compression start");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted waiting for compression start", e);
+        }
+    }
+
     @Test
     void concurrentLevelsDoNotCorruptEachOther() throws Exception {
         byte[] input = SyntheticPdfFactory.createDiverse(2);
@@ -122,11 +134,21 @@ class QpdfParityTest {
         byte[] sequentialLow = PdfOptimizer.compress(input, 1, false, false);
         byte[] sequentialHigh = PdfOptimizer.compress(input, 9, false, false);
 
-        CompletableFuture<byte[]> low = CompletableFuture.supplyAsync(
-                () -> PdfOptimizer.compress(input, 1, false, false));
-        CompletableFuture<byte[]> high = CompletableFuture.supplyAsync(
-                () -> PdfOptimizer.compress(input, 9, false, false));
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        CompletableFuture<byte[]> low = CompletableFuture.supplyAsync(() -> {
+            ready.countDown();
+            await(start);
+            return PdfOptimizer.compress(input, 1, false, false);
+        });
+        CompletableFuture<byte[]> high = CompletableFuture.supplyAsync(() -> {
+            ready.countDown();
+            await(start);
+            return PdfOptimizer.compress(input, 9, false, false);
+        });
 
+        assertTrue(ready.await(60, TimeUnit.SECONDS), "compression workers did not become ready");
+        start.countDown();
         byte[] concurrentLow = low.get(60, TimeUnit.SECONDS);
         byte[] concurrentHigh = high.get(60, TimeUnit.SECONDS);
         assertReadable(concurrentLow, 2);

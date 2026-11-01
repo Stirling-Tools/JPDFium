@@ -22,6 +22,8 @@ import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -56,6 +58,14 @@ public final class QpdfLib {
      * invalid and rejected.
      */
     private static volatile Semaphore QPDF_PERMITS = createPermits();
+
+    /**
+     * Coordinates level-setting qpdf writers with PDFium saves that may run the
+     * in-domain qpdf sanitize pass. Saves take the read lock before entering the
+     * PDFium domain, so a writer that holds the native compression-level lock
+     * cannot stall unrelated PDFium work.
+     */
+    private static final ReentrantReadWriteLock SAVE_COORDINATION = new ReentrantReadWriteLock();
 
     /**
      * The configured bound, tracked apart from live semaphore availability:
@@ -111,6 +121,25 @@ public final class QpdfLib {
         Semaphore permits = QPDF_PERMITS;
         if (permits != null) permits.acquire();
         return permits;
+    }
+
+    /** Acquire the shared side of the save/level-writer coordination lock. */
+    public static Lock acquireSaveReadLock() {
+        Lock lock = SAVE_COORDINATION.readLock();
+        lock.lock();
+        return lock;
+    }
+
+    /** Release a lock returned by {@link #acquireSaveReadLock()}. */
+    public static void releaseSaveLock(Lock lock) {
+        if (lock != null) lock.unlock();
+    }
+
+    private static Lock acquireLevelWriteLock(int level) {
+        if (level <= 0) return null;
+        Lock lock = SAVE_COORDINATION.writeLock();
+        lock.lock();
+        return lock;
     }
 
     /** Release a slot back to the semaphore that granted it. */
@@ -318,6 +347,7 @@ public final class QpdfLib {
         if (input == null || input.length == 0) {
             return null;
         }
+        Lock levelLock = acquireLevelWriteLock(compressionLevel);
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             int rc = JpdfiumH.jpdfium_qpdf_optimize(
@@ -333,6 +363,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf optimization failed", t);
+        } finally {
+            releaseSaveLock(levelLock);
         }
     }
 
@@ -353,6 +385,7 @@ public final class QpdfLib {
         if (!isOptimizeExSupported() || input == null || input.length == 0) {
             return null;
         }
+        Lock levelLock = acquireLevelWriteLock(compressionLevel);
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             int rc = JpdfiumH.jpdfium_qpdf_optimize_ex(
@@ -368,6 +401,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf optimization failed", t);
+        } finally {
+            releaseSaveLock(levelLock);
         }
     }
 
@@ -682,8 +717,13 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf optimize interrupted while waiting for a job slot", e);
         }
         try (OutputTransaction tx = OutputTransaction.begin(output)) {
-            callOptimizeExFile(tx.staging(), input, flags, compressionLevel, objectStreamMode,
-                    streamDataMode, decodeLevel, jpegQuality);
+            Lock levelLock = acquireLevelWriteLock(compressionLevel);
+            try {
+                callOptimizeExFile(tx.staging(), input, flags, compressionLevel, objectStreamMode,
+                        streamDataMode, decodeLevel, jpegQuality);
+            } finally {
+                releaseSaveLock(levelLock);
+            }
             tx.publish(SaveOptions.fast());
             return true;
         } catch (IOException e) {

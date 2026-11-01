@@ -30,6 +30,16 @@ on:
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/EciAltonaSuiteTest.java'
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/FlattenVisualCorpusTest.java'
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/PdfXConverterTest.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfMetadataEditor.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfStructuralInspector.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfOptimizer.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/doc/PdfRepair.java'
+      - 'jpdfium/src/main/java/stirling/software/jpdfium/panama/QpdfLib.java'
+      - 'native/bridge/src/jpdfium_qpdf.cpp'
+      - 'native/bridge/src/jpdfium_qpdf_sanitize.cpp'
+      - 'native/bridge/src/jpdfium_qpdf_writer_lock.h'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/QpdfParityTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/QpdfApiSurfaceTest.java'
       - '.github/scripts/verify-ghent-inkcov.sh'
       - '.github/workflows/ghent.yml'
 
@@ -120,12 +130,14 @@ jobs:
 
       # These tests need no downloads. Run them even when a corpus download
       # failed, so a network outage still exercises the flatten and PDF/X paths.
-      - name: Run download-free visual and PDF/X gate
+      - name: Run download-free visual, PDF/X, and qpdf gate
         if: always() && steps.build-native.outcome == 'success'
         run: |
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
             --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
+            --tests 'stirling.software.jpdfium.doc.QpdfParityTest' \
+            --tests 'stirling.software.jpdfium.doc.QpdfApiSurfaceTest' \
             --no-daemon --stacktrace
 
       - name: Run Ghent and ECI conversion gate
