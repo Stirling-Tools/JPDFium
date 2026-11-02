@@ -1187,11 +1187,14 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         // placement where no match covers it.
         if (!pixelErased.empty() && survivingImages.size() > 1) {
             std::unordered_map<FPDF_PAGEOBJECT, ImageDataKey> keys;
-            std::vector<uint8_t> scratch;
-            for (FPDF_PAGEOBJECT image : survivingImages) {
-                keys.emplace(image, imageDataKey(image, scratch));
+            {
+                // Scoped so its capacity is freed before sameImageData reads
+                // two more image-sized buffers.
+                std::vector<uint8_t> scratch;
+                for (FPDF_PAGEOBJECT image : survivingImages) {
+                    keys.emplace(image, imageDataKey(image, scratch));
+                }
             }
-            scratch = {};
             for (FPDF_PAGEOBJECT erased : pixelErased) {
                 for (FPDF_PAGEOBJECT other : survivingImages) {
                     if (other != erased &&
