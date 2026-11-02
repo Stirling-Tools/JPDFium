@@ -63,7 +63,7 @@ Forms can be read, filled, and flattened. Form field creation is not exposed.
 
 ## Images
 
-Without `jpdfium-vips`, formats are whatever `javax.imageio` provides, which depends on your JDK and any ImageIO plugins on the classpath. A stock JDK 25 provides PNG, JPEG, and BMP.
+Without `jpdfium-vips`, formats are whatever `javax.imageio` provides. A stock JDK handles baseline TIFF, including multi-page output; add a TIFF ImageIO plugin for BigTIFF/CMYK variants. Other formats depend on your JDK and any ImageIO plugins on the classpath. A stock JDK 25 provides PNG, JPEG, BMP, and baseline TIFF.
 
 With `jpdfium-vips`, the libvips codec reads and writes WebP, HEIC, AVIF, JXL, and JPEG 2000 in addition to PNG, JPEG, and TIFF. Reading and writing are probed independently, so a libvips build without a given encoder still decodes that format. See [images.md](images.md) for the per-format table.
 
@@ -71,7 +71,7 @@ With `jpdfium-vips`, the libvips codec reads and writes WebP, HEIC, AVIF, JXL, a
 
 Native modules are published for eight platform targets. All eight run in the release CI matrix, defined in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), which builds each target and runs the test suite against it.
 
-The vips modules cover six targets: Linux x64 and arm64, macOS x64 and arm64, and Windows x64 and arm64. There is no musl vips build, so Alpine and other musl runtimes are limited to ImageIO formats.
+The vips modules cover Linux x64 and arm64 (glibc), macOS x64 and arm64, and Windows x64 and arm64. The FreeBSD x64 vips artifact is produced by the Prebuild libvips workflow and joins the release matrix once its prebuild asset is pinned.
 
 A published artifact means the module exists for that target. It is not a promise that the artifact carries native libraries: the musl modules are experimental and can be published without a payload while their build is stabilised. Run [`.github/scripts/check-natives-jars.sh`](../.github/scripts/check-natives-jars.sh) against a downloaded release to see which platforms shipped libraries.
 

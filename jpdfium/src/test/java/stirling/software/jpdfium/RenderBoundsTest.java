@@ -13,6 +13,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import java.io.ByteArrayOutputStream;
 
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.PdfCorruptException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -22,8 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Render-bounds guard: untrusted PDFs can carry "wall sized" pages
  * (12608 x 16806 pt = 848 MB of RGBA at 72 dpi, ~14.7 GB at 300 dpi).
  * Rendering must refuse such pages with a clear exception instead of
- * exhausting the heap. The bound is configurable via
- * {@code -Djpdfium.maxRenderPixels} and read dynamically per render.
+ * exhausting the heap. {@code -Djpdfium.maxRenderPixels} is unlimited by
+ * default and read dynamically per render; the native ceiling of 268,435,456
+ * pixels per page applies regardless.
  */
 @EnabledIfSystemProperty(named = "jpdfium.integration", matches = "true")
 class RenderBoundsTest {
@@ -34,7 +36,8 @@ class RenderBoundsTest {
     }
 
     @Test
-    void wallSizedPageIsRefusedWithDefaultBound() throws Exception {
+    void wallSizedPageIsRefusedWithAConfiguredBound() throws Exception {
+        System.setProperty("jpdfium.maxRenderPixels", "100000000"); // 100 MP cap
         byte[] pdf = hugePagePdf();
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             try (PdfPage page = doc.page(0)) {
@@ -42,6 +45,16 @@ class RenderBoundsTest {
                         () -> page.renderAt(72));
                 assertTrue(e.getMessage().contains("jpdfium.maxRenderPixels"),
                         "message must name the bound and how to override it: " + e.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void wallSizedPageAboveTheNativeCeilingIsRefusedWithoutABound() throws Exception {
+        byte[] pdf = hugePagePdf();
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            try (PdfPage page = doc.page(0)) {
+                assertThrows(PdfCorruptException.class, () -> page.renderAt(300));
             }
         }
     }

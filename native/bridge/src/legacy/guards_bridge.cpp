@@ -77,6 +77,138 @@ JPDF_API int32_t jpdf_guard_jpdfium_annot_remove_redact(int64_t page,
     }
 }
 
+JPDF_API uint32_t jpdf_guard_jpdfium_color_capabilities(void) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_capabilities();
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_document_images_to_cmyk_ex(
+    int64_t doc_handle, int32_t quality, int32_t flags, const uint8_t* lut, int32_t lut_grid,
+    int64_t* out_converted) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_document_images_to_cmyk_ex(doc_handle, quality, flags, lut, lut_grid,
+                                                        out_converted);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_output_intent_bytes(const uint8_t* input,
+                                                              int64_t input_len, const uint8_t* icc,
+                                                              int64_t icc_len, const char* subtype,
+                                                              const char* condition_identifier,
+                                                              const char* info, uint8_t** output,
+                                                              int64_t* output_len) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_output_intent_bytes(input, input_len, icc, icc_len, subtype,
+                                                 condition_identifier, info, output, output_len);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_output_intent_file(
+    const char* in_path, const char* out_path, const uint8_t* icc, int64_t icc_len,
+    const char* subtype, const char* condition_identifier, const char* info) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_output_intent_file(in_path, out_path, icc, icc_len, subtype,
+                                                condition_identifier, info);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_page_images_to_cmyk(int64_t doc_handle,
+                                                              int32_t page_index, int32_t quality,
+                                                              int32_t flags,
+                                                              int64_t* out_converted) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_page_images_to_cmyk(doc_handle, page_index, quality, flags,
+                                                 out_converted);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_page_images_to_cmyk_ex(
+    int64_t doc_handle, int32_t page_index, int32_t quality, int32_t flags, const uint8_t* lut,
+    int32_t lut_grid, int64_t* out_converted) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_page_images_to_cmyk_ex(doc_handle, page_index, quality, flags, lut,
+                                                    lut_grid, out_converted);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_pdfx_bytes(const uint8_t* input, int64_t input_len,
+                                                     const uint8_t* icc, int64_t icc_len,
+                                                     const char* version, const char* conformance,
+                                                     const char* condition_identifier,
+                                                     const char* info, uint8_t** output,
+                                                     int64_t* output_len) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_pdfx_bytes(input, input_len, icc, icc_len, version, conformance,
+                                        condition_identifier, info, output, output_len);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_pdfx_file(const char* in_path, const char* out_path,
+                                                    const uint8_t* icc, int64_t icc_len,
+                                                    const char* version, const char* conformance,
+                                                    const char* condition_identifier,
+                                                    const char* info) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_pdfx_file(in_path, out_path, icc, icc_len, version, conformance,
+                                       condition_identifier, info);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
+JPDF_API int32_t jpdf_guard_jpdfium_color_samples_to_cmyk_jpeg(
+    const uint8_t* samples, int64_t samples_len, int32_t width, int32_t height, int32_t components,
+    int32_t quality, int32_t flags, uint8_t** out_ptr, int64_t* out_len) noexcept {
+    jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
+    if (!guard.admitted()) return {};
+    try {
+        return jpdfium_color_samples_to_cmyk_jpeg(samples, samples_len, width, height, components,
+                                                  quality, flags, out_ptr, out_len);
+    } catch (...) {
+        jpdf::set_guard_refusal(JPDF_E_INTERNAL);
+        return {};
+    }
+}
+
 JPDF_API int32_t jpdf_guard_jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                         float h) noexcept {
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
