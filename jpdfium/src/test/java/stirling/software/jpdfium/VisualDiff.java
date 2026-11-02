@@ -2,6 +2,7 @@ package stirling.software.jpdfium;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -131,18 +132,29 @@ public final class VisualDiff {
     /** Mean absolute RGB error per channel, in the range 0-255. */
     public static double meanAbsoluteError(BufferedImage a, BufferedImage b) {
         requireSameSize(a, b);
+        int[] pa = intPixels(a);
+        int[] pb = intPixels(b);
         long sum = 0;
-        long count = 0;
-        for (int y = 0; y < a.getHeight(); y++) {
-            for (int x = 0; x < a.getWidth(); x++) {
-                int pa = a.getRGB(x, y);
-                int pb = b.getRGB(x, y);
-                sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
-                count += 3;
+        if (pa != null && pb != null) {
+            for (int i = 0; i < pa.length; i++) {
+                int x = pa[i];
+                int y = pb[i];
+                sum += Math.abs(((x >> 16) & 0xFF) - ((y >> 16) & 0xFF));
+                sum += Math.abs(((x >> 8) & 0xFF) - ((y >> 8) & 0xFF));
+                sum += Math.abs((x & 0xFF) - (y & 0xFF));
+            }
+        } else {
+            for (int y = 0; y < a.getHeight(); y++) {
+                for (int x = 0; x < a.getWidth(); x++) {
+                    int p = a.getRGB(x, y);
+                    int q = b.getRGB(x, y);
+                    sum += Math.abs(((p >> 16) & 0xFF) - ((q >> 16) & 0xFF));
+                    sum += Math.abs(((p >> 8) & 0xFF) - ((q >> 8) & 0xFF));
+                    sum += Math.abs((p & 0xFF) - (q & 0xFF));
+                }
             }
         }
+        long count = (long) a.getWidth() * a.getHeight() * 3;
         return count == 0 ? 0.0d : (double) sum / count;
     }
 
@@ -154,23 +166,50 @@ public final class VisualDiff {
     public static double maxTileMae(BufferedImage a, BufferedImage b, int tile) {
         requireSameSize(a, b);
         if (tile <= 0) throw new IllegalArgumentException("tile must be positive");
+        int[] pa = intPixels(a);
+        int[] pb = intPixels(b);
+        int width = a.getWidth();
         double max = 0;
         for (int y = 0; y + tile <= a.getHeight(); y += tile) {
-            for (int x = 0; x + tile <= a.getWidth(); x += tile) {
+            for (int x = 0; x + tile <= width; x += tile) {
                 long sum = 0;
                 for (int yy = y; yy < y + tile; yy++) {
+                    int row = yy * width;
                     for (int xx = x; xx < x + tile; xx++) {
-                        int pa = a.getRGB(xx, yy);
-                        int pb = b.getRGB(xx, yy);
-                        sum += Math.abs(((pa >> 16) & 0xFF) - ((pb >> 16) & 0xFF));
-                        sum += Math.abs(((pa >> 8) & 0xFF) - ((pb >> 8) & 0xFF));
-                        sum += Math.abs((pa & 0xFF) - (pb & 0xFF));
+                        int i = row + xx;
+                        int p = pa != null ? pa[i] : a.getRGB(xx, yy);
+                        int q = pb != null ? pb[i] : b.getRGB(xx, yy);
+                        sum += Math.abs(((p >> 16) & 0xFF) - ((q >> 16) & 0xFF));
+                        sum += Math.abs(((p >> 8) & 0xFF) - ((q >> 8) & 0xFF));
+                        sum += Math.abs((p & 0xFF) - (q & 0xFF));
                     }
                 }
-                max = Math.max(max, (double) sum / (tile * tile * 3));
+                max = Math.max(max, (double) sum / ((long) tile * tile * 3));
             }
         }
         return max;
+    }
+
+    /**
+     * Returns the backing int array for a simple {@link BufferedImage}, or null
+     * when the raster uses a layout where {@link BufferedImage#getRGB} semantics
+     * are not the raw ARGB word. TYPE_INT_RGB and TYPE_INT_ARGB both pack RGB
+     * in the low 24 bits, which is all these comparisons read.
+     */
+    private static int[] intPixels(BufferedImage image) {
+        if (image.getType() != BufferedImage.TYPE_INT_ARGB
+                && image.getType() != BufferedImage.TYPE_INT_RGB) {
+            return null;
+        }
+        var raster = image.getRaster();
+        if (!(raster.getDataBuffer() instanceof DataBufferInt buffer)) return null;
+        if (!(raster.getSampleModel()
+                instanceof java.awt.image.SinglePixelPackedSampleModel samples)) {
+            return null;
+        }
+        if (samples.getScanlineStride() != image.getWidth() || buffer.getOffset() != 0) return null;
+        int[] data = buffer.getData();
+        return data.length >= image.getWidth() * image.getHeight() ? data : null;
     }
 
     private static void requireSameSize(BufferedImage a, BufferedImage b) {
