@@ -494,6 +494,37 @@ bundle_windows() {
     fi
 }
 
+# Windows loads ICU data at runtime, so icudt*.dll never appears as a PE
+# import. After bundle_windows resolves the actual icuuc*.dll imports, keep
+# only the data DLLs whose major is imported and drop the rest before the
+# orphan gate rejects them as unreferenced.
+prune_windows_icu_data() {
+    case "$PLATFORM" in
+        windows-*|vips-windows-*) ;;
+        *) return 0 ;;
+    esac
+    local -A icu_majors=()
+    local f dep major
+    for f in "$DIST_DIR"/*.dll; do
+        [ -f "$f" ] || continue
+        while IFS= read -r dep; do
+            major=$(printf '%s' "$dep" |
+                    sed -n 's/^icuuc\([0-9][0-9]*\)\.dll$/\1/p')
+            [ -n "$major" ] && icu_majors["$major"]=1
+        done < <("$DUMPBIN" //dependents "$f" 2>/dev/null |
+                 grep -oiE 'icuuc[0-9]+\.dll' | sort -u)
+    done
+    [ "${#icu_majors[@]}" -gt 0 ] || return 0
+    for f in "$DIST_DIR"/icudt[0-9]*.dll; do
+        [ -f "$f" ] || continue
+        major=$(basename "$f" | sed -n 's/^icudt\([0-9][0-9]*\)\.dll$/\1/p')
+        if [ -n "$major" ] && [ -z "${icu_majors["$major"]:-}" ]; then
+            echo "  Removing $(basename "$f"): no bundled ICU $major runtime"
+            rm -f "$f"
+        fi
+    done
+}
+
 # Cross legs have shipped a wrong-arch dependency before (darwin-x64 staged an
 # arm64 libsharpyuv), so every staged binary must match the target arch.
 assert_bundle_arch() {
@@ -717,6 +748,7 @@ case "$PLATFORM" in
     windows-*|vips-windows-*)
         bundle_windows
         assert_bundle_arch
+        prune_windows_icu_data
         swap_full_icudata
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-build a trimmed icudt78.dll for Windows from a Linux runner.
+# Cross-build a trimmed icudt<major>.dll for Windows from a Linux runner.
 #
 # Why on Linux: the Windows runner doesn't have icupkg.exe / pkgdata.exe
 # (vcpkg's icu port skips installing the tools dir on Windows targets), but
@@ -8,23 +8,23 @@
 # in a Linux .so or a Windows .dll, what differs is the binary wrapper.
 #
 # Pipeline:
-#   1. Download upstream ICU 78 Win64 prebuilt + extract icudt78.dll
-#   2. mingw-w64 objcopy --dump-section .rdata=icudt78l.dat icudt78.dll
+#   1. Download the requested ICU Win64 prebuilt + extract icudt<major>.dll
+#   2. mingw-w64 objcopy --dump-section .rdata=icudt<major>l.dat icudt<major>.dll
 #      (the .rdata IS the .dat, with our specific PE layout the section
 #       header offset matches the symbol)
-#   3. icupkg -x '*' → loose items (ICU 74 icupkg reads ICU 78 .dat fine;
+#   3. icupkg -x '*' → loose items (ICU 74 icupkg reads the requested ICU .dat fine;
 #      .dat archive format has been stable since ICU 4.x and items inside
-#      keep their original ICU 78 byte content untouched)
+#      keep their original the requested ICU byte content untouched)
 #   4. Build keep-list (same patterns as the Linux trim - cnvalias, ulayout,
 #      pool.res, root/en fallback + the sentence-only brkitr rules)
 #   5. pkgdata -m archive packages the kept items into a fresh .dat
 #   6. mingw-w64 objcopy + gcc -shared wraps the trimmed .dat into a new
-#      icudt78.dll exporting icudt78_dat
+#      icudt<major>.dll exporting icudt<major>_dat
 #   7. Pre-stage into native/dist/windows-x64/ for upload-artifact / pickup
 #      by the Windows job's Stage binaries step.
 #
 # Best-effort: every failure path is exit 0 with a message - the Windows
-# job will fall back to vcpkg's full icudt78.dll (~33 MB) if anything here
+# job will fall back to vcpkg's full icudt<major>.dll (~33 MB) if anything here
 # misfires. No size regression vs current state.
 
 echo "build-minimal-icu-windows.sh: start ($(uname -s) $(uname -m))"
@@ -44,10 +44,10 @@ for tool in icupkg pkgdata x86_64-w64-mingw32-gcc x86_64-w64-mingw32-objcopy pyt
     fi
 done
 
-ICU_VER=78
+ICU_VER="${ICU_VER:-78}"
 ICU_MINOR=1
 # ICU's release-tag and asset-name conventions vary across ICU major
-# versions: ICU 74 uses release-74-2 + icu4c-74_2-..., ICU 78 uses
+# versions: ICU 74 uses release-74-2 + icu4c-74_2-..., the requested ICU uses
 # release-78.1 + icu4c-78.1-.... Try the newer format first, fall back
 # to the legacy one if the modern asset 404s.
 ICU_TAG_NEW="release-${ICU_VER}.${ICU_MINOR}"
@@ -56,7 +56,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 # Step 1: Download upstream ICU's pre-assembled little-endian .dat. This is
-# the SAME byte sequence that ends up baked into icudt<MAJ>.dll on Windows,
+# the SAME byte sequence that ends up baked into icudt<major>.dll on Windows,
 # packaged as a loose .dat by the ICU release process, so we don't have to
 # parse PE format to extract it.
 echo "Downloading ICU $ICU_VER.$ICU_MINOR data-bin-l..."
@@ -92,7 +92,7 @@ if [[ ! "$MAGIC" =~ ....da27$ ]]; then
 fi
 echo "Source .dat : $DAT_FILE ($(du -h "$DAT_FILE" | cut -f1))"
 
-# Step 3: Extract items. ICU 74's icupkg can read ICU 78 .dat because the
+# Step 3: Extract items. ICU 74's icupkg can read the requested ICU .dat because the
 # archive format itself has been stable since ICU 4.x - only the items
 # inside have their own (independent) format versions which we don't touch.
 EXTRACT="$WORK/extract"
@@ -158,7 +158,7 @@ fi
 echo "Trimmed .dat : $TRIMMED_DAT ($(du -h "$TRIMMED_DAT" | cut -f1))"
 
 # Step 6: mingw-w64 objcopy turns the raw .dat into a PE .o exporting the
-# icudt<MAJ>_dat symbol; then mingw-w64 gcc -shared links into a Windows DLL.
+# icudt<major>_dat symbol; then mingw-w64 gcc -shared links into a Windows DLL.
 TRIMMED_BASENAME=$(basename "$TRIMMED_DAT")
 TRIMMED_DIR=$(dirname "$TRIMMED_DAT")
 OBJ="$WORK/icudata_dat.o"
@@ -185,7 +185,7 @@ x86_64-w64-mingw32-gcc -shared -nostartfiles \
     "$OBJ" "$DEF" \
     || { echo "build-minimal-icu-windows.sh: mingw gcc -shared failed; skipping" >&2; exit 0; }
 
-# Sanity check: verify icudt78_dat is actually exported.
+# Sanity check: verify icudt<major>_dat is actually exported.
 if ! x86_64-w64-mingw32-objdump -p "$NEW_DLL" 2>/dev/null | grep -qE "icudt${ICU_VER}_dat"; then
     echo "build-minimal-icu-windows.sh: icudt${ICU_VER}_dat NOT exported by new DLL; skipping" >&2
     exit 0
@@ -203,9 +203,9 @@ echo "Pre-staged  : $PLATFORM_DIST/icudt${ICU_VER}.dll"
 
 # Also pre-stage the bare trimmed .dat into a shared dir so the macOS jobs
 # can grab it via download-artifact and wrap it with clang into a
-# libicudata.<MAJ>.dylib. brew's icu4c@78 keg doesn't ship icupkg/pkgdata
+# libicudata.<MAJ>.dylib. brew's icu4c@<major> keg doesn't ship icupkg/pkgdata
 # on macOS, so we do the trim once on Linux (this job already has both
-# apt's icu-devtools binaries AND the matching upstream ICU 78 source
+# apt's icu-devtools binaries AND the matching upstream the requested ICU source
 # data) and let the macOS jobs do the platform-specific wrapping. The .dat
 # is byte-identical across OSes - only the binary wrapper differs.
 SHARED_DIST="$(dirname "$0")/dist/icu-data"
@@ -217,7 +217,7 @@ echo "Pre-staged  : $SHARED_DIST/icudt${ICU_VER}l.dat ($(du -h "$SHARED_DIST/icu
 # Ubuntu has no aarch64-w64-mingw32 toolchain, so the arm64 DLL is wrapped
 # with llvm-mingw (pinned like every other toolchain here). lld refuses a DLL
 # with no entry point, hence the DllMain stub. Best-effort: the arm64 bundle
-# then keeps PDFium's full icudt78.dll and the ICU size guard fails the build.
+# then keeps PDFium's full icudt<major>.dll and the ICU size guard fails the build.
 LLVM_MINGW_VERSION="${LLVM_MINGW_VERSION:-20260922}"
 build_arm64_icu() {
     local host
