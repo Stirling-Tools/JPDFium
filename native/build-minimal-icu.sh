@@ -41,11 +41,30 @@ if ! command -v pkgdata >/dev/null 2>&1; then
     exit 0
 fi
 
-# Auto-detect ICU major.minor version. icupkg --version prints e.g.
-# "icupkg version 74.2 ..." so we grab the first M.N.
-ICU_FULL_VER=$(icupkg --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+# Auto-detect ICU major.minor version. Newer icupkg builds treat --version
+# as a usage error (and print no version), so prefer pkg-config/icuinfo and
+# only fall back to parsing icupkg output.
+ICU_FULL_VER=$(pkg-config --modversion icu-uc 2>/dev/null | grep -oE '^[0-9]+\.[0-9]+' | head -1 || true)
+if [ -z "$ICU_FULL_VER" ] && command -v icuinfo >/dev/null 2>&1; then
+    ICU_FULL_VER=$(icuinfo 2>/dev/null | sed -n 's:.*<version>\([0-9][0-9]*\.[0-9][0-9]*\).*:\1:p' | head -1 || true)
+fi
+if [ -z "$ICU_FULL_VER" ]; then
+    ICU_FULL_VER=$(icupkg --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)
+fi
 ICU_FULL_VER=${ICU_FULL_VER:-74.2}
 ICU_VER=$(echo "$ICU_FULL_VER" | cut -d. -f1)
+# The PDFium prebuild may link a newer libicudata than the distro's -dev
+# package (for example ICU 78 data on an ICU 74 dev tree). Detect the actual
+# data library so trimming targets the version that will be bundled.
+ACTUAL_ICUDATA=$(find /usr/lib /lib -maxdepth 6 -type f -name 'libicudata.so.*' \
+    2>/dev/null | sort -V | tail -1)
+if [ -n "$ACTUAL_ICUDATA" ]; then
+    ACTUAL_VER=$(basename "$ACTUAL_ICUDATA" | sed -E 's/^libicudata\.so\.([0-9]+).*/\1/')
+    if [ -n "$ACTUAL_VER" ]; then
+        ICU_VER="$ACTUAL_VER"
+        ICU_FULL_VER="${ACTUAL_VER}.0"
+    fi
+fi
 echo "ICU detected : v${ICU_FULL_VER} (major ${ICU_VER})"
 
 # The Ubuntu binary packages (libicu-dev, icu-devtools) DO NOT ship the
@@ -195,7 +214,11 @@ echo "pkgdata inc  : $ICUPKG_INC"
 
 OUT_DIR="$WORK/out"
 mkdir -p "$OUT_DIR" "$WORK/pkg-tmp"
-pkgdata -m archive -p icudata -e "icudt${ICU_VER}_dat" \
+# The package name must match ICU's data lookup path (`icudt<MAJ>l`), not
+# the generic `icudata`. With `-p icudata`, eager items such as NFC load but
+# `ures_open("icudt78l/brkitr/...")` fails, so sentence BreakIterator returns
+# U_MISSING_RESOURCE_ERROR even though sent.brk is present in the archive.
+pkgdata -m archive -p "icudt${ICU_VER}l" -e "icudt${ICU_VER}_dat" \
         -O "$ICUPKG_INC" \
         -T "$WORK/pkg-tmp" \
         -d "$OUT_DIR" \
@@ -214,6 +237,11 @@ if [ -z "$TRIMMED_DAT" ] || [ ! -f "$TRIMMED_DAT" ]; then
     exit 0
 fi
 echo "Trimmed .dat : $TRIMMED_DAT ($(du -h "$TRIMMED_DAT" | cut -f1))"
+# Keep the bare .dat as an artifact too: the macOS wrapper consumes it to
+# build libicudata.<MAJ>.dylib without needing icupkg/pkgdata on the runner.
+DAT_OUT_DIR="$(dirname "$0")/dist/icu-data"
+mkdir -p "$DAT_OUT_DIR"
+cp -v "$TRIMMED_DAT" "$DAT_OUT_DIR/icudt${ICU_VER}l.dat"
 
 # Wrap the .dat in a shared library by hand.
 HOST_ARCH=$(uname -m)

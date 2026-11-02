@@ -34,6 +34,7 @@ target/
 # Java runtime artifacts
 *.class
 *.jar
+!buildSrc/libs/xz-1.10.jar
 *.war
 *.ear
 *.nar

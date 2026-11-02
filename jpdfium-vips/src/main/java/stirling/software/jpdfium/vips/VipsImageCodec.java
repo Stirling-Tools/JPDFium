@@ -1,11 +1,12 @@
 package stirling.software.jpdfium.vips;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Path;
 import java.util.List;
-import stirling.software.jpdfium.internal.ImageCodecs;
 import stirling.software.jpdfium.internal.PixelFormat;
 import stirling.software.jpdfium.internal.RenderedPageView;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -19,11 +20,14 @@ import stirling.software.jpdfium.spi.ImageCodec;
  * <p>Decoding goes through libvips loaders (adding HEIC/HEIF/AVIF/JXL/JPEG2000
  * to the core's image-to-PDF path); encoding uses libvips savers, which makes
  * WebP writing work without an ImageIO plugin. Formats libvips cannot write
- * (BMP) fall back to ImageIO through {@link ImageCodecs}. HEIC/HEIF
+ * (BMP) fall back to ImageIO through
+ * {@link stirling.software.jpdfium.internal.ImageCodecs}. HEIC/HEIF
  * encoding uses the kvazaar (BSD-3-Clause) HEVC encoder on every platform,
  * including the Windows bundle.
  */
 public final class VipsImageCodec implements ImageCodec {
+
+    private static final long MAX_MULTI_PAGE_BYTES = 512L * 1024 * 1024;
 
     @Override
     public String name() {
@@ -74,6 +78,33 @@ public final class VipsImageCodec implements ImageCodec {
         VipsEncodeOptions options =
                 VipsEncodeOptions.builder(vipsFormat).quality(quality).build();
         VipsEncoder.encodeToFile(view, output, options);
+    }
+
+    @Override
+    public boolean canEncodeMultiPageTiff() {
+        return canEncode(ImageFormat.TIFF);
+    }
+
+    @Override
+    public void encodeMultiPageTiff(List<BufferedImage> images, OutputStream output, float quality)
+            throws IOException {
+        if (images == null || images.isEmpty()) {
+            throw new IllegalArgumentException("At least one image is required for multi-page TIFF");
+        }
+        BufferedImage first = images.get(0);
+        if (first == null) {
+            throw new IllegalArgumentException("First image is null");
+        }
+        long totalBytes = 8L + (long) first.getWidth() * first.getHeight() * 4L * images.size();
+        if (totalBytes > MAX_MULTI_PAGE_BYTES) {
+            throw new UnsupportedOperationException(
+                    "Multi-page TIFF exceeds the libvips working-set limit; use ImageIO");
+        }
+        float clamped = Math.max(0.0f, Math.min(1.0f, quality));
+        VipsEncodeOptions options = VipsEncodeOptions.builder(VipsFormat.TIFF)
+                .quality(Math.round(clamped * 100.0f))
+                .build();
+        VipsEncoder.encodeImagesToStream(images, options, output);
     }
 
     @Override

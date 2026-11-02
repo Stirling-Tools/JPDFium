@@ -10,7 +10,8 @@
     "native/vcpkg-overlay/",
     "native/rust/target/",
     "native/build.*/",
-    "native/dist/"
+    "native/dist/",
+    "\\.icc$"
   ],
   "Disable": {
     "IndentSize": true
