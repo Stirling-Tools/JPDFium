@@ -11,14 +11,16 @@ case "$PLATFORM" in
     linux-*)
         OS=linux
         LIBVIPS_NAME="libvips.so.42"
-        # native/pdfium/lib holds the component PDFium the vips build links;
-        # ldd needs it on the search path to stage libpdfium + its deps.
-        PDFIUM_LIB_DIR="$(dirname "$0")/pdfium/lib"
-        export LD_LIBRARY_PATH="/usr/local/lib:${PDFIUM_LIB_DIR}:${LD_LIBRARY_PATH:-}"
+        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
         ;;
     darwin-*)
         OS=darwin
         LIBVIPS_NAME="libvips.42.dylib"
+        ;;
+    freebsd-*)
+        OS=freebsd
+        LIBVIPS_NAME="libvips.so.42"
+        export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
         ;;
     windows-*)
         OS=windows
@@ -41,6 +43,12 @@ resolve_libvips() {
             p=$(ldconfig -p 2>/dev/null | awk -v n="$LIBVIPS_NAME" '$1==n{print $NF; exit}' || true)
             [ -n "$p" ] && [ -f "$p" ] && { echo "$p"; return 0; }
             p=$(find /usr/lib /usr/local/lib -name "$LIBVIPS_NAME" 2>/dev/null | head -n1 || true)
+            [ -n "$p" ] && { echo "$p"; return 0; }
+            ;;
+        freebsd)
+            local p
+            [ -f /usr/local/lib/"$LIBVIPS_NAME" ] && { echo /usr/local/lib/"$LIBVIPS_NAME"; return 0; }
+            p=$(find /usr/local/lib -name "$LIBVIPS_NAME" 2>/dev/null | head -n1 || true)
             [ -n "$p" ] && { echo "$p"; return 0; }
             ;;
         darwin)
@@ -66,7 +74,7 @@ resolve_libvips() {
 # turns that fallback into an error.
 if [ "${JPDFIUM_REQUIRE_SOURCE_VIPS:-}" = "1" ]; then
     case "$OS" in
-        linux) REQUIRED_VIPS="/usr/local/lib/$LIBVIPS_NAME" ;;
+        linux|freebsd) REQUIRED_VIPS="/usr/local/lib/$LIBVIPS_NAME" ;;
         darwin) REQUIRED_VIPS="$(brew --prefix 2>/dev/null || echo /opt/homebrew)/lib/$LIBVIPS_NAME" ;;
         *) REQUIRED_VIPS="" ;;
     esac

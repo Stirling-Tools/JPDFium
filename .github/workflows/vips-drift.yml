@@ -142,9 +142,18 @@ jobs:
             gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
             echo "Updated drift issue #$EXISTING."
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" \
+            if gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "libvips drift: pinned versions are behind upstream" \
               --label vips-drift \
-              --body "$BODY"
-            echo "Opened drift issue."
+              --body "$BODY"; then
+              echo "Opened drift issue."
+            else
+              issues=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.has_issues')
+              if [ "$issues" = "false" ]; then
+                echo "::warning::Could not open drift issue: issues are disabled on this fork."
+              else
+                echo "ERROR: failed to open drift issue" >&2
+                exit 1
+              fi
+            fi
           fi

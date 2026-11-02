@@ -112,6 +112,12 @@ JPDFIUM_EXPORT int32_t jpdfium_rust_svg_to_rgba(const uint8_t* svg, int64_t svg_
                                                 int32_t height, uint8_t** out_ptr, int64_t* out_len,
                                                 int32_t* out_w, int32_t* out_h);
 
+// Encode interleaved CMYK samples (4 bytes/px) into a 4-component JPEG; the
+// encoder inverts samples and PDFium's /Decode inverts them back, so pass ink values.
+JPDFIUM_EXPORT int32_t jpdfium_rust_encode_cmyk_jpeg(const uint8_t* cmyk, int64_t cmyk_len,
+                                                     int32_t width, int32_t height, int32_t quality,
+                                                     uint8_t** out_ptr, int64_t* out_len);
+
 // Free a buffer allocated by any jpdfium_rust_* function.
 //
 // Must be called to release memory returned in out_ptr by the Rust functions.

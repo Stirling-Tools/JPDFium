@@ -37,7 +37,14 @@ case "$JPDFIUM_BUILD_MODE" in
         ;;
 esac
 ASSET="pdfium-${PLATFORM}${SUFFIX}.tar.gz"
-echo "Fetching $ASSET (mode=$JPDFIUM_BUILD_MODE) from release $TAG ($UPSTREAM_REPO)..."
+# Prefer the fork's release so a branch can validate a new prebuild before it
+# is merged upstream. GITHUB_REPOSITORY is set automatically in Actions.
+REPOS=()
+if [ -n "${GITHUB_REPOSITORY:-}" ] && [ "$GITHUB_REPOSITORY" != "$UPSTREAM_REPO" ]; then
+    REPOS+=("$GITHUB_REPOSITORY")
+fi
+REPOS+=("$UPSTREAM_REPO")
+echo "Fetching $ASSET (mode=$JPDFIUM_BUILD_MODE) from release $TAG (${REPOS[*]})..."
 
 mkdir -p "$TARGET_DIR"
 TMP="$(mktemp -d)"
@@ -47,38 +54,58 @@ trap 'rm -rf "$TMP"' EXIT
 #
 # Primary path: gh CLI (honours GH_TOKEN).
 # Fallback: plain curl to the browser-download URL.
-download_from_upstream() {
+download_from_repo() {
+    local repo="$1"
     local attempt
     for attempt in 1 2 3; do
         if gh release download "$TAG" \
-            --repo "$UPSTREAM_REPO" \
+            --repo "$repo" \
             --pattern "$ASSET" \
             --dir "$TMP" 2>/dev/null; then
             return 0
         fi
-        echo "  gh release download attempt $attempt/3 failed for $UPSTREAM_REPO; retrying..." >&2
+        echo "  gh release download attempt $attempt/3 failed for $repo; retrying..." >&2
         sleep 5
     done
     for attempt in 1 2 3; do
         if curl -fL --retry 3 --retry-delay 3 \
-            "https://github.com/${UPSTREAM_REPO}/releases/download/${TAG}/${ASSET}" \
+            "https://github.com/${repo}/releases/download/${TAG}/${ASSET}" \
             -o "${TMP}/${ASSET}" 2>/dev/null; then
             return 0
         fi
-        echo "  direct download attempt $attempt/3 failed for $UPSTREAM_REPO; retrying..." >&2
+        echo "  direct download attempt $attempt/3 failed for $repo; retrying..." >&2
         sleep 5
     done
     return 1
 }
 
-if download_from_upstream && [ -f "${TMP}/${ASSET}" ]; then
+asset_exists() {
+    local repo="$1" assets
+    if command -v gh >/dev/null 2>&1; then
+        assets=$(gh release view "$TAG" --repo "$repo" --json assets --jq '.assets[].name' 2>/dev/null || true)
+        if grep -Fx "$ASSET" <<<"$assets" >/dev/null; then
+            return 0
+        fi
+    fi
+    curl -fsI --retry 2 --retry-delay 2 \
+        "https://github.com/${repo}/releases/download/${TAG}/${ASSET}" >/dev/null
+}
+
+for repo in "${REPOS[@]}"; do
+    if ! asset_exists "$repo"; then
+        continue
+    fi
+    if ! download_from_repo "$repo" || [ ! -f "${TMP}/${ASSET}" ]; then
+        echo "ERROR: $ASSET exists in $repo release $TAG but could not be downloaded." >&2
+        exit 1
+    fi
     tar -xzf "$TMP/$ASSET" -C "$TARGET_DIR"
     echo "Extracted prebuilt PDFium into $TARGET_DIR:"
     ls -la "$TARGET_DIR"
     exit 0
-fi
+done
 
-echo "Prebuilt $ASSET not available in upstream release $TAG ($UPSTREAM_REPO)."
+echo "Prebuilt $ASSET not available in release $TAG (${REPOS[*]})."
 if [ "${JPDFIUM_ALLOW_SOURCE_FALLBACK:-0}" != "1" ]; then
     echo "ERROR: set JPDFIUM_ALLOW_SOURCE_FALLBACK=1 to build PDFium from source." >&2
     exit 1

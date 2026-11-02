@@ -34,4 +34,5 @@ module stirling.software.jpdfium {
     // Standard library requirements
     requires transitive java.desktop;      // java.awt.image.BufferedImage surfaces in the public API
     requires java.net.http;     // java.net.http.HttpClient for link validation
+    requires org.tukaani.xz;     // xz-compressed native payloads in the per-platform jars
 }

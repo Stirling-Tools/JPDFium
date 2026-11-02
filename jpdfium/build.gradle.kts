@@ -1,5 +1,4 @@
-import java.nio.file.Files
-import java.nio.file.Path
+import jpdfium.HostPlatform
 
 plugins {
     id("jpdfium.library-conventions")
@@ -69,44 +68,38 @@ graalvmNative {
     }
 }
 
+val localNatives = configurations.create("localNatives") {
+    isCanBeConsumed = false
+    isCanBeResolved = false
+}
+configurations.named("runtimeClasspath") { extendsFrom(localNatives) }
+configurations.named("testRuntimeClasspath") { extendsFrom(localNatives) }
+// GraalVM's native-image classpath is created from a snapshot of the runtime
+// dependencies, so extending runtimeClasspath is not enough for nativeCompile.
+configurations.named("nativeImageClasspath") { extendsFrom(localNatives) }
+configurations.findByName("nativeImageCliClasspath")?.extendsFrom(localNatives)
+configurations.findByName("nativeImageTestClasspath")?.extendsFrom(localNatives)
+
 dependencies {
-    // No imageio-webp: jpdfium-vips registers a libvips-backed ImageCodec as
-    // the default and writes WebP without an ImageIO plugin. WebP writing
-    // without the vips module is intentionally unsupported
-    // (canWrite(WEBP) == false). TwelveMonkeys TIFF stays for the ImageIO
-    // fallback (BigTIFF/CMYK + compression the JDK writer lacks).
-    implementation(libs.imageio.tiff)
+    // No imageio-webp or imageio-tiff runtime dependency: jpdfium-vips
+    // registers a libvips-backed ImageCodec and handles TIFF, including
+    // multi-page output. Core-only users can add a TIFF ImageIO plugin; the
+    // core test path deliberately uses only the stock JDK TIFF writer.
+    compileOnly(libs.imageio.tiff)
+    // Decompresses the xz-compressed native payload in the per-platform
+    // native jars. Kept tiny (~120 KiB) and pure Java so the runtime has no
+    // additional native dependency.
+    implementation(libs.xz)
     // Which platform's native jar lands on the classpath. Auto-detects host OS
     // and arch by default; CI overrides per matrix job with
     // -Pjpdfium.testNatives=<platform> so the smoke loads the native it built.
-    val defaultPlatform = run {
-        val os = System.getProperty("os.name").lowercase()
-        val arch = System.getProperty("os.arch").lowercase()
-        val isArm = arch == "aarch64" || arch == "arm64"
-        when {
-            os.contains("mac") || os.contains("darwin") -> if (isArm) "darwin-arm64" else "darwin-x64"
-            os.contains("win") -> if (isArm) "windows-arm64" else "windows-x64"
-            else -> {
-                // Linux natives are libc-specific: a musl host (Alpine) needs the
-                // linux-musl-* artifact - a glibc-linked libjpdfium.so won't load
-                // into a musl JVM. Mirror NativeLoader's detection here so builds
-                // executed on Alpine resolve the right natives jar automatically.
-                val muslLoader = Path.of("/lib/ld-musl-${if (isArm) "aarch64" else "x86_64"}.so.1")
-                val musl = Files.exists(muslLoader)
-                    || runCatching {
-                        Files.newDirectoryStream(Path.of("/lib"), "ld-musl-*").use { it.iterator().hasNext() }
-                    }.getOrDefault(false)
-                when {
-                    musl && isArm -> "linux-musl-arm64"
-                    musl -> "linux-musl-x64"
-                    isArm -> "linux-arm64"
-                    else -> "linux-x64"
-                }
-            }
-        }
-    }
+    val defaultPlatform = HostPlatform.detect()
     val testNatives = (findProperty("jpdfium.testNatives") ?: defaultPlatform).toString()
-    runtimeOnly(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
+    // Local run/native-image/test classpaths only. This must NOT be a
+    // runtimeOnly dependency: that is published in the POM and Gradle module
+    // metadata, which forced every consumer to download the Linux x64 natives
+    // even on macOS/Windows/ARM. Consumers pick their platform artifact.
+    localNatives(project(":jpdfium-natives:jpdfium-natives-$testNatives"))
     testImplementation(libs.pdfbox)
     jmhImplementation(libs.jmh.core)
     jmhAnnotationProcessor(libs.jmh.annproc)
@@ -447,10 +440,11 @@ tasks.register<Test>("integrationTest") {
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath       = sourceSets.test.get().runtimeClasspath
     systemProperty("jpdfium.integration", "true")
-    // Forward -Djpdfium.bench.* / -Djpdfium.compress.* from the invocation.
+    // Forward bench/compress/PDF-X test knobs from the invocation.
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")) {
+        if (key.startsWith("jpdfium.bench") || key.startsWith("jpdfium.compress")
+            || key.startsWith("jpdfium.pdfx") || key.startsWith("jpdfium.test.")) {
             systemProperty(key, v.toString())
         }
     }
@@ -476,7 +470,9 @@ tasks.register<Test>("corpusTest") {
     // Forward corpus shard selection (used by the sharded CI job).
     System.getProperties().forEach { k, v ->
         val key = k.toString()
-        if (key.startsWith("jpdfium.corpus.")) systemProperty(key, v.toString())
+        if (key.startsWith("jpdfium.corpus.") || key.startsWith("jpdfium.pdfx")) {
+            systemProperty(key, v.toString())
+        }
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = System.getProperty("jpdfium.bench.xmx", "4g")

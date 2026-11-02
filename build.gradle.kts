@@ -3,6 +3,7 @@ allprojects {
     version = findProperty("jpdfium.version")?.toString() ?: "0.0.0-SNAPSHOT"
 
     repositories {
+        flatDir { dirs(rootProject.file("buildSrc/libs")) }
         mavenCentral()
     }
 }

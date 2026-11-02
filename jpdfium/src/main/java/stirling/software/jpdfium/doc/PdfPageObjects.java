@@ -1,5 +1,6 @@
 package stirling.software.jpdfium.doc;
 
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.PageEditBindings;
@@ -85,6 +86,95 @@ public final class PdfPageObjects {
         } catch (Throwable t) { hasTransparency = false; }
 
         return new PageContentSummary(text, image, path, shading, form, hasTransparency);
+    }
+
+    /**
+     * Strict transparency probe for conformance gates.
+     *
+     * <p>{@link #summarize(MemorySegment)} deliberately treats a failed probe
+     * as "no transparency", which is correct for an informational summary but
+     * not for a PDF/X preflight. This method checks the page flag and then
+     * every page object, recursing into form XObjects, so constant alpha in an
+     * ExtGState ({@code /ca 0.5}) is detected even though PDFium's page-level
+     * flag only covers transparency-group state. Any probe failure is reported
+     * instead of being folded into {@code false}.
+     */
+    public static boolean hasTransparencyStrict(MemorySegment rawPage) {
+        if (rawPage == null || rawPage.equals(MemorySegment.NULL)) {
+            throw new JPDFiumException("transparency check requires an open page");
+        }
+        try {
+            if ((int) PageEditBindings.FPDFPage_HasTransparency.invokeExact(rawPage) != 0) {
+                return true;
+            }
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_HasTransparency failed", t);
+        }
+
+        int count;
+        try {
+            count = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPage_CountObjects failed", t);
+        }
+        if (count < 0) {
+            throw new JPDFiumException("FPDFPage_CountObjects returned " + count);
+        }
+        for (int i = 0; i < count; i++) {
+            MemorySegment obj;
+            try {
+                obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
+            } catch (Throwable t) {
+                throw new JPDFiumException("FPDFPage_GetObject failed at index " + i, t);
+            }
+            if (obj == null || obj.equals(MemorySegment.NULL)) {
+                throw new JPDFiumException("FPDFPage_GetObject returned NULL at index " + i);
+            }
+            if (objectHasTransparencyStrict(obj, 0)) return true;
+        }
+        return false;
+    }
+
+    private static boolean objectHasTransparencyStrict(MemorySegment obj, int depth) {
+        if (depth > 64) {
+            throw new JPDFiumException("form XObject nesting exceeds 64 levels");
+        }
+        int transparent;
+        try {
+            transparent = (int) PageEditBindings.FPDFPageObj_HasTransparency.invokeExact(obj);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPageObj_HasTransparency failed", t);
+        }
+        if (transparent != 0) return true;
+
+        int type;
+        try {
+            type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFPageObj_GetType failed", t);
+        }
+        if (type != 5) return false;
+        if (!PageEditBindings.formTraversalAvailable()) {
+            throw new JPDFiumException(
+                    "form XObject transparency is unverifiable: required binding is unavailable");
+        }
+        int children;
+        try {
+            children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+        } catch (Throwable t) {
+            throw new JPDFiumException("FPDFFormObj_CountObjects failed", t);
+        }
+        if (children < 0) {
+            throw new JPDFiumException("FPDFFormObj_CountObjects returned " + children);
+        }
+        for (int i = 0; i < children; i++) {
+            MemorySegment child = PageEditBindings.formObject(obj, i);
+            if (child == null || child.equals(MemorySegment.NULL)) {
+                throw new JPDFiumException("FPDFFormObj_GetObject returned NULL at index " + i);
+            }
+            if (objectHasTransparencyStrict(child, depth + 1)) return true;
+        }
+        return false;
     }
 
     private static PageObject readObject(MemorySegment obj, int index) {

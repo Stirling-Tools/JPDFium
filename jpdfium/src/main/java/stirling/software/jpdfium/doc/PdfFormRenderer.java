@@ -63,8 +63,10 @@ public final class PdfFormRenderer {
             try (PdfPage page = document.page(pageIndex)) {
                 MemorySegment rawPage = page.rawHandle();
                 PageSize size = page.size();
-                int width = Math.max(1, (int) Math.round(size.width() * dpi / 72.0));
-                int height = Math.max(1, (int) Math.round(size.height() * dpi / 72.0));
+                // Match PdfPage's native raster size, which floors the scaled
+                // page dimensions. Rounding here produced a one-pixel mismatch.
+                int width = Math.max(1, (int) Math.floor(size.width() * dpi / 72.0));
+                int height = Math.max(1, (int) Math.floor(size.height() * dpi / 72.0));
                 return render(env, rawPage, width, height);
             } finally {
                 try {

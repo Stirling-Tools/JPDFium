@@ -28,6 +28,7 @@ set -euo pipefail
 # which would eat a hyphenated version such as 1.2.1-SNAPSHOT or 1.2.1-rc.1.
 KNOWN_PLATFORMS="linux-musl-x64 linux-musl-arm64 vips-linux-x64 vips-linux-arm64
 vips-darwin-x64 vips-darwin-arm64 vips-windows-x64 vips-windows-arm64
+vips-freebsd-x64
 linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64 windows-arm64"
 # The awk below matches a native library name (.so, .dylib or .dll, optionally
 # versioned) with a regex literal, because passing the pattern through `-v`
@@ -75,8 +76,8 @@ summarise() {
       if (rest == "") next
       if (rest == "native-libs.txt")    { manifest = $1; next }
       if (rest == "native-libs.sha256") { hashes = $1; next }
-      if ($1 > 0 && rest ~ /\.(so|dylib|dll)(\.[0-9]+)*$/) payload++
-      if ($1 > 0 && rest == bridge) found = 1
+      if ($1 > 0 && rest ~ /\.(so|dylib|dll)(\.[0-9]+)*(\.xz)?$/) payload++
+      if ($1 > 0 && (rest == bridge || rest == bridge ".xz")) found = 1
     }
     END { printf "%d %d %d %d\n", payload, manifest, hashes, found }
   '
