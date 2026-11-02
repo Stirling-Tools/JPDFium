@@ -12,6 +12,8 @@ on:
       - 'native/rust/jpdfium-impl/**'
       - 'native/CMakeLists.txt'
       - 'native/bridge/src/jpdfium_color.cpp'
+      - 'native/bridge/src/jpdfium_document.cpp'
+      - 'native/bridge/src/jpdfium_render.cpp'
       - 'native/bridge/include/jpdfium.h'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfDocument.java'
       - 'jpdfium/src/main/java/stirling/software/jpdfium/PdfPage.java'
@@ -30,6 +32,9 @@ on:
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/EciAltonaSuiteTest.java'
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/FlattenVisualCorpusTest.java'
       - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/PdfXConverterTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/corpus/VeraPdfCorpusTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/doc/IccProfileCorpusTest.java'
+      - 'jpdfium/src/test/java/stirling/software/jpdfium/corpus/PdfJsCorpusTest.java'
       - '.github/scripts/verify-ghent-inkcov.sh'
       - '.github/workflows/ghent.yml'
 
@@ -92,6 +97,42 @@ jobs:
             exit 1
           fi
 
+      - name: Download expanded visual corpora
+        id: corpus-download
+        run: |
+          mkdir -p /tmp/pdfjs /tmp/skcms /tmp/verapdf
+          if curl -fsSL --connect-timeout 20 --max-time 900 --retry 3 --retry-max-time 180 \
+            'https://codeload.github.com/mozilla/pdf.js/zip/c53f395e4057b501f478a7e98ed03d47c7c62a04' \
+            -o /tmp/pdfjs.zip; then
+            echo '6ad03937d2965daf88b4219a9f02f73ad46c143530e2852afe9f4e9e7f62a43a  /tmp/pdfjs.zip' | sha256sum -c -
+            unzip -q /tmp/pdfjs.zip -d /tmp/pdfjs
+            test -d /tmp/pdfjs/pdf.js-c53f395e4057b501f478a7e98ed03d47c7c62a04/test/pdfs
+          else
+            echo '::warning::PDF.js corpus download failed; skipping it.'
+            exit 1
+          fi
+          rm -rf /tmp/skcms-src
+          if git init -q /tmp/skcms-src \
+            && git -C /tmp/skcms-src remote add origin https://skia.googlesource.com/skcms \
+            && timeout 900s git -C /tmp/skcms-src fetch -q --depth=1 origin f0bbebbebb50851813e4f11d3d4b9edd2878a056 \
+            && git -C /tmp/skcms-src checkout -q FETCH_HEAD; then
+            test "$(git -C /tmp/skcms-src rev-parse HEAD)" = "f0bbebbebb50851813e4f11d3d4b9edd2878a056"
+            test -d /tmp/skcms-src/profiles
+          else
+            echo '::warning::skcms ICC corpus download failed; skipping it.'
+            exit 1
+          fi
+          if curl -fsSL --connect-timeout 20 --max-time 900 --retry 3 --retry-max-time 180 \
+            'https://codeload.github.com/veraPDF/veraPDF-corpus/zip/bb75f4f0073d9350dfd058c0162a367e6fadf25e' \
+            -o /tmp/verapdf.zip; then
+            echo '0e75b3d8278228f11f0266d075da88d87dce63a6cb93543cff593fa03f3b98d4  /tmp/verapdf.zip' | sha256sum -c -
+            unzip -q /tmp/verapdf.zip -d /tmp/verapdf
+            test -d /tmp/verapdf/veraPDF-corpus-bb75f4f0073d9350dfd058c0162a367e6fadf25e
+          else
+            echo '::warning::veraPDF corpus download failed; skipping it.'
+            exit 1
+          fi
+
       - name: Download ECI Altona fixtures
         id: eci-download
         run: |
@@ -123,10 +164,16 @@ jobs:
       - name: Run download-free visual and PDF/X gate
         if: always() && steps.build-native.outcome == 'success'
         run: |
+          set +e
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.FlattenVisualCorpusTest' \
             --tests 'stirling.software.jpdfium.doc.PdfXConverterTest' \
-            --no-daemon --stacktrace
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/download-free
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/download-free/ 2>/dev/null || true
+          exit $rc
 
       - name: Run Ghent and ECI conversion gate
         id: conversion-gate
@@ -136,13 +183,38 @@ jobs:
           GHENT_OUTPUT_DIR: /tmp
           ECI_DIR: /tmp/eci
         run: |
+          set +e
           ./gradlew :jpdfium:integrationTest \
             --tests 'stirling.software.jpdfium.doc.GhentOutputSuiteTest' \
             --tests 'stirling.software.jpdfium.doc.EciAltonaSuiteTest' \
-            --no-daemon --stacktrace
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/ghent-eci
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/ghent-eci/ 2>/dev/null || true
+          exit $rc
+
+      - name: Run expanded PDF.js, ICC and veraPDF corpus gate
+        if: ${{ !cancelled() && steps.corpus-download.outcome == 'success' }}
+        env:
+          PDFJS_DIR: /tmp/pdfjs/pdf.js-c53f395e4057b501f478a7e98ed03d47c7c62a04/test/pdfs
+          ICC_PROFILE_DIR: /tmp/skcms-src/profiles
+          VERAPDF_DIR: /tmp/verapdf/veraPDF-corpus-bb75f4f0073d9350dfd058c0162a367e6fadf25e
+        run: |
+          set +e
+          ./gradlew :jpdfium:integrationTest \
+            --tests 'stirling.software.jpdfium.corpus.PdfJsCorpusTest' \
+            --tests 'stirling.software.jpdfium.doc.IccProfileCorpusTest' \
+            --tests 'stirling.software.jpdfium.corpus.VeraPdfCorpusTest' \
+            --rerun-tasks --no-daemon --stacktrace
+          rc=$?
+          mkdir -p /tmp/jpdfium-reports/corpus
+          cp -R jpdfium/build/reports/tests/integrationTest/. \
+            /tmp/jpdfium-reports/corpus/ 2>/dev/null || true
+          exit $rc
 
       - name: Verify Ghent process ink coverage
-        if: steps.conversion-gate.outcome == 'success'
+        if: ${{ !cancelled() && steps.conversion-gate.outcome == 'success' }}
         env:
           GHENT_DIR: /tmp/ghent/Ghent_PDF_Output_Suite_V50_Testpages
         run: bash .github/scripts/verify-ghent-inkcov.sh "$GHENT_DIR" /tmp
@@ -154,5 +226,6 @@ jobs:
           name: ghent-cmyk-output
           path: |
             /tmp/jpdfium-ghent-*.pdf
+            /tmp/jpdfium-reports/**
             jpdfium/build/reports/tests/integrationTest
           if-no-files-found: ignore
