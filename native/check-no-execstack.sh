@@ -14,7 +14,7 @@ for f in "$DIST_DIR"/lib*.so*; do
     [ -e "$f" ] || continue
     [ -L "$f" ] && continue
     lib_count=$((lib_count + 1))
-    if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep -q "RWE"; then
+    if readelf -lW "$f" 2>/dev/null | grep "GNU_STACK" | grep "RWE" >/dev/null; then
         echo "FAIL: $f requires an executable stack (GNU_STACK RWE)" >&2
         failures=$((failures + 1))
     fi

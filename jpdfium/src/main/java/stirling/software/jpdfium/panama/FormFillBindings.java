@@ -1,6 +1,7 @@
 package stirling.software.jpdfium.panama;
 
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
@@ -51,7 +52,8 @@ public final class FormFillBindings {
             downcallOptional("EPDFForm_GetFieldObjNum", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
     public static final MethodHandle EPDFForm_ResetField = downcallOptional("EPDFForm_ResetField",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS,
+                    NativeLayouts.C_ULONG, ADDRESS));
 
     /**
      * Newer EmbedPDF form API: write a terminal field's value. The NONE kind
@@ -59,20 +61,76 @@ public final class FormFillBindings {
      */
     public static final MethodHandle EPDFForm_SetFieldValue = downcallOptional(
             "EPDFForm_SetFieldValue",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, ADDRESS,
+                    NativeLayouts.C_ULONG));
 
     /** {@code EPDF_FORM_VALUE_NONE}: remove the field's /V (or write an empty value). */
     public static final int EPDF_FORM_VALUE_NONE = 0;
 
+    /** Field families returned by {@code EPDFForm_GetFieldFamily}. */
+    public static final int EPDF_FORMFIELD_FAMILY_UNKNOWN = 0;
+    public static final int EPDF_FORMFIELD_FAMILY_PUSHBUTTON = 1;
+    public static final int EPDF_FORMFIELD_FAMILY_CHECKBOX = 2;
+    public static final int EPDF_FORMFIELD_FAMILY_RADIO = 3;
+    public static final int EPDF_FORMFIELD_FAMILY_TEXT = 4;
+    public static final int EPDF_FORMFIELD_FAMILY_COMBOBOX = 5;
+    public static final int EPDF_FORMFIELD_FAMILY_LISTBOX = 6;
+    public static final int EPDF_FORMFIELD_FAMILY_SIGNATURE = 7;
+
+    /** Return a field's family, or UNKNOWN when the probe is unavailable. */
+    public static final MethodHandle EPDFForm_GetFieldFamily = downcallOptional(
+            "EPDFForm_GetFieldFamily", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
     /** Delete a terminal field, detaching its widgets from the AcroForm tree. */
     public static final MethodHandle EPDFForm_DeleteField = downcallOptional(
             "EPDFForm_DeleteField",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS,
+                    NativeLayouts.C_ULONG, ADDRESS));
 
     /** Newer EmbedPDF form API: regenerate a text/choice field's widget appearances. */
     public static final MethodHandle EPDFForm_RedrawFieldWidgets = downcallOptional(
             "EPDFForm_RedrawFieldWidgets",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS,
+                    NativeLayouts.C_ULONG, ADDRESS));
+
+    /** Invoke {@code EPDFForm_ResetField} with the native C {@code unsigned long} size. */
+    public static int resetField(MemorySegment document, int fieldObjNum, MemorySegment buffer,
+                                 int bufferSize, MemorySegment outCount) throws Throwable {
+        return NativeLayouts.C_ULONG_IS_64_BIT
+                ? (int) EPDFForm_ResetField.invokeExact(
+                        document, fieldObjNum, buffer, (long) bufferSize, outCount)
+                : (int) EPDFForm_ResetField.invokeExact(
+                        document, fieldObjNum, buffer, bufferSize, outCount);
+    }
+
+    /** Clear a field's value with {@code EPDF_FORM_VALUE_NONE}. */
+    public static int setFieldValueNone(MemorySegment document, int fieldObjNum) throws Throwable {
+        return NativeLayouts.C_ULONG_IS_64_BIT
+                ? (int) EPDFForm_SetFieldValue.invokeExact(
+                        document, fieldObjNum, EPDF_FORM_VALUE_NONE, MemorySegment.NULL, 0L)
+                : (int) EPDFForm_SetFieldValue.invokeExact(
+                        document, fieldObjNum, EPDF_FORM_VALUE_NONE, MemorySegment.NULL, 0);
+    }
+
+    /** Invoke {@code EPDFForm_DeleteField} with the native C {@code unsigned long} size. */
+    public static int deleteField(MemorySegment document, int fieldObjNum, MemorySegment buffer,
+                                  int bufferSize, MemorySegment outCount) throws Throwable {
+        return NativeLayouts.C_ULONG_IS_64_BIT
+                ? (int) EPDFForm_DeleteField.invokeExact(
+                        document, fieldObjNum, buffer, (long) bufferSize, outCount)
+                : (int) EPDFForm_DeleteField.invokeExact(
+                        document, fieldObjNum, buffer, bufferSize, outCount);
+    }
+
+    /** Regenerate a text/choice field's widget appearances. */
+    public static int redrawFieldWidgets(MemorySegment document, int fieldObjNum)
+            throws Throwable {
+        return NativeLayouts.C_ULONG_IS_64_BIT
+                ? (int) EPDFForm_RedrawFieldWidgets.invokeExact(
+                        document, fieldObjNum, MemorySegment.NULL, 0L, MemorySegment.NULL)
+                : (int) EPDFForm_RedrawFieldWidgets.invokeExact(
+                        document, fieldObjNum, MemorySegment.NULL, 0, MemorySegment.NULL);
+    }
 
     private static MethodHandle downcall(String name, FunctionDescriptor desc) {
         return Symbols.downcall(name, desc);

@@ -15,6 +15,9 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
+import org.tukaani.xz.LZMA2Options;
+import org.tukaani.xz.XZOutputStream;
+
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +28,7 @@ import stirling.software.jpdfium.exception.NativeLoadException;
 
 import com.sun.net.httpserver.HttpHandler;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -238,6 +242,21 @@ class NativeDownloaderTest {
     }
 
     @Test
+    void xzCompressedPayloadValidatesAndLoads() throws Exception {
+        Path jar = tempDir.resolve("natives-xz.jar");
+        Files.write(jar, nativesJarXz(PLATFORM));
+        assertTrue(NativeDownloader.isUsableJar(jar, PLATFORM));
+
+        NativeLoader.installSupplementalLoader(jar);
+        String resource = "/natives/" + PLATFORM + "/libtest.so";
+        assertNotNull(NativeLoader.findResource(resource));
+        try (InputStream in = NativeLoader.openResource(resource)) {
+            assertNotNull(in);
+            assertArrayEquals(new byte[] {0x7F, 0x45, 0x4C, 0x46}, in.readAllBytes());
+        }
+    }
+
+    @Test
     void downloadedJarSupplementsClasspathLookup() throws Exception {
         startServer(exchange -> {
             byte[] jar = nativesJar(PLATFORM, false);
@@ -292,6 +311,22 @@ class NativeDownloaderTest {
             if (zipSlip) {
                 addEntry(zip, "natives/" + platform + "/../../evil.txt", "evil");
             }
+        }
+        return bos.toByteArray();
+    }
+
+    private static byte[] nativesJarXz(String platform) throws IOException {
+        byte[] payload = {0x7F, 0x45, 0x4C, 0x46};
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        try (XZOutputStream xz = new XZOutputStream(packed, new LZMA2Options(6))) {
+            xz.write(payload);
+        }
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bos, StandardCharsets.UTF_8)) {
+            addEntry(zip, "natives/" + platform + "/native-libs.txt", "libtest.so\n");
+            addEntry(zip, "natives/" + platform + "/native-libs.sha256",
+                    sha256Hex(payload) + "  libtest.so\n");
+            addEntry(zip, "natives/" + platform + "/libtest.so.xz", packed.toByteArray());
         }
         return bos.toByteArray();
     }

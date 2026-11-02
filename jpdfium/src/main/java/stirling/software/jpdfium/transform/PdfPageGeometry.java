@@ -237,7 +237,7 @@ public final class PdfPageGeometry {
             throw new JPDFiumException("form cleanup is unverifiable: EPDFForm_LoadModel returned NULL");
         }
 
-        List<Integer> unplaced = new ArrayList<>();
+        List<UnplacedField> unplaced = new ArrayList<>();
         try {
             int fields;
             try {
@@ -270,7 +270,11 @@ public final class PdfPageGeometry {
                 }
                 if (placed) continue;
                 try {
-                    unplaced.add((int) FormFillBindings.EPDFForm_GetFieldObjNum.invokeExact(model, i));
+                    int objNum = (int) FormFillBindings.EPDFForm_GetFieldObjNum.invokeExact(model, i);
+                    int family = FormFillBindings.EPDFForm_GetFieldFamily == null
+                            ? FormFillBindings.EPDF_FORMFIELD_FAMILY_UNKNOWN
+                            : (int) FormFillBindings.EPDFForm_GetFieldFamily.invokeExact(model, i);
+                    unplaced.add(new UnplacedField(objNum, family));
                 } catch (Throwable t) {
                     throw new JPDFiumException(t);
                 }
@@ -296,7 +300,8 @@ public final class PdfPageGeometry {
             throw new JPDFiumException(t);
         }
         // A write invalidates the model, so reset only after it is closed.
-        for (int objNum : unplaced) {
+        for (UnplacedField field : unplaced) {
+            int objNum = field.objNum();
             try {
                 // Removing the terminal field also removes its /AS state and
                 // field-tree reference, not just the visible widget.
@@ -306,33 +311,65 @@ public final class PdfPageGeometry {
                                 detachedArena.allocate(ValueLayout.JAVA_INT, 256);
                         MemorySegment detachedCount =
                                 detachedArena.allocate(ValueLayout.JAVA_LONG);
-                        int removed = (int) FormFillBindings.EPDFForm_DeleteField.invokeExact(
-                                rawDoc, objNum, detached, 256L, detachedCount);
+                        int removed = FormFillBindings.deleteField(
+                                rawDoc, objNum, detached, 256, detachedCount);
                         if (removed != 0) continue;
                     }
                 }
+                // Signature and push-button fields have no writable value. The
+                // widgets are already detached from the page, so there is
+                // nothing left to clear and a zero return is expected.
+                if (field.isValueLess()) continue;
                 if (FormFillBindings.EPDFForm_SetFieldValue != null) {
-                    int ok = (int) FormFillBindings.EPDFForm_SetFieldValue.invokeExact(
-                            rawDoc, objNum, FormFillBindings.EPDF_FORM_VALUE_NONE,
-                            MemorySegment.NULL, 0L);
-                    // Signature/push-button fields do not carry a writable value; the
-                    // legacy ResetField path also ignored this case. Their widgets were
-                    // already removed, so there is nothing left to clear.
-                    if (ok != 0 && FormFillBindings.EPDFForm_RedrawFieldWidgets != null) {
-                        // SetFieldValue intentionally does not draw. Regenerate text and
-                        // choice appearances so the old value is not left in /AP.
-                        int ignored = (int) FormFillBindings.EPDFForm_RedrawFieldWidgets.invokeExact(
-                                rawDoc, objNum, MemorySegment.NULL, 0L, MemorySegment.NULL);
+                    int ok = FormFillBindings.setFieldValueNone(rawDoc, objNum);
+                    if (ok == 0) {
+                        // Older builds do not expose the field family; keep the
+                        // legacy best-effort behaviour instead of failing a crop
+                        // that has already been applied.
+                        if (field.familyKnown()) {
+                            throw new JPDFiumException(
+                                    "EPDFForm_SetFieldValue failed for field " + objNum);
+                        }
+                    } else if (FormFillBindings.EPDFForm_RedrawFieldWidgets != null
+                            && field.drawsAppearance()) {
+                        // SetFieldValue intentionally does not draw. Regenerate text
+                        // and choice appearances so the old value is not left in /AP.
+                        // A zero return is tolerated: the widget is already detached
+                        // and a throw here would leave the document half-cropped.
+                        FormFillBindings.redrawFieldWidgets(rawDoc, objNum);
                     }
                 } else {
-                    // Legacy EmbedPDF API. invokeExact requires the int return type
-                    // to be captured exactly.
-                    int ignored = (int) FormFillBindings.EPDFForm_ResetField.invokeExact(rawDoc, objNum,
-                            MemorySegment.NULL, 0L, MemorySegment.NULL);
+                    // Legacy EmbedPDF API. A zero return is the documented
+                    // result for value-less fields, which are skipped above.
+                    int reset = FormFillBindings.resetField(
+                            rawDoc, objNum, MemorySegment.NULL, 0, MemorySegment.NULL);
+                    if (reset == 0 && field.familyKnown()) {
+                        throw new JPDFiumException(
+                                "EPDFForm_ResetField failed for field " + objNum);
+                    }
                 }
             } catch (Throwable t) {
                 throw new JPDFiumException(t);
             }
+        }
+    }
+
+    /** One terminal field whose widgets were all removed by the crop. */
+    private record UnplacedField(int objNum, int family) {
+        boolean familyKnown() {
+            return family != FormFillBindings.EPDF_FORMFIELD_FAMILY_UNKNOWN;
+        }
+
+        boolean isValueLess() {
+            return family == FormFillBindings.EPDF_FORMFIELD_FAMILY_SIGNATURE
+                    || family == FormFillBindings.EPDF_FORMFIELD_FAMILY_PUSHBUTTON;
+        }
+
+        boolean drawsAppearance() {
+            return family == FormFillBindings.EPDF_FORMFIELD_FAMILY_TEXT
+                    || family == FormFillBindings.EPDF_FORMFIELD_FAMILY_COMBOBOX
+                    || family == FormFillBindings.EPDF_FORMFIELD_FAMILY_LISTBOX
+                    || !familyKnown();
         }
     }
 
@@ -426,14 +463,21 @@ public final class PdfPageGeometry {
     }
 
     /**
-     * Rotate all pages by the given angle.
+     * Set every page's rotation to the given absolute angle.
+     *
+     * <p>This is not additive: {@code rotateAll(doc, 90)} sets 90 degrees even
+     * when a page already carries a rotation.
      *
      * @param doc     open PDF document
-     * @param degrees rotation in degrees (0, 90, 180, 270)
+     * @param degrees rotation in degrees; normalized to 0, 90, 180 or 270
      */
     public static void rotateAll(PdfDocument doc, int degrees) {
+        if (degrees % 90 != 0) {
+            throw new IllegalArgumentException("rotation must be a multiple of 90 degrees: " + degrees);
+        }
+        int normalized = ((degrees % 360) + 360) % 360;
         for (int i = 0; i < doc.pageCount(); i++) {
-            setRotation(doc, i, degrees);
+            setRotation(doc, i, normalized);
         }
     }
 }
