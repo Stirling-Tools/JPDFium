@@ -117,11 +117,11 @@ All modules use the `com.stirling` group. Package a native module for each targe
 
 The musl modules are experimental. They are packaged only when the Alpine PDFium prebuild is available, so a release can publish them without libraries, and loading then fails with `NativeNotFoundException`. Use a glibc base image, or build the natives yourself as described in the [contributing guide](CONTRIBUTING.md).
 
-The `jpdfium` artifact itself depends on `jpdfium-natives-linux-x64` at runtime, so that module is always on the classpath; exclude it if you want only the module for your target platform.
+The `jpdfium` artifact does **not** publish a platform native dependency. Declare exactly the native module for your target platform (as in the example above); this keeps other platforms out of your dependency graph and image.
 
 Verify that your runtime classpath, application distribution, or container includes the required modules. Missing native modules cause `NativeNotFoundException` unless runtime downloading is enabled.
 
-Optional: `com.stirling:jpdfium-vips` with a matching `jpdfium-natives-vips-<platform>` adds WebP, HEIC, AVIF, JXL, and JPEG 2000.
+Optional: `com.stirling:jpdfium-vips` with a matching `jpdfium-natives-vips-<platform>` adds WebP, HEIC, AVIF, JXL, and JPEG 2000. Bundled vips natives are published for Linux (glibc), macOS, and Windows. FreeBSD x64 is prebuild-only until its asset is pinned for release.
 
 ## Editing and thread safety
 

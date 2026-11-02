@@ -1,6 +1,8 @@
 package stirling.software.jpdfium.spi;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -42,6 +44,24 @@ public interface ImageCodec {
 
     /** Encode an RGBA frame (8-byte header + pixels) to {@code format}. */
     byte[] encodeFrame(byte[] frame, ImageFormat format, int quality) throws IOException;
+
+    /** True when {@link #encodeMultiPageTiff} is available. */
+    default boolean canEncodeMultiPageTiff() {
+        return false;
+    }
+
+    /**
+     * Encode several images as consecutive frames of a multi-page TIFF.
+     *
+     * <p>Implementations should encode the complete TIFF before writing, but a
+     * stream failure can still leave partial bytes in the stream. Callers must
+     * not retry on the same stream after such a failure. Codecs that do not
+     * implement this method throw {@link UnsupportedOperationException}.
+     */
+    default void encodeMultiPageTiff(List<BufferedImage> images, OutputStream output, float quality)
+            throws IOException {
+        throw new UnsupportedOperationException(name() + " cannot encode multi-page TIFF");
+    }
 
     /** Encode a rendered page view directly with zero heap copies. */
     default byte[] encodeView(RenderedPageView view, ImageFormat format, int quality) throws IOException {

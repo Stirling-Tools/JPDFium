@@ -993,6 +993,16 @@ if [ -d third_party/skia ] && [ -f patches/embedpdf-runtime/skia/geometry-only-s
     (cd third_party/skia && patch --forward --batch -p1 < ../../patches/embedpdf-runtime/skia/geometry-only-stroke.patch 2>/dev/null || true)
 fi
 
+# PDFium's Skia renderer is raster-only: it never creates a GrDirectContext.
+# Skia's Ganesh/GL/Vulkan sources are therefore dead weight (about 1 MB on
+# darwin, more on Linux/Windows). Keep them available for experiments with
+# JPDFIUM_SKIA_GPU=1, but default the prebuild to raster-only.
+if [ "${JPDFIUM_SKIA_GPU:-0}" != "1" ] && [ -f skia/BUILD.gn ] && \
+   grep -q '^skia_use_ganesh_backend = !is_ios' skia/BUILD.gn; then
+    echo "  Disabling Skia Ganesh/GPU sources (raster-only PDFium)..."
+    sed_i 's/^skia_use_ganesh_backend = !is_ios/skia_use_ganesh_backend = false/' skia/BUILD.gn
+fi
+
 # On Windows component builds without full Skia (pdf_use_skia=false), skia_config must not define SKIA_DLL,
 # and SkPdfiumUserConfig.h must not define SK_API as COMPONENT_EXPORT(SKIA). Otherwise SkPathBuilder/SkStrokeRec
 # symbols get marked __declspec(dllimport) while being statically linked into pdfium.dll, causing lld-link LNK4217.

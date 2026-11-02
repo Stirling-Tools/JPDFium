@@ -102,7 +102,7 @@ Binding the properties does not configure JPDFium. Application code has to apply
 
 Add `com.stirling:jpdfium-vips` and the matching `jpdfium-natives-vips-<platform>` module to read and write WebP, HEIC, AVIF, JXL, and JPEG 2000. Without them, JPDFium uses `javax.imageio` and supports whatever your JDK supports. See [images.md](images.md).
 
-The vips native artifacts are published for Linux x64 and arm64, macOS x64 and arm64, and Windows x64 and arm64. There is no musl build.
+The vips native artifacts are published for Linux x64 and arm64, macOS x64 and arm64, and Windows x64 and arm64. FreeBSD x64 is produced by the Prebuild libvips workflow and joins the release matrix once its prebuild asset is pinned.
 
 ## Verifying the installation
 

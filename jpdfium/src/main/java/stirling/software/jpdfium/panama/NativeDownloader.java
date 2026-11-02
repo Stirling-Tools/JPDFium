@@ -15,8 +15,10 @@ import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.Set;
+import org.tukaani.xz.XZInputStream;
 import java.util.Map;
 import java.util.Properties;
 import java.util.zip.ZipFile;
@@ -222,7 +224,7 @@ final class NativeDownloader {
         String prefix = entryPrefix(platform);
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             if (zip.getEntry(prefix + "native-libs.txt") == null) return false;
-            var names = new ArrayList<String>();
+            Set<String> names = new HashSet<>();
             var entries = zip.entries();
             while (entries.hasMoreElements()) {
                 var entry = entries.nextElement();
@@ -234,7 +236,9 @@ final class NativeDownloader {
                     return false;
                 }
                 if (!shortName.equals("native-libs.txt") && !shortName.equals("native-libs.sha256")) {
-                    names.add(shortName);
+                    names.add(shortName.endsWith(".xz")
+                            ? shortName.substring(0, shortName.length() - 3)
+                            : shortName);
                 }
             }
             var shaEntry = zip.getEntry(prefix + "native-libs.sha256");
@@ -250,9 +254,15 @@ final class NativeDownloader {
                 String expected = hashes.get(shortName);
                 if (expected == null) return false;
                 var payload = zip.getEntry(prefix + shortName);
+                boolean packed = false;
+                if (payload == null) {
+                    payload = zip.getEntry(prefix + shortName + ".xz");
+                    packed = payload != null;
+                }
                 if (payload == null) return false;
                 sha.reset();
-                try (InputStream in = zip.getInputStream(payload)) {
+                try (InputStream raw = zip.getInputStream(payload);
+                        InputStream in = packed ? new XZInputStream(raw) : raw) {
                     int n;
                     while ((n = in.read(buf)) != -1) sha.update(buf, 0, n);
                 }

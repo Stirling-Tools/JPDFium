@@ -30,7 +30,7 @@ The format is selected by the enum rather than by the file name, so the output p
 |---|---|
 | `png` | PNG |
 | `jpg`, `jpeg`, `jpe`, `jfif` | JPEG |
-| `tif`, `tiff` | TIFF |
+| `tif`, `tiff` | TIFF (JDK ImageIO; libvips when present) |
 | `webp` | WebP |
 | `bmp`, `dib` | BMP |
 | `heic` | HEIC, with `jpdfium-vips` |
