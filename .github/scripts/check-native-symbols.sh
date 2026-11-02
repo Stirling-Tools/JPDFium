@@ -30,6 +30,27 @@ EXPECTED=(
   jpdfium_brotli_decode
 )
 MISSING=0
+symbol_exported() {
+  local sym="$1"
+  local attempt
+  # nm intermittently returns short output on macOS runners; retry a few times
+  # before declaring an export missing.
+  for attempt in 1 2 3; do
+    # grep without -q drains the whole symbol table: with `set -o pipefail`,
+    # grep -q can close the pipe early and turn a successful nm into SIGPIPE 141.
+    if nm -D "$LIB" 2>/dev/null | grep -E " T ${sym}\$" >/dev/null; then
+      return 0
+    fi
+    # Also try without -D for macOS
+    if nm -g "$LIB" 2>/dev/null | grep -E " T _?${sym}\$" >/dev/null; then
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep 2
+    fi
+  done
+  return 1
+}
 if [[ "$LIB" == *.dll ]]; then
   # Windows: use dumpbin if available, else skip
   DUMPBIN_BIN=$(command -v dumpbin 2>/dev/null || true)
@@ -49,12 +70,9 @@ if [[ "$LIB" == *.dll ]]; then
   fi
 else
   for sym in "${EXPECTED[@]}"; do
-    if ! nm -D "$LIB" 2>/dev/null | grep -q " T $sym"; then
-      # Also try without -D for macOS
-      if ! nm -g "$LIB" 2>/dev/null | grep -q " T _\?$sym"; then
-        echo "MISSING export: $sym"
-        MISSING=1
-      fi
+    if ! symbol_exported "$sym"; then
+      echo "MISSING export: $sym"
+      MISSING=1
     fi
   done
 fi

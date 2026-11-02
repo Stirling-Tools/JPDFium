@@ -29,6 +29,11 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  */
 public final class EmbedPdfAnnotations {
 
+    /** Usage flag for {@code EPDFPage_FlattenAnnotations}: normal-display appearances. */
+    private static final int FLAT_NORMALDISPLAY = 0;
+    /** {@code EPDFPage_FlattenAnnotations} return value: at least one flattened. */
+    private static final int FLATTEN_SUCCESS = 1;
+
     private EmbedPdfAnnotations() {}
     /**
      * Set annotation color (works even with appearance streams).
@@ -77,7 +82,8 @@ public final class EmbedPdfAnnotations {
     public static void setOpacity(MemorySegment page, int index, int alpha) {
         MemorySegment annot = openAnnot(page, index);
         try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, alpha);
+            float opacity = Math.clamp(alpha, 0, 255) / 255.0f;
+            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_SetOpacity.invokeExact(annot, opacity);
             if (ok == 0) throw new JPDFiumException("EPDFAnnot_SetOpacity failed");
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
@@ -89,10 +95,10 @@ public final class EmbedPdfAnnotations {
     public static int getOpacity(MemorySegment page, int index) {
         MemorySegment annot = openAnnot(page, index);
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment buf = arena.allocate(ValueLayout.JAVA_INT);
+            MemorySegment buf = arena.allocate(ValueLayout.JAVA_FLOAT);
             int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_GetOpacity.invokeExact(annot, buf);
             if (ok == 0) return 255;
-            return buf.get(ValueLayout.JAVA_INT, 0);
+            return Math.round(buf.get(ValueLayout.JAVA_FLOAT, 0) * 255.0f);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }
@@ -228,15 +234,17 @@ public final class EmbedPdfAnnotations {
      * @return count of non-redact annotations removed as a side effect
      */
     public static int applyRedactionWithCount(MemorySegment page, int index) {
-        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction;
+        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions;
         if (apply == null) {
-            throw new UnsupportedOperationException("EPDFAnnot_ApplyRedaction is not supported by this PDFium build");
+            throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
         }
         MemorySegment annot = openAnnot(page, index);
         try (Arena arena = Arena.ofConfined()) {
+            MemorySegment marks = arena.allocate(ValueLayout.ADDRESS);
+            marks.set(ValueLayout.ADDRESS, 0, annot);
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int ok = (int) apply.invokeExact(page, annot, countSeg);
-            if (ok == 0) throw new JPDFiumException("EPDFAnnot_ApplyRedaction failed");
+            int ok = (int) apply.invokeExact(page, marks, 1, countSeg);
+            if (ok == 0) throw new JPDFiumException("EPDFPage_ApplyRedactions failed");
             return countSeg.get(JAVA_INT, 0);
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
@@ -255,7 +263,7 @@ public final class EmbedPdfAnnotations {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            return (int) apply.invokeExact(page, countSeg) != 0;
+            return (int) apply.invokeExact(page, MemorySegment.NULL, 0, countSeg) != 0;
         } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
     }
 
@@ -272,7 +280,7 @@ public final class EmbedPdfAnnotations {
         }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int ok = (int) apply.invokeExact(page, countSeg);
+            int ok = (int) apply.invokeExact(page, MemorySegment.NULL, 0, countSeg);
             return (ok != 0) ? countSeg.get(JAVA_INT, 0) : 0;
         } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
     }
@@ -285,13 +293,28 @@ public final class EmbedPdfAnnotations {
      * @param index annotation index
      */
     public static void flatten(MemorySegment page, int index) {
-        if (EmbedPdfAnnotationBindings.EPDFAnnot_Flatten == null) {
-            throw new UnsupportedOperationException("EPDFAnnot_Flatten is not supported by this PDFium build");
-        }
         MemorySegment annot = openAnnot(page, index);
         try {
-            int ok = (int) EmbedPdfAnnotationBindings.EPDFAnnot_Flatten.invokeExact(page, annot);
-            if (ok == 0) throw new JPDFiumException("EPDFAnnot_Flatten failed");
+            MethodHandle single = EmbedPdfAnnotationBindings.EPDFAnnot_Flatten;
+            if (single != null) {
+                int ok = (int) single.invokeExact(page, annot);
+                if (ok == 0) throw new JPDFiumException("EPDFAnnot_Flatten failed");
+                return;
+            }
+            // Newer EmbedPDF builds dropped the per-annotation entry point;
+            // flatten through the set-based API with a one-mark scope.
+            MethodHandle batch = EmbedPdfAnnotationBindings.EPDFPage_FlattenAnnotations;
+            if (batch == null) {
+                throw new UnsupportedOperationException("EPDFAnnot_Flatten is not supported by this PDFium build");
+            }
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment marks = arena.allocate(ValueLayout.ADDRESS);
+                marks.set(ValueLayout.ADDRESS, 0, annot);
+                int rc = (int) batch.invokeExact(page, marks, 1, FLAT_NORMALDISPLAY, MemorySegment.NULL);
+                if (rc != FLATTEN_SUCCESS) {
+                    throw new JPDFiumException("EPDFPage_FlattenAnnotations failed (rc=" + rc + ")");
+                }
+            }
         } catch (Throwable t) { throw new JPDFiumException(t); }
         finally { closeAnnot(annot); }
     }

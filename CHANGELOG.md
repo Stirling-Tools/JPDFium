@@ -31,6 +31,16 @@ publishing workflows, not library releases, so they are not listed here.
   tests for the structural guarantees (contiguous ranges, no split surrogate
   pairs, deterministic and thread-safe behaviour).
 
+### Fixed
+
+- Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
+  it font bytes it had marked read-only from a buffer that died with the function,
+  so shaping read freed memory. HarfBuzz now owns a copy of the font data.
+- Native file saves on Windows wrote every LF as CRLF because the staging file
+  was opened without `_O_BINARY`. The shifted offsets made PDFium's own reader
+  mis-resolve objects and reload page content as empty; every file-based save
+  overload was affected.
+
 ### Changed
 
 - Sentence segmentation for the PII pipeline runs in Java
@@ -60,9 +70,21 @@ publishing workflows, not library releases, so they are not listed here.
   reconciles every documented version reference on every run, never moves the
   development version backwards, and updates its own branch in place instead of
   deleting it.
+- The `jpdfium` artifact no longer depends on TwelveMonkeys `imageio-tiff`.
+  Baseline TIFF, including multi-page output, uses the JDK ImageIO implementation;
+  `jpdfium-vips` handles advanced TIFF variants and multi-page TIFF through
+  libvips. Add TwelveMonkeys explicitly if you need BigTIFF, CMYK, or compression
+  variants without libvips.
+- The `jpdfium` artifact no longer publishes a transitive
+  `jpdfium-natives-linux-x64` dependency. Add the native module for your target
+  platform explicitly; this keeps unrelated platform binaries out of the
+  dependency graph and image.
 
 ### Removed
 
+- 10/12-bit AVIF **encoding**. The source-built AOM is encoder-only and
+  high-bit-depth support is disabled for payload size; 8-bit AVIF remains, and
+  dav1d still decodes high-bit-depth AVIF.
 - Native ICU sentence segmentation. `jpdfium_icu_break_sentences` still exists in
   every native build, but now reports not-found with an empty result, and
   `IcuLib.breakSentences(String)` still exists for binary compatibility and
@@ -90,6 +112,20 @@ publishing workflows, not library releases, so they are not listed here.
 Both were public in 1.2.0, so they are deliberate source and binary breaks like
 the one above, and `.github/workflows/compatibility.yml` excludes each class by
 name from the japicmp gate.
+
+- Four `MethodHandle` constants in the otherwise surviving Panama binding
+  holders, because the new PDFium pin no longer exports the native symbols they
+  mirrored: `EmbedPdfAnnotationBindings.EPDFAnnot_ApplyRedaction` (the fork
+  replaced it with `EPDFPage_ApplyRedactions`),
+  `EmbedPdfDocumentBindings.EPDF_GetPageRotationByIndex` (renamed to
+  `EPDF_GetPageRotateByIndex`, which reports rotation through an out parameter),
+  and the dead `EmbedPdfAnnotationBindings.EPDFAnnot_SetRectangleDifferences`
+  and `EmbedPdfDocumentBindings.EPDF_GetPageSizeByIndexNormalized` bindings,
+  which nothing called. Retargeting those fields at the surviving symbols would
+  only ship handles that fail at invoke time, so dropping them is the deliberate
+  break; each is excluded individually in
+  `.github/workflows/compatibility.yml`, and every other member of the two
+  binding classes keeps its signature.
 
 ## [1.2.0] - 2026-10-11
 

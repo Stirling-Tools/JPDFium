@@ -50,11 +50,11 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_SetColor = downcall("EPDFAnnot_SetColor",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
 
-    /** Set annotation opacity (0-255). */
+    /** Set annotation opacity (0 = transparent, 1 = opaque). */
     public static final MethodHandle EPDFAnnot_SetOpacity = downcall("EPDFAnnot_SetOpacity",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT));
 
-    /** Get annotation opacity (0-255). */
+    /** Get annotation opacity (0..1). */
     public static final MethodHandle EPDFAnnot_GetOpacity = downcall("EPDFAnnot_GetOpacity",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
 
@@ -89,10 +89,6 @@ public final class EmbedPdfAnnotationBindings {
     /** Get /RD (inset between Rect and drawn appearance). */
     public static final MethodHandle EPDFAnnot_GetRectangleDifferences = downcall("EPDFAnnot_GetRectangleDifferences",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS));
-
-    /** Set /RD. */
-    public static final MethodHandle EPDFAnnot_SetRectangleDifferences = downcall("EPDFAnnot_SetRectangleDifferences",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
 
     /** Remove /RD entry. */
     public static final MethodHandle EPDFAnnot_ClearRectangleDifferences = downcall("EPDFAnnot_ClearRectangleDifferences",
@@ -282,17 +278,12 @@ public final class EmbedPdfAnnotationBindings {
     public static final MethodHandle EPDFAnnot_GetOverlayTextRepeat = downcallCritical("EPDFAnnot_GetOverlayTextRepeat",
             FunctionDescriptor.of(JAVA_INT, ADDRESS));
 
-    /** Apply a single redact annotation (burns content under it).
-     * Signature: FPDF_BOOL EPDFAnnot_ApplyRedaction(FPDF_PAGE, FPDF_ANNOTATION, uint32_t* out_removed_count)
-     */
-    public static final MethodHandle EPDFAnnot_ApplyRedaction = downcallOptional("EPDFAnnot_ApplyRedaction",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
-
-    /** Apply all redact annotations on a page.
-     * Signature: FPDF_BOOL EPDFPage_ApplyRedactions(FPDF_PAGE, uint32_t* out_removed_count)
+    /** Apply redact annotations on a page (burns content under them).
+     * Signature: FPDF_BOOL EPDFPage_ApplyRedactions(FPDF_PAGE, const FPDF_ANNOTATION* marks, int count, uint32_t* out_removed_count)
+     * Pass the marks to apply, or null/0 to apply every REDACT annotation on the page.
      */
     public static final MethodHandle EPDFPage_ApplyRedactions = downcallOptional("EPDFPage_ApplyRedactions",
-            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, ADDRESS));
 
     /** Flatten a single annotation's AP to page content. */
     public static final MethodHandle EPDFAnnot_Flatten = downcallOptional("EPDFAnnot_Flatten",
