@@ -133,13 +133,13 @@ jobs:
             sleep 30
           done
           exit 1
-      - name: Cross-build minimal Windows ICU data
+      - name: Cross-build minimal Windows ICU data (78 + 79)
         # Windows runners ship either vcpkg ICU 78 or 79, and the
         # darwin-x64 runner's Homebrew has only 78. Build both data majors;
         # each platform selects the matching DLL/data after download.
         run: |
-          ICU_VER=78 bash native/build-minimal-icu-windows.sh
-          ICU_VER=79 bash native/build-minimal-icu-windows.sh
+          ICU_VER=78 ICU_MINOR=1 bash native/build-minimal-icu-windows.sh
+          ICU_VER=79 ICU_MINOR=1 bash native/build-minimal-icu-windows.sh
       - name: Upload trimmed Windows ICU data DLLs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

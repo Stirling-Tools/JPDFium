@@ -51,7 +51,7 @@ extern "C" {
 // combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
-#define JPDFIUM_ABI_VERSION (1)
+#define JPDFIUM_ABI_VERSION (2)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
 #define JPDFIUM_ABI_QUERY_PTR_SIZE (0)
@@ -533,28 +533,61 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
 #define JPDFIUM_QPDF_COMPRESS_STREAMS 0x04
 #define JPDFIUM_QPDF_PRESERVE_UNREFERENCED 0x08
 #define JPDFIUM_QPDF_NORMALIZE_CONTENT 0x10
-// --remove-unreferenced-resources has no read/write-pass equivalent in qpdf
-// (it only applies during --pages splitting), so it is intentionally omitted.
+// QDF output, equivalent to qpdf --qdf.
+#define JPDFIUM_QPDF_QDF 0x20
+// Page-resource cleanup, equivalent to --remove-unreferenced-resources=yes.
+#define JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES 0x40
+// Image pass, equivalent to --optimize-images; jpegQuality < 0 keeps DCT data.
+#define JPDFIUM_QPDF_OPTIMIZE_IMAGES 0x80
 // objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
 // streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
 // decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default
-// compressionLevel: accepted for ABI stability but currently IGNORED. qpdf's
-// only zlib-level knob (Pl_Flate::setCompressionLevel) is process-global, not
-// per-QPDFWriter, so exposing it here would race across concurrent requests.
+// compressionLevel: 1..9, -1 default (0 is a legacy alias). Levels are
+// process-global, so level-setting writers serialize.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,
                                              uint8_t** output, int64_t* outputLen, int32_t flags,
                                              int32_t compressionLevel, int32_t objectStreamMode,
                                              int32_t streamDataMode, int32_t decodeLevel);
 
-// File-backed optimize: parses from disk, writes straight to disk. No
-// document-sized buffer exists on either side, so peak heap is independent of
-// document size. Honours the same flag/mode parameters as
-// jpdfium_qpdf_optimize; compressionLevel is likewise ignored. Returns 0 on
-// success. On failure a partial out_path may exist and should be removed by
-// the caller.
+// File-backed optimize; no document-sized buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path,
                                                   int32_t flags, int32_t objectStreamMode,
                                                   int32_t streamDataMode, int32_t decodeLevel);
+
+// Optimize with explicit JPEG quality; jpegQuality < 0 keeps DCT data.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t inputLen,
+                                                uint8_t** output, int64_t* outputLen, int32_t flags,
+                                                int32_t compressionLevel, int32_t objectStreamMode,
+                                                int32_t streamDataMode, int32_t decodeLevel,
+                                                int32_t jpegQuality);
+
+// File-backed extended optimize; accepts a compression level.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex_file(const char* in_path, const char* out_path,
+                                                     int32_t flags, int32_t compressionLevel,
+                                                     int32_t objectStreamMode,
+                                                     int32_t streamDataMode, int32_t decodeLevel,
+                                                     int32_t jpegQuality);
+
+// Inspect structure as JSON; caller frees *json with jpdfium_free_string.
+// A missing password yields {"status":"password_required"}.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,
+                                            const char* password, char** json);
+
+// File-backed inspect; no document-sized buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_file(const char* in_path, const char* password,
+                                                 char** json);
+
+// Update/remove /Info entries; NULL value removes a key. Caller frees *output.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
+                                                const char* const* keys, const char* const* values,
+                                                int32_t count, const char* password,
+                                                uint8_t** output, int64_t* outputLen);
+
+// File-backed /Info update; caller should pass a staging path.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const char* out_path,
+                                                     const char* const* keys,
+                                                     const char* const* values, int32_t count,
+                                                     const char* password);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm

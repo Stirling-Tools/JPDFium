@@ -441,6 +441,10 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE ${QPDF_LIBRARIES})
     target_compile_options(jpdfium PRIVATE ${QPDF_CFLAGS_OTHER})
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
+
+    # Pl_DCT's jpeg_set_quality callback needs libjpeg symbols directly.
+    find_package(JPEG REQUIRED)
+    target_link_libraries(jpdfium PRIVATE JPEG::JPEG)
     # Silence qpdf's PointerHolder transition #warning (treated as error by
     # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
     # std::shared_ptr qpdf API (e.g. QPDFWriter::getBufferSharedPointer) and

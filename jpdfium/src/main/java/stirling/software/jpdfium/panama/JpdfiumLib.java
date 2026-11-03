@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.concurrent.locks.Lock;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -152,7 +153,7 @@ public final class JpdfiumLib {
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
-    public static final int EXPECTED_ABI_VERSION = 1;
+    public static final int EXPECTED_ABI_VERSION = 2;
     /** Expected native pointer width: all supported targets are 64-bit. */
     public static final long EXPECTED_PTR_SIZE = 8;
     /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
@@ -594,7 +595,12 @@ public final class JpdfiumLib {
     public static void docSaveToFile(long doc, Path destination, SaveOptions options) {
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
         try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
-            docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+            Lock saveLock = QpdfLib.acquireSaveReadLock();
+            try {
+                docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+            } finally {
+                QpdfLib.releaseSaveLock(saveLock);
+            }
             tx.publish(opts);
         } catch (IOException e) {
             throw new JPDFiumException("docSaveToFile failed", e);
@@ -625,7 +631,12 @@ public final class JpdfiumLib {
             throw new JPDFiumException("save temp creation failed", e);
         }
         try {
-            docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+            Lock saveLock = QpdfLib.acquireSaveReadLock();
+            try {
+                docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+            } finally {
+                QpdfLib.releaseSaveLock(saveLock);
+            }
             OutputTransaction.validateStaged(tmp, opts);
             return tmp;
         } catch (Throwable t) {
@@ -638,6 +649,15 @@ public final class JpdfiumLib {
     }
 
     public static byte[] docSaveBytes(long doc) {
+        Lock saveLock = QpdfLib.acquireSaveReadLock();
+        try {
+            return docSaveBytesLocked(doc);
+        } finally {
+            QpdfLib.releaseSaveLock(saveLock);
+        }
+    }
+
+    private static byte[] docSaveBytesLocked(long doc) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);

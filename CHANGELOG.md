@@ -19,6 +19,25 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- In-process qpdf parity for the operations that previously required the
+  `qpdf` executable: QDF repair (`PdfOptimizer.repair`), content normalization,
+  unreferenced page-resource cleanup, full compression-level control, and
+  qpdf's image optimization pass with explicit JPEG quality. The low-level
+  bridge adds `jpdfium_qpdf_optimize_ex` and `jpdfium_qpdf_optimize_ex_file`;
+  the existing optimize entry points remain source- and binary-compatible.
+  Explicit compression levels are now honoured and coordinated across
+  concurrent writers instead of being ignored.
+- Structural inspection (`PdfStructuralInspector`, qpdf-backed JSON reports for
+  page/object counts, linearization validity, encryption, attachments, forms,
+  signatures, and warnings), lossless `/Info` editing (`PdfMetadataEditor`), and
+  `PdfRepair.repairQdf` for QDF repair with PDFium/PDFio/Rust fallbacks. The
+  bridge adds `jpdfium_qpdf_inspect`, `jpdfium_qpdf_inspect_file`,
+  `jpdfium_qpdf_set_docinfo`, and `jpdfium_qpdf_set_docinfo_file`.
+- File-backed qpdf inspection and metadata editing now parse and write straight
+  from/to disk, avoiding document-sized Java/native buffers. Measured on a
+  14.5 MB fixture: path inspection is 4.65x faster (1.743 to 0.375 ms/op) and
+  drops Java allocation from 15.2 MB/op to 1.0 KB/op; file metadata editing is
+  15.6% faster (19.388 to 16.359 ms/op).
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
 - `PdfPageGeometry.AUTO_CONTENT_MARGIN` and the `cropAndRemoveContent`

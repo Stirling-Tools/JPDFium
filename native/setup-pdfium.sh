@@ -259,52 +259,66 @@ else
 fi
 echo "  Commit: $(git log --oneline -1)"
 
-# Patch DEPS to remove the buildtools/reclient dep. PDFium's DEPS hard-pins
-# reclient as an unconditional cipd dep; the platform interpolation
-# (infra/rbe/client/${{platform}}) breaks on linux-arm64 because no arm64
-# package is published, and we don't use remote execution anyway. We tried
-# custom_deps in .gclient (both 'pdfium/buildtools/reclient' and
+# Patch DEPS to remove two dead or unusable deps before gclient processes them:
+#
+# - buildtools/reclient: PDFium hard-pins it as an unconditional cipd dep; the
+#   platform interpolation (infra/rbe/client/${{platform}}) breaks on
+#   linux-arm64 because no arm64 package is published. We don't use remote
+#   execution, so it is dead weight on every platform.
+# - third_party/clang-format/script: the pinned commit (9f7968...) is no longer
+#   served by chromium.googlesource.com; gclient sync fails with HTTP 400
+#   before the build starts. The clang-format scripts are not part of the
+#   PDFium build, so the dependency is not needed in CI.
+#
+# We tried custom_deps in .gclient (both 'pdfium/buildtools/reclient' and
 # 'buildtools/reclient' as keys) but neither took effect for this gclient
 # version + this DEPS layout. Patching the DEPS file directly is reliable.
-if [ -f DEPS ] && grep -q "'buildtools/reclient'" DEPS; then
-    echo "  Patching DEPS to remove buildtools/reclient dep..."
+if [ -f DEPS ] && grep -qE "'(buildtools/reclient|third_party/clang-format/script)'" DEPS; then
+    echo "  Patching DEPS to remove unused deps..."
     python3 - DEPS <<'PY_EOF'
+import re
 import sys
+
 path = sys.argv[1]
+keys = ("buildtools/reclient", "third_party/clang-format/script")
+patterns = [re.compile(r"^  '%s'\s*:" % re.escape(k)) for k in keys]
+
 with open(path) as f:
     lines = f.readlines()
-# Strip the 'buildtools/reclient' dep block. The block contains nested braces
-# (a 'packages': [{...}] list), so a regex with [^{}] won't match across them.
-# Use a brace-counting scan instead: enter skip mode when we see the dep key
-# with a '{', exit when brace depth returns to zero.
+
 out = []
 skipping = False
-brace_depth = 0
 removed = 0
 for line in lines:
-    if not skipping and "'buildtools/reclient'" in line and ':' in line and '{' in line:
-        skipping = True
-        brace_depth = line.count('{') - line.count('}')
-        continue
     if skipping:
-        brace_depth += line.count('{') - line.count('}')
-        if brace_depth <= 0:
+        # Top-level DEPS entries start with two spaces + a quoted key. The
+        # entry's own closing brace is also indented two spaces, so stop only
+        # at the next key or at the dict's closing brace.
+        if re.match(r"^  '|^\}", line):
             skipping = False
-            removed += 1
+        else:
+            continue
+    if any(p.match(line) for p in patterns):
+        skipping = True
+        removed += 1
         continue
     out.append(line)
+
 if removed == 0:
-    print("  buildtools/reclient block found by grep but brace scan didn't match.")
+    print("  DEPS keys found by grep but indentation scan didn't match.")
     sys.exit(0)
-with open(path, 'w') as f:
-    f.write(''.join(out))
-print(f"  Removed {removed} buildtools/reclient dep block from DEPS.")
+with open(path, "w") as f:
+    f.write("".join(out))
+print(f"  Removed {removed} DEPS entr{'y' if removed == 1 else 'ies'}.")
 PY_EOF
+    # DEPS is executable Python; reject a patch that broke its syntax.
+    python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' DEPS
 fi
 
 # Now run gclient sync. With DEPS patched, cipd ensure won't try to fetch
-# infra/rbe/client/linux-arm64. The source is already cloned, so
-# --managed=False (set in .gclient) means gclient only processes sub-deps.
+# infra/rbe/client/linux-arm64 and gclient won't fetch the dead clang-format
+# revision. The source is already cloned, so --managed=False (set in .gclient)
+# means gclient only processes sub-deps.
 cd "${BUILD_DIR}"
 if [ ! -d "${PDFIUM_SRC}/third_party/abseil-cpp" ]; then
     echo "[2b/7] Running gclient sync (this downloads ~10 GB of dependencies)..."
@@ -350,8 +364,21 @@ fi
 if [ -f third_party/libpng/visibility.gni ]; then
     if ! grep -q 'fpdfsdk' third_party/libpng/visibility.gni; then
         echo "  Adding fpdfsdk to libpng visibility..."
-        sed_i '/visibility += \[ "\/\/third_party:png" \]/a\
-  visibility += [ "//fpdfsdk:*" ]' third_party/libpng/visibility.gni
+        python3 - third_party/libpng/visibility.gni <<'PY_EOF'
+import sys
+
+path = sys.argv[1]
+anchor = 'visibility += [ "//third_party:png" ]'
+addition = '  visibility += [ "//fpdfsdk:*" ]'
+with open(path) as f:
+    src = f.read()
+if addition not in src:
+    if anchor not in src:
+        raise SystemExit(f"ERROR: visibility anchor not found in {path}")
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, anchor + "\n" + addition, 1))
+    print("  Added fpdfsdk to libpng visibility.")
+PY_EOF
     fi
 fi
 
@@ -382,14 +409,37 @@ fi
 # The stock RGB setters always force DeviceRGB; the content generator already emits "k"/"K".
 EDITHEADER="public/fpdf_edit.h"
 EDITPAGE="fpdfsdk/fpdf_editpage.cpp"
-if [ -f "${EDITPAGE}" ] && ! grep -q 'core/fpdfapi/parser/cpdf_stream.h' "${EDITPAGE}"; then
-    sed_i '/#include "core\/fpdfapi\/parser\/cpdf_document.h"/a\
-#include "core/fpdfapi/parser/cpdf_stream.h"\
-#include "core/fpdfapi/parser/cpdf_stream_acc.h"' "${EDITPAGE}"
-fi
-if [ -f "${EDITPAGE}" ] && ! grep -q 'core/fpdfapi/page/cpdf_iccprofile.h' "${EDITPAGE}"; then
-    sed_i '/#include "core\/fpdfapi\/page\/cpdf_formobject.h"/a\
-#include "core/fpdfapi/page/cpdf_iccprofile.h"' "${EDITPAGE}"
+# Insert includes with explicit newlines. BSD sed's append command does not
+# reliably terminate multi-line text with a newline, which joins the inserted
+# include to the following source line and breaks the macOS build.
+insert_include() {
+    python3 - "$1" "$2" "$3" <<'PY_EOF'
+import sys
+
+path, anchor, include = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    src = f.read()
+if include in src:
+    print(f"  {include} already present in {path}.")
+elif anchor not in src:
+    raise SystemExit(f"ERROR: include anchor not found in {path}: {anchor}")
+else:
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, anchor + "\n" + include, 1))
+    print(f"  Inserted {include} into {path}.")
+PY_EOF
+}
+if [ -f "${EDITPAGE}" ]; then
+    if ! grep -q 'core/fpdfapi/parser/cpdf_stream.h' "${EDITPAGE}"; then
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/parser/cpdf_document.h"' \
+            '#include "core/fpdfapi/parser/cpdf_stream.h"'
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/parser/cpdf_stream.h"' \
+            '#include "core/fpdfapi/parser/cpdf_stream_acc.h"'
+    fi
+    if ! grep -q 'core/fpdfapi/page/cpdf_iccprofile.h' "${EDITPAGE}"; then
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/page/cpdf_formobject.h"' \
+            '#include "core/fpdfapi/page/cpdf_iccprofile.h"'
+    fi
 fi
 if [ -f "${EDITHEADER}" ] && [ -f "${EDITPAGE}" ] && \
    { ! grep -q 'FPDFPageObj_SetFillColorCMYK' "${EDITHEADER}" || \
@@ -1299,6 +1349,22 @@ def apply_patch(filepath, target, replacement, patch_name):
         f.write(src.replace(target, replacement, 1))
     print(f"  Applied patch '{patch_name}' to {filepath}.")
 
+
+def apply_patch_all(filepath, target, replacement, patch_name):
+    if not os.path.isfile(filepath):
+        raise SystemExit(f"ERROR: Cannot apply patch '{patch_name}': file {filepath} not found")
+    with open(filepath) as f:
+        src = f.read()
+    if target not in src:
+        if replacement.strip() in src:
+            print(f"  Patch '{patch_name}' already applied to {filepath}.")
+            return
+        raise SystemExit(f"ERROR: Target anchor not found in {filepath} for patch '{patch_name}'")
+    count = src.count(target)
+    with open(filepath, "w") as f:
+        f.write(src.replace(target, replacement))
+    print(f"  Applied patch '{patch_name}' to {filepath} ({count} occurrences).")
+
 # 1. build/config/BUILDCONFIG.gn: allow current_os == "freebsd"
 bc = "build/config/BUILDCONFIG.gn"
 if not os.path.isfile(bc):
@@ -1357,6 +1423,36 @@ if os.path.isfile(stack_cc):
     with open(stack_cc, "w") as f:
         f.write(stack_src)
     print("  Patched partition_alloc stack.cc for FreeBSD.")
+
+# 3b. partition_alloc platform_thread_ref.h: FreeBSD's pthread_t is a
+#     pointer, so static_cast<uintptr_t> is ill-formed there. A
+#     reinterpret_cast is valid for both pointer and integral pthread_t.
+thread_ref = "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h"
+target_cast = "return Hasher()(static_cast<uintptr_t>(id_));"
+repl_cast = "return Hasher()(reinterpret_cast<uintptr_t>(id_));"
+if os.path.isfile(thread_ref):
+    with open(thread_ref) as f:
+        thread_src = f.read()
+    # The header can contain more than one Hasher implementation; replace
+    # every occurrence, not just the first.
+    if target_cast in thread_src:
+        thread_src = thread_src.replace(target_cast, repl_cast)
+        with open(thread_ref, "w") as f:
+            f.write(thread_src)
+        print("  Patched all partition_alloc pthread_t casts for FreeBSD.")
+    elif repl_cast in thread_src:
+        print("  partition_alloc pthread_t casts already patched.")
+    else:
+        raise SystemExit(f"ERROR: pthread_t cast anchor not found in {thread_ref}")
+
+# 3c. epdf_secure_random.cpp: FreeBSD has arc4random_buf in <stdlib.h>, like
+#     Apple platforms, but the file's platform switch predates FreeBSD support.
+apply_patch_all(
+    "core/fxcrt/epdf_secure_random.cpp",
+    "#elif BUILDFLAG(IS_APPLE)",
+    "#elif BUILDFLAG(IS_APPLE) || defined(__FreeBSD__)",
+    "epdf_secure_random FreeBSD arc4random",
+)
 
 # 4. core/fxge/linux/fx_linux_impl.cpp: allow FreeBSD
 fx_impl = "core/fxge/linux/fx_linux_impl.cpp"
