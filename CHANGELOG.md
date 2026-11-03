@@ -21,6 +21,8 @@ publishing workflows, not library releases, so they are not listed here.
 
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
+- `PdfPageGeometry.AUTO_CONTENT_MARGIN` and the `cropAndRemoveContent`
+  overloads that accept a content-removal margin.
 
 ### Fixed
 
@@ -34,6 +36,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Hard crop retains the outside glyphs of words touching the crop edge. The
+  page boxes clip those glyphs. A content-removal margin also retains content
+  within the margin outside the crop, clipped by the page boxes.
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
   still reads them.
