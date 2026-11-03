@@ -1349,6 +1349,22 @@ def apply_patch(filepath, target, replacement, patch_name):
         f.write(src.replace(target, replacement, 1))
     print(f"  Applied patch '{patch_name}' to {filepath}.")
 
+
+def apply_patch_all(filepath, target, replacement, patch_name):
+    if not os.path.isfile(filepath):
+        raise SystemExit(f"ERROR: Cannot apply patch '{patch_name}': file {filepath} not found")
+    with open(filepath) as f:
+        src = f.read()
+    if target not in src:
+        if replacement.strip() in src:
+            print(f"  Patch '{patch_name}' already applied to {filepath}.")
+            return
+        raise SystemExit(f"ERROR: Target anchor not found in {filepath} for patch '{patch_name}'")
+    count = src.count(target)
+    with open(filepath, "w") as f:
+        f.write(src.replace(target, replacement))
+    print(f"  Applied patch '{patch_name}' to {filepath} ({count} occurrences).")
+
 # 1. build/config/BUILDCONFIG.gn: allow current_os == "freebsd"
 bc = "build/config/BUILDCONFIG.gn"
 if not os.path.isfile(bc):
@@ -1428,6 +1444,15 @@ if os.path.isfile(thread_ref):
         print("  partition_alloc pthread_t casts already patched.")
     else:
         raise SystemExit(f"ERROR: pthread_t cast anchor not found in {thread_ref}")
+
+# 3c. epdf_secure_random.cpp: FreeBSD has arc4random_buf in <stdlib.h>, like
+#     Apple platforms, but the file's platform switch predates FreeBSD support.
+apply_patch_all(
+    "core/fxcrt/epdf_secure_random.cpp",
+    "#elif BUILDFLAG(IS_APPLE)",
+    "#elif BUILDFLAG(IS_APPLE) || defined(__FreeBSD__)",
+    "epdf_secure_random FreeBSD arc4random",
+)
 
 # 4. core/fxge/linux/fx_linux_impl.cpp: allow FreeBSD
 fx_impl = "core/fxge/linux/fx_linux_impl.cpp"
