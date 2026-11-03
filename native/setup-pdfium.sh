@@ -364,8 +364,21 @@ fi
 if [ -f third_party/libpng/visibility.gni ]; then
     if ! grep -q 'fpdfsdk' third_party/libpng/visibility.gni; then
         echo "  Adding fpdfsdk to libpng visibility..."
-        sed_i '/visibility += \[ "\/\/third_party:png" \]/a\
-  visibility += [ "//fpdfsdk:*" ]' third_party/libpng/visibility.gni
+        python3 - third_party/libpng/visibility.gni <<'PY_EOF'
+import sys
+
+path = sys.argv[1]
+anchor = 'visibility += [ "//third_party:png" ]'
+addition = '  visibility += [ "//fpdfsdk:*" ]'
+with open(path) as f:
+    src = f.read()
+if addition not in src:
+    if anchor not in src:
+        raise SystemExit(f"ERROR: visibility anchor not found in {path}")
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, anchor + "\n" + addition, 1))
+    print("  Added fpdfsdk to libpng visibility.")
+PY_EOF
     fi
 fi
 
@@ -396,14 +409,37 @@ fi
 # The stock RGB setters always force DeviceRGB; the content generator already emits "k"/"K".
 EDITHEADER="public/fpdf_edit.h"
 EDITPAGE="fpdfsdk/fpdf_editpage.cpp"
-if [ -f "${EDITPAGE}" ] && ! grep -q 'core/fpdfapi/parser/cpdf_stream.h' "${EDITPAGE}"; then
-    sed_i '/#include "core\/fpdfapi\/parser\/cpdf_document.h"/a\
-#include "core/fpdfapi/parser/cpdf_stream.h"\
-#include "core/fpdfapi/parser/cpdf_stream_acc.h"' "${EDITPAGE}"
-fi
-if [ -f "${EDITPAGE}" ] && ! grep -q 'core/fpdfapi/page/cpdf_iccprofile.h' "${EDITPAGE}"; then
-    sed_i '/#include "core\/fpdfapi\/page\/cpdf_formobject.h"/a\
-#include "core/fpdfapi/page/cpdf_iccprofile.h"' "${EDITPAGE}"
+# Insert includes with explicit newlines. BSD sed's append command does not
+# reliably terminate multi-line text with a newline, which joins the inserted
+# include to the following source line and breaks the macOS build.
+insert_include() {
+    python3 - "$1" "$2" "$3" <<'PY_EOF'
+import sys
+
+path, anchor, include = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    src = f.read()
+if include in src:
+    print(f"  {include} already present in {path}.")
+elif anchor not in src:
+    raise SystemExit(f"ERROR: include anchor not found in {path}: {anchor}")
+else:
+    with open(path, "w") as f:
+        f.write(src.replace(anchor, anchor + "\n" + include, 1))
+    print(f"  Inserted {include} into {path}.")
+PY_EOF
+}
+if [ -f "${EDITPAGE}" ]; then
+    if ! grep -q 'core/fpdfapi/parser/cpdf_stream.h' "${EDITPAGE}"; then
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/parser/cpdf_document.h"' \
+            '#include "core/fpdfapi/parser/cpdf_stream.h"'
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/parser/cpdf_stream.h"' \
+            '#include "core/fpdfapi/parser/cpdf_stream_acc.h"'
+    fi
+    if ! grep -q 'core/fpdfapi/page/cpdf_iccprofile.h' "${EDITPAGE}"; then
+        insert_include "${EDITPAGE}" '#include "core/fpdfapi/page/cpdf_formobject.h"' \
+            '#include "core/fpdfapi/page/cpdf_iccprofile.h"'
+    fi
 fi
 if [ -f "${EDITHEADER}" ] && [ -f "${EDITPAGE}" ] && \
    { ! grep -q 'FPDFPageObj_SetFillColorCMYK' "${EDITHEADER}" || \
