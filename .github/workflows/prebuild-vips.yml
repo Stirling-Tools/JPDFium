@@ -142,7 +142,10 @@ jobs:
           VCPKG_BINARY_SOURCES: clear;default,readwrite
         run: |
           TRIPLET="${{ matrix.triplet }}"
-          VCPKG_ROOT="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
+          # Normalize to forward slashes: several tools below pass this path to
+          # Python, where a literal backslash (for example \v in C:\vcpkg) is
+          # interpreted as an escape sequence.
+          VCPKG_ROOT="$(cygpath -m "${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}")"
           INSTALL_ROOT="$(cygpath -m "$VCPKG_ROOT/installed")"
           # The manifest pins a builtin-baseline for reproducibility. vcpkg
           # resolves versions from the checkout's working tree, so fetch that
@@ -166,7 +169,7 @@ jobs:
           check_sha() {
             python3 -c 'import hashlib,sys; h=hashlib.sha512(); f=open(sys.argv[1],"rb"); [h.update(c) for c in iter(lambda: f.read(1 << 20), b"")]; sys.exit(0 if h.hexdigest() == sys.argv[2] else 1)' "$1" "$2"
           }
-          ORC_VERSION=$(python3 -c "import json;print(json.load(open('$VCPKG_ROOT/ports/orc/vcpkg.json'))['version'])")
+          ORC_VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$VCPKG_ROOT/ports/orc/vcpkg.json")
           ORC_SHA=$(sed -n 's/.*SHA512 \([0-9a-f]\{128\}\).*/\1/p' "$VCPKG_ROOT/ports/orc/portfile.cmake" | head -1)
           if [ -n "$ORC_VERSION" ] && [ -n "$ORC_SHA" ]; then
             ORC_DIR="$VCPKG_ROOT/downloads"

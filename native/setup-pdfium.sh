@@ -1372,6 +1372,17 @@ if os.path.isfile(stack_cc):
         f.write(stack_src)
     print("  Patched partition_alloc stack.cc for FreeBSD.")
 
+# 3b. partition_alloc platform_thread_ref.h: FreeBSD's pthread_t is a
+#     pointer, so static_cast<uintptr_t> is ill-formed there. A
+#     reinterpret_cast is valid for both pointer and integral pthread_t.
+thread_ref = "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h"
+apply_patch(
+    thread_ref,
+    "return Hasher()(static_cast<uintptr_t>(id_));",
+    "return Hasher()(reinterpret_cast<uintptr_t>(id_));",
+    "partition_alloc pthread_t cast",
+)
+
 # 4. core/fxge/linux/fx_linux_impl.cpp: allow FreeBSD
 fx_impl = "core/fxge/linux/fx_linux_impl.cpp"
 target_fx = '#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !defined(OS_ASMJS)'
