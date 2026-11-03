@@ -75,6 +75,42 @@ public final class CropTestPdfGenerator {
     }
 
     /**
+     * Words at known distances from the right edge of a left-half crop (x=306):
+     * INSIDE@(100,700), NEAR@(310,700) and FAR@(330,600). AUTO removes NEAR
+     * and FAR; a 10pt margin keeps NEAR; a 40pt margin keeps FAR too.
+     */
+    public static byte[] boundaryWordColumnsPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "INSIDE", 100, 700);
+                placeWord(cs, "NEAR", 310, 700);
+                placeWord(cs, "FAR", 330, 600);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * Word "BOTTOM" with its baseline at y=100, so a crop whose bottom edge is
+     * y=105 cuts through the glyph boxes. The origin is outside the crop but
+     * the glyphs reach inside; the word must survive whole under AUTO.
+     */
+    public static byte[] bottomStraddlingWordPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 14);
+                placeWord(cs, "BOTTOM", 100, 100);
+            }
+            return save(doc);
+        }
+    }
+
+    /**
      * One page with three solid-colour images at known bounds:
      * <pre>
      *   inside     x 100-200  y 600-700   (fully inside left-half crop)
@@ -263,6 +299,72 @@ public final class CropTestPdfGenerator {
             try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                 cs.drawImage(img, 100, 600, 50, 50);  // fully inside a left-half crop
                 cs.drawImage(img, 400, 600, 50, 50);  // fully outside
+            }
+            return save(doc);
+        }
+    }
+
+    /** One Form XObject, holding the two-tone image at (100,100)-(300,300), drawn on two pages. */
+    public static byte[] sharedFormAcrossPagesPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(0, 0, 612, 792));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "inForm");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write("q 200 0 0 200 100 100 cm /ImF Do Q".getBytes(StandardCharsets.US_ASCII));
+            }
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(LETTER);
+                doc.addPage(page);
+                page.setResources(new PDResources());
+                page.getResources().add(form, "Fm0");
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(form);
+                }
+            }
+            return save(doc);
+        }
+    }
+
+    /**
+     * A Form XObject with BBox (100,100)-(300,300) and no text: a grey fill, the
+     * two-tone image at (200,100)-(300,300), then a stroked frame, so the image is
+     * sandwiched between earlier and later form content.
+     */
+    public static byte[] sandwichedImageInTextlessFormPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(LETTER);
+            doc.addPage(page);
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(100, 100, 200, 200));
+            form.setResources(new PDResources());
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "sandwiched");
+            form.getResources().put(COSName.getPDFName("ImF"), img);
+            try (var os = form.getContentStream().createOutputStream()) {
+                os.write(("0.8 g 100 100 200 200 re f q 100 0 0 200 200 100 cm /ImF Do Q "
+                        + "0 G 2 w 101 101 198 198 re S").getBytes(StandardCharsets.US_ASCII));
+            }
+            page.setResources(new PDResources());
+            page.getResources().add(form, "Fm0");
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawForm(form);
+            }
+            return save(doc);
+        }
+    }
+
+    /** One two-tone image XObject drawn at (100,100)-(300,300) on each of two pages. */
+    public static byte[] sharedImageAcrossPagesPdf() throws IOException {
+        try (PDDocument doc = new PDDocument()) {
+            PDImageXObject img = PDImageXObject.createFromByteArray(doc, twoTonePng(), "shared");
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(LETTER);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawImage(img, 100, 100, 200, 200);
+                }
             }
             return save(doc);
         }
@@ -529,8 +631,12 @@ public final class CropTestPdfGenerator {
         }
     }
 
-    /** Form-nested text "SECRETKEEP" at (100,700), single text object. */
-    public static byte[] formNestedSingleWordPdf() throws IOException {
+    /**
+     * Form-nested text "SECRET KEEP" at (100,700), two words. A crop that starts
+     * between them must remove SECRET and keep KEEP; a single straddling word
+     * would be preserved whole under the word-level crop contract.
+     */
+    public static byte[] formNestedSplitWordPdf() throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDPage page = new PDPage(LETTER);
             doc.addPage(page);
@@ -540,7 +646,7 @@ public final class CropTestPdfGenerator {
             form.getResources().put(COSName.getPDFName("F1"),
                     new PDType1Font(Standard14Fonts.FontName.HELVETICA));
             try (var os = form.getContentStream().createOutputStream()) {
-                os.write("q BT /F1 14 Tf 100 700 Td (SECRETKEEP) Tj ET Q"
+                os.write("q BT /F1 14 Tf 100 700 Td (SECRET KEEP) Tj ET Q"
                         .getBytes(StandardCharsets.US_ASCII));
             }
             if (page.getResources() == null) page.setResources(new PDResources());

@@ -859,6 +859,12 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
 int32_t jpdfium_crop_remove_content(int64_t, float x, float y, float w, float h) noexcept {
     return stub_rect_invalid(x, y, w, h) ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
+int32_t jpdfium_crop_remove_content_ex(int64_t, float x, float y, float w, float h,
+                                       float margin) noexcept {
+    return (!std::isfinite(margin) || margin < 0.0f || stub_rect_invalid(x, y, w, h))
+               ? JPDFIUM_ERR_INVALID
+               : JPDFIUM_OK;
+}
 int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t,
                                int32_t remove_content) noexcept {
     if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned
@@ -898,6 +904,14 @@ int32_t jpdfium_page_flatten(int64_t page) noexcept {
     return g_page_doc.find(page) == g_page_doc.end() ? JPDFIUM_ERR_INVALID : JPDFIUM_OK;
 }
 int32_t jpdfium_page_to_image(int64_t, int32_t, int32_t) {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_flatten_annotations(int64_t) noexcept {
+    return JPDFIUM_OK;
+}
+
+int32_t jpdfium_doc_flatten_to_images(int64_t, int32_t) noexcept {
     return JPDFIUM_OK;
 }
 
@@ -1427,8 +1441,9 @@ int32_t jpdfium_repair_inspect(const uint8_t*, int64_t, char** json_out) {
     return 0;
 }
 
-int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
-                              int64_t* out_len, int32_t, int32_t, int32_t, int32_t, int32_t) {
+int32_t jpdfium_qpdf_optimize_ex(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
+                                 int64_t* out_len, int32_t, int32_t, int32_t, int32_t, int32_t,
+                                 int32_t) {
     if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
         if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
             *out_ptr = p;
@@ -1439,6 +1454,62 @@ int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_p
     if (out_ptr) *out_ptr = nullptr;
     if (out_len) *out_len = 0;
     return -1;
+}
+
+int32_t jpdfium_qpdf_optimize(const uint8_t* in, int64_t in_len, uint8_t** out_ptr,
+                              int64_t* out_len, int32_t flags, int32_t compression_level,
+                              int32_t object_stream_mode, int32_t stream_data_mode,
+                              int32_t decode_level) {
+    return jpdfium_qpdf_optimize_ex(in, in_len, out_ptr, out_len, flags, compression_level,
+                                    object_stream_mode, stream_data_mode, decode_level, -1);
+}
+
+int32_t jpdfium_qpdf_inspect(const uint8_t* in, int64_t in_len, const char*, char** json_out) {
+    if (!json_out) return -1;
+    const int32_t pages = stub_effective_pages(in, in_len);
+    std::string json =
+        "{\"status\":\"ok\",\"qpdf_version\":\"stub\",\"pdf_version\":\"1.7\","
+        "\"pages\":" +
+        std::to_string(pages) +
+        ",\"page_tree_valid\":true,\"object_count\":0,\"linearized\":false,"
+        "\"linearization_valid\":true,\"encrypted\":false,"
+        "\"requires_password\":false,\"encryption_revision\":0,"
+        "\"encryption_version\":0,\"permissions\":0,"
+        "\"owner_password_matched\":false,\"user_password_matched\":false,"
+        "\"page_labels\":false,\"attachments\":0,\"form_fields\":0,"
+        "\"signatures\":0,\"warning_count\":0,\"warnings\":[]}";
+    *json_out = dup_cstring(json);
+    return *json_out ? 0 : -1;
+}
+
+int32_t jpdfium_qpdf_inspect_file(const char*, const char*, char** json_out) {
+    if (!json_out) return -1;
+    *json_out = dup_cstring(
+        "{\"status\":\"unavailable\",\"message\":\"qpdf not linked\","
+        "\"warnings\":[]}");
+    return *json_out ? 0 : -1;
+}
+
+int32_t jpdfium_qpdf_set_docinfo(const uint8_t* in, int64_t in_len, const char* const*,
+                                 const char* const*, int32_t, const char*, uint8_t** out_ptr,
+                                 int64_t* out_len) {
+    if (out_ptr && out_len && in && in_len >= 4 && std::memcmp(in, "%PDF", 4) == 0) {
+        if (auto* p = dup_bytes(in, static_cast<std::size_t>(in_len))) {
+            *out_ptr = p;
+            *out_len = in_len;
+            return 0;
+        }
+    }
+    if (out_ptr) *out_ptr = nullptr;
+    if (out_len) *out_len = 0;
+    return -1;
+}
+
+int32_t stub_copy_pdf_file(const char* in_path, const char* out_path);
+
+int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const char* out_path, const char* const*,
+                                      const char* const*, int32_t, const char*) {
+    return stub_copy_pdf_file(in_path, out_path);
 }
 
 // File-backed mocks mirror the real bridge surface so the Java staging,
@@ -1480,9 +1551,16 @@ int32_t stub_copy_pdf_file(const char* in_path, const char* out_path) {
     return 0;
 }
 
-int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, int32_t, int32_t,
-                                   int32_t, int32_t) {
+int32_t jpdfium_qpdf_optimize_ex_file(const char* in_path, const char* out_path, int32_t, int32_t,
+                                      int32_t, int32_t, int32_t, int32_t) {
     return stub_copy_pdf_file(in_path, out_path);
+}
+
+int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, int32_t flags,
+                                   int32_t object_stream_mode, int32_t stream_data_mode,
+                                   int32_t decode_level) {
+    return jpdfium_qpdf_optimize_ex_file(in_path, out_path, flags, -1, object_stream_mode,
+                                         stream_data_mode, decode_level, -1);
 }
 
 int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path, int32_t) {

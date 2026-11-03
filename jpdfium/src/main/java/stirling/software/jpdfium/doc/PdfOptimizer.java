@@ -10,9 +10,8 @@ import java.nio.file.Path;
 /**
  * In-process qpdf structural optimization (FFM, no CLI).
  *
- * <p>Thin wrapper over {@link QpdfLib} exposing the qpdf operations Stirling-PDF
- * used to run as a subprocess (linearize, recompress, object-stream generation,
- * content normalization).
+ * <p>Thin wrapper over {@link QpdfLib} for in-process qpdf structural
+ * operations.
  */
 public final class PdfOptimizer {
 
@@ -22,6 +21,12 @@ public final class PdfOptimizer {
     public static final int COMPRESS_STREAMS = 0x04;
     public static final int PRESERVE_UNREFERENCED = 0x08;
     public static final int NORMALIZE_CONTENT = 0x10;
+    /** Pretty-printed, normalized, uncompressed QDF output (qpdf's repair mode). */
+    public static final int QDF = 0x20;
+    /** Drop page resources that the page content never references. */
+    public static final int REMOVE_UNREFERENCED_RESOURCES = 0x40;
+    /** Run qpdf's DCT image optimization pass before writing. */
+    public static final int OPTIMIZE_IMAGES = 0x80;
 
     public static final int OBJECT_STREAMS_DISABLE = 0;
     public static final int OBJECT_STREAMS_PRESERVE = 1;
@@ -43,14 +48,33 @@ public final class PdfOptimizer {
 
     public static byte[] optimize(byte[] input, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) {
+        if (input == null || input.length == 0) return null;
         return QpdfLib.optimize(input, flags, compressionLevel,
                 objectStreamMode, streamDataMode, decodeLevel);
+    }
+
+    /**
+     * Optimize bytes with the image pass; {@code jpegQuality} is 0..100 or -1
+     * to keep existing DCT data.
+     */
+    public static byte[] optimize(byte[] input, int flags, int compressionLevel,
+            int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality) {
+        if (input == null || input.length == 0) return null;
+        return QpdfLib.optimize(input, flags, compressionLevel,
+                objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
     }
 
     public static byte[] optimize(Path input, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) throws IOException {
         return optimize(Files.readAllBytes(input), flags, compressionLevel,
                 objectStreamMode, streamDataMode, decodeLevel);
+    }
+
+    public static byte[] optimize(Path input, int flags, int compressionLevel,
+            int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality)
+            throws IOException {
+        return optimize(Files.readAllBytes(input), flags, compressionLevel,
+                objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
     }
 
     /**
@@ -67,15 +91,37 @@ public final class PdfOptimizer {
      */
     public static void optimize(Path input, Path output, int flags, int compressionLevel,
             int objectStreamMode, int streamDataMode, int decodeLevel) throws IOException {
-        // The file route takes no compression level: using it here would
-        // silently replace an explicit level with qpdf's default. Only take it
-        // when no level was requested; the buffered path honors the level.
-        if (compressionLevel == DEFAULT && QpdfLib.optimizeFile(input, output, flags,
-                objectStreamMode, streamDataMode, decodeLevel)) {
+        optimize(input, output, flags, compressionLevel, objectStreamMode, streamDataMode,
+                decodeLevel, -1);
+    }
+
+    /** Optimize file-to-file with an explicit JPEG quality. */
+    public static void optimize(Path input, Path output, int flags, int compressionLevel,
+            int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality)
+            throws IOException {
+        // Fail before entering the native retry ladder: an unreadable input
+        // cannot be helped by the legacy or byte[] fallbacks.
+        if (!Files.isReadable(input)) {
+            throw new IOException("input PDF is not readable: " + input);
+        }
+        // 0 was accepted as "default" while the level was ignored; preserve
+        // that spelling instead of failing existing callers.
+        int effectiveLevel = compressionLevel == 0 ? DEFAULT : compressionLevel;
+        if (QpdfLib.optimizeFile(input, output, flags, effectiveLevel, objectStreamMode,
+                streamDataMode, decodeLevel, jpegQuality)) {
             return;
         }
-        byte[] result = optimize(input, flags, compressionLevel,
-                objectStreamMode, streamDataMode, decodeLevel);
+        if (jpegQuality >= 0 || effectiveLevel != DEFAULT) {
+            // The extended native route is required for these options. Falling
+            // back to the legacy route would silently ignore one of them.
+            throw new IOException("extended qpdf file optimize is unavailable");
+        }
+        if (QpdfLib.optimizeFile(input, output, flags, objectStreamMode, streamDataMode,
+                decodeLevel)) {
+            return;
+        }
+        byte[] result = optimize(input, flags, effectiveLevel,
+                objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
         if (result == null) {
             throw new IOException("qpdf optimization produced no output");
         }
@@ -91,17 +137,62 @@ public final class PdfOptimizer {
     }
 
     /**
+     * QDF repair, equivalent to
+     * {@code qpdf --qdf --object-streams=disable}.
+     */
+    public static byte[] repair(byte[] input) {
+        return optimize(input, QDF, DEFAULT, OBJECT_STREAMS_DISABLE, DEFAULT, DEFAULT);
+    }
+
+    /**
+     * File-to-file QDF repair, keeping document bytes off the Java heap.
+     */
+    public static void repair(Path input, Path output) throws IOException {
+        optimize(input, output, QDF, DEFAULT, OBJECT_STREAMS_DISABLE, DEFAULT, DEFAULT);
+    }
+
+    /**
      * Normalize content streams (qpdf content normalization), preserving object
      * streams. Used before PDF/A conversion to fix font programs and CIDSet issues.
-     *
-     * <p>Note: qpdf's {@code --remove-unreferenced-resources} only applies during
-     * {@code --pages} splitting, not a plain read/write pass, so CIDSet cleanup
-     * relies on content normalization alone.
      *
      * @return normalized bytes, or {@code null} on failure
      */
     public static byte[] normalizeContent(byte[] input) {
         return optimize(input, NORMALIZE_CONTENT, DEFAULT,
+                OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
+    }
+
+    /** File-to-file content normalization. */
+    public static void normalizeContent(Path input, Path output) throws IOException {
+        optimize(input, output, NORMALIZE_CONTENT, DEFAULT,
+                OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
+    }
+
+    /**
+     * Remove unreferenced page resources, equivalent to
+     * {@code --remove-unreferenced-resources=yes}.
+     */
+    public static byte[] removeUnreferencedResources(byte[] input) {
+        return optimize(input, REMOVE_UNREFERENCED_RESOURCES, DEFAULT,
+                OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
+    }
+
+    /** File-to-file unreferenced page-resource cleanup. */
+    public static void removeUnreferencedResources(Path input, Path output) throws IOException {
+        optimize(input, output, REMOVE_UNREFERENCED_RESOURCES, DEFAULT,
+                OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
+    }
+
+    /** Normalize content and remove unreferenced resources in one rewrite. */
+    public static byte[] normalizeContentAndCleanResources(byte[] input) {
+        return optimize(input, NORMALIZE_CONTENT | REMOVE_UNREFERENCED_RESOURCES, DEFAULT,
+                OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
+    }
+
+    /** File-to-file combined content normalization and resource cleanup. */
+    public static void normalizeContentAndCleanResources(Path input, Path output)
+            throws IOException {
+        optimize(input, output, NORMALIZE_CONTENT | REMOVE_UNREFERENCED_RESOURCES, DEFAULT,
                 OBJECT_STREAMS_PRESERVE, DEFAULT, DEFAULT);
     }
 
@@ -114,11 +205,47 @@ public final class PdfOptimizer {
      */
     public static byte[] compress(byte[] input, int compressionLevel,
             boolean linearize, boolean preserveUnreferenced) {
+        return compress(input, compressionLevel, linearize, preserveUnreferenced,
+                false, false, -1);
+    }
+
+    /**
+     * Full compression pass; {@code jpegQuality} is 0..100 or -1 to keep
+     * existing DCT data.
+     */
+    public static byte[] compress(byte[] input, int compressionLevel,
+            boolean linearize, boolean preserveUnreferenced,
+            boolean normalizeContent, boolean optimizeImages, int jpegQuality) {
         int flags = RECOMPRESS_FLATE | COMPRESS_STREAMS
                 | (linearize ? LINEARIZE : 0)
-                | (preserveUnreferenced ? PRESERVE_UNREFERENCED : 0);
+                | (preserveUnreferenced ? PRESERVE_UNREFERENCED : 0)
+                | (normalizeContent ? NORMALIZE_CONTENT : 0)
+                | (optimizeImages ? OPTIMIZE_IMAGES : 0);
         return optimize(input, flags, compressionLevel,
-                OBJECT_STREAMS_GENERATE, STREAM_DATA_COMPRESS, DECODE_LEVEL_GENERALIZED);
+                OBJECT_STREAMS_GENERATE, STREAM_DATA_COMPRESS, DECODE_LEVEL_GENERALIZED,
+                jpegQuality);
+    }
+
+    /** File-to-file structural compression. Keeps document bytes native. */
+    public static void compress(Path input, Path output, int compressionLevel,
+            boolean linearize, boolean preserveUnreferenced) throws IOException {
+        compress(input, output, compressionLevel, linearize, preserveUnreferenced,
+                false, false, -1);
+    }
+
+    /** File-to-file full compression pass. */
+    public static void compress(Path input, Path output, int compressionLevel,
+            boolean linearize, boolean preserveUnreferenced,
+            boolean normalizeContent, boolean optimizeImages, int jpegQuality)
+            throws IOException {
+        int flags = RECOMPRESS_FLATE | COMPRESS_STREAMS
+                | (linearize ? LINEARIZE : 0)
+                | (preserveUnreferenced ? PRESERVE_UNREFERENCED : 0)
+                | (normalizeContent ? NORMALIZE_CONTENT : 0)
+                | (optimizeImages ? OPTIMIZE_IMAGES : 0);
+        optimize(input, output, flags, compressionLevel,
+                OBJECT_STREAMS_GENERATE, STREAM_DATA_COMPRESS, DECODE_LEVEL_GENERALIZED,
+                jpegQuality);
     }
 
     /** Check if in-process QPDF optimization is available. */
@@ -126,13 +253,8 @@ public final class PdfOptimizer {
         return QpdfLib.isOptimizeSupported();
     }
 
-    /**
-     * True if {@link #optimize} can downsample embedded images. False: the qpdf
-     * writer has no image step; use {@link PdfImageOptimizer} for that.
-     *
-     * @return true once the native optimize path performs image optimization
-     */
+    /** True when the native qpdf image pass is available. */
     public static boolean isImageOptimizationSupported() {
-        return false;
+        return QpdfLib.isOptimizeExSupported();
     }
 }

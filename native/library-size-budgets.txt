@@ -17,8 +17,8 @@ dav1d.dll        2500000
 libdeflate*       250000
 libheif*         3000000
 heif.dll         3000000
-libjxl*          4000000
-jxl.dll          4000000
+libjxl*          5000000
+jxl.dll          5000000
 libglib*         1700000
 glib-2.0-*.dll   1700000
 libgio*          2300000
@@ -31,7 +31,7 @@ libvips*         3500000
 vips-42.dll      3500000
 libskia*         8000000
 skia.dll         8000000
-libpdfium*       9000000
-pdfium.dll       9000000
+libpdfium*      10500000
+pdfium.dll      10500000
 libjpdfium*     13500000
 jpdfium.dll     13500000
