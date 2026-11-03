@@ -31,7 +31,7 @@ libvips*         3500000
 vips-42.dll      3500000
 libskia*         8000000
 skia.dll         8000000
-libpdfium*       9000000
-pdfium.dll       9000000
+libpdfium*      10500000
+pdfium.dll      10500000
 libjpdfium*     13500000
 jpdfium.dll     13500000
