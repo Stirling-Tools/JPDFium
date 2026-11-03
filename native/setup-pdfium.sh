@@ -259,52 +259,66 @@ else
 fi
 echo "  Commit: $(git log --oneline -1)"
 
-# Patch DEPS to remove the buildtools/reclient dep. PDFium's DEPS hard-pins
-# reclient as an unconditional cipd dep; the platform interpolation
-# (infra/rbe/client/${{platform}}) breaks on linux-arm64 because no arm64
-# package is published, and we don't use remote execution anyway. We tried
-# custom_deps in .gclient (both 'pdfium/buildtools/reclient' and
+# Patch DEPS to remove two dead or unusable deps before gclient processes them:
+#
+# - buildtools/reclient: PDFium hard-pins it as an unconditional cipd dep; the
+#   platform interpolation (infra/rbe/client/${{platform}}) breaks on
+#   linux-arm64 because no arm64 package is published. We don't use remote
+#   execution, so it is dead weight on every platform.
+# - third_party/clang-format/script: the pinned commit (9f7968...) is no longer
+#   served by chromium.googlesource.com; gclient sync fails with HTTP 400
+#   before the build starts. The clang-format scripts are not part of the
+#   PDFium build, so the dependency is not needed in CI.
+#
+# We tried custom_deps in .gclient (both 'pdfium/buildtools/reclient' and
 # 'buildtools/reclient' as keys) but neither took effect for this gclient
 # version + this DEPS layout. Patching the DEPS file directly is reliable.
-if [ -f DEPS ] && grep -q "'buildtools/reclient'" DEPS; then
-    echo "  Patching DEPS to remove buildtools/reclient dep..."
+if [ -f DEPS ] && grep -qE "'(buildtools/reclient|third_party/clang-format/script)'" DEPS; then
+    echo "  Patching DEPS to remove unused deps..."
     python3 - DEPS <<'PY_EOF'
+import re
 import sys
+
 path = sys.argv[1]
+keys = ("buildtools/reclient", "third_party/clang-format/script")
+patterns = [re.compile(r"^  '%s'\s*:" % re.escape(k)) for k in keys]
+
 with open(path) as f:
     lines = f.readlines()
-# Strip the 'buildtools/reclient' dep block. The block contains nested braces
-# (a 'packages': [{...}] list), so a regex with [^{}] won't match across them.
-# Use a brace-counting scan instead: enter skip mode when we see the dep key
-# with a '{', exit when brace depth returns to zero.
+
 out = []
 skipping = False
-brace_depth = 0
 removed = 0
 for line in lines:
-    if not skipping and "'buildtools/reclient'" in line and ':' in line and '{' in line:
-        skipping = True
-        brace_depth = line.count('{') - line.count('}')
-        continue
     if skipping:
-        brace_depth += line.count('{') - line.count('}')
-        if brace_depth <= 0:
+        # Top-level DEPS entries start with two spaces + a quoted key. The
+        # entry's own closing brace is also indented two spaces, so stop only
+        # at the next key or at the dict's closing brace.
+        if re.match(r"^  '|^\}", line):
             skipping = False
-            removed += 1
+        else:
+            continue
+    if any(p.match(line) for p in patterns):
+        skipping = True
+        removed += 1
         continue
     out.append(line)
+
 if removed == 0:
-    print("  buildtools/reclient block found by grep but brace scan didn't match.")
+    print("  DEPS keys found by grep but indentation scan didn't match.")
     sys.exit(0)
-with open(path, 'w') as f:
-    f.write(''.join(out))
-print(f"  Removed {removed} buildtools/reclient dep block from DEPS.")
+with open(path, "w") as f:
+    f.write("".join(out))
+print(f"  Removed {removed} DEPS entr{'y' if removed == 1 else 'ies'}.")
 PY_EOF
+    # DEPS is executable Python; reject a patch that broke its syntax.
+    python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' DEPS
 fi
 
 # Now run gclient sync. With DEPS patched, cipd ensure won't try to fetch
-# infra/rbe/client/linux-arm64. The source is already cloned, so
-# --managed=False (set in .gclient) means gclient only processes sub-deps.
+# infra/rbe/client/linux-arm64 and gclient won't fetch the dead clang-format
+# revision. The source is already cloned, so --managed=False (set in .gclient)
+# means gclient only processes sub-deps.
 cd "${BUILD_DIR}"
 if [ ! -d "${PDFIUM_SRC}/third_party/abseil-cpp" ]; then
     echo "[2b/7] Running gclient sync (this downloads ~10 GB of dependencies)..."

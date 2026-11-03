@@ -15,6 +15,11 @@ on:
         description: 'libvips tag (vX.Y.Z)'
         type: string
         default: v8.18.6
+      dry-run:
+        description: 'Build and verify artifacts but do not create a release or PR'
+        type: boolean
+        required: false
+        default: false
   # Weekly cron: Monday 04:00 UTC, after the Prebuild PDFium run.
   schedule:
     - cron: '0 4 * * 1'
@@ -585,7 +590,7 @@ jobs:
     needs: [marker, resolve-sha, build]
     # The asset check below is the publication gate. Do not gate on the whole
     # matrix: a FreeBSD VM failure is optional and must not hide other assets.
-    if: always() && needs.resolve-sha.result == 'success' && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
+    if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
     permissions:
       contents: write
       pull-requests: write    # open the auto pin-bump PR
