@@ -1412,12 +1412,22 @@ if os.path.isfile(stack_cc):
 #     pointer, so static_cast<uintptr_t> is ill-formed there. A
 #     reinterpret_cast is valid for both pointer and integral pthread_t.
 thread_ref = "base/allocator/partition_allocator/src/partition_alloc/partition_alloc_base/threading/platform_thread_ref.h"
-apply_patch(
-    thread_ref,
-    "return Hasher()(static_cast<uintptr_t>(id_));",
-    "return Hasher()(reinterpret_cast<uintptr_t>(id_));",
-    "partition_alloc pthread_t cast",
-)
+target_cast = "return Hasher()(static_cast<uintptr_t>(id_));"
+repl_cast = "return Hasher()(reinterpret_cast<uintptr_t>(id_));"
+if os.path.isfile(thread_ref):
+    with open(thread_ref) as f:
+        thread_src = f.read()
+    # The header can contain more than one Hasher implementation; replace
+    # every occurrence, not just the first.
+    if target_cast in thread_src:
+        thread_src = thread_src.replace(target_cast, repl_cast)
+        with open(thread_ref, "w") as f:
+            f.write(thread_src)
+        print("  Patched all partition_alloc pthread_t casts for FreeBSD.")
+    elif repl_cast in thread_src:
+        print("  partition_alloc pthread_t casts already patched.")
+    else:
+        raise SystemExit(f"ERROR: pthread_t cast anchor not found in {thread_ref}")
 
 # 4. core/fxge/linux/fx_linux_impl.cpp: allow FreeBSD
 fx_impl = "core/fxge/linux/fx_linux_impl.cpp"
