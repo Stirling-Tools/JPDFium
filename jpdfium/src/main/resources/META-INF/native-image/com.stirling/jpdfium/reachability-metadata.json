@@ -1959,6 +1959,17 @@
           "jint",
           "void*"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "jlong",
+          "jfloat",
+          "jfloat",
+          "jfloat",
+          "jfloat",
+          "jfloat"
+        ]
       }
     ],
     "upcalls": [

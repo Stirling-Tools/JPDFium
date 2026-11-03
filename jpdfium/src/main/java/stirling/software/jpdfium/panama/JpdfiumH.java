@@ -2367,6 +2367,71 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_crop_remove_content_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_crop_remove_content_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_crop_remove_content_ex$descriptor() {
+        return jpdfium_crop_remove_content_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static MethodHandle jpdfium_crop_remove_content_ex$handle() {
+        return jpdfium_crop_remove_content_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static MemorySegment jpdfium_crop_remove_content_ex$address() {
+        return jpdfium_crop_remove_content_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static int jpdfium_crop_remove_content_ex(long page, float x, float y, float w, float h, float margin) {
+        var mh$ = jpdfium_crop_remove_content_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_crop_remove_content_ex", page, x, y, w, h, margin);
+            }
+            return (int)mh$.invokeExact(page, x, y, w, h, margin);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_redact_pattern {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -2681,6 +2746,127 @@ public class JpdfiumH extends JpdfiumH$shared {
                 traceDowncall("jpdfium_page_to_image", doc, pageIndex, dpi);
             }
             return (int)mh$.invokeExact(doc, pageIndex, dpi);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_doc_flatten_annotations {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_annotations");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_flatten_annotations$descriptor() {
+        return jpdfium_doc_flatten_annotations.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_flatten_annotations$handle() {
+        return jpdfium_doc_flatten_annotations.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_flatten_annotations$address() {
+        return jpdfium_doc_flatten_annotations.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static int jpdfium_doc_flatten_annotations(long doc) {
+        var mh$ = jpdfium_doc_flatten_annotations.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_flatten_annotations", doc);
+            }
+            return (int)mh$.invokeExact(doc);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_doc_flatten_to_images {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_to_images");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_flatten_to_images$descriptor() {
+        return jpdfium_doc_flatten_to_images.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_flatten_to_images$handle() {
+        return jpdfium_doc_flatten_to_images.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_flatten_to_images$address() {
+        return jpdfium_doc_flatten_to_images.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static int jpdfium_doc_flatten_to_images(long doc, int dpi) {
+        var mh$ = jpdfium_doc_flatten_to_images.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_flatten_to_images", doc, dpi);
+            }
+            return (int)mh$.invokeExact(doc, dpi);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {
