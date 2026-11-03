@@ -50,7 +50,7 @@ extern "C" {
 // combinations handshake on JPDFIUM_ABI_VERSION and verify platform-sensitive
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
-#define JPDFIUM_ABI_VERSION (1)
+#define JPDFIUM_ABI_VERSION (2)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
 #define JPDFIUM_ABI_QUERY_PTR_SIZE (0)

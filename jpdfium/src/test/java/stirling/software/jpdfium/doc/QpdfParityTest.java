@@ -1,5 +1,14 @@
 package stirling.software.jpdfium.doc;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -8,9 +17,11 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.SyntheticPdfFactory;
 import stirling.software.jpdfium.panama.NativeRuntime;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -34,8 +45,8 @@ class QpdfParityTest {
         assumeTrue(NativeRuntime.isFull(), "requires a full native build");
     }
 
-    private static String ascii(byte[] bytes) {
-        return new String(bytes, 0, Math.min(bytes.length, 4096), StandardCharsets.ISO_8859_1);
+    private static String document(byte[] bytes) {
+        return new String(bytes, StandardCharsets.ISO_8859_1);
     }
 
     private static void assertReadable(byte[] bytes, int expectedPages) {
@@ -46,6 +57,52 @@ class QpdfParityTest {
         }
     }
 
+    /** Adds a font to page 0 /Resources that no content stream refers to. */
+    private static byte[] withUnreferencedFont(byte[] input) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(input)) {
+            PDResources resources = doc.getPage(0).getResources();
+            resources.put(COSName.getPDFName("JpdfUnusedFont"),
+                    new PDType1Font(Standard14Fonts.FontName.COURIER));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
+    private static boolean hasFontResource(byte[] pdf, COSName name) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            for (PDPage page : doc.getPages()) {
+                if (page.getResources() == null) continue;
+                for (COSName font : page.getResources().getFontNames()) {
+                    if (font.equals(name)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Repetitive content whose Flate payload is measurably smaller at level 9 than level 1. */
+    private static byte[] compressionFixture() throws Exception {
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.LETTER);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 8);
+                cs.newLineAtOffset(36, 750);
+                for (int i = 0; i < 1200; i++) {
+                    cs.showText("JPDFium compression fixture line " + (i % 40)
+                            + " - repeated content compresses differently by level.");
+                    cs.newLineAtOffset(0, -9);
+                }
+                cs.endText();
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
+        }
+    }
+
     @Test
     void qdfRepairWritesReadableQdfWithoutObjectStreams(@TempDir Path tempDir) throws Exception {
         byte[] input = SyntheticPdfFactory.createDiverse(3);
@@ -53,10 +110,10 @@ class QpdfParityTest {
 
         byte[] repaired = PdfOptimizer.repair(input);
         assertReadable(repaired, 3);
-        String header = ascii(repaired);
-        assertTrue(header.contains("%QDF-1.0"),
+        String document = document(repaired);
+        assertTrue(document.contains("%QDF-1.0"),
                 "qpdf QDF mode must be visible in the output header");
-        assertFalse(header.contains("/ObjStm"),
+        assertFalse(document.contains("/ObjStm"),
                 "QDF repair must disable object streams");
 
         Path in = tempDir.resolve("repair-in.pdf");
@@ -69,11 +126,16 @@ class QpdfParityTest {
 
     @Test
     void pdfaNormalizationAndResourceCleanupPreservePages(@TempDir Path tempDir) throws Exception {
-        byte[] input = SyntheticPdfFactory.createDiverse(2);
+        byte[] input = withUnreferencedFont(SyntheticPdfFactory.createDiverse(2));
         assumeTrue(PdfOptimizer.isSupported(), "native qpdf optimizer unavailable");
+        COSName unusedFont = COSName.getPDFName("JpdfUnusedFont");
+        assertTrue(hasFontResource(input, unusedFont), "fixture must carry an unreferenced font");
 
+        byte[] cleanedBytes = PdfOptimizer.removeUnreferencedResources(input);
+        assertReadable(cleanedBytes, 2);
+        assertFalse(hasFontResource(cleanedBytes, unusedFont),
+                "resource cleanup must remove the unreferenced font");
         assertReadable(PdfOptimizer.normalizeContent(input), 2);
-        assertReadable(PdfOptimizer.removeUnreferencedResources(input), 2);
         assertReadable(PdfOptimizer.normalizeContentAndCleanResources(input), 2);
 
         Path in = tempDir.resolve("normalize-in.pdf");
@@ -94,17 +156,22 @@ class QpdfParityTest {
         byte[] input = SyntheticPdfFactory.createDiverse(2);
         assumeTrue(PdfOptimizer.isSupported(), "native qpdf optimizer unavailable");
 
-        byte[] level1 = PdfOptimizer.compress(input, 1, false, false);
-        byte[] level9 = PdfOptimizer.compress(input, 9, false, false);
-        assertReadable(level1, 2);
-        assertReadable(level9, 2);
-        assertTrue(level9.length <= level1.length,
-                "level 9 must not produce a larger structural result than level 1");
+        byte[] levelInput = compressionFixture();
+        byte[] level1 = PdfOptimizer.compress(levelInput, 1, false, false);
+        byte[] level9 = PdfOptimizer.compress(levelInput, 9, false, false);
+        assertReadable(level1, 1);
+        assertReadable(level9, 1);
+        assertTrue(level9.length < level1.length,
+                "compression level must affect output size: level 1=" + level1.length
+                        + " B, level 9=" + level9.length + " B");
 
         if (PdfOptimizer.isImageOptimizationSupported()) {
+            byte[] structural = PdfOptimizer.compress(input, 9, false, false);
             byte[] optimized = PdfOptimizer.compress(input, 9, false, false,
                     true, true, 40);
             assertReadable(optimized, 2);
+            assertFalse(Arrays.equals(structural, optimized),
+                    "the qpdf image pass must change the output");
 
             Path in = tempDir.resolve("compress-in.pdf");
             Path out = tempDir.resolve("compress-out.pdf");
@@ -128,11 +195,14 @@ class QpdfParityTest {
 
     @Test
     void concurrentLevelsDoNotCorruptEachOther() throws Exception {
-        byte[] input = SyntheticPdfFactory.createDiverse(2);
+        byte[] input = compressionFixture();
         assumeTrue(PdfOptimizer.isSupported(), "native qpdf optimizer unavailable");
 
         byte[] sequentialLow = PdfOptimizer.compress(input, 1, false, false);
         byte[] sequentialHigh = PdfOptimizer.compress(input, 9, false, false);
+        assertTrue(sequentialHigh.length < sequentialLow.length,
+                "compression level must affect output size: level 1=" + sequentialLow.length
+                        + " B, level 9=" + sequentialHigh.length + " B");
 
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
@@ -151,8 +221,8 @@ class QpdfParityTest {
         start.countDown();
         byte[] concurrentLow = low.get(60, TimeUnit.SECONDS);
         byte[] concurrentHigh = high.get(60, TimeUnit.SECONDS);
-        assertReadable(concurrentLow, 2);
-        assertReadable(concurrentHigh, 2);
+        assertReadable(concurrentLow, 1);
+        assertReadable(concurrentHigh, 1);
         assertEquals(sequentialLow.length, concurrentLow.length,
                 "level-1 concurrent output must match the sequential level-1 size");
         assertEquals(sequentialHigh.length, concurrentHigh.length,

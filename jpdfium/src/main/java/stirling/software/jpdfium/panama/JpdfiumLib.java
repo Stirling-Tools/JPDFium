@@ -151,7 +151,7 @@ public final class JpdfiumLib {
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
-    public static final int EXPECTED_ABI_VERSION = 1;
+    public static final int EXPECTED_ABI_VERSION = 2;
     /** Expected native pointer width: all supported targets are 64-bit. */
     public static final long EXPECTED_PTR_SIZE = 8;
     /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
