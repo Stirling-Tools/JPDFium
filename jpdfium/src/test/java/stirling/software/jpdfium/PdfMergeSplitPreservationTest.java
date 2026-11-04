@@ -158,8 +158,10 @@ class PdfMergeSplitPreservationTest {
                         "each input's page labels restart where its pages land");
                 assertEquals("en-GB", catalog.getLanguage());
                 assertTrue(catalog.getViewerPreferences().displayDocTitle());
-                assertNotNull(catalog.getNames().getDests().getValue("A-last"),
-                        "the first input's named destinations survive");
+                PDPageDestination destination = catalog.getNames().getDests().getValue("A-last");
+                assertNotNull(destination, "the first input's named destinations survive");
+                assertEquals(3, destination.retrievePageNumber(),
+                        "A-last resolves to the first input's last output page");
             }
         }
     }
