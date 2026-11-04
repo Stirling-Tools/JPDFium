@@ -48,6 +48,18 @@ struct TransparentStringEqual {
 #define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
+// Parses a positive decimal limit from the environment. Returns `fallback`
+// when the variable is unset, empty, non-numeric, zero or out of range, so a
+// typo cannot silently disable a cap.
+inline uint32_t envUint32(const char* name, uint32_t fallback) {
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw) return fallback;
+    char* end = nullptr;
+    unsigned long value = std::strtoul(raw, &end, 10);
+    if (end == raw || *end != '\0' || value == 0 || value > 0xFFFFFFFFul) return fallback;
+    return static_cast<uint32_t>(value);
+}
+
 inline int translatePdfiumError() {
     switch (FPDF_GetLastError()) {
         case FPDF_ERR_SUCCESS:
