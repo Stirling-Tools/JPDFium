@@ -114,6 +114,17 @@ class RasterFrame {
     int32_t height_ = 0;
 };
 
+// A gray image a redaction erase stored. SetBitmap can only write gray as
+// 8-bit /Indexed over a 256-entry gray ramp, so the save stage
+// (compactErasedGrayImages) finds each one again by size and the hash of its
+// samples and rewrites it as /DeviceGray: 1 bit per pixel when only black and
+// white remain (a scan), else 8.
+struct ErasedGrayImage {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint64_t hash = 0;  // FNV-1a over the row-packed samples
+};
+
 // Shared document state.
 struct DocCore {
     FPDF_DOCUMENT doc = nullptr;
@@ -141,6 +152,7 @@ struct DocCore {
     std::vector<std::string> touchedFontNames{};
     std::string sanitizeReport{};
     std::vector<FPDF_FONT> loadedFonts{};
+    std::vector<ErasedGrayImage> erasedGrayImages{};
 
     // Filesystem path this document was opened from, or empty for in-memory
     // documents. Retained only so save can refuse to write over its own input:
@@ -446,6 +458,12 @@ void jpdfium_ensure_library();
 // Returns 0 and fills out/reportJson on success; -1 on failure.
 int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& core,
                         std::vector<uint8_t>& out, std::string& reportJson);
+
+// Save stage for DocCore::erasedGrayImages (jpdfium_redact_image.cpp): a qpdf
+// pass that rewrites those images in place, losslessly. Returns true when it
+// replaced |bytes|; false leaves them as PDFium wrote them (nothing matched,
+// qpdf unavailable, or the pass failed), which is still a complete redaction.
+bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes);
 
 // Abandon a pending progressive render for a raw FPDF_PAGE without reporting
 // (jpdfium_render.cpp). Called when the owning page is closed while a session

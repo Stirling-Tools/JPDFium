@@ -462,6 +462,19 @@ int32_t applySanitizeStage(DocWrapper* w, std::vector<uint8_t>& bytes) {
     return JPDFIUM_OK;
 }
 
+// Every post-serialization stage, in order: erased gray images back to
+// /DeviceGray (best effort: PDFium's bytes are already complete), then the
+// opt-in sanitize pass.
+int32_t applySaveStages(DocWrapper* w, std::vector<uint8_t>& bytes) {
+    compactErasedGrayImages(*w->core, bytes);
+    return applySanitizeStage(w, bytes);
+}
+
+// True when a save needs the whole serialization for applySaveStages.
+bool needsSaveStages(const DocCore& core) {
+    return (core.contentRedacted && core.sanitizeOnSave) || !core.erasedGrayImages.empty();
+}
+
 }  // namespace
 namespace {
 // Alias protection helper: saving over the document's own backing file would
@@ -513,13 +526,23 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             return JPDFIUM_ERR_INVALID;
         }
 
-        // Opt-in sanitize pass needs the whole serialization post-hoc, so it
-        // keeps the buffered path. The common case streams with no large buffer.
-        if (w->core->contentRedacted && w->core->sanitizeOnSave) {
+        // The save stages need the whole serialization post-hoc, so they keep
+        // the buffered path. The common case streams with no large buffer.
+        if (needsSaveStages(*w->core)) {
+            // The budget applies to PDFium's output too, so an oversized save
+            // stops instead of first buffering the whole document. The stages
+            // only shrink or scrub, so this refuses nothing the streaming
+            // branch would have accepted for the same content.
             struct BufWriter : FPDF_FILEWRITE {
                 std::vector<uint8_t> buf;
+                std::uint64_t max_bytes = 0;
+                bool budget_exceeded = false;
                 static int Write(FPDF_FILEWRITE* self, const void* data, unsigned long size) {
                     auto* bw = static_cast<BufWriter*>(self);
+                    if (bw->max_bytes > 0 && bw->buf.size() + size > bw->max_bytes) {
+                        bw->budget_exceeded = true;
+                        return 0;
+                    }
                     try {
                         auto* src = static_cast<const uint8_t*>(data);
                         bw->buf.insert(bw->buf.end(), src, src + size);
@@ -531,9 +554,12 @@ int32_t jpdfium_doc_save_to_file(int64_t doc, const char* path, int64_t max_byte
             } bw;
             bw.version = 1;
             bw.WriteBlock = BufWriter::Write;
+            bw.max_bytes = max_bytes > 0 ? static_cast<std::uint64_t>(max_bytes) : 0;
 
-            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
-            int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+            if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) {
+                return bw.budget_exceeded ? JPDFIUM_ERR_TOO_LARGE : JPDFIUM_ERR_IO;
+            }
+            int32_t sanitizeRc = applySaveStages(w, bw.buf);
             if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
             // Same code as the streaming branch so callers see one error
             // category for "output exceeded the budget".
@@ -635,7 +661,7 @@ int32_t jpdfium_doc_save_bytes(int64_t doc, uint8_t** data, int64_t* len) {
 
     if (!FPDF_SaveAsCopy(w->core->doc, &bw, FPDF_NO_INCREMENTAL)) return JPDFIUM_ERR_IO;
 
-    int32_t sanitizeRc = applySanitizeStage(w, bw.buf);
+    int32_t sanitizeRc = applySaveStages(w, bw.buf);
     if (sanitizeRc != JPDFIUM_OK) return sanitizeRc;
 
     size_t sz = bw.buf.size();

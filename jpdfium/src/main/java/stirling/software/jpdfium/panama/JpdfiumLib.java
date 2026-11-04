@@ -117,6 +117,7 @@ public final class JpdfiumLib {
             rc = JpdfiumH.jpdfium_init();
         }
         if (rc != OK) throw new JPDFiumException("jpdfium_init failed: " + rc);
+        RedactImageDecoder.install();
         // JVM-exit teardown quiesces first, then destroys only when no live
         // resources remain (the OS reclaims the rest). Never force-destroys an
         // active library for cosmetic teardown.

@@ -967,7 +967,8 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
         }
         if (eraseRectsBuffer.empty()) return;  // fully inside: leave it
         if (!eraseImagePixels(doc, page, child, childToPage,
-                              std::span<const FS_RECTF>(eraseRectsBuffer), argb, &pixelsErased)) {
+                              std::span<const FS_RECTF>(eraseRectsBuffer), argb, &pixelsErased,
+                              core ? &core->erasedGrayImages : nullptr)) {
             objsToDestroy.insert(child);
             promotionFailed = true;
             return;
@@ -1262,7 +1263,8 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 } else {
                     erased = eraseImagePixels(doc, page, obj, imgMatrix,
                                               std::span<const FS_RECTF>(eraseRectsBuffer), argb,
-                                              &pixelsErased);
+                                              &pixelsErased,
+                                              core ? &core->erasedGrayImages : nullptr);
                 }
                 if (!erased) {
                     // Doctrine: pixel-true erase or full removal, never cover-and-keep.
