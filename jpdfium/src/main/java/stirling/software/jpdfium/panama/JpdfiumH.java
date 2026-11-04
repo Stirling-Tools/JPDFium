@@ -2303,6 +2303,73 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_redact_region_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_FLOAT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_redact_region_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t argb, int32_t remove_content, float glyph_coverage)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_redact_region_ex$descriptor() {
+        return jpdfium_redact_region_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t argb, int32_t remove_content, float glyph_coverage)
+     * }
+     */
+    public static MethodHandle jpdfium_redact_region_ex$handle() {
+        return jpdfium_redact_region_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t argb, int32_t remove_content, float glyph_coverage)
+     * }
+     */
+    public static MemorySegment jpdfium_redact_region_ex$address() {
+        return jpdfium_redact_region_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_redact_region_ex(int64_t page, float x, float y, float w, float h, uint32_t argb, int32_t remove_content, float glyph_coverage)
+     * }
+     */
+    public static int jpdfium_redact_region_ex(long page, float x, float y, float w, float h, int argb, int remove_content, float glyph_coverage) {
+        var mh$ = jpdfium_redact_region_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_redact_region_ex", page, x, y, w, h, argb, remove_content, glyph_coverage);
+            }
+            return (int)mh$.invokeExact(page, x, y, w, h, argb, remove_content, glyph_coverage);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_crop_remove_content {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,

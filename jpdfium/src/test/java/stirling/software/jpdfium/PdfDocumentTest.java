@@ -122,6 +122,19 @@ class PdfDocumentTest {
     }
 
     @Test
+    void redactRegionWithGlyphCoverage() throws Exception {
+        try (var doc  = PdfDocument.open(pdfPath());
+             var page = doc.page(0)) {
+            assertDoesNotThrow(() -> page.redactRegion(Rect.of(10, 10, 100, 20), 0xFF000000, 0f));
+            assertDoesNotThrow(() -> page.redactRegion(Rect.of(10, 40, 100, 20), 0xFF000000, 1f));
+            for (float bad : new float[]{Float.NaN, -0.01f, 1.01f, Float.POSITIVE_INFINITY}) {
+                assertThrows(IllegalArgumentException.class,
+                        () -> page.redactRegion(Rect.of(10, 10, 100, 20), 0xFF000000, bad), "coverage " + bad);
+            }
+        }
+    }
+
+    @Test
     void redactPattern() throws Exception {
         try (var doc  = PdfDocument.open(pdfPath());
              var page = doc.page(0)) {

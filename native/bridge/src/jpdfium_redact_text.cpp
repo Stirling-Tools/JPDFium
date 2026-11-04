@@ -295,7 +295,8 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
     return fp;
 }
 
-bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt) {
+bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt,
+                double coverage) {
     if (!(r > rl && l < rr && t > rb && b < rt)) return false;  // no overlap at all
     double cw = r - l, ch = t - b;
     if (cw <= 0.01 || ch <= 0.01) {
@@ -304,7 +305,7 @@ bool charInRect(double l, double b, double r, double t, float rl, float rb, floa
     }
     double ix0 = std::max(l, static_cast<double>(rl)), iy0 = std::max(b, static_cast<double>(rb));
     double ix1 = std::min(r, static_cast<double>(rr)), iy1 = std::min(t, static_cast<double>(rt));
-    return (ix1 - ix0) * (iy1 - iy0) >= 0.5 * cw * ch;
+    return (ix1 - ix0) * (iy1 - iy0) >= coverage * cw * ch;
 }
 
 // Decomposes standard Unicode ligatures (U+FB00-FB06) into their ASCII
