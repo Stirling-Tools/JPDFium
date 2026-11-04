@@ -30,11 +30,44 @@ publishing workflows, not library releases, so they are not listed here.
   the open password for QPDF, including file-backed large documents.
 - `PdfDocument.saveIncremental(Path)`, a transactional append-only save that
   leaves earlier signed revisions byte-for-byte intact.
+- In-process qpdf parity for the operations that previously required the
+  `qpdf` executable: QDF repair (`PdfOptimizer.repair`), content normalization,
+  unreferenced page-resource cleanup, full compression-level control, and
+  qpdf's image optimization pass with explicit JPEG quality. The low-level
+  bridge adds `jpdfium_qpdf_optimize_ex` and `jpdfium_qpdf_optimize_ex_file`;
+  the existing optimize entry points remain source- and binary-compatible.
+  Explicit compression levels are now honoured and coordinated across
+  concurrent writers instead of being ignored.
+- Structural inspection (`PdfStructuralInspector`, qpdf-backed JSON reports for
+  page/object counts, linearization validity, encryption, attachments, forms,
+  signatures, and warnings), lossless `/Info` editing (`PdfMetadataEditor`), and
+  `PdfRepair.repairQdf` for QDF repair with PDFium/PDFio/Rust fallbacks. The
+  bridge adds `jpdfium_qpdf_inspect`, `jpdfium_qpdf_inspect_file`,
+  `jpdfium_qpdf_set_docinfo`, and `jpdfium_qpdf_set_docinfo_file`.
+- File-backed qpdf inspection and metadata editing now parse and write straight
+  from/to disk, avoiding document-sized Java/native buffers. Measured on a
+  14.5 MB fixture: path inspection is 4.65x faster (1.743 to 0.375 ms/op) and
+  drops Java allocation from 15.2 MB/op to 1.0 KB/op; file metadata editing is
+  15.6% faster (19.388 to 16.359 ms/op).
 - `Automatic-Module-Name` in the `jpdfium-spring`, `jpdfium-vips`, and
   `jpdfium-natives-*` jars, which were previously named after the artifact file.
+- `PdfPageGeometry.AUTO_CONTENT_MARGIN` and the `cropAndRemoveContent`
+  overloads that accept a content-removal margin.
 
 ### Fixed
 
+- Whole-word redaction skipped pages where words are separated by control
+  characters (some fonts map the space glyph to U+0002): the keyword prefilter
+  reads text without those characters and saw the words joined. The prefilter
+  now screens pages by substring and leaves the whole-word test to the native
+  matcher.
+- Region and text redaction left an image nested in a Form XObject intact under
+  the painted cover when the redaction covered only part of it. The covered
+  pixels are now erased and the image is moved to the page, as crop already did.
+- Redacting or cropping part of an image that is drawn more than once on a page
+  also erased the same pixels in the other placements, which nothing covered.
+  Such a request now fails with `RedactIncompleteException` before the page
+  changes, and the document can still be saved.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.
@@ -45,6 +78,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Changed
 
+- Hard crop retains the outside glyphs of words touching the crop edge. The
+  page boxes clip those glyphs. A content-removal margin also retains content
+  within the margin outside the crop, clipped by the page boxes.
 - The published `jpdfium` jar no longer carries the GraalVM smoke-test PDFs.
   Those fixtures stay on the native-image build classpath, so the smoke test
   still reads them.

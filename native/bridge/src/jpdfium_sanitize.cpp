@@ -21,6 +21,8 @@
 #include <qpdf/QPDFTokenizer.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_writer_lock.h"
+
 #ifdef JPDFIUM_HAS_PUGIXML
 #include <pugixml.hpp>
 #endif
@@ -742,6 +744,7 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
         // 1. Dead-object purge + full rewrite.
         QPDFWriter w(q);
         w.setOutputMemory();
+        jpdfium_qpdf_internal::WriterLock lock{-1};
         w.write();
         std::shared_ptr<Buffer> buf = w.getBufferSharedPointer();
         out.assign(buf->getBuffer(), buf->getBuffer() + buf->getSize());
