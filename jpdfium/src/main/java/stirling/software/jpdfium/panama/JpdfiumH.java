@@ -2367,6 +2367,71 @@ public class JpdfiumH extends JpdfiumH$shared {
         }
     }
 
+    private static class jpdfium_crop_remove_content_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT,
+            JpdfiumH.C_FLOAT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_crop_remove_content_ex");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_crop_remove_content_ex$descriptor() {
+        return jpdfium_crop_remove_content_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static MethodHandle jpdfium_crop_remove_content_ex$handle() {
+        return jpdfium_crop_remove_content_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static MemorySegment jpdfium_crop_remove_content_ex$address() {
+        return jpdfium_crop_remove_content_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w, float h, float margin)
+     * }
+     */
+    public static int jpdfium_crop_remove_content_ex(long page, float x, float y, float w, float h, float margin) {
+        var mh$ = jpdfium_crop_remove_content_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_crop_remove_content_ex", page, x, y, w, h, margin);
+            }
+            return (int)mh$.invokeExact(page, x, y, w, h, margin);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
     private static class jpdfium_redact_pattern {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
             JpdfiumH.C_INT,
@@ -2681,6 +2746,127 @@ public class JpdfiumH extends JpdfiumH$shared {
                 traceDowncall("jpdfium_page_to_image", doc, pageIndex, dpi);
             }
             return (int)mh$.invokeExact(doc, pageIndex, dpi);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_doc_flatten_annotations {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_annotations");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_flatten_annotations$descriptor() {
+        return jpdfium_doc_flatten_annotations.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_flatten_annotations$handle() {
+        return jpdfium_doc_flatten_annotations.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_flatten_annotations$address() {
+        return jpdfium_doc_flatten_annotations.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_annotations(int64_t doc)
+     * }
+     */
+    public static int jpdfium_doc_flatten_annotations(long doc) {
+        var mh$ = jpdfium_doc_flatten_annotations.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_flatten_annotations", doc);
+            }
+            return (int)mh$.invokeExact(doc);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_doc_flatten_to_images {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("jpdfium_doc_flatten_to_images");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_doc_flatten_to_images$descriptor() {
+        return jpdfium_doc_flatten_to_images.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static MethodHandle jpdfium_doc_flatten_to_images$handle() {
+        return jpdfium_doc_flatten_to_images.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static MemorySegment jpdfium_doc_flatten_to_images$address() {
+        return jpdfium_doc_flatten_to_images.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi)
+     * }
+     */
+    public static int jpdfium_doc_flatten_to_images(long doc, int dpi) {
+        var mh$ = jpdfium_doc_flatten_to_images.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_doc_flatten_to_images", doc, dpi);
+            }
+            return (int)mh$.invokeExact(doc, dpi);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {
@@ -5051,6 +5237,399 @@ public class JpdfiumH extends JpdfiumH$shared {
                 traceDowncall("jpdfium_qpdf_optimize_file", in_path, out_path, flags, objectStreamMode, streamDataMode, decodeLevel);
             }
             return (int)mh$.invokeExact(in_path, out_path, flags, objectStreamMode, streamDataMode, decodeLevel);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_optimize_ex {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize_ex").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex(const uint8_t *input, int64_t inputLen, uint8_t **output, int64_t *outputLen, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_optimize_ex$descriptor() {
+        return jpdfium_qpdf_optimize_ex.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex(const uint8_t *input, int64_t inputLen, uint8_t **output, int64_t *outputLen, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_optimize_ex$handle() {
+        return jpdfium_qpdf_optimize_ex.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex(const uint8_t *input, int64_t inputLen, uint8_t **output, int64_t *outputLen, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_optimize_ex$address() {
+        return jpdfium_qpdf_optimize_ex.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex(const uint8_t *input, int64_t inputLen, uint8_t **output, int64_t *outputLen, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static int jpdfium_qpdf_optimize_ex(MemorySegment input, long inputLen, MemorySegment output, MemorySegment outputLen, int flags, int compressionLevel, int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality) {
+        var mh$ = jpdfium_qpdf_optimize_ex.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_optimize_ex", input, inputLen, output, outputLen, flags, compressionLevel, objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
+            }
+            return (int)mh$.invokeExact(input, inputLen, output, outputLen, flags, compressionLevel, objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_optimize_ex_file {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_INT
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_optimize_ex_file").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex_file(const char *in_path, const char *out_path, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_optimize_ex_file$descriptor() {
+        return jpdfium_qpdf_optimize_ex_file.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex_file(const char *in_path, const char *out_path, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_optimize_ex_file$handle() {
+        return jpdfium_qpdf_optimize_ex_file.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex_file(const char *in_path, const char *out_path, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_optimize_ex_file$address() {
+        return jpdfium_qpdf_optimize_ex_file.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_optimize_ex_file(const char *in_path, const char *out_path, int32_t flags, int32_t compressionLevel, int32_t objectStreamMode, int32_t streamDataMode, int32_t decodeLevel, int32_t jpegQuality)
+     * }
+     */
+    public static int jpdfium_qpdf_optimize_ex_file(MemorySegment in_path, MemorySegment out_path, int flags, int compressionLevel, int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality) {
+        var mh$ = jpdfium_qpdf_optimize_ex_file.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_optimize_ex_file", in_path, out_path, flags, compressionLevel, objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
+            }
+            return (int)mh$.invokeExact(in_path, out_path, flags, compressionLevel, objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_inspect {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_inspect").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect(const uint8_t *input, int64_t inputLen, const char *password, char **json)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_inspect$descriptor() {
+        return jpdfium_qpdf_inspect.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect(const uint8_t *input, int64_t inputLen, const char *password, char **json)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_inspect$handle() {
+        return jpdfium_qpdf_inspect.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect(const uint8_t *input, int64_t inputLen, const char *password, char **json)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_inspect$address() {
+        return jpdfium_qpdf_inspect.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect(const uint8_t *input, int64_t inputLen, const char *password, char **json)
+     * }
+     */
+    public static int jpdfium_qpdf_inspect(MemorySegment input, long inputLen, MemorySegment password, MemorySegment json) {
+        var mh$ = jpdfium_qpdf_inspect.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_inspect", input, inputLen, password, json);
+            }
+            return (int)mh$.invokeExact(input, inputLen, password, json);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_inspect_file {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_inspect_file").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect_file(const char *in_path, const char *password, char **json)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_inspect_file$descriptor() {
+        return jpdfium_qpdf_inspect_file.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect_file(const char *in_path, const char *password, char **json)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_inspect_file$handle() {
+        return jpdfium_qpdf_inspect_file.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect_file(const char *in_path, const char *password, char **json)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_inspect_file$address() {
+        return jpdfium_qpdf_inspect_file.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_inspect_file(const char *in_path, const char *password, char **json)
+     * }
+     */
+    public static int jpdfium_qpdf_inspect_file(MemorySegment in_path, MemorySegment password, MemorySegment json) {
+        var mh$ = jpdfium_qpdf_inspect_file.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_inspect_file", in_path, password, json);
+            }
+            return (int)mh$.invokeExact(in_path, password, json);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_set_docinfo {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_LONG,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_set_docinfo").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo(const uint8_t *input, int64_t inputLen, const char *const *keys, const char *const *values, int32_t count, const char *password, uint8_t **output, int64_t *outputLen)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_set_docinfo$descriptor() {
+        return jpdfium_qpdf_set_docinfo.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo(const uint8_t *input, int64_t inputLen, const char *const *keys, const char *const *values, int32_t count, const char *password, uint8_t **output, int64_t *outputLen)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_set_docinfo$handle() {
+        return jpdfium_qpdf_set_docinfo.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo(const uint8_t *input, int64_t inputLen, const char *const *keys, const char *const *values, int32_t count, const char *password, uint8_t **output, int64_t *outputLen)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_set_docinfo$address() {
+        return jpdfium_qpdf_set_docinfo.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo(const uint8_t *input, int64_t inputLen, const char *const *keys, const char *const *values, int32_t count, const char *password, uint8_t **output, int64_t *outputLen)
+     * }
+     */
+    public static int jpdfium_qpdf_set_docinfo(MemorySegment input, long inputLen, MemorySegment keys, MemorySegment values, int count, MemorySegment password, MemorySegment output, MemorySegment outputLen) {
+        var mh$ = jpdfium_qpdf_set_docinfo.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_set_docinfo", input, inputLen, keys, values, count, password, output, outputLen);
+            }
+            return (int)mh$.invokeExact(input, inputLen, keys, values, count, password, output, outputLen);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class jpdfium_qpdf_set_docinfo_file {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_POINTER,
+            JpdfiumH.C_INT,
+            JpdfiumH.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.find("jpdfium_qpdf_set_docinfo_file").orElse(null);
+
+        public static final MethodHandle HANDLE = ADDR != null ? Linker.nativeLinker().downcallHandle(ADDR, DESC) : null;
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo_file(const char *in_path, const char *out_path, const char *const *keys, const char *const *values, int32_t count, const char *password)
+     * }
+     */
+    public static FunctionDescriptor jpdfium_qpdf_set_docinfo_file$descriptor() {
+        return jpdfium_qpdf_set_docinfo_file.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo_file(const char *in_path, const char *out_path, const char *const *keys, const char *const *values, int32_t count, const char *password)
+     * }
+     */
+    public static MethodHandle jpdfium_qpdf_set_docinfo_file$handle() {
+        return jpdfium_qpdf_set_docinfo_file.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo_file(const char *in_path, const char *out_path, const char *const *keys, const char *const *values, int32_t count, const char *password)
+     * }
+     */
+    public static MemorySegment jpdfium_qpdf_set_docinfo_file$address() {
+        return jpdfium_qpdf_set_docinfo_file.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * int32_t jpdfium_qpdf_set_docinfo_file(const char *in_path, const char *out_path, const char *const *keys, const char *const *values, int32_t count, const char *password)
+     * }
+     */
+    public static int jpdfium_qpdf_set_docinfo_file(MemorySegment in_path, MemorySegment out_path, MemorySegment keys, MemorySegment values, int count, MemorySegment password) {
+        var mh$ = jpdfium_qpdf_set_docinfo_file.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("jpdfium_qpdf_set_docinfo_file", in_path, out_path, keys, values, count, password);
+            }
+            return (int)mh$.invokeExact(in_path, out_path, keys, values, count, password);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

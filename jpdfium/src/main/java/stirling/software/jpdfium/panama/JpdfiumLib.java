@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.concurrent.locks.Lock;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -61,6 +62,8 @@ public final class JpdfiumLib {
     public static final int ERR_UNCOMMITTED_MARKS  =  -6;
     public static final int ERR_REDACT_INCOMPLETE  =  -7;
     public static final int ERR_REDACT_UNVERIFIABLE =  -8;
+    /** The native call modified content and then failed; the document no longer matches disk. */
+    public static final int ERR_CONTENT_MUTATED    = -10;
 
     // Image placement positions (match JPDFIUM_POSITION_* constants and Position enum ordinals)
     public static final int POSITION_TOP_LEFT      = 0;
@@ -150,7 +153,7 @@ public final class JpdfiumLib {
     }
 
     /** Expected bridge ABI version (mirrors {@code JPDFIUM_ABI_VERSION}). */
-    public static final int EXPECTED_ABI_VERSION = 1;
+    public static final int EXPECTED_ABI_VERSION = 2;
     /** Expected native pointer width: all supported targets are 64-bit. */
     public static final long EXPECTED_PTR_SIZE = 8;
     /** Expected {@code sizeof(FS_RECTF)}: four floats, no padding. */
@@ -340,6 +343,8 @@ public final class JpdfiumLib {
                     "Redaction incomplete: the post-redaction audit found content it could not remove - " + ctx);
             case ERR_REDACT_UNVERIFIABLE -> new RedactUnverifiableException(
                     "Redaction could not run or could not be verified; no silent fallback was applied - " + ctx);
+            case ERR_CONTENT_MUTATED   -> new JPDFiumException(
+                    "Content was modified before the operation failed - " + ctx, ERR_CONTENT_MUTATED);
             default                    -> new JPDFiumException("Native error " + rc + " - " + ctx);
         };
     }
@@ -590,7 +595,12 @@ public final class JpdfiumLib {
     public static void docSaveToFile(long doc, Path destination, SaveOptions options) {
         SaveOptions opts = options == null ? SaveOptions.fast() : options;
         try (OutputTransaction tx = OutputTransaction.begin(destination, opts.durable())) {
-            docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+            Lock saveLock = QpdfLib.acquireSaveReadLock();
+            try {
+                docSaveNative(doc, tx.staging().toAbsolutePath().toString(), opts.maxOutputBytes());
+            } finally {
+                QpdfLib.releaseSaveLock(saveLock);
+            }
             tx.publish(opts);
         } catch (IOException e) {
             throw new JPDFiumException("docSaveToFile failed", e);
@@ -621,7 +631,12 @@ public final class JpdfiumLib {
             throw new JPDFiumException("save temp creation failed", e);
         }
         try {
-            docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+            Lock saveLock = QpdfLib.acquireSaveReadLock();
+            try {
+                docSaveNative(doc, tmp.toAbsolutePath().toString(), opts.maxOutputBytes());
+            } finally {
+                QpdfLib.releaseSaveLock(saveLock);
+            }
             OutputTransaction.validateStaged(tmp, opts);
             return tmp;
         } catch (Throwable t) {
@@ -634,6 +649,15 @@ public final class JpdfiumLib {
     }
 
     public static byte[] docSaveBytes(long doc) {
+        Lock saveLock = QpdfLib.acquireSaveReadLock();
+        try {
+            return docSaveBytesLocked(doc);
+        } finally {
+            QpdfLib.releaseSaveLock(saveLock);
+        }
+    }
+
+    private static byte[] docSaveBytesLocked(long doc) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_doc_save_bytes(doc, ADDR_SCRATCH, LONG_SCRATCH), "docSaveBytes");
             MemorySegment nativePtr = ADDR_SCRATCH.get(ADDRESS, 0);
@@ -1336,12 +1360,13 @@ public final class JpdfiumLib {
     }
 
     /**
-     * Hard crop: physically remove everything outside the crop rectangle.
-     * Straddling text is split per character, straddling images are
+     * Hard crop: physically remove content wholly outside the crop rectangle.
+     * Words touching the crop edge keep their outside glyphs, and margin-kept
+     * content remains in the file; both are clipped only by the page boxes.
+     * Straddling words and objects are kept whole, straddling images are
      * pixel-erased outside (soft masks kept when the image can be rendered,
-     * nested images promoted),
-     * fully outside objects are removed. A post-pass audit returns
-     * {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
+     * nested images promoted), fully outside objects are removed. A post-pass
+     * audit returns {@code JPDFIUM_ERR_REDACT_INCOMPLETE} or
      * {@code JPDFIUM_ERR_REDACT_UNVERIFIABLE} when content survives or the
      * audit cannot run.
      *
@@ -1352,11 +1377,32 @@ public final class JpdfiumLib {
      * @param h    crop rect height
      */
     public static void cropRemoveContent(long page, float x, float y, float w, float h) {
+        cropRemoveContent(page, x, y, w, h, 0.0f);
+    }
+
+    /**
+     * Hard crop with a content-removal margin. A zero margin is AUTO: only
+     * content wholly outside the crop is removed; anything touching the crop
+     * survives. A positive margin keeps content within that many PDF points of
+     * the crop edge, so content is removed only once it is wholly outside the
+     * expanded rectangle. The page boxes are still set to the unexpanded crop,
+     * so margin-kept content remains clipped from view.
+     *
+     * @param page   bridge page handle
+     * @param x      crop rect left (PDF points)
+     * @param y      crop rect bottom (PDF points)
+     * @param w      crop rect width
+     * @param h      crop rect height
+     * @param margin content-removal margin in PDF points; {@code 0} is AUTO
+     */
+    public static void cropRemoveContent(long page, float x, float y, float w, float h,
+                                         float margin) {
         // Leaf admission: five captured arguments made this one of the hottest
         // allocating call sites (see docPageCount).
         PdfiumRuntime.enterLeaf();
         try {
-            check(JpdfiumH.jpdfium_crop_remove_content(page, x, y, w, h), "cropRemoveContent");
+            check(JpdfiumH.jpdfium_crop_remove_content_ex(page, x, y, w, h, margin),
+                    "cropRemoveContent");
         } finally {
             PdfiumRuntime.exitLeaf();
         }
@@ -1455,6 +1501,27 @@ public final class JpdfiumLib {
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_page_to_image(doc, pageIndex, dpi), "pageToImage");
+        });
+    }
+
+    /**
+     * Bakes annotations and form fields into page content on every page, in one native pass over
+     * the document handle.
+     */
+    public static void docFlattenAnnotations(long doc) {
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_doc_flatten_annotations(doc), "docFlattenAnnotations");
+        });
+    }
+
+    /**
+     * Rasterizes every page at {@code dpi} and replaces its content with that image. One render
+     * frame is reused until the page size changes, when it is reallocated.
+     */
+    public static void docFlattenToImages(long doc, int dpi) {
+        if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+        PdfiumRuntime.execute(() -> {
+            check(JpdfiumH.jpdfium_doc_flatten_to_images(doc, dpi), "docFlattenToImages");
         });
     }
 
