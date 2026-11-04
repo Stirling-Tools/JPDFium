@@ -14,6 +14,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
 import stirling.software.jpdfium.doc.Signature;
 import stirling.software.jpdfium.doc.SignatureDetails;
+import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.ColorType;
 import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.model.ImageFormat;
@@ -1033,31 +1034,56 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <ul>
      *   <li>{@link FlattenMode#ANNOTATIONS}: bakes annotations and form fields into
-     *       the content stream. Text remains selectable. Uses native PDFium
-     *       {@code jpdfium_page_flatten}.</li>
+     *       the content stream. Text remains selectable. Runs {@code
+     *       jpdfium_doc_flatten_annotations}.</li>
      *   <li>{@link FlattenMode#FULL}: rasterizes each page at the given DPI,
-     *       replacing all content with an image. Nothing is selectable. Uses native
-     *       PDFium {@code jpdfium_page_to_image}.</li>
+     *       replacing all content with an image. Nothing is selectable. Runs {@code
+     *       jpdfium_doc_flatten_to_images}.</li>
      * </ul>
+     *
+     * <p>A whole-document pass holds the process-wide PDFium domain for its whole
+     * duration, so other operations wait for it to finish; use
+     * {@link #flattenPage(int, int)} for interactive work.
      *
      * @param mode what to flatten (see {@link FlattenMode})
      * @param dpi  render resolution for {@link FlattenMode#FULL} (ignored for other modes)
      */
     public void flatten(FlattenMode mode, int dpi) {
         ensureOpen();
-        int count = pageCount();
-        for (int i = 0; i < count; i++) {
-            switch (mode) {
-                case ANNOTATIONS -> {
-                    long pageHandle = JpdfiumLib.pageOpen(handle, i);
-                    try {
-                        JpdfiumLib.pageFlatten(pageHandle);
-                    } finally {
-                        JpdfiumLib.pageClose(pageHandle);
-                    }
+        if (mode == null) throw new IllegalArgumentException("mode must not be null");
+        switch (mode) {
+            case ANNOTATIONS -> {
+                // Flatten rewrites page content in place and keeps every open page
+                // valid, so a partial pass only needs the content flag.
+                try {
+                    JpdfiumLib.docFlattenAnnotations(handle);
+                } finally {
+                    // A failed pass can still have baked the pages before it.
                     markContentModified();
                 }
-                case FULL -> convertPageToImage(i, dpi);
+            }
+            case FULL -> {
+                // Validate before the try: the Java guard in JpdfiumLib throws
+                // for a non-positive dpi before any native work, and the finally
+                // below would otherwise mark pages stale for an untouched
+                // document.
+                if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
+                // The native pass rolls back any failure it can still undo and reports
+                // CONTENT_MUTATED only once the replaced pages can no longer be restored.
+                boolean replacedPages = false;
+                try {
+                    JpdfiumLib.docFlattenToImages(handle, dpi);
+                    // An empty document leaves nothing replaced, so nothing is stale.
+                    replacedPages = pageCount() > 0;
+                } catch (JPDFiumException e) {
+                    replacedPages = e.isContentMutated();
+                    throw e;
+                } finally {
+                    if (replacedPages) {
+                        invalidateOpenPages();
+                        markContentModified();
+                    }
+                }
             }
         }
     }
@@ -1371,8 +1397,10 @@ public final class PdfDocument implements AutoCloseable {
         ensureOpen();
         if (dpi <= 0) throw new IllegalArgumentException("dpi must be > 0");
         JpdfiumLib.pageToImage(handle, pageIndex, dpi);
-        markContentModified();
+        // The page is replaced by an image, so the document no longer matches
+        // the bytes it was opened with.
         invalidateOpenPages();
+        markContentModified();
     }
 
     /**

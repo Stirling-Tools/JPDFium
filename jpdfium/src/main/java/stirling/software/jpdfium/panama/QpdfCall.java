@@ -11,24 +11,11 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Per-call confined FFM context for in-process QPDF structural operations.
+ * Per-call FFM arena for qpdf operations. QPDF never enters the PDFium domain,
+ * so calls run concurrently; level-setting writers serialize natively.
  *
- * <p>Each QPDF invocation owns its argument storage, output pointer/length
- * slots, and arena lifetime. Nothing here touches the PdfiumRuntime execution
- * domain or the PDFium shared scratch slots in {@link JpdfiumLib}, which is
- * what allows QPDF merge/extract/optimize/encrypt/decrypt/sanitize to run
- * concurrently with each other: QPDF never enters the PDFium domain, so it is
- * never serialized against PDFium work.
- *
- * <p>QPDF thread-safety contract (one {@code QPDF}/{@code QPDFWriter} per
- * call, never shared across threads) is satisfied because every bridge entry
- * point constructs its own instances from call-local inputs only; the only
- * deliberately shared knob (zlib level via {@code Pl_Flate}) is left unwired
- * for exactly this reason.
- *
- * <p>Use with try-with-resources; closing the arena invalidates every segment
- * allocated through it. Detached native result buffers must be copied and
- * freed via {@link #copyAndFree} before close.
+ * <p>Use try-with-resources and copy detached buffers with
+ * {@link #copyAndFree} before close.
  */
 final class QpdfCall implements AutoCloseable {
 

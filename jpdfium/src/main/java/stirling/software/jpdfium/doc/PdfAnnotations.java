@@ -32,6 +32,8 @@ import stirling.software.jpdfium.exception.JPDFiumException;
  */
 public final class PdfAnnotations {
 
+    private static final int[] EMPTY_OBJECT_NUMBERS = new int[0];
+
     private PdfAnnotations() {}
 
     /**
@@ -212,7 +214,7 @@ public final class PdfAnnotations {
      */
     public static int[] clipToRect(MemorySegment page, Rect crop) {
         int n = count(page);
-        if (n <= 0) return new int[0];
+        if (n <= 0) return EMPTY_OBJECT_NUMBERS;
         List<Integer> removed = new ArrayList<>();
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment rectSeg = arena.allocate(AnnotationBindings.FS_RECTF_LAYOUT);

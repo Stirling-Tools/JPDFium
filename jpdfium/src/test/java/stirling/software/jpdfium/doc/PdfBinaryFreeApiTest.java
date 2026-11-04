@@ -108,8 +108,8 @@ class PdfBinaryFreeApiTest {
 
     @Test
     void optimizerBackendProbe() {
-        assertFalse(PdfOptimizer.isImageOptimizationSupported(),
-                "qpdf writer path has no image optimization");
+        assertEquals(PdfOptimizer.isSupported(), PdfOptimizer.isImageOptimizationSupported(),
+                "the native qpdf writer exposes its image pass whenever the writer is present");
     }
 
     @Test

@@ -585,6 +585,40 @@ assert_bundle_arch() {
     [ "$failed" -eq 0 ] || exit 1
 }
 
+# Windows bundles may stage trimmed ICU data for multiple major versions (the
+# prep job builds 78 and 79). Keep only the icudt*.dll imported by the ICU
+# library that vcpkg actually selected; the orphan check rejects the rest.
+prune_unused_windows_icu() {
+    case "$PLATFORM" in
+        windows-*|vips-windows-*) ;;
+        *) return 0 ;;
+    esac
+    local db
+    if command -v dumpbin >/dev/null 2>&1; then
+        db=dumpbin
+    else
+        db=$(find "/c/Program Files/Microsoft Visual Studio" -name 'dumpbin.exe' 2>/dev/null | head -1 || true)
+    fi
+    [ -n "$db" ] || return 0
+    local imports
+    imports=$(mktemp 2>/dev/null || mktemp -t icu-imports)
+    : > "$imports"
+    local f
+    for f in "$DIST_DIR"/*.dll; do
+        [ -e "$f" ] || continue
+        "$db" //dependents "$f" 2>/dev/null \
+            | grep -oiE 'icudt[0-9]+\.dll' | tr 'A-Z' 'a-z' >> "$imports" || true
+    done
+    sort -u -o "$imports" "$imports"
+    for f in "$DIST_DIR"/icudt*.dll; do
+        [ -e "$f" ] || continue
+        local base
+        base=$(basename "$f" | tr 'A-Z' 'a-z')
+        grep -qx "$base" "$imports" || rm -f "$f"
+    done
+    rm -f "$imports"
+}
+
 # The source-built vips links the distro ICU, whose full data file (~30 MB)
 # would dominate the bundle. Swap it for the core bundle's trimmed copy (same
 # data, ~0.45 MB) before strip/sign/checks. The core dist for this platform is
@@ -750,6 +784,7 @@ case "$PLATFORM" in
         assert_bundle_arch
         prune_windows_icu_data
         swap_full_icudata
+        prune_unused_windows_icu
         find "$DIST_DIR" -maxdepth 1 -type f \
             \( -name '*allocator_shim*' -o -name '*raw_ptr*' \) -print -delete
         if command -v llvm-strip >/dev/null 2>&1; then

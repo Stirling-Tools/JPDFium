@@ -288,6 +288,16 @@ if(JPDFIUM_USE_PDFIUM)
         target_link_libraries(jpdfium PRIVATE "${PDFIUM_LIB}")
     endif()
 
+    # Optional TurboJPEG: powers the FULL flatten DCT embed. Without it the
+    # bridge falls back to the raw bitmap embed.
+    find_path(TURBOJPEG_INCLUDE turbojpeg.h HINTS /opt/homebrew/include /usr/local/include)
+    find_library(TURBOJPEG_LIB NAMES turbojpeg libturbojpeg)
+    if(TURBOJPEG_INCLUDE AND TURBOJPEG_LIB)
+        target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
+        target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+    endif()
+
     find_program(CARGO_CMD cargo)
     if(NOT CARGO_CMD)
         message(FATAL_ERROR
@@ -432,6 +442,10 @@ if(JPDFIUM_USE_PDFIUM)
     target_link_libraries(jpdfium PRIVATE ${QPDF_LIBRARIES})
     target_compile_options(jpdfium PRIVATE ${QPDF_CFLAGS_OTHER})
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_QPDF)
+
+    # Pl_DCT's jpeg_set_quality callback needs libjpeg symbols directly.
+    find_package(JPEG REQUIRED)
+    target_link_libraries(jpdfium PRIVATE JPEG::JPEG)
     # Silence qpdf's PointerHolder transition #warning (treated as error by
     # CMAKE_COMPILE_WARNING_AS_ERROR). The bridge uses the modern
     # std::shared_ptr qpdf API (e.g. QPDFWriter::getBufferSharedPointer) and
