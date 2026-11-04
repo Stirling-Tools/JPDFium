@@ -109,7 +109,8 @@ void runCropEngineChecks() {
         return;
     }
 
-    // Left-half hard crop: removes DROP_ME, fissions STRADDLING at x=306.
+    // Left-half hard crop: removes DROP_ME, preserves the straddling word at
+    // x=306 whole (crop no longer splits a word that touches the boundary).
     rc = jpdfium_crop_remove_content(cpage, 0.0f, 0.0f, 306.0f, 792.0f);
     CHECK(rc == JPDFIUM_OK, "crop left half");
 
@@ -187,6 +188,16 @@ void runPositivePath() {
           "crop negative height");
     CHECK(jpdfium_crop_remove_content(page, 0.0f, 0.0f, 10.0f, 10.0f) == JPDFIUM_OK,
           "crop valid rect");
+    CHECK(jpdfium_crop_remove_content_ex(page, 0.0f, 0.0f, 10.0f, 10.0f, 0.0f) == JPDFIUM_OK,
+          "crop AUTO margin");
+    CHECK(jpdfium_crop_remove_content_ex(page, 0.0f, 0.0f, 10.0f, 10.0f, 1.0f) == JPDFIUM_OK,
+          "crop 1pt margin");
+    CHECK(jpdfium_crop_remove_content_ex(page, 0.0f, 0.0f, 10.0f, 10.0f, -1.0f) ==
+              JPDFIUM_ERR_INVALID,
+          "crop negative margin");
+    CHECK(
+        jpdfium_crop_remove_content_ex(page, 0.0f, 0.0f, 10.0f, 10.0f, NAN) == JPDFIUM_ERR_INVALID,
+        "crop NaN margin");
     CHECK(
         jpdfium_redact_region(page, NAN, 0.0f, 10.0f, 10.0f, 0xFF000000, 1) == JPDFIUM_ERR_INVALID,
         "redact_region NaN x");

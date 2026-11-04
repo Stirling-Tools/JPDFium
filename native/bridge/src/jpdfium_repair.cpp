@@ -178,6 +178,8 @@ bool publish_staged(const std::string& staging, const char* destination) {
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_writer_lock.h"
+
 // Helper: serialize qpdf warnings to JSON array
 static std::string warnings_to_json(const std::vector<QPDFExc>& warnings) {
     std::ostringstream os;
@@ -230,6 +232,7 @@ static int try_qpdf_repair(const uint8_t* input, int64_t inputLen, uint8_t** out
             writer.forcePDFVersion("1.4");
         }
 
+        jpdfium_qpdf_internal::WriterLock lock{-1};
         writer.write();
 
         auto warnings = pdf.getWarnings();
@@ -285,6 +288,7 @@ static int try_qpdf_repair_file(const char* inputPath, const char* outputPath, i
                 writer.forcePDFVersion("1.4");
             }
 
+            jpdfium_qpdf_internal::WriterLock lock{-1};
             writer.write();
             const bool closed = std::fclose(probe) == 0;
             probe = nullptr;
