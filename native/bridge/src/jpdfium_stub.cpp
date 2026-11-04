@@ -1273,6 +1273,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t, int32_t remove_content,
     return JPDFIUM_OK;
 }
 
+void jpdfium_set_image_decoder(jpdfium_image_decoder_fn) noexcept {}
+
 int32_t jpdfium_doc_sanitize_report(int64_t doc, char** json) noexcept {
     auto it = g_docs.find(doc);
     if (it == g_docs.end() || !json) return JPDFIUM_ERR_INVALID;

@@ -4,6 +4,7 @@
 // fonts, image, fission, pattern, audit) sharing jpdfium_redact_internal.h.
 // This file keeps the C entry points plus the thread-local scratch they run on.
 
+#include <epdf_annot.h>
 #include <epdf_redact.h>
 #include <fpdf_annot.h>
 #include <fpdf_edit.h>
@@ -1000,6 +1001,10 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
         bool epdfOk = true;
         for (auto& item : redactAnnots) {
+            // Drop Acrobat's pre-baked /RO overlay: EmbedPDF ignores its /Matrix and
+            // repaints it near the origin, while we draw our own cover below.
+            EPDFAnnot_RemoveKey(item.annot, "RO");
+
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &item.annot, 1, &rem);
             FPDFPage_CloseAnnot(item.annot);
