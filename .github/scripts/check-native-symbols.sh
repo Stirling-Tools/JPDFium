@@ -22,6 +22,8 @@ EXPECTED=(
   jpdfium_render_page_into
   jpdfium_render_page_form_into
   jpdfium_text_get_chars
+  jpdfium_doc_flatten_annotations
+  jpdfium_doc_flatten_to_images
   jpdfium_redact_words_ex
   jpdfium_pcre2_compile
   jpdfium_flashtext_create

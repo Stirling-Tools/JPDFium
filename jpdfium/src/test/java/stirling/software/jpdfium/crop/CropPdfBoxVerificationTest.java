@@ -130,10 +130,10 @@ class CropPdfBoxVerificationTest {
 
     @Test
     void formChildTextRemovalLeavesNoStaleStream() throws Exception {
-        // Single survivor run ("KEEP"): a stale form stream would leave
-        // "SECRETKEEP" extractable.
-        byte[] output = cropFirstPage(CropTestPdfGenerator.formNestedSingleWordPdf(),
-                new Rect(155, 0, 457, 792));
+        // SECRET is wholly outside the crop and KEEP survives. A stale form
+        // stream would leave SECRET extractable.
+        byte[] output = cropFirstPage(CropTestPdfGenerator.formNestedSplitWordPdf(),
+                new Rect(165, 0, 447, 792));
         try (PDDocument doc = Loader.loadPDF(output)) {
             String text = new PDFTextStripper().getText(doc);
             assertFalse(text.contains("SECRET"),

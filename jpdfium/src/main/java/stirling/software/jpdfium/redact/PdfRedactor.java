@@ -170,7 +170,10 @@ public final class PdfRedactor {
 
                         long tPrefilterStart = System.nanoTime();
                         scratchMatches.clear();
-                        kwIndex.findMatches(scratch.charBuffer(), charCount, options.wholeWord(), scratchMatches);
+                        // Screen by substring even for whole-word requests: FPDFText_GetText drops
+                        // characters the native matcher reads (U+0002 word gaps in some fonts), so a
+                        // boundary missing here can still be a native \b match.
+                        kwIndex.findMatches(scratch.charBuffer(), charCount, false, scratchMatches);
                         pagePrefilterNs[i] = System.nanoTime() - tPrefilterStart;
 
                         if (!scratchMatches.isEmpty()) {

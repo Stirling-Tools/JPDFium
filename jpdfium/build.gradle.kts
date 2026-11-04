@@ -187,7 +187,9 @@ val jpdfiumFunctions = listOf(
     "jpdfium_text_get_char_positions",
     "jpdfium_redact_region", "jpdfium_redact_pattern", "jpdfium_redact_words",
     "jpdfium_redact_words_ex", "jpdfium_crop_remove_content",
+    "jpdfium_crop_remove_content_ex",
     "jpdfium_page_flatten", "jpdfium_page_to_image",
+    "jpdfium_doc_flatten_annotations", "jpdfium_doc_flatten_to_images",
     // Advanced Pattern Engine (PCRE2 JIT)
     "jpdfium_pcre2_compile", "jpdfium_pcre2_match_all", "jpdfium_pcre2_free",
     "jpdfium_luhn_validate",
@@ -236,7 +238,13 @@ val jpdfiumFunctions = listOf(
     "jpdfium_rust_free",
     // QPDF in-process functions
     "jpdfium_qpdf_optimize",
+    "jpdfium_qpdf_optimize_ex",
     "jpdfium_qpdf_optimize_file",
+    "jpdfium_qpdf_optimize_ex_file",
+    "jpdfium_qpdf_inspect",
+    "jpdfium_qpdf_inspect_file",
+    "jpdfium_qpdf_set_docinfo",
+    "jpdfium_qpdf_set_docinfo_file",
     "jpdfium_qpdf_sanitize",
     "jpdfium_qpdf_sanitize_file",
     "jpdfium_qpdf_merge",
@@ -352,7 +360,10 @@ val patchBindingsForCrossPlatform = tasks.register("patchBindingsForCrossPlatfor
 
             // qpdf symbols are optional in stub/non-qpdf builds. Make their lookup graceful.
             val qpdfFuncs = listOf(
-                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_file",
+                "jpdfium_qpdf_optimize", "jpdfium_qpdf_optimize_ex",
+                "jpdfium_qpdf_optimize_file", "jpdfium_qpdf_optimize_ex_file",
+                "jpdfium_qpdf_inspect", "jpdfium_qpdf_inspect_file",
+                "jpdfium_qpdf_set_docinfo", "jpdfium_qpdf_set_docinfo_file",
                 "jpdfium_qpdf_sanitize", "jpdfium_qpdf_merge",
                 "jpdfium_qpdf_extract_pages", "jpdfium_qpdf_encrypt", "jpdfium_qpdf_decrypt"
             )
@@ -518,6 +529,8 @@ tasks.register<Test>("nativeSmokeTest") {
     systemProperty("jpdfium.smoke", "true")
     filter {
         includeTestsMatching("*NativeSmokeTest")
+        // Flatten assertions need real PDFium: the stub-based :test task skips them.
+        includeTestsMatching("*FlattenApiTest")
         includeTestsMatching("*PdfEncryptionCopyTest")
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")

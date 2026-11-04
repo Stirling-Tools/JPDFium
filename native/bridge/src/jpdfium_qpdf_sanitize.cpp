@@ -33,12 +33,15 @@
 #include <qpdf/QPDFPageDocumentHelper.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_writer_lock.h"
+
 namespace {
 
 // Same one-buffer-per-writer policy as createOutputFile in jpdfium_qpdf.cpp:
 // the default 4 KiB stdio buffer turns a large save into thousands of small
 // write(2) calls.
 constexpr std::size_t kQpdfIoBufferBytes = static_cast<std::size_t>(256) * 1024;
+using jpdfium_qpdf_internal::WriterLock;
 
 struct QpdfResult {
     std::shared_ptr<Buffer> buffer;
@@ -145,6 +148,7 @@ QpdfResult sanitize(std::span<const uint8_t> input, int32_t flags) {
 
         QPDFWriter w(*qpdf);
         w.setOutputMemory();
+        WriterLock lock{-1};
         w.write();
 
         return {w.getBufferSharedPointer(), ""};
@@ -183,6 +187,7 @@ static int sanitizeFile(const char* in_path, const char* out_path, int32_t flags
             QPDFWriter w(*qpdf);
             w.setOutputFile("jpdfium-out", out, true);
             writerOwnsFile = true;
+            WriterLock lock{-1};
             w.write();
             return 0;
         } catch (const std::exception& e) {

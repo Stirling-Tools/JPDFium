@@ -828,7 +828,7 @@ JPDF_API FPDF_BOOL jpdf_guard_EPDFFont_AddFallbackFont(EPDF_FONT_ID font_id) noe
     jpdf::GuardScope guard(jpdf::Purpose::Ordinary);
     if (!guard.admitted()) return {};
     try {
-        return EPDFFont_AddFallbackFont(font_id);
+        return EPDFFont_AddFallbackFont(font_id, 0);
     } catch (...) {
         jpdf::set_guard_refusal(JPDF_E_INTERNAL);
         return {};

@@ -879,6 +879,8 @@ int32_t jpdfium_redact_glyph_aware(int64_t, const char**, int32_t, uint32_t, flo
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
 
+#include "jpdfium_qpdf_writer_lock.h"
+
 // Save an FPDF_DOCUMENT to a byte vector.
 static bool qpdf_save_fpdf(FPDF_DOCUMENT doc, std::vector<uint8_t>& out) {
     struct BufWriter : FPDF_FILEWRITE {
@@ -906,6 +908,7 @@ static std::vector<uint8_t> qpdf_write(QPDF& pdf) {
     writer.setOutputMemory();
     writer.setLinearization(false);
     writer.setCompressStreams(true);
+    jpdfium_qpdf_internal::WriterLock lock{-1};
     writer.write();
     std::shared_ptr<Buffer> buf = writer.getBufferSharedPointer();
     std::vector<uint8_t> result(buf->getSize());

@@ -44,6 +44,7 @@ extern "C" {
 #define JPDFIUM_ERR_REDACT_INCOMPLETE (-7)    // post-redaction audit found remaining text
 #define JPDFIUM_ERR_REDACT_UNVERIFIABLE (-8)  // redaction could not run/verify (no silent degrade)
 #define JPDFIUM_ERR_TOO_LARGE (-9)            // save aborted: output exceeded the byte budget
+#define JPDFIUM_ERR_CONTENT_MUTATED (-10)     // operation modified content, then failed
 #define JPDFIUM_ERR_NATIVE (-99)
 
 // Bridge ABI version and layout probe surface. Packaged Java/native
@@ -51,6 +52,7 @@ extern "C" {
 // layout facts (pointer width, PDFium struct geometry) instead of trusting
 // handwritten FFM patches. Bump the version on any ABI-breaking change.
 // 2: Java binds PDFium only through jpdf_guard_* shims and starts the jpdf_* runtime.
+
 #define JPDFIUM_ABI_VERSION (2)
 
 // Query ids for jpdfium_abi_query. Unknown ids return -1.
@@ -210,8 +212,16 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_region(int64_t page, float x, float y, flo
                                              uint32_t argb,
                                              int32_t remove_content) JPDFIUM_NOEXCEPT;
 // Hard crop: removes page objects lying outside the crop rectangle [x,y,x+w,y+h] (PDF coordinates).
+// A text word or object that only partly falls outside the crop is preserved whole.
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float y, float w,
                                                    float h) JPDFIUM_NOEXCEPT;
+// Hard crop with a content-removal margin in PDF points. A non-negative margin
+// expands the region whose content is kept: content is removed only when it lies
+// wholly outside [x-margin, y-margin, x+w+margin, y+h+margin]. A margin of zero
+// preserves every word/object that touches the crop and removes wholly outside
+// content (AUTO).
+JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w,
+                                                      float h, float margin) JPDFIUM_NOEXCEPT;
 // Content redaction. These entry points mutate the page content stream, so a
 // failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
 // original content in place: while such an incomplete redaction is pending, every
@@ -237,6 +247,21 @@ JPDFIUM_EXPORT int32_t jpdfium_redact_words_ex(int64_t page, const char** words,
                                                int32_t* matchCount) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_flatten(int64_t page) JPDFIUM_NOEXCEPT;
 JPDFIUM_EXPORT int32_t jpdfium_page_to_image(int64_t doc, int32_t pageIndex, int32_t dpi);
+
+// Document-wide flatten over a file-backed document handle.
+//
+// jpdfium_doc_flatten_annotations: bakes annotations/form fields into page content on every page
+// (FPDFPage_Flatten). Returns JPDFIUM_OK when every page flattened or had nothing to do. Flattening
+// rewrites page content in place: the FPDF_PAGE handles stay valid, so this does not bump the
+// structural generation.
+//
+// jpdfium_doc_flatten_to_images: rasterizes every page at `dpi` and replaces its content with the
+// resulting image, borrowing one scratch frame from the document. It returns
+// JPDFIUM_ERR_CONTENT_MUTATED when a failure happens after an earlier page was already replaced
+// (the document no longer matches the one that was opened); a failure before any page was replaced
+// reports its own code.
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_annotations(int64_t doc) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_doc_flatten_to_images(int64_t doc, int32_t dpi) JPDFIUM_NOEXCEPT;
 
 // Returns JSON: [{"i":0,"ox":10.1,"oy":20.2,"l":10.0,"r":18.0,"b":15.0,"t":27.0}, ...]
 JPDFIUM_EXPORT int32_t jpdfium_text_get_char_positions(int64_t page, char** json);
@@ -514,28 +539,61 @@ JPDFIUM_EXPORT int32_t jpdfium_repair_inspect(const uint8_t* input, int64_t inpu
 #define JPDFIUM_QPDF_COMPRESS_STREAMS 0x04
 #define JPDFIUM_QPDF_PRESERVE_UNREFERENCED 0x08
 #define JPDFIUM_QPDF_NORMALIZE_CONTENT 0x10
-// --remove-unreferenced-resources has no read/write-pass equivalent in qpdf
-// (it only applies during --pages splitting), so it is intentionally omitted.
+// QDF output, equivalent to qpdf --qdf.
+#define JPDFIUM_QPDF_QDF 0x20
+// Page-resource cleanup, equivalent to --remove-unreferenced-resources=yes.
+#define JPDFIUM_QPDF_REMOVE_UNREFERENCED_RESOURCES 0x40
+// Image pass, equivalent to --optimize-images; jpegQuality < 0 keeps DCT data.
+#define JPDFIUM_QPDF_OPTIMIZE_IMAGES 0x80
 // objectStreamMode: 0=disable,1=preserve,2=generate,-1=default
 // streamDataMode:   0=uncompress,1=preserve,2=compress,-1=default
 // decodeLevel:      0=none,1=generalized,2=specialized,3=all,-1=default
-// compressionLevel: accepted for ABI stability but currently IGNORED. qpdf's
-// only zlib-level knob (Pl_Flate::setCompressionLevel) is process-global, not
-// per-QPDFWriter, so exposing it here would race across concurrent requests.
+// compressionLevel: 1..9, -1 default (0 is a legacy alias). Levels are
+// process-global, so level-setting writers serialize.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t inputLen,
                                              uint8_t** output, int64_t* outputLen, int32_t flags,
                                              int32_t compressionLevel, int32_t objectStreamMode,
                                              int32_t streamDataMode, int32_t decodeLevel);
 
-// File-backed optimize: parses from disk, writes straight to disk. No
-// document-sized buffer exists on either side, so peak heap is independent of
-// document size. Honours the same flag/mode parameters as
-// jpdfium_qpdf_optimize; compressionLevel is likewise ignored. Returns 0 on
-// success. On failure a partial out_path may exist and should be removed by
-// the caller.
+// File-backed optimize; no document-sized buffer.
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path,
                                                   int32_t flags, int32_t objectStreamMode,
                                                   int32_t streamDataMode, int32_t decodeLevel);
+
+// Optimize with explicit JPEG quality; jpegQuality < 0 keeps DCT data.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t inputLen,
+                                                uint8_t** output, int64_t* outputLen, int32_t flags,
+                                                int32_t compressionLevel, int32_t objectStreamMode,
+                                                int32_t streamDataMode, int32_t decodeLevel,
+                                                int32_t jpegQuality);
+
+// File-backed extended optimize; accepts a compression level.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex_file(const char* in_path, const char* out_path,
+                                                     int32_t flags, int32_t compressionLevel,
+                                                     int32_t objectStreamMode,
+                                                     int32_t streamDataMode, int32_t decodeLevel,
+                                                     int32_t jpegQuality);
+
+// Inspect structure as JSON; caller frees *json with jpdfium_free_string.
+// A missing password yields {"status":"password_required"}.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,
+                                            const char* password, char** json);
+
+// File-backed inspect; no document-sized buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect_file(const char* in_path, const char* password,
+                                                 char** json);
+
+// Update/remove /Info entries; NULL value removes a key. Caller frees *output.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo(const uint8_t* input, int64_t inputLen,
+                                                const char* const* keys, const char* const* values,
+                                                int32_t count, const char* password,
+                                                uint8_t** output, int64_t* outputLen);
+
+// File-backed /Info update; caller should pass a staging path.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const char* out_path,
+                                                     const char* const* keys,
+                                                     const char* const* values, int32_t count,
+                                                     const char* password);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
