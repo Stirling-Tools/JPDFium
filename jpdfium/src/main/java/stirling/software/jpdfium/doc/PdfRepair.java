@@ -82,6 +82,11 @@ public final class PdfRepair {
     public boolean validateIcc() { return validateIcc; }
     public boolean validateJpx() { return validateJpx; }
 
+    /** True when the core qpdf-backed repair stage is available. */
+    public static boolean isSupported() {
+        return PdfOptimizer.isSupported();
+    }
+
     /** Create a new repair builder. */
     public static Builder builder() {
         return new Builder();
@@ -107,6 +112,31 @@ public final class PdfRepair {
     public static RepairResult.Status repairFile(Path input, Path output, int flags)
             throws IOException {
         return RepairLib.repairToFile(input, output, flags);
+    }
+
+    /**
+     * QDF repair with PDFium validation and the native repair cascade on
+     * failure.
+     *
+     * @return the first usable result, or {@link RepairResult.Status#FAILED}
+     */
+    public static RepairResult repairQdf(byte[] input) {
+        if (input == null || input.length == 0) {
+            return new RepairResult(RepairResult.Status.FAILED, null,
+                    "{\"error\":\"empty input\"}");
+        }
+
+        byte[] qdf = PdfOptimizer.repair(input);
+        if (qdf != null) {
+            try (PdfDocument doc = PdfDocument.open(qdf)) {
+                if (doc.pageCount() > 0) {
+                    return new RepairResult(RepairResult.Status.FIXED, qdf, inspect(input));
+                }
+            } catch (Exception _) {
+                // QDF output is not openable by PDFium; let the cascade try.
+            }
+        }
+        return builder().input(input).all().build().execute();
     }
 
     /**

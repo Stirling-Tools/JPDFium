@@ -55,17 +55,44 @@ public enum AnnotationType {
     /** FDF /Subtype name (mixed case), or {@code null} if not supported. */
     public String fdfName() { return fdfName; }
 
-    public static AnnotationType fromCode(int code) {
-        for (AnnotationType t : values()) {
-            if (t.code == code) return t;
+    /**
+     * Cached {@link #values()}: the implicit call clones the constant array, and the lookups below
+     * run once per annotation.
+     */
+    private static final AnnotationType[] VALUES = values();
+
+    /** Code-indexed lookup built once from {@link #VALUES}. */
+    private static final AnnotationType[] BY_CODE = buildByCode();
+
+    private static AnnotationType[] buildByCode() {
+        int max = 0;
+        for (AnnotationType t : VALUES) {
+            if (t.code > max) {
+                max = t.code;
+            }
         }
-        return UNKNOWN;
+        AnnotationType[] byCode = new AnnotationType[max + 1];
+        // First entry with a given code wins.
+        for (AnnotationType t : VALUES) {
+            if (byCode[t.code] == null) {
+                byCode[t.code] = t;
+            }
+        }
+        return byCode;
+    }
+
+    public static AnnotationType fromCode(int code) {
+        if (code < 0 || code >= BY_CODE.length) {
+            return UNKNOWN;
+        }
+        AnnotationType t = BY_CODE[code];
+        return t != null ? t : UNKNOWN;
     }
 
     public static AnnotationType fromXfdfTag(String tag) {
         if (tag == null) return null;
         String lower = tag.toLowerCase(Locale.ROOT);
-        for (AnnotationType t : values()) {
+        for (AnnotationType t : VALUES) {
             if (lower.equals(t.xfdfTag)) return t;
         }
         return null;
@@ -73,7 +100,7 @@ public enum AnnotationType {
 
     public static AnnotationType fromFdfName(String name) {
         if (name == null) return null;
-        for (AnnotationType t : values()) {
+        for (AnnotationType t : VALUES) {
             if (name.equals(t.fdfName)) return t;
         }
         return null;

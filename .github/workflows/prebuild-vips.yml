@@ -15,6 +15,11 @@ on:
         description: 'libvips tag (vX.Y.Z)'
         type: string
         default: v8.18.6
+      dry-run:
+        description: 'Build and verify artifacts but do not create a release or PR'
+        type: boolean
+        required: false
+        default: false
   # Weekly cron: Monday 04:00 UTC, after the Prebuild PDFium run.
   schedule:
     - cron: '0 4 * * 1'
@@ -137,7 +142,10 @@ jobs:
           VCPKG_BINARY_SOURCES: clear;default,readwrite
         run: |
           TRIPLET="${{ matrix.triplet }}"
-          VCPKG_ROOT="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
+          # Normalize to forward slashes: several tools below pass this path to
+          # Python, where a literal backslash (for example \v in C:\vcpkg) is
+          # interpreted as an escape sequence.
+          VCPKG_ROOT="$(cygpath -m "${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}")"
           INSTALL_ROOT="$(cygpath -m "$VCPKG_ROOT/installed")"
           # The manifest pins a builtin-baseline for reproducibility. vcpkg
           # resolves versions from the checkout's working tree, so fetch that
@@ -152,6 +160,47 @@ jobs:
               || { echo "ERROR: could not check out vcpkg baseline $BASELINE" >&2; exit 1; }
             git -C "$VCPKG_ROOT" log -1 --format='vcpkg baseline: %H %s'
           fi
+
+          # orc is only published on archive.apache.org, which is frequently
+          # slow or unreachable from GitHub runners; vcpkg gives up after two
+          # short retries and fails the whole install. Prime vcpkg's download
+          # cache from the active Apache mirrors first, verifying the SHA512
+          # from the pinned portfile.
+          check_sha() {
+            python3 -c 'import hashlib,sys; h=hashlib.sha512(); f=open(sys.argv[1],"rb"); [h.update(c) for c in iter(lambda: f.read(1 << 20), b"")]; sys.exit(0 if h.hexdigest() == sys.argv[2] else 1)' "$1" "$2"
+          }
+          ORC_VERSION=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['version'])" "$VCPKG_ROOT/ports/orc/vcpkg.json")
+          ORC_SHA=$(sed -n 's/.*SHA512 \([0-9a-f]\{128\}\).*/\1/p' "$VCPKG_ROOT/ports/orc/portfile.cmake" | head -1)
+          if [ -n "$ORC_VERSION" ] && [ -n "$ORC_SHA" ]; then
+            ORC_DIR="$VCPKG_ROOT/downloads"
+            ORC_FILE="$ORC_DIR/orc-${ORC_VERSION}.tar.gz"
+            mkdir -p "$ORC_DIR"
+            if [ ! -f "$ORC_FILE" ] || ! check_sha "$ORC_FILE" "$ORC_SHA"; then
+              rm -f "$ORC_FILE" "$ORC_FILE.part"
+              for mirror in \
+                https://downloads.apache.org/orc \
+                https://dlcdn.apache.org/orc \
+                https://archive.apache.org/dist/orc; do
+                URL="$mirror/orc-${ORC_VERSION}/orc-${ORC_VERSION}.tar.gz"
+                echo "Priming vcpkg cache: $URL"
+                if curl -fL --retry 5 --retry-all-errors --retry-delay 5 \
+                    --connect-timeout 30 --max-time 600 \
+                    "$URL" -o "$ORC_FILE.part" && check_sha "$ORC_FILE.part" "$ORC_SHA"; then
+                  mv "$ORC_FILE.part" "$ORC_FILE"
+                  break
+                fi
+                rm -f "$ORC_FILE.part"
+              done
+            fi
+            if check_sha "$ORC_FILE" "$ORC_SHA" 2>/dev/null; then
+              echo "orc $ORC_VERSION archive cached and verified"
+            else
+              echo "WARNING: could not pre-fetch orc $ORC_VERSION; vcpkg will retry its own download" >&2
+            fi
+          else
+            echo "WARNING: could not read orc version/SHA512 from the vcpkg checkout" >&2
+          fi
+
           # Manifest mode: the manifest disables libheif's default `hevc`
           # feature (GPL-2 x265) and selects permissive codecs only.
           bash native/vcpkg-install.sh \
@@ -585,7 +634,7 @@ jobs:
     needs: [marker, resolve-sha, build]
     # The asset check below is the publication gate. Do not gate on the whole
     # matrix: a FreeBSD VM failure is optional and must not hide other assets.
-    if: always() && needs.resolve-sha.result == 'success' && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
+    if: always() && inputs.dry-run != true && needs.resolve-sha.result == 'success' && (github.event_name != 'pull_request' || needs.marker.outputs.run == 'true')
     permissions:
       contents: write
       pull-requests: write    # open the auto pin-bump PR
