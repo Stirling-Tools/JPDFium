@@ -68,8 +68,12 @@ publishing workflows, not library releases, so they are not listed here.
   unpinned `ubuntu-latest` runner, so they failed to load on Ubuntu 24.04 and
   any other distribution with an older glibc, with
   "version `GLIBC_2.43' not found". linux-x64 now builds on Ubuntu 24.04 like
-  linux-arm64, and a build gate fails any Linux natives jar that needs a glibc
-  newer than 2.39 or a libstdc++ newer than `GLIBCXX_3.4.33`.
+  linux-arm64. PDFium and vips prebuild producers use the same baseline,
+  and publication gates reject shared libraries and final bundles requiring
+  glibc newer than 2.39, `GLIBCXX_3.4.33` or `CXXABI_1.3.15`.
+  Snapshot CI runs the staged Linux natives on Ubuntu 24.04 and 26.04,
+  including merge/extract preservation and vips codec tests, and rejects
+  skipped compatibility tests.
 - Merging and page extraction through qpdf kept only the pages and dropped the
   rest of the document: form fields, page labels, named destinations, viewer
   preferences, XMP metadata, the document language and the document
