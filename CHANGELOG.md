@@ -45,6 +45,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Applying annotation redactions produced by Adobe Acrobat (`commitRedactions`,
+  `applyRedaction`, and `applyRedactions`) unexpectedly drew a duplicate black
+  box near the bottom-left corner of the page: Acrobat's pre-baked `/RO`
+  (Redact Overlay) Form XObject uses an offset matrix translation that the
+  native overlay flattening ignored. Existing `/RO` streams are now stripped
+  before applying redactions, preventing misaligned overlays from being
+  flattened into the page. This also drops any overlay text or custom colour
+  baked into Acrobat's `/RO` stream.
 - Whole-word redaction skipped pages where words are separated by control
   characters (some fonts map the space glyph to U+0002): the keyword prefilter
   reads text without those characters and saw the words joined. The prefilter
