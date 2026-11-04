@@ -536,7 +536,7 @@ tasks.register<Test>("nativeSmokeTest") {
 // The compatibility gate must exercise the real qpdf paths on each Ubuntu runtime.
 tasks.register<Test>("nativeCompatibilityTest") {
     group = "verification"
-    description = "Verify native loading and merge/extract preservation"
+    description = "Verify native loading, pattern matching and merge/extract preservation"
     useJUnitPlatform()
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
@@ -544,6 +544,7 @@ tasks.register<Test>("nativeCompatibilityTest") {
     filter {
         includeTestsMatching("*NativeSmokeTest")
         includeTestsMatching("*PdfMergeSplitPreservationTest")
+        includeTestsMatching("*PatternEngineTest")
     }
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     testLogging {

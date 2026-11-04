@@ -45,6 +45,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The UTF-8 pattern engine and UTF-32 redaction engine used different C++ structs
+  with the same name, violating the one-definition rule in optimized builds.
+  Their native pattern types now have distinct names.
 - Whole-word redaction skipped pages where words are separated by control
   characters (some fonts map the space glyph to U+0002): the keyword prefilter
   reads text without those characters and saw the words joined. The prefilter
