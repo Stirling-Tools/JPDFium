@@ -9,6 +9,7 @@ import stirling.software.jpdfium.doc.PdfAttachments;
 import stirling.software.jpdfium.doc.PdfBookmarks;
 import stirling.software.jpdfium.doc.PdfMerger;
 import stirling.software.jpdfium.doc.PdfMetadata;
+import stirling.software.jpdfium.doc.PdfMetadataEditor;
 import stirling.software.jpdfium.doc.PdfNamedPages;
 import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.doc.PdfSignatures;
@@ -69,6 +70,8 @@ import java.util.function.ObjIntConsumer;
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
 public final class PdfDocument implements AutoCloseable {
+
+    private static final MetadataTag[] METADATA_TAGS = MetadataTag.values();
 
     private final long handle;
     private volatile MemorySegment rawDocSegment;
@@ -1124,6 +1127,32 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
+     * Save incrementally to a file: the original bytes are retained and only
+     * changed objects are appended as a new revision. Existing digital
+     * signatures keep their original {@code /ByteRange} coverage, which a full
+     * {@link #save(Path)} does not preserve.
+     *
+     * <p>The write is transactional: PDFium streams to a sibling staging file
+     * and the destination is replaced only after a successful save.
+     */
+    public void saveIncremental(Path path) {
+        saveIncrementalTo(path, SaveOptions.fast());
+    }
+
+    /**
+     * Incremental save with an explicit output policy.
+     *
+     * @param destination target file, overwritten on success
+     * @param options     save policy; null uses {@link SaveOptions#fast()}
+     */
+    public void saveIncrementalTo(Path destination, SaveOptions options) {
+        ensureOpen();
+        if (destination == null) throw new IllegalArgumentException("destination must not be null");
+        JpdfiumLib.docSaveIncrementalToFile(handle, destination,
+                options == null ? SaveOptions.fast() : options);
+    }
+
+    /**
      * Save the document to a {@link WritableByteChannel} with bounded memory.
      *
      * <p>PDFium first spools to an owned temp file (guard held only for the
@@ -1472,15 +1501,34 @@ public final class PdfDocument implements AutoCloseable {
     }
 
     /**
-     * Get a specific metadata value by tag (e.g., "Title", "Author", "Creator").
+     * Get a specific metadata value by /Info dictionary key, including custom keys.
+     * Standard keys remain case-insensitive.
      */
     public Optional<String> metadata(String tag) {
-        for (MetadataTag metadataTag : MetadataTag.values()) {
+        if (tag == null) return Optional.empty();
+        for (MetadataTag metadataTag : METADATA_TAGS) {
             if (metadataTag.pdfKey().equalsIgnoreCase(tag)) {
                 return PdfMetadata.of(rawHandleForRead()).get(metadataTag);
             }
         }
-        return Optional.empty();
+        return PdfMetadata.of(rawHandleForRead()).get(tag);
+    }
+
+    /**
+     * Starts a metadata edit for this document.
+     *
+     * <pre>{@code
+     * doc.editMetadata()
+     *     .title("Quarterly report")
+     *     .author("Finance")
+     *     .custom("Department", "Finance")
+     *     .apply();
+     * doc.save(output);
+     * }</pre>
+     */
+    public PdfMetadataEditor editMetadata() {
+        ensureOpen();
+        return PdfMetadataEditor.on(this);
     }
 
     /**
@@ -1661,6 +1709,18 @@ public final class PdfDocument implements AutoCloseable {
     public long nativeHandle() {
         ensureOpen();
         markContentModified();
+        return handle;
+    }
+
+    /**
+     * Returns the bridge document handle for library-internal reads that cannot
+     * change the document.
+     *
+     * <p><strong>Internal use only.</strong> Unlike {@link #nativeHandle()}, this
+     * does not mark the document as modified.
+     */
+    public long nativeHandleForRead() {
+        ensureOpen();
         return handle;
     }
 

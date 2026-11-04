@@ -72,6 +72,7 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setRotation(page.rawHandle(), nativeRot);
         }
+        doc.markContentModified();
     }
 
     /**
@@ -87,6 +88,7 @@ public final class PdfPageGeometry {
                     rect.x(), rect.y(),
                     rect.x() + rect.width(), rect.y() + rect.height());
         }
+        doc.markContentModified();
     }
 
     /**
@@ -148,6 +150,7 @@ public final class PdfPageGeometry {
         Set<Integer> removedWidgets = new HashSet<>();
         cropSingle(doc, pageIndex, rect, contentRemovalMargin, removedWidgets);
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
+        doc.markContentModified();
     }
 
     /**
@@ -194,6 +197,7 @@ public final class PdfPageGeometry {
             cropSingle(doc, i, rect, contentRemovalMargin, removedWidgets);
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
+        doc.markContentModified();
     }
 
     /**
@@ -249,6 +253,7 @@ public final class PdfPageGeometry {
             cropSingle(doc, index, rect, contentRemovalMargin, removedWidgets);
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
+        doc.markContentModified();
     }
 
     /**
@@ -300,6 +305,7 @@ public final class PdfPageGeometry {
             }
         }
         clearUnplacedFormFields(doc.rawHandle(), removedWidgets);
+        doc.markContentModified();
     }
 
     /**
@@ -569,6 +575,7 @@ public final class PdfPageGeometry {
         try (PdfPage page = doc.page(pageIndex)) {
             PdfPageEditor.setMediaBox(page.rawHandle(), 0, 0, size.width(), size.height());
         }
+        doc.markContentModified();
     }
 
     /**
