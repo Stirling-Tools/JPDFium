@@ -20,7 +20,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -55,6 +58,14 @@ public final class QpdfLib {
      * invalid and rejected.
      */
     private static volatile Semaphore QPDF_PERMITS = createPermits();
+
+    /**
+     * Coordinates level-setting qpdf writers with PDFium saves that may run the
+     * in-domain qpdf sanitize pass. Saves take the read lock before entering the
+     * PDFium domain, so a writer that holds the native compression-level lock
+     * cannot stall unrelated PDFium work.
+     */
+    private static final ReentrantReadWriteLock SAVE_COORDINATION = new ReentrantReadWriteLock();
 
     /**
      * The configured bound, tracked apart from live semaphore availability:
@@ -112,9 +123,38 @@ public final class QpdfLib {
         return permits;
     }
 
+    /** Acquire the shared side of the save/level-writer coordination lock. */
+    public static Lock acquireSaveReadLock() {
+        Lock lock = SAVE_COORDINATION.readLock();
+        lock.lock();
+        return lock;
+    }
+
+    /** Release a lock returned by {@link #acquireSaveReadLock()}. */
+    public static void releaseSaveLock(Lock lock) {
+        if (lock != null) lock.unlock();
+    }
+
+    private static Lock acquireLevelWriteLock(int level) {
+        if (level <= 0) return null;
+        Lock lock = SAVE_COORDINATION.writeLock();
+        lock.lock();
+        return lock;
+    }
+
     /** Release a slot back to the semaphore that granted it. */
     public static void releaseSlot(Semaphore held) {
         if (held != null) held.release();
+    }
+
+    private static Semaphore acquireSlotOrThrow(String operation) {
+        try {
+            return acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException(
+                    "qpdf " + operation + " interrupted while waiting for a job slot", e);
+        }
     }
 
     /**
@@ -134,8 +174,38 @@ public final class QpdfLib {
         return OPTIMIZE_FILE_HANDLE != null;
     }
 
+    /** True when the extended optimize entry point (JPEG quality) is available. */
+    public static boolean isOptimizeExSupported() {
+        return JpdfiumH.jpdfium_qpdf_optimize_ex$address() != null;
+    }
+
+    /** True when the file-backed extended optimize downcall resolved. */
+    public static boolean isOptimizeExFileSupported() {
+        return OPTIMIZE_EX_FILE_HANDLE != null;
+    }
+
     public static boolean isOptimizeSupported() {
         return JpdfiumH.jpdfium_qpdf_optimize$address() != null;
+    }
+
+    /** True when the structural inspection entry point is available. */
+    public static boolean isInspectSupported() {
+        return JpdfiumH.jpdfium_qpdf_inspect$address() != null;
+    }
+
+    /** True when the file-backed structural inspection entry point is available. */
+    public static boolean isInspectFileSupported() {
+        return JpdfiumH.jpdfium_qpdf_inspect_file$address() != null;
+    }
+
+    /** True when the in-memory /Info editor is available. */
+    public static boolean isSetDocInfoSupported() {
+        return JpdfiumH.jpdfium_qpdf_set_docinfo$address() != null;
+    }
+
+    /** True when the file-backed /Info editor resolved. */
+    public static boolean isSetDocInfoFileSupported() {
+        return SET_DOCINFO_FILE_HANDLE != null;
     }
 
     public static boolean isSanitizeSupported() {
@@ -165,6 +235,16 @@ public final class QpdfLib {
                     "jpdfium_qpdf_optimize_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT,
                             JAVA_INT, JAVA_INT));
+    private static final MethodHandle OPTIMIZE_EX_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_optimize_ex_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, JAVA_INT, JAVA_INT,
+                            JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT));
+    private static final MethodHandle SET_DOCINFO_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_set_docinfo_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT,
+                            ADDRESS));
     private static final MethodHandle MERGE_FILES_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_merge_files",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
@@ -277,13 +357,20 @@ public final class QpdfLib {
         if (input == null || input.length == 0) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("optimization");
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
-            int rc = JpdfiumH.jpdfium_qpdf_optimize(
-                    inputSeg, input.length,
-                    call.outPtr, call.outLen,
-                    flags, compressionLevel,
-                    objectStreamMode, streamDataMode, decodeLevel);
+            int rc;
+            Lock levelLock = acquireLevelWriteLock(compressionLevel);
+            try {
+                rc = JpdfiumH.jpdfium_qpdf_optimize(
+                        inputSeg, input.length,
+                        call.outPtr, call.outLen,
+                        flags, compressionLevel,
+                        objectStreamMode, streamDataMode, decodeLevel);
+            } finally {
+                releaseSaveLock(levelLock);
+            }
 
             if (rc != 0 && rc != 3) {
                 return null;
@@ -292,7 +379,209 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf optimization failed", t);
+        } finally {
+            releaseSlot(held);
         }
+    }
+
+    /**
+     * Optimize with qpdf's image pass. {@code jpegQuality} is 0..100, or -1 to
+     * leave existing DCT data untouched.
+     */
+    public static byte[] optimize(byte[] input, int flags, int compressionLevel,
+            int objectStreamMode, int streamDataMode, int decodeLevel, int jpegQuality) {
+        if (jpegQuality < -1 || jpegQuality > 100) {
+            throw new IllegalArgumentException("jpegQuality must be -1 or 0..100");
+        }
+        // The legacy route already covers everything except explicit JPEG quality.
+        if (jpegQuality < 0) {
+            return optimize(input, flags, compressionLevel, objectStreamMode, streamDataMode,
+                    decodeLevel);
+        }
+        if (!isOptimizeExSupported() || input == null || input.length == 0) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("optimization");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            int rc;
+            Lock levelLock = acquireLevelWriteLock(compressionLevel);
+            try {
+                rc = JpdfiumH.jpdfium_qpdf_optimize_ex(
+                        inputSeg, input.length,
+                        call.outPtr, call.outLen,
+                        flags, compressionLevel,
+                        objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
+            } finally {
+                releaseSaveLock(levelLock);
+            }
+
+            if (rc != 0 && rc != 3) {
+                return null;
+            }
+            return call.copyAndFree("qpdfOptimize");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf optimization failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** Inspect PDF bytes. */
+    public static String inspect(byte[] input) {
+        return inspect(input, null);
+    }
+
+    /**
+     * Inspect PDF bytes with an optional password. Missing passwords produce a
+     * {@code password_required} report rather than null.
+     */
+    public static String inspect(byte[] input, String password) {
+        if (!isInspectSupported() || input == null || input.length == 0) return null;
+        Semaphore held = acquireSlotOrThrow("inspection");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment inputSeg = arena.allocateFrom(JAVA_BYTE, input);
+            MemorySegment passSeg =
+                    password == null ? MemorySegment.NULL : arena.allocateFrom(password);
+            MemorySegment jsonPtr = arena.allocate(ADDRESS);
+            int rc = JpdfiumH.jpdfium_qpdf_inspect(inputSeg, input.length, passSeg, jsonPtr);
+            if (rc != 0) return null;
+            MemorySegment json = jsonPtr.get(ADDRESS, 0);
+            if (json.equals(MemorySegment.NULL)) return null;
+            try {
+                return FfmHelper.readNativeString(json);
+            } finally {
+                JpdfiumH.jpdfium_free_string(json);
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** Inspect a PDF file without materializing it on the Java heap. */
+    public static String inspect(Path input, String password) {
+        if (!isInspectFileSupported() || input == null) return null;
+        Semaphore held = acquireSlotOrThrow("inspection");
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment inSeg = arena.allocateFrom(input.toAbsolutePath().toString());
+            MemorySegment passSeg =
+                    password == null ? MemorySegment.NULL : arena.allocateFrom(password);
+            MemorySegment jsonPtr = arena.allocate(ADDRESS);
+            int rc = JpdfiumH.jpdfium_qpdf_inspect_file(inSeg, passSeg, jsonPtr);
+            if (rc != 0) return null;
+            MemorySegment json = jsonPtr.get(ADDRESS, 0);
+            if (json.equals(MemorySegment.NULL)) return null;
+            try {
+                return FfmHelper.readNativeString(json);
+            } finally {
+                JpdfiumH.jpdfium_free_string(json);
+            }
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf file inspection failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** Inspect a PDF file without a password. */
+    public static String inspect(Path input) {
+        return inspect(input, null);
+    }
+
+    /** Update or remove {@code /Info} entries; a {@code null} value removes a key. */
+    public static byte[] setDocInfo(byte[] input, Map<String, String> fields, String password) {
+        if (!isSetDocInfoSupported() || input == null || input.length == 0 || fields == null) {
+            return null;
+        }
+        for (String key : fields.keySet()) {
+            if (key == null || key.isEmpty() || key.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException(
+                        "metadata key must not be empty or contain NUL");
+            }
+        }
+        Semaphore held = acquireSlotOrThrow("metadata update");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            MemorySegment keysSeg = MemorySegment.NULL;
+            MemorySegment valuesSeg = MemorySegment.NULL;
+            if (!fields.isEmpty()) {
+                keysSeg = call.arena.allocate(ADDRESS, fields.size());
+                valuesSeg = call.arena.allocate(ADDRESS, fields.size());
+                int i = 0;
+                for (Map.Entry<String, String> entry : fields.entrySet()) {
+                    keysSeg.setAtIndex(ADDRESS, i, call.cString(entry.getKey()));
+                    valuesSeg.setAtIndex(ADDRESS, i, call.cString(entry.getValue()));
+                    i++;
+                }
+            }
+            int rc = JpdfiumH.jpdfium_qpdf_set_docinfo(inputSeg, input.length, keysSeg, valuesSeg,
+                    fields.size(), call.cString(password), call.outPtr, call.outLen);
+            if (rc != 0) return null;
+            return call.copyAndFree("qpdfSetDocInfo");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf metadata update failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    /** Update or remove {@code /Info} entries straight to a staged file. */
+    public static boolean setDocInfoToFile(Path input, Path output, Map<String, String> fields,
+            String password, long maxBytes) {
+        if (SET_DOCINFO_FILE_HANDLE == null || input == null || output == null || fields == null) {
+            return false;
+        }
+        if (!Files.isReadable(input)) return false;
+        for (String key : fields.keySet()) {
+            if (key == null || key.isEmpty() || key.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException(
+                        "metadata key must not be empty or contain NUL");
+            }
+        }
+        Semaphore held = acquireSlotOrThrow("metadata update");
+        Path staging = null;
+        try (QpdfCall call = new QpdfCall();
+                OutputTransaction tx = OutputTransaction.begin(output)) {
+            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+            rejectAlias(List.of(input), output);
+            staging = tx.staging();
+            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
+            MemorySegment keysSeg = MemorySegment.NULL;
+            MemorySegment valuesSeg = MemorySegment.NULL;
+            if (!fields.isEmpty()) {
+                keysSeg = call.arena.allocate(ADDRESS, fields.size());
+                valuesSeg = call.arena.allocate(ADDRESS, fields.size());
+                int i = 0;
+                for (Map.Entry<String, String> entry : fields.entrySet()) {
+                    keysSeg.setAtIndex(ADDRESS, i, call.cString(entry.getKey()));
+                    valuesSeg.setAtIndex(ADDRESS, i, call.cString(entry.getValue()));
+                    i++;
+                }
+            }
+            int rc = (int) SET_DOCINFO_FILE_HANDLE.invokeExact(inSeg, outSeg, keysSeg, valuesSeg,
+                    fields.size(), call.cString(password));
+            if (rc != 0) return false;
+            publish(staging, output, maxBytes);
+            staging = null;
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf metadata update file failed", t);
+        } finally {
+            deleteQuietly(staging);
+            releaseSlot(held);
+        }
+    }
+
+    public static boolean setDocInfoToFile(Path input, Path output, Map<String, String> fields,
+            String password) {
+        return setDocInfoToFile(input, output, fields, password, 0);
     }
 
     /**
@@ -307,6 +596,7 @@ public final class QpdfLib {
         if (input == null || input.length == 0) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("sanitization");
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             int rc = JpdfiumH.jpdfium_qpdf_sanitize(
@@ -319,6 +609,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf sanitization failed", t);
+        } finally {
+            releaseSlot(held);
         }
     }
 
@@ -332,6 +624,7 @@ public final class QpdfLib {
         if (!isSupported() || inputs == null || inputs.isEmpty()) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("merge");
         try (QpdfCall call = new QpdfCall()) {
             int count = inputs.size();
             MemorySegment inputsArraySeg = call.arena.allocate(ADDRESS, count);
@@ -358,6 +651,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf merge failed", t);
+        } finally {
+            releaseSlot(held);
         }
     }
 
@@ -415,6 +710,70 @@ public final class QpdfLib {
             MemorySegment cOut = arena.allocateFrom(staging.toAbsolutePath().toString());
             int rc = (int) OPTIMIZE_FILE_HANDLE.invokeExact(cIn, cOut, flags,
                     objectStreamMode, streamDataMode, decodeLevel);
+            if (rc != 0) {
+                throw new JPDFiumException("qpdf file optimize failed with code " + rc);
+            }
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable t) {
+            throw new JPDFiumException("qpdf file optimize invocation failed", t);
+        }
+    }
+
+    /**
+     * File-backed extended optimize: same staging/publish contract as
+     * {@link #optimizeFile(Path, Path, int, int, int, int)} but with an explicit
+     * compression level and JPEG quality. Keeping this file-backed avoids the
+     * input+output heap materialization that a level-9 compression of a large
+     * document would otherwise need.
+     *
+     * @return true on success; false if the file operation is unavailable
+     */
+    public static boolean optimizeFile(Path input, Path output, int flags,
+                                       int compressionLevel, int objectStreamMode,
+                                       int streamDataMode, int decodeLevel, int jpegQuality) {
+        if (jpegQuality < -1 || jpegQuality > 100) {
+            throw new IllegalArgumentException("jpegQuality must be -1 or 0..100");
+        }
+        if (OPTIMIZE_EX_FILE_HANDLE == null || input == null || output == null) {
+            return false;
+        }
+        if (!Files.isReadable(input)) {
+            return false;
+        }
+        Semaphore held = null;
+        try {
+            held = acquireSlot();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new JPDFiumException("qpdf optimize interrupted while waiting for a job slot", e);
+        }
+        try (OutputTransaction tx = OutputTransaction.begin(output)) {
+            Lock levelLock = acquireLevelWriteLock(compressionLevel);
+            try {
+                callOptimizeExFile(tx.staging(), input, flags, compressionLevel, objectStreamMode,
+                        streamDataMode, decodeLevel, jpegQuality);
+            } finally {
+                releaseSaveLock(levelLock);
+            }
+            tx.publish(SaveOptions.fast());
+            return true;
+        } catch (IOException e) {
+            throw new JPDFiumException("qpdf file optimize failed", e);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
+    private static void callOptimizeExFile(Path staging, Path input, int flags,
+                                           int compressionLevel, int objectStreamMode,
+                                           int streamDataMode, int decodeLevel,
+                                           int jpegQuality) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment cIn = arena.allocateFrom(input.toAbsolutePath().toString());
+            MemorySegment cOut = arena.allocateFrom(staging.toAbsolutePath().toString());
+            int rc = (int) OPTIMIZE_EX_FILE_HANDLE.invokeExact(cIn, cOut, flags, compressionLevel,
+                    objectStreamMode, streamDataMode, decodeLevel, jpegQuality);
             if (rc != 0) {
                 throw new JPDFiumException("qpdf file optimize failed with code " + rc);
             }
@@ -556,6 +915,7 @@ public final class QpdfLib {
         if (!isSupported() || input == null || input.length == 0 || pageIndices == null || pageIndices.length == 0) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("page extraction");
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             MemorySegment indicesSeg = call.copyInts(pageIndices.clone());
@@ -570,6 +930,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf extract pages failed", t);
+        } finally {
+            releaseSlot(held);
         }
     }
 
@@ -587,6 +949,7 @@ public final class QpdfLib {
         if (!isSupported() || input == null || input.length == 0) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("encryption");
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             MemorySegment userPassSeg = call.cString(userPassword);
@@ -602,6 +965,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf encrypt failed", t);
+        } finally {
+            releaseSlot(held);
         }
     }
 
@@ -616,6 +981,7 @@ public final class QpdfLib {
         if (!isSupported() || input == null || input.length == 0) {
             return null;
         }
+        Semaphore held = acquireSlotOrThrow("decryption");
         try (QpdfCall call = new QpdfCall()) {
             MemorySegment inputSeg = call.copyBytes(input);
             MemorySegment passSeg = call.cString(password);
@@ -629,6 +995,8 @@ public final class QpdfLib {
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("qpdf decrypt failed", t);
+        } finally {
+            releaseSlot(held);
         }
     }
 

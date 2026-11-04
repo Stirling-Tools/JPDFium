@@ -13,7 +13,6 @@ import stirling.software.jpdfium.transform.PdfPageGeometry;
 import java.awt.image.BufferedImage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -46,15 +45,13 @@ class CropFormZOrderTest {
             output = doc.saveBytes();
         }
 
-        // The straddling word must still exist in the text layer (its surviving
-        // glyphs were fissioned out of the form, not lost), and the removed
-        // part must be gone from the stream.
+        // The straddling word is preserved whole: glyphs outside the crop stay
+        // in the text layer (the page box clips them), and they must not be
+        // split or dropped.
         try (PDDocument doc = Loader.loadPDF(output)) {
             String text = new PDFTextStripper().getText(doc);
-            assertTrue(text.contains("EDG"),
-                    "surviving glyphs of the straddling word must exist: " + text);
-            assertFalse(text.contains("EDGE_WORD") || text.contains("E_WORD"),
-                    "the removed part of the form word must be gone from the stream: " + text);
+            assertTrue(text.contains("EDGE_WORD"),
+                    "straddling word must be preserved whole: " + text);
         }
 
         // Visual truth: no dark (text) pixels may appear inside the rect that

@@ -176,13 +176,17 @@ int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, 
         matches.push_back(std::move(tm));
 
         std::vector<FPDF_PAGEOBJECT> paintedCovers;
-        int32_t rc =
-            objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core, &paintedCovers);
+        bool refusedUnmodified = false;
+        int32_t rc = objectFissionRedact(pw->doc, pw->page, tp, matches, argb, pw->core,
+                                         &paintedCovers, nullptr, false, &refusedUnmodified);
         FPDFText_ClosePage(tp);
         if (rc != JPDFIUM_OK) {
             // objectFissionRedact mutates the page before it audits, so a
-            // half-finished region redaction has already destroyed content.
-            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
+            // half-finished region redaction has already destroyed content. A
+            // refusal before any change leaves nothing half-done to protect.
+            if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE && !refusedUnmodified) {
+                markRedactionIncomplete(pw, matches);
+            }
             return rc;
         }
 
@@ -399,8 +403,9 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             FPDFText_ClosePage(tp);
             tp = nullptr;
             if (rc != JPDFIUM_OK) {
-                // The fission engine mutates the page before it audits: a
-                // half-finished fallback redaction must fail every save closed.
+                // The fission engine mutates the page before it audits, and the
+                // failed EPDF pass may have left its REDACT annotations behind:
+                // a half-finished fallback redaction must fail every save closed.
                 if (rc == JPDFIUM_ERR_REDACT_INCOMPLETE) markRedactionIncomplete(pw, matches);
                 return rc;
             }
@@ -455,6 +460,29 @@ int32_t jpdfium_page_flatten(int64_t page) noexcept {
     if (!pw || !pw->page) return JPDFIUM_ERR_INVALID;
     int rc = FPDFPage_Flatten(pw->page, FLAT_NORMALDISPLAY);
     return (rc == FLATTEN_SUCCESS || rc == FLATTEN_NOTHINGTODO) ? JPDFIUM_OK : JPDFIUM_ERR_NATIVE;
+}
+
+int32_t jpdfium_doc_flatten_annotations(int64_t docHandle) noexcept {
+    bool mutated = false;
+    try {
+        DocWrapper* dw = decodeDoc(docHandle);
+        if (!dw || !dw->core->doc) return JPDFIUM_ERR_INVALID;
+        const int count = FPDF_GetPageCount(dw->core->doc);
+        for (int i = 0; i < count; ++i) {
+            UniquePage page(FPDF_LoadPage(dw->core->doc, i));
+            if (!page) return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NOT_FOUND;
+            const int rc = FPDFPage_Flatten(page.get(), FLAT_NORMALDISPLAY);
+            if (rc != FLATTEN_SUCCESS && rc != FLATTEN_NOTHINGTODO) {
+                return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
+            }
+            if (rc == FLATTEN_SUCCESS) mutated = true;
+        }
+        // Flatten rewrites content in place and keeps every FPDF_PAGE valid, so
+        // the structural generation must not move; Java tracks the edit itself.
+        return JPDFIUM_OK;
+    } catch (...) {
+        return mutated ? JPDFIUM_ERR_CONTENT_MUTATED : JPDFIUM_ERR_NATIVE;
+    }
 }
 
 // Word-list redaction with padding

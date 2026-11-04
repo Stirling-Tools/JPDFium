@@ -48,6 +48,8 @@
 #include <qpdf/QPDFExc.hh>
 #include <qpdf/QPDFObjectHandle.hh>
 #include <qpdf/QPDFWriter.hh>
+
+#include "jpdfium_qpdf_writer_lock.h"
 #endif
 
 namespace {
@@ -662,6 +664,7 @@ std::shared_ptr<Buffer> InjectOutputIntent(const uint8_t* input, size_t input_le
     QPDFWriter writer{*qpdf};
     ConfigureWriter(writer);
     writer.setOutputMemory();
+    jpdfium_qpdf_internal::WriterLock lock{-1};
     writer.write();
     return writer.getBufferSharedPointer();
 }
@@ -933,6 +936,7 @@ std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const
     QPDFWriter writer{*qpdf};
     ConfigurePdfxWriter(writer, version);
     writer.setOutputMemory();
+    jpdfium_qpdf_internal::WriterLock lock{-1};
     writer.write();
     return writer.getBufferSharedPointer();
 }
@@ -1196,6 +1200,7 @@ JPDFIUM_EXPORT int32_t jpdfium_color_output_intent_file(const char* in_path, con
             QPDFWriter writer{*qpdf};
             ConfigureWriter(writer);
             writer.setOutputFilename(target.c_str());
+            jpdfium_qpdf_internal::WriterLock lock{-1};
             writer.write();
         } catch (...) {
             std::remove(target.c_str());
@@ -1296,6 +1301,7 @@ JPDFIUM_EXPORT int32_t jpdfium_color_pdfx_file(const char* in_path, const char* 
             QPDFWriter writer{*qpdf};
             ConfigurePdfxWriter(writer, version);
             writer.setOutputFilename(target.c_str());
+            jpdfium_qpdf_internal::WriterLock lock{-1};
             writer.write();
         } catch (...) {
             std::remove(target.c_str());
