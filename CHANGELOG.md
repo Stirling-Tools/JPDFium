@@ -57,6 +57,19 @@ publishing workflows, not library releases, so they are not listed here.
   also erased the same pixels in the other placements, which nothing covered.
   Such a request now fails with `RedactIncompleteException` before the page
   changes, and the document can still be saved.
+- Redacting part of a JPEG XL, HEIF or AVIF image (encodings PDFium cannot
+  decode) dropped the whole picture. With an image codec registered (the
+  `jpdfium-vips` module) the image is now decoded, only the covered pixels are
+  erased, and the rest is kept. Without one it still fails closed. The bridge
+  adds `jpdfium_set_image_decoder`, which `JpdfiumLib` registers at startup.
+- A partly redacted image grew on save: the erased image was always stored as
+  8-bit RGB with a soft mask, even when it was opaque. It now gets a soft mask
+  only when it has transparency. Gray images are rewritten as `/DeviceGray`
+  by a qpdf pass at save, and 1-bit scans (JBIG2, CCITT) stay 1-bit. On an A4
+  300 dpi scan the redacted page drops from about 256 KB to 96 KB. If that pass
+  cannot run, the image keeps PDFium's 8-bit `/Indexed` gray form, which is
+  still fully redacted. The pass is file-to-file, so a large save does not hold
+  the whole document in memory.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.

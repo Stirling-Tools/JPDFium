@@ -18,6 +18,7 @@
 #include <vector>
 
 struct DocCore;
+struct ErasedGrayImage;
 
 #ifdef JPDFIUM_HAS_PCRE2
 #define PCRE2_CODE_UNIT_WIDTH 32
@@ -147,7 +148,8 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
                                     const std::vector<char>& redactSet);
 bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
                       const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects, uint32_t argb,
-                      bool* pixelsChanged = nullptr);
+                      bool* pixelsChanged = nullptr,
+                      std::vector<ErasedGrayImage>* grayImages = nullptr);
 bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt);
 std::u32string decomposeLigatures(const std::u32string& input);
 uint32_t unicodeToWinAnsiCharcode(uint32_t unicode);

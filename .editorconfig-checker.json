@@ -11,7 +11,8 @@
     "native/rust/target/",
     "native/build.*/",
     "native/dist/",
-    "\\.icc$"
+    "\\.icc$",
+    "\\.(g4|jbig2)$"
   ],
   "Disable": {
     "IndentSize": true
