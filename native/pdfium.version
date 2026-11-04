@@ -9,7 +9,7 @@
 # Example: pdfium-20260420-65816fe
 #
 # Bootstrap: if this file is empty (as on first install), trigger the
-# `Prebuild PDFium` workflow manually. It will build PDFium ×5, publish a
+# `Prebuild PDFium` workflow manually. It will build the platform variants, publish a
 # release, and open a PR bumping this file to the new tag.
 #
 # Subsequent updates: the weekly cron in `Prebuild PDFium` auto-opens a PR
