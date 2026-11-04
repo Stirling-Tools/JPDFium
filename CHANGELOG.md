@@ -68,7 +68,8 @@ publishing workflows, not library releases, so they are not listed here.
   by a qpdf pass at save, and 1-bit scans (JBIG2, CCITT) stay 1-bit. On an A4
   300 dpi scan the redacted page drops from about 256 KB to 96 KB. If that pass
   cannot run, the image keeps PDFium's 8-bit `/Indexed` gray form, which is
-  still fully redacted. A save after such an erase is buffered in memory.
+  still fully redacted. The pass is file-to-file, so a large save does not hold
+  the whole document in memory.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.

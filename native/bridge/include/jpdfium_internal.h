@@ -465,6 +465,13 @@ int sanitizeRedactedPdf(const uint8_t* input, size_t inputLen, const DocCore& co
 // qpdf unavailable, or the pass failed), which is still a complete redaction.
 bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes);
 
+// File-backed form of the same stage: reads |inputPath| and, when an image is
+// rewritten, writes the complete PDF to |output|. The caller owns |output| and
+// closes it; false means |output| is incomplete and must be discarded. No
+// document-sized buffer is held: qpdf streams from the input file and writes
+// straight to the output file.
+bool compactErasedGrayImagesFile(const DocCore& core, const char* inputPath, std::FILE* output);
+
 // Abandon a pending progressive render for a raw FPDF_PAGE without reporting
 // (jpdfium_render.cpp). Called when the owning page is closed while a session
 // is still pending so the map never retains a dangling page identity.

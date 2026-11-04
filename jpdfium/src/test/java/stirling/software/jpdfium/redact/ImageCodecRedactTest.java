@@ -114,9 +114,9 @@ class ImageCodecRedactTest {
     }
 
     @Test
-    void outputBudgetStillHoldsWhenTheSaveIsBuffered(@TempDir Path dir) throws Exception {
-        // An erased gray image sends a file save down the buffered path for the
-        // gray rewrite; the budget must stop it there too, leaving no file.
+    void outputBudgetStillHoldsWhenTheSaveNeedsGrayCompaction(@TempDir Path dir) throws Exception {
+        // An erased gray image sends a file save through the file-backed
+        // compaction stage; the budget must stop it there too, leaving no file.
         Path dest = dir.resolve("out.pdf");
         try (PdfDocument doc = PdfDocument.open(imagePdf("/ColorSpace /DeviceGray /BitsPerComponent 1"
                 + " /Filter /JBIG2Decode", resource("bilevel.jbig2"), null))) {
@@ -131,17 +131,41 @@ class ImageCodecRedactTest {
     }
 
     @Test
+    void grayImageStaysGrayOnFileSave(@TempDir Path dir) throws Exception {
+        Path dest = dir.resolve("out.pdf");
+        byte[] input = imagePdf("/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
+                deflate(grayQuadrants()), null);
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            try (PdfPage page = doc.page(0)) {
+                page.redactRegion(TOP_LEFT_QUARTER, OPAQUE_BLACK, true);
+            }
+            doc.saveTo(dest, SaveOptions.fast());
+        }
+        byte[] output = Files.readAllBytes(dest);
+        assertFalse(containsStream(output, imageStream(input)), "the original image data must be gone");
+        List<Redacted> images = drawnImages(output);
+        assertEquals(1, images.size(), "expected exactly one image drawn on the page");
+        images.get(0).assertQuarters(0, 0x404040, 0x808080, 0xC0C0C0, 0xC0C0C0);
+        images.get(0).assertEncoding("DeviceGray", 8, false);
+    }
+
+    @Test
     void grayImageStaysGray() throws Exception {
+        Redacted r = redact(imagePdf("/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
+                deflate(grayQuadrants()), null));
+        r.assertQuarters(0, 0x404040, 0x808080, 0xC0C0C0, 0xC0C0C0);
+        r.assertEncoding("DeviceGray", 8, false);
+    }
+
+    /** Gray samples whose quarters are 0x40, 0x80, 0xC0 and 0xC0. */
+    private static byte[] grayQuadrants() {
         byte[] gray = new byte[100 * 100];
         for (int y = 0; y < 100; y++) {
             for (int x = 0; x < 100; x++) {
                 gray[y * 100 + x] = (byte) (y < 50 ? (x < 50 ? 0x40 : 0x80) : 0xC0);
             }
         }
-        Redacted r = redact(imagePdf("/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode",
-                deflate(gray), null));
-        r.assertQuarters(0, 0x404040, 0x808080, 0xC0C0C0, 0xC0C0C0);
-        r.assertEncoding("DeviceGray", 8, false);
+        return gray;
     }
 
     @Test

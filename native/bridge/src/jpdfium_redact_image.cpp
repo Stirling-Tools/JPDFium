@@ -178,8 +178,8 @@ void recordGrayImage(std::vector<ErasedGrayImage>* grayImages, const uint8_t* gr
 // losing a pixel: Gray when every pixel is gray, BGR when every pixel is
 // opaque, else BGRA (RGB plus an /SMask). SetBitmap writes BGRA as an
 // /SMask even when it is all opaque, which grew every erased image.
-bool setCompactBitmap(FPDF_PAGEOBJECT imageObj, FPDF_BITMAP bmp, int fmt, int w, int h,
-                      int stride, const uint8_t* buf, std::vector<ErasedGrayImage>* grayImages) {
+bool setCompactBitmap(FPDF_PAGEOBJECT imageObj, FPDF_BITMAP bmp, int fmt, int w, int h, int stride,
+                      const uint8_t* buf, std::vector<ErasedGrayImage>* grayImages) {
     const int bpp = fmt == FPDFBitmap_Gray ? 1 : (fmt == FPDFBitmap_BGR ? 3 : 4);
     if (bpp == 1) {
         if (FPDFImageObj_SetBitmap(nullptr, 0, imageObj, bmp) == 0) return false;
@@ -429,6 +429,77 @@ bool isGrayRamp(QPDFObjectHandle cs) {
     return true;
 }
 
+// Rewrites every recorded gray image found in |q|. Returns true when at least
+// one image changed; the caller chooses memory or file output.
+bool rewriteErasedGrayImages(QPDF& q, const DocCore& core) {
+    bool changed = false;
+    for (QPDFObjectHandle obj : q.getAllObjects()) {
+        if (!obj.isStream()) continue;
+        QPDFObjectHandle dict = obj.getDict();
+        if (!dict.getKey("/Subtype").isNameAndEquals("/Image")) continue;
+        QPDFObjectHandle wObj = dict.getKey("/Width");
+        QPDFObjectHandle hObj = dict.getKey("/Height");
+        QPDFObjectHandle bpc = dict.getKey("/BitsPerComponent");
+        if (!wObj.isInteger() || !hObj.isInteger() || !bpc.isInteger() || bpc.getIntValue() != 8) {
+            continue;
+        }
+        // SetBitmap never writes these for a gray image; their presence
+        // means the image is not one of ours.
+        if (dict.hasKey("/SMask") || dict.hasKey("/Mask") || dict.hasKey("/Decode") ||
+            dict.hasKey("/ImageMask")) {
+            continue;
+        }
+        const long long w = wObj.getIntValue();
+        const long long h = hObj.getIntValue();
+        if (w <= 0 || h <= 0) continue;
+        bool sizeMatches = false;
+        for (const ErasedGrayImage& img : core.erasedGrayImages) {
+            if (img.width == w && img.height == h) {
+                sizeMatches = true;
+                break;
+            }
+        }
+        if (!sizeMatches || !isGrayRamp(dict.getKey("/ColorSpace"))) continue;
+        std::shared_ptr<Buffer> data = obj.getStreamData(qpdf_dl_generalized);
+        const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
+        if (data->getSize() != n) continue;
+        const uint8_t* gray = data->getBuffer();
+        const uint64_t hash = fnv1a(kFnvOffset, gray, n);
+        bool ours = false;
+        for (const ErasedGrayImage& img : core.erasedGrayImages) {
+            if (img.width == w && img.height == h && img.hash == hash) {
+                ours = true;
+                break;
+            }
+        }
+        if (!ours) continue;
+
+        bool bilevel = true;
+        for (size_t i = 0; i < n && bilevel; i++) bilevel = gray[i] == 0 || gray[i] == 255;
+        std::string samples;
+        if (bilevel) {
+            // DeviceGray at 1 bpc: 0 is black, 1 is white; rows pad to a byte.
+            const size_t rowBytes = (static_cast<size_t>(w) + 7) / 8;
+            samples.assign(rowBytes * static_cast<size_t>(h), '\0');
+            for (long long y = 0; y < h; y++) {
+                const uint8_t* row = gray + static_cast<size_t>(y) * w;
+                char* out = samples.data() + static_cast<size_t>(y) * rowBytes;
+                for (long long x = 0; x < w; x++) {
+                    if (row[x]) out[x >> 3] |= static_cast<char>(0x80 >> (x & 7));
+                }
+            }
+            dict.replaceKey("/BitsPerComponent", QPDFObjectHandle::newInteger(1));
+        } else {
+            samples.assign(reinterpret_cast<const char*>(gray), n);
+        }
+        // Unfiltered here; QPDFWriter Flate-compresses it on write.
+        obj.replaceStreamData(samples, QPDFObjectHandle::newNull(), QPDFObjectHandle::newNull());
+        dict.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceGray"));
+        changed = true;
+    }
+    return changed;
+}
+
 }  // namespace
 
 bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes) {
@@ -437,74 +508,7 @@ bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes) {
         QPDF q;
         q.processMemoryFile("erased-images.pdf", reinterpret_cast<const char*>(bytes.data()),
                             bytes.size());
-        bool changed = false;
-        for (QPDFObjectHandle obj : q.getAllObjects()) {
-            if (!obj.isStream()) continue;
-            QPDFObjectHandle dict = obj.getDict();
-            if (!dict.getKey("/Subtype").isNameAndEquals("/Image")) continue;
-            QPDFObjectHandle wObj = dict.getKey("/Width");
-            QPDFObjectHandle hObj = dict.getKey("/Height");
-            QPDFObjectHandle bpc = dict.getKey("/BitsPerComponent");
-            if (!wObj.isInteger() || !hObj.isInteger() || !bpc.isInteger() ||
-                bpc.getIntValue() != 8) {
-                continue;
-            }
-            // SetBitmap never writes these for a gray image; their presence
-            // means the image is not one of ours.
-            if (dict.hasKey("/SMask") || dict.hasKey("/Mask") || dict.hasKey("/Decode") ||
-                dict.hasKey("/ImageMask")) {
-                continue;
-            }
-            const long long w = wObj.getIntValue();
-            const long long h = hObj.getIntValue();
-            if (w <= 0 || h <= 0) continue;
-            bool sizeMatches = false;
-            for (const ErasedGrayImage& img : core.erasedGrayImages) {
-                if (img.width == w && img.height == h) {
-                    sizeMatches = true;
-                    break;
-                }
-            }
-            if (!sizeMatches || !isGrayRamp(dict.getKey("/ColorSpace"))) continue;
-            std::shared_ptr<Buffer> data = obj.getStreamData(qpdf_dl_generalized);
-            const size_t n = static_cast<size_t>(w) * static_cast<size_t>(h);
-            if (data->getSize() != n) continue;
-            const uint8_t* gray = data->getBuffer();
-            const uint64_t hash = fnv1a(kFnvOffset, gray, n);
-            bool ours = false;
-            for (const ErasedGrayImage& img : core.erasedGrayImages) {
-                if (img.width == w && img.height == h && img.hash == hash) {
-                    ours = true;
-                    break;
-                }
-            }
-            if (!ours) continue;
-
-            bool bilevel = true;
-            for (size_t i = 0; i < n && bilevel; i++) bilevel = gray[i] == 0 || gray[i] == 255;
-            std::string samples;
-            if (bilevel) {
-                // DeviceGray at 1 bpc: 0 is black, 1 is white; rows pad to a byte.
-                const size_t rowBytes = (static_cast<size_t>(w) + 7) / 8;
-                samples.assign(rowBytes * static_cast<size_t>(h), '\0');
-                for (long long y = 0; y < h; y++) {
-                    const uint8_t* row = gray + static_cast<size_t>(y) * w;
-                    char* out = samples.data() + static_cast<size_t>(y) * rowBytes;
-                    for (long long x = 0; x < w; x++) {
-                        if (row[x]) out[x >> 3] |= static_cast<char>(0x80 >> (x & 7));
-                    }
-                }
-                dict.replaceKey("/BitsPerComponent", QPDFObjectHandle::newInteger(1));
-            } else {
-                samples.assign(reinterpret_cast<const char*>(gray), n);
-            }
-            // Unfiltered here; QPDFWriter Flate-compresses it on write.
-            obj.replaceStreamData(samples, QPDFObjectHandle::newNull(),
-                                  QPDFObjectHandle::newNull());
-            dict.replaceKey("/ColorSpace", QPDFObjectHandle::newName("/DeviceGray"));
-            changed = true;
-        }
-        if (!changed) return false;
+        if (!rewriteErasedGrayImages(q, core)) return false;
         QPDFWriter writer(q);
         writer.setOutputMemory();
         {
@@ -521,9 +525,38 @@ bool compactErasedGrayImages(const DocCore& core, std::vector<uint8_t>& bytes) {
     }
 }
 
+bool compactErasedGrayImagesFile(const DocCore& core, const char* inputPath, std::FILE* output) {
+    if (core.erasedGrayImages.empty() || !inputPath || !*inputPath || !output) return false;
+    try {
+        // processFile keeps stream data file-backed; QPDFWriter writes straight
+        // to |output|, so the save never holds a document-sized buffer.
+        QPDF q;
+        q.processFile(inputPath);
+        if (!rewriteErasedGrayImages(q, core)) return false;
+        try {
+            QPDFWriter writer(q);
+            // The staging FILE* stays owned by the caller, which closes it and
+            // discards the file when this function returns false.
+            writer.setOutputFile("erased-images-out", output, false);
+            jpdfium_qpdf_internal::WriterLock lock{-1};
+            writer.write();
+            return true;
+        } catch (...) {
+            return false;
+        }
+    } catch (...) {
+        // PDFium's file is already a complete redaction; keep it.
+        return false;
+    }
+}
+
 #else  // !JPDFIUM_HAS_QPDF
 
 bool compactErasedGrayImages(const DocCore&, std::vector<uint8_t>&) {
+    return false;
+}
+
+bool compactErasedGrayImagesFile(const DocCore&, const char*, std::FILE*) {
     return false;
 }
 

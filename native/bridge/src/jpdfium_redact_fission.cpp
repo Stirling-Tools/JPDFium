@@ -1261,10 +1261,9 @@ int32_t objectFissionRedact(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_TEXTPAGE tex
                 if (!FPDFPageObj_GetMatrix(obj, &imgMatrix)) {
                     erased = false;
                 } else {
-                    erased = eraseImagePixels(doc, page, obj, imgMatrix,
-                                              std::span<const FS_RECTF>(eraseRectsBuffer), argb,
-                                              &pixelsErased,
-                                              core ? &core->erasedGrayImages : nullptr);
+                    erased = eraseImagePixels(
+                        doc, page, obj, imgMatrix, std::span<const FS_RECTF>(eraseRectsBuffer),
+                        argb, &pixelsErased, core ? &core->erasedGrayImages : nullptr);
                 }
                 if (!erased) {
                     // Doctrine: pixel-true erase or full removal, never cover-and-keep.
