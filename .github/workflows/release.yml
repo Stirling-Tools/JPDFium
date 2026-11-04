@@ -1100,7 +1100,9 @@ jobs:
   verify-staging:
     name: Verify staged artifacts (${{ matrix.platform }})
     needs: publish
-    if: inputs.dryRun != true && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
+    # Automatic deployments can already be published by this point. Verify them
+    # through Maven Central below, rather than the validated-deployment endpoint.
+    if: inputs.dryRun != true && inputs.autoRelease != true && (startsWith(github.ref, 'refs/tags/') || inputs.version != '')
     strategy:
       fail-fast: false
       matrix:
