@@ -134,6 +134,63 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch
     }
 }
 
+namespace {
+// A REDACT annotation a commit applies: its /Rect, and its /QuadPoints when the
+// mark covers rotated or wrapped text more tightly than the rect does.
+struct CommitMark {
+    FPDF_ANNOTATION annot = nullptr;
+    FS_RECTF rect{};
+    std::vector<FS_QUADPOINTSF> quads;
+};
+}  // namespace
+
+// FS_QUADPOINTSF slot order: (x1,y1)-(x2,y2) is the top edge and (x3,y3)-(x4,y4)
+// the bottom one, so the polygon runs 1-2-4-3. A point on an edge counts as inside.
+static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
+    const double px[4] = {q.x1, q.x2, q.x4, q.x3};
+    const double py[4] = {q.y1, q.y2, q.y4, q.y3};
+    int side = 0;
+    for (int i = 0; i < 4; ++i) {
+        int j = (i + 1) % 4;
+        double cross = (px[j] - px[i]) * (y - py[i]) - (py[j] - py[i]) * (x - px[i]);
+        if (cross == 0) continue;
+        int s = cross > 0 ? 1 : -1;
+        if (side == 0) {
+            side = s;
+        } else if (s != side) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Whether text survived the marks a commit applied: hardens commit with the same
+// verified-removal check the other redaction paths run. The redactor reports
+// success without saying which glyphs it removed, and it passes over glyphs it
+// cannot measure (one with no outline is a point at its origin), so the page is
+// re-extracted: a char at least half inside a plain mark, or centred inside a
+// quad of a quad mark, survived it. A quad mark is not judged by its rect, which
+// also spans text beside rotated quads that the redactor rightly kept.
+static bool commitLeftText(FPDF_TEXTPAGE audit, const std::vector<CommitMark>& marks) {
+    int n = FPDFText_CountChars(audit);
+    for (int ci = 0; ci < n; ++ci) {
+        double l, r, b, t;
+        if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
+        for (const CommitMark& mark : marks) {
+            if (mark.quads.empty()) {
+                if (charInRect(l, b, r, t, mark.rect.left, mark.rect.bottom, mark.rect.right,
+                               mark.rect.top))
+                    return true;
+                continue;
+            }
+            for (const FS_QUADPOINTSF& q : mark.quads) {
+                if (pointInQuad(0.5 * (l + r), 0.5 * (b + t), q)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
                               int32_t remove_content) noexcept {
     PageWrapper* pw = decodePage(page);
@@ -947,12 +1004,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
     try {
         // Collect all REDACT annotations and rects
         int total = FPDFPage_GetAnnotCount(pw->page);
-        struct AnnotItem {
-            FPDF_ANNOTATION annot = nullptr;
-            FS_RECTF rect{};
-            std::vector<FS_QUADPOINTSF> quads;
-        };
-        std::vector<AnnotItem> redactAnnots;
+        std::vector<CommitMark> redactAnnots;
         std::vector<int> redactIndices;
 
         for (int i = 0; i < total; ++i) {
@@ -961,7 +1013,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             if (FPDFAnnot_GetSubtype(a) == FPDF_ANNOT_REDACT) {
                 FS_RECTF rect;
                 if (FPDFAnnot_GetRect(a, &rect)) {
-                    AnnotItem item;
+                    CommitMark item;
                     item.annot = a;
                     item.rect = rect;
                     size_t qc = FPDFAnnot_CountAttachmentPoints(a);
@@ -988,7 +1040,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         // Apply in reverse reading order (bottom-to-top, right-to-left) to avoid
         // text matrix shifting artifacts across multiple regions in the same text object.
         std::sort(redactAnnots.begin(), redactAnnots.end(),
-                  [](const AnnotItem& a, const AnnotItem& b) {
+                  [](const CommitMark& a, const CommitMark& b) {
                       if (std::abs(a.rect.bottom - b.rect.bottom) > 2.0f) {
                           return a.rect.bottom < b.rect.bottom;
                       }
@@ -1046,6 +1098,18 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 }
             }
             FPDFPage_GenerateContent(pw->page);
+
+            FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+            if (!audit) {
+                markRedactionIncomplete(pw, redactRects);
+                return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
+            }
+            bool survivors = commitLeftText(audit, redactAnnots);
+            FPDFText_ClosePage(audit);
+            if (survivors) {
+                markRedactionIncomplete(pw, redactRects);
+                return JPDFIUM_ERR_REDACT_INCOMPLETE;
+            }
 
             if (pw->core) {
                 pw->core->contentRedacted = true;

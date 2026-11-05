@@ -17,6 +17,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Word and pattern redaction now removes text drawn with glyphs the embedded
+  font has no outline for, such as text using a truncated font subset. These
+  pages previously stopped with `RedactIncompleteException`.
+- `commitRedactions` now verifies that marked text was removed, as the other
+  redaction paths do, and raises `RedactIncompleteException` otherwise.
+
 ## [1.3.0] - 2026-11-05
 
 ### Added

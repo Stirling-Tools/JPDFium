@@ -178,6 +178,18 @@ static constexpr double kInkDpi = 200.0;
 static constexpr double kMaxInkPixels = 16.0e6;
 static constexpr double kMinCoverWidthEm = 0.1;
 static constexpr double kFallbackEm = 10.0;  // pt, for chars with no derivable size
+// PDFium gives a glyph with no outline a box one font unit thick; the thinnest
+// inked glyph (a hyphen, a rule) is tens of units.
+static constexpr double kOutlineLessThicknessEm = 0.002;
+// The band an outline-less glyph's cover spans around the baseline. It paints no
+// ink to hide, so the band only places the cover on its line, and stays short of
+// the baselines above and below at any leading of 1em or more.
+static constexpr double kOutlineLessBelowBaselineEm = 0.25;
+static constexpr double kOutlineLessAboveBaselineEm = 0.75;
+// How far past the glyph origin a cover reaches: the redactor hit-tests with
+// strict inequalities, and its origin and PDFium's text-page origin are computed
+// in float along different paths.
+static constexpr double kOriginMarginEm = 0.01;
 
 // Font size of a character in page space, or 0 when it cannot be derived:
 // generated chars (the spaces and line breaks PDFium inserts) have no text
@@ -359,8 +371,50 @@ static void growToInk(double l, double r, double em, double* bottom, double* top
     *bottom = std::min(*bottom, t_ink.boxTop - newBot / t_ink.scale);
 }
 
+// A glyph the font has no outline for: a font program cut short of the glyph ids
+// its content stream uses. It paints nothing but still extracts, and the
+// redactor's glyph box for it is the single point at its origin, which a cover
+// removes only when that point lies strictly inside it. The cover therefore
+// contains the origin with a margin. Whitespace is left alone: it is blank in
+// every font, and widening its box would change covers over ordinary phrases.
+//
+// On upright text PDFium's box for such a glyph is its advance cell, one font unit
+// tall, so the next glyph's cell starts exactly where it ends. The cover stops a
+// margin short of that edge: on the edge, whether the neighbour counts as touched
+// turns on float rounding that differs before and after the rewrite, and the
+// survivor audit then reports the page incomplete. It also spans a band around the
+// baseline so the painted cover sits on the line. Other orientations only grow the
+// box, since which side of it is the advance is not known.
+static void coverOutlineLessGlyph(FPDF_TEXTPAGE textPage, int index, double* l, double* r,
+                                  double* b, double* t) {
+    unsigned int u = FPDFText_GetUnicode(textPage, index);
+    if (u == ' ' || u == 0xA0 || u == '\t' || u == '\r' || u == '\n') return;
+    FS_MATRIX m;
+    double em = charEm(textPage, index, &m);
+    double ox, oy;
+    if (em <= 0 || !FPDFText_GetCharOrigin(textPage, index, &ox, &oy)) return;
+    double thin = kOutlineLessThicknessEm * em;
+    double margin = kOriginMarginEm * em;
+    bool upright =
+        m.d > 0 && std::fabs(m.b) <= 0.01f * std::fabs(m.a) && std::fabs(m.c) <= 0.01f * m.d;
+    if (upright && m.a > 0) {
+        if (*t - *b >= thin) return;
+        *l = ox - margin;
+        *r = std::max(*r - margin, ox + margin);
+        *b = oy - kOutlineLessBelowBaselineEm * em;
+        *t = oy + kOutlineLessAboveBaselineEm * em;
+        return;
+    }
+    if (std::min(*r - *l, *t - *b) >= thin) return;
+    *l = std::min(*l, ox - margin);
+    *r = std::max(*r, ox + margin);
+    *b = std::min(*b, oy - margin);
+    *t = std::max(*t, oy + margin);
+}
+
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
+    coverOutlineLessGlyph(textPage, index, l, r, b, t);
     // A redaction removes a char only when the box overlaps its glyph box, and a
     // zero-width one (a combining mark, OCR text with no advance) on the edge of
     // the box only touches it. A box over it alone would have no area.
