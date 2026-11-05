@@ -19,12 +19,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Contract tests for qpdf-backed exact font-stream replacement. */
 class PdfFontEmbedderTest {
 
     @Test
     void replacesAnExistingEmbeddedFontStreamAndIgnoresTheSubsetPrefix() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf")
                 .toURI());
         byte[] input = Files.readAllBytes(source);
@@ -48,6 +50,7 @@ class PdfFontEmbedderTest {
 
     @Test
     void missingFontDescriptorFailsInsteadOfReturningTheInput() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/minimal.pdf")
                 .toURI());
         byte[] input = Files.readAllBytes(source);
