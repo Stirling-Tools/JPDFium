@@ -199,14 +199,17 @@ public final class PdfTextExtractor {
             if (dot < 0) {
                 return (float) parseIntFast(s, start, end);
             }
-            int intPart = parseIntFast(s, start, dot);
+            boolean negative = start < end && s.charAt(start) == '-';
+            int digitsStart = negative ? start + 1 : start;
+            int intPart = parseIntFast(s, digitsStart, dot);
             int fracPart = parseIntFast(s, dot + 1, end);
             int fracDigits = end - (dot + 1);
             float frac = fracPart;
             for (int i = 0; i < fracDigits; i++) {
                 frac /= 10.0f;
             }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
+            float value = intPart + frac;
+            return negative ? -value : value;
         } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
             try {
                 return Float.parseFloat(s.substring(start, end));

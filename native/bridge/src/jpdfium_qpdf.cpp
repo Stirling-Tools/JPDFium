@@ -886,10 +886,15 @@ int forceVersionFile(const char* in_path, const char* out_path, const char* vers
             std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
             if (!writerOwnsFile) std::fclose(out);
             return -1;
+        } catch (...) {
+            if (!writerOwnsFile) std::fclose(out);
+            return JPDFIUM_ERR_NATIVE;
         }
     } catch (std::exception const& e) {
         std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
         return -1;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
     }
 }
 

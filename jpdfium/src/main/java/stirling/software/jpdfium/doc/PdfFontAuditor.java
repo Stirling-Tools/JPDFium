@@ -40,6 +40,9 @@ public final class PdfFontAuditor {
 
     private PdfFontAuditor() {}
 
+    private static final int FPDF_PAGEOBJ_TEXT = 1;
+    private static final int FPDF_PAGEOBJ_FORM = 5;
+
     /**
      * Information about a single font used in the document.
      */
@@ -154,7 +157,7 @@ public final class PdfFontAuditor {
         } catch (Throwable t) {
             return;
         }
-        if (type == 1) { // FPDF_PAGEOBJ_TEXT
+        if (type == FPDF_PAGEOBJ_TEXT) {
             MemorySegment font;
             try {
                 font = (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
@@ -182,7 +185,7 @@ public final class PdfFontAuditor {
             fb.pages.add(pageIdx);
             return;
         }
-        if (type != 2) return; // FPDF_PAGEOBJ_FORM
+        if (type != FPDF_PAGEOBJ_FORM) return;
         int children;
         try {
             children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);

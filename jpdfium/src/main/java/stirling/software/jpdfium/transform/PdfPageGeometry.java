@@ -13,6 +13,7 @@ import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
+import stirling.software.jpdfium.text.TextWord;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
@@ -157,39 +158,41 @@ public final class PdfPageGeometry {
         PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
         float epsilon = 0.01f;
         try (PdfPage page = doc.page(pageIndex)) {
-            for (TextChar ch : text.chars()) {
-                if (!intersects(ch, crop) || isFullyInside(ch, crop)) {
+            for (TextWord word : text.allWords()) {
+                if (!intersects(word, crop) || isFullyInside(word, crop)) {
                     continue;
                 }
-                boolean removed =
-                        page.redactInRect(
-                                new Rect(
-                                        ch.x() - epsilon,
-                                        ch.y() - epsilon,
-                                        ch.width() + 2 * epsilon,
-                                        ch.height() + 2 * epsilon),
-                                true,
-                                false);
-                if (!removed) {
-                    throw new RedactIncompleteException(
-                            "strict crop could not remove a boundary-crossing glyph");
+                for (TextChar ch : word.chars()) {
+                    boolean removed =
+                            page.redactInRect(
+                                    new Rect(
+                                            ch.x() - epsilon,
+                                            ch.y() - epsilon,
+                                            ch.width() + 2 * epsilon,
+                                            ch.height() + 2 * epsilon),
+                                    true,
+                                    false);
+                    if (!removed) {
+                        throw new RedactIncompleteException(
+                                "strict crop could not remove a boundary-crossing word");
+                    }
                 }
             }
         }
     }
 
-    private static boolean intersects(TextChar ch, Rect crop) {
-        return ch.x() < crop.x() + crop.width()
-                && ch.x() + ch.width() > crop.x()
-                && ch.y() < crop.y() + crop.height()
-                && ch.y() + ch.height() > crop.y();
+    private static boolean intersects(TextWord word, Rect crop) {
+        return word.x() < crop.x() + crop.width()
+                && word.x() + word.width() > crop.x()
+                && word.y() < crop.y() + crop.height()
+                && word.y() + word.height() > crop.y();
     }
 
-    private static boolean isFullyInside(TextChar ch, Rect crop) {
-        return ch.x() >= crop.x()
-                && ch.y() >= crop.y()
-                && ch.x() + ch.width() <= crop.x() + crop.width()
-                && ch.y() + ch.height() <= crop.y() + crop.height();
+    private static boolean isFullyInside(TextWord word, Rect crop) {
+        return word.x() >= crop.x()
+                && word.y() >= crop.y()
+                && word.x() + word.width() <= crop.x() + crop.width()
+                && word.y() + word.height() <= crop.y() + crop.height();
     }
 
     /**

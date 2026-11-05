@@ -87,21 +87,15 @@ public final class PdfXConverter {
                     standard.gtsVersion(), standard.gtsConformance())) {
                 throw new JPDFiumException("PDF/X metadata application failed");
             }
-            Path styled = Files.createTempFile(
-                    output.toAbsolutePath().getParent(), "jpdfium-pdfx-styled-", ".pdf");
-            try {
-                try (PdfDocument document = PdfDocument.open(metadata)) {
-                    applyPageBoxes(document);
-                    applyDocumentInfo(document, options);
-                    document.save(styled);
-                }
-                if (!PdfVersionConverter.forceVersion(styled, output, versionFor(standard))) {
-                    throw new JPDFiumException("PDF/X version rewrite failed");
-                }
-            } finally {
-                Files.deleteIfExists(styled);
+            try (PdfDocument document = PdfDocument.open(metadata)) {
+                applyPageBoxes(document);
+                applyDocumentInfo(document, options);
+                requireEmbeddedFonts(document, options);
+                document.save(staging);
             }
-            requireEmbeddedFonts(output, options);
+            if (!PdfVersionConverter.forceVersion(staging, output, versionFor(standard))) {
+                throw new JPDFiumException("PDF/X version rewrite failed");
+            }
         } finally {
             deleteQuietly(staging);
             deleteQuietly(metadata);
@@ -222,13 +216,6 @@ public final class PdfXConverter {
         }
     }
 
-    private static void requireEmbeddedFonts(Path pdf, PdfXOptions options) throws IOException {
-        if (!options.requireEmbeddedFonts()) return;
-        try (PdfDocument document = PdfDocument.open(pdf)) {
-            requireEmbeddedFonts(document, options);
-        }
-    }
-
     private static void requireEmbeddedFonts(PdfDocument document, PdfXOptions options) {
         if (options.requireEmbeddedFonts() && PdfFontAuditor.hasNonEmbeddedFonts(document)) {
             throw new JPDFiumException(
@@ -260,8 +247,10 @@ public final class PdfXConverter {
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 applyPageBoxes(metadata);
                 applyDocumentInfo(metadata, options);
-                return PdfVersionConverter.saveWithVersionToBytes(
+                byte[] versioned = PdfVersionConverter.saveWithVersionToBytes(
                         metadata.rawHandle(), versionFor(standard));
+                requireEmbeddedFonts(versioned, options);
+                return versioned;
             }
         }
     }
