@@ -174,6 +174,10 @@ class ScopedCoverPage {
     ScopedCoverPage(const ScopedCoverPage&) = delete;
     ScopedCoverPage& operator=(const ScopedCoverPage&) = delete;
 };
+// The page-space box of a char, with a glyph the font has no outline for given
+// the cell a cover must span to remove it rather than PDFium's one-unit sliver.
+bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b,
+                         double* t);
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 int32_t logicalMatchCount(const std::vector<TextMatch>& matches);

@@ -145,7 +145,8 @@ struct CommitMark {
 }  // namespace
 
 // FS_QUADPOINTSF slot order: (x1,y1)-(x2,y2) is the top edge and (x3,y3)-(x4,y4)
-// the bottom one, so the polygon runs 1-2-4-3. A point on an edge counts as inside.
+// the bottom one, so the polygon runs 1-2-4-3. A point on an edge counts as inside;
+// a quad whose corners coincide contains nothing.
 static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
     const double px[4] = {q.x1, q.x2, q.x4, q.x3};
     const double py[4] = {q.y1, q.y2, q.y4, q.y3};
@@ -161,7 +162,7 @@ static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
             return false;
         }
     }
-    return true;
+    return side != 0;
 }
 
 // Whether text survived the marks a commit applied: hardens commit with the same
@@ -170,12 +171,15 @@ static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
 // cannot measure (one with no outline is a point at its origin), so the page is
 // re-extracted: a char at least half inside a plain mark, or centred inside a
 // quad of a quad mark, survived it. A quad mark is not judged by its rect, which
-// also spans text beside rotated quads that the redactor rightly kept.
+// also spans text beside rotated quads that the redactor rightly kept. Chars
+// PDFium generates (separators it inserts between runs) have no content to
+// remove, and an outline-less glyph is judged by the cell a cover for it spans.
 static bool commitLeftText(FPDF_TEXTPAGE audit, const std::vector<CommitMark>& marks) {
     int n = FPDFText_CountChars(audit);
     for (int ci = 0; ci < n; ++ci) {
+        if (FPDFText_IsGenerated(audit, ci) == 1) continue;
         double l, r, b, t;
-        if (!FPDFText_GetCharBox(audit, ci, &l, &r, &b, &t)) continue;
+        if (!outlineAwareCharBox(audit, ci, &l, &r, &b, &t)) continue;
         for (const CommitMark& mark : marks) {
             if (mark.quads.empty()) {
                 if (charInRect(l, b, r, t, mark.rect.left, mark.rect.bottom, mark.rect.right,
@@ -1099,6 +1103,14 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             }
             FPDFPage_GenerateContent(pw->page);
 
+            // The redactor removed the marks it applied, so they no longer hold a
+            // save back as unapplied, whatever the audit below finds.
+            if (pw->core) {
+                pw->core->unappliedRedactMarksCount =
+                    std::max(0, pw->core->unappliedRedactMarksCount -
+                                    static_cast<int32_t>(redactRects.size()));
+            }
+
             FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
             if (!audit) {
                 markRedactionIncomplete(pw, redactRects);
@@ -1123,9 +1135,6 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 for (const auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
-                pw->core->unappliedRedactMarksCount =
-                    std::max(0, pw->core->unappliedRedactMarksCount -
-                                    static_cast<int32_t>(redactRects.size()));
             }
             if (commitCount) *commitCount = static_cast<int32_t>(redactRects.size());
             return JPDFIUM_OK;

@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -87,16 +88,20 @@ class OutlineLessGlyphRedactTest {
     }
 
     /**
-     * A mark that starts just past the first glyph's origin: the redactor sees that
-     * glyph as a point at its origin and keeps it, while most of its cell lies under
-     * the mark. The commit must refuse rather than report the word redacted.
+     * Marks the redactor passes over glyphs under: one starting just past the first
+     * glyph's origin, and one whose bottom sits just above the baseline. It sees each
+     * outline-less glyph as a point at its origin and keeps it, while most of its cell
+     * lies under the mark. The commit must refuse rather than report the word redacted.
      */
-    @Test
-    void commitFailsClosedWhenAMarkMissesAnOutlineLessGlyph() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void commitFailsClosedWhenAMarkMissesAnOutlineLessGlyph(boolean aboveBaseline) throws Exception {
         byte[] pdf = truncatedFontPage(false);
         float[] cell = wordCell(pdf, "moments");
-        float start = cell[0] + 0.5f;
-        Rect mark = new Rect(start, 700f - 0.25f * SIZE, cell[1] - start, SIZE);
+        float baseline = 700f;
+        Rect mark = aboveBaseline
+                ? new Rect(cell[0], baseline + 0.05f, cell[1] - cell[0], 0.75f * SIZE)
+                : new Rect(cell[0] + 0.5f, baseline - 0.25f * SIZE, cell[1] - cell[0] - 0.5f, SIZE);
         try (PdfDocument doc = PdfDocument.open(pdf)) {
             try (PdfPage page = doc.page(0)) {
                 page.markRedactRegion(mark, 0xFF000000);
@@ -124,13 +129,9 @@ class OutlineLessGlyphRedactTest {
     }
 
     private static void assertOnlyMomentsRemoved(byte[] redacted) throws Exception {
-        for (String extracted : List.of(pdfiumText(redacted), RedactTestPages.text(redacted))) {
-            assertFalse(extracted.contains("moment"), "the redacted word is gone: " + extracted);
-            assertTrue(extracted.contains("Lady Coote stood for a few"), "the text before it survives: " + extracted);
-            assertTrue(extracted.contains("tragically on the terrace"), "the text after it survives: " + extracted);
-            assertTrue(extracted.contains("nerved herself to speak to MacDonald"),
-                    "the next line survives: " + extracted);
-        }
+        String expected = String.join(" ", LINES).replace("moments ", "");
+        assertEquals(expected, pdfiumText(redacted).strip(), "PDFium text: only the word is gone");
+        assertEquals(expected, RedactTestPages.text(redacted).strip(), "PDFBox text: only the word is gone");
     }
 
     /** Runs the whole of a real document named by {@code jpdfium.test.outlineLessPdf}, which is not checked in. */
@@ -196,7 +197,7 @@ class OutlineLessGlyphRedactTest {
         boolean patched = false;
         for (int i = 0; i < tables; i++) {
             int record = 12 + 16 * i;
-            if (new String(ttf, record, 4, java.nio.charset.StandardCharsets.US_ASCII).equals("maxp")) {
+            if (new String(ttf, record, 4, StandardCharsets.US_ASCII).equals("maxp")) {
                 buf.putShort(buf.getInt(record + 8) + 4, (short) kept);
                 patched = true;
             }

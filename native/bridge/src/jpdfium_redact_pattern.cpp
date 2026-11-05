@@ -412,9 +412,15 @@ static void coverOutlineLessGlyph(FPDF_TEXTPAGE textPage, int index, double* l, 
     *t = std::max(*t, oy + margin);
 }
 
-bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
+bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b,
+                         double* t) {
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
     coverOutlineLessGlyph(textPage, index, l, r, b, t);
+    return true;
+}
+
+bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {
+    if (!outlineAwareCharBox(textPage, index, l, r, b, t)) return false;
     // A redaction removes a char only when the box overlaps its glyph box, and a
     // zero-width one (a combining mark, OCR text with no advance) on the edge of
     // the box only touches it. A box over it alone would have no area.
