@@ -971,8 +971,8 @@ QpdfResult replaceFontStream(std::span<const uint8_t> input, std::string const& 
                 auto replacementDict = replacement.getDict();
                 if (std::string(key) == "/FontFile" || std::string(key) == "/FontFile2") {
                     replacementDict.replaceKey(
-                            "/Length1", QPDFObjectHandle::newInteger(
-                                               static_cast<long long>(fontData.size())));
+                        "/Length1",
+                        QPDFObjectHandle::newInteger(static_cast<long long>(fontData.size())));
                 } else {
                     auto subtype = stream.getKey("/Subtype");
                     if (subtype.isName()) replacementDict.replaceKey("/Subtype", subtype);
