@@ -995,8 +995,8 @@ ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string 
                                           : (object.isDictionary() ? object : QPDFObjectHandle());
             if (dict.isDictionary()) {
                 if (dict.hasKey("/ByteRange")) {
-                    return {nullptr, "document contains signatures (/ByteRange); refusing to rewrite",
-                            -3};
+                    return {nullptr,
+                            "document contains signatures (/ByteRange); refusing to rewrite", -3};
                 }
                 auto ft = dict.getKey("/FT");
                 if (ft.isName() && ft.getName() == "/Sig") {
