@@ -908,3 +908,34 @@ JPDFIUM_EXPORT int32_t jpdfium_signature_digest(int64_t doc, int32_t index, int3
 #ifdef __cplusplus
 }
 #endif
+
+extern "C" {
+
+// Optional PoDoFo bridge. Returns 0 when PoDoFo was not linked at build time.
+JPDFIUM_EXPORT int32_t jpdfium_podofo_available(void);
+
+// Re-save a PDF through PoDoFo. Used as a conservative structural repair
+// fallback when qpdf/PDFium cannot produce a usable document.
+JPDFIUM_EXPORT int32_t jpdfium_podofo_repair(const uint8_t* input, int64_t inputLen,
+                                             uint8_t** output, int64_t* outputLen);
+
+// Replace the stream behind an existing /FontFile{,2,3} descriptor. The
+// caller supplies program bytes matching the font dictionary; this does not
+// synthesize missing encodings or widths.
+JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
+        const uint8_t* input, int64_t inputLen, int64_t fontNum, int32_t fontGen,
+        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen);
+
+// Replace every font dictionary whose /BaseFont equals fontName and whose
+// descriptor already has a font program stream.
+JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(
+        const uint8_t* input, int64_t inputLen, const char* fontName,
+        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen);
+
+// Remove duplicate image XObjects and rewrite /XObject references. This is a
+// structural optimization; it never recompresses image pixels.
+JPDFIUM_EXPORT int32_t jpdfium_podofo_dedup_images(const uint8_t* input, int64_t inputLen,
+                                                   uint8_t** output, int64_t* outputLen,
+                                                   int32_t* removed);
+
+}  // extern "C"

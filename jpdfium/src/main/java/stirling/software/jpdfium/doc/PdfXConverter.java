@@ -14,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.PodofoLib;
 import stirling.software.jpdfium.model.PdfVersion;
 
 /**
@@ -52,6 +53,7 @@ public final class PdfXConverter {
                 options.outputIntentProfile(),
                 PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                 standard.gtsVersion(), standard.gtsConformance());
+        converted = applyFontData(converted, options);
         try (PdfDocument metadata = PdfDocument.open(converted)) {
             applyPageBoxes(metadata);
             applyDocumentInfo(metadata, options);
@@ -87,6 +89,10 @@ public final class PdfXConverter {
                     standard.gtsVersion(), standard.gtsConformance())) {
                 throw new JPDFiumException("PDF/X metadata application failed");
             }
+            if (!options.fontData().isEmpty()) {
+                byte[] withFonts = applyFontData(Files.readAllBytes(metadata), options);
+                Files.write(metadata, withFonts);
+            }
             try (PdfDocument document = PdfDocument.open(metadata)) {
                 applyPageBoxes(document);
                 applyDocumentInfo(document, options);
@@ -100,6 +106,23 @@ public final class PdfXConverter {
             deleteQuietly(staging);
             deleteQuietly(metadata);
         }
+    }
+
+    private static byte[] applyFontData(byte[] pdf, PdfXOptions options) {
+        if (options.fontData().isEmpty()) return pdf;
+        if (!PodofoLib.isAvailable()) {
+            throw new JPDFiumException(
+                    "fontData requires a JPDFium build with PoDoFo linked");
+        }
+        byte[] current = pdf;
+        for (var entry : options.fontData().entrySet()) {
+            current = PodofoLib.embedFontData(current, entry.getKey(), entry.getValue());
+            if (current == null) {
+                throw new JPDFiumException(
+                        "PoDoFo could not replace font " + entry.getKey());
+            }
+        }
+        return current;
     }
 
     private static void deleteQuietly(Path path) {
@@ -244,6 +267,7 @@ public final class PdfXConverter {
                     options.outputIntentProfile(),
                     PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                     standard.gtsVersion(), standard.gtsConformance());
+            converted = applyFontData(converted, options);
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 applyPageBoxes(metadata);
                 applyDocumentInfo(metadata, options);

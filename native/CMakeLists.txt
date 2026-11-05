@@ -209,6 +209,7 @@ if(JPDFIUM_USE_PDFIUM)
         bridge/src/jpdfium_sanitize.cpp
         bridge/src/jpdfium_brotli.cpp
         bridge/src/jpdfium_pdfio.cpp
+        bridge/src/jpdfium_podofo.cpp
         bridge/src/jpdfium_lcms.cpp
         bridge/src/jpdfium_openjpeg.cpp
         bridge/src/jpdfium_signature.cpp)
@@ -296,6 +297,40 @@ if(JPDFIUM_USE_PDFIUM)
         target_include_directories(jpdfium PRIVATE "${TURBOJPEG_INCLUDE}")
         target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_TURBOJPEG=1)
         target_link_libraries(jpdfium PRIVATE "${TURBOJPEG_LIB}")
+    endif()
+
+    # Optional PDFio: independent XRef repair. The bridge already contains a
+    # stub; linking the real library turns the third-opinion fallback on.
+    set(PDFIO_ROOT "" CACHE PATH "Prefix containing the PDFio headers and libraries")
+    find_path(PDFIO_INCLUDE_DIR pdfio.h HINTS "${PDFIO_ROOT}/include"
+              /opt/homebrew/include /usr/local/include)
+    find_library(PDFIO_LIB NAMES pdfio HINTS "${PDFIO_ROOT}/lib"
+                 /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_TTF_LIB NAMES ttf HINTS "${PDFIO_ROOT}/lib" "${PDFIO_ROOT}/ttf"
+                 /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_PNG_LIB NAMES png16 png HINTS /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_WEBP_LIB NAMES webp HINTS /opt/homebrew/lib /usr/local/lib)
+    find_library(PDFIO_Z_LIB NAMES z HINTS /opt/homebrew/lib /usr/local/lib)
+    if(NOT WIN32 AND PDFIO_INCLUDE_DIR AND PDFIO_LIB AND PDFIO_TTF_LIB AND PDFIO_PNG_LIB
+       AND PDFIO_WEBP_LIB AND PDFIO_Z_LIB)
+        target_include_directories(jpdfium PRIVATE "${PDFIO_INCLUDE_DIR}")
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PDFIO=1)
+        target_link_libraries(jpdfium PRIVATE "${PDFIO_LIB}" "${PDFIO_TTF_LIB}"
+                              "${PDFIO_PNG_LIB}" "${PDFIO_WEBP_LIB}" "${PDFIO_Z_LIB}")
+        message(STATUS "PDFio enabled: ${PDFIO_LIB}")
+    else()
+        message(STATUS "PDFio not found; repair bridge reports unavailable")
+    endif()
+
+    # Optional PoDoFo: font program replacement and a conservative repair
+    # fallback. Kept opt-in because PoDoFo is LGPL/MPL and pulls in fontconfig.
+    find_package(podofo CONFIG QUIET)
+    if(podofo_FOUND)
+        target_link_libraries(jpdfium PRIVATE podofo::podofo)
+        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
+        message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
+    else()
+        message(STATUS "PoDoFo not found; PoDoFo bridge reports unavailable")
     endif()
 
     find_program(CARGO_CMD cargo)

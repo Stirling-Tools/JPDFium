@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Map;
+
 /**
  * PDF/X metadata options. The output-intent ICC profile is also the vector and
  * image conversion target, so separation uses the declared printing condition.
@@ -24,6 +26,7 @@ public final class PdfXOptions {
     private final boolean convertLosslessImages;
     private final boolean requireEmbeddedFonts;
     private final String title;
+    private final Map<String, byte[]> fontData;
 
     private PdfXOptions(Builder b) {
         this.standard = b.standard;
@@ -42,6 +45,7 @@ public final class PdfXOptions {
         this.convertLosslessImages = b.convertLosslessImages;
         this.requireEmbeddedFonts = b.requireEmbeddedFonts;
         this.title = b.title;
+        this.fontData = b.fontData == null ? Map.of() : Map.copyOf(b.fontData);
     }
 
     public PdfXStandard standard() {
@@ -108,6 +112,11 @@ public final class PdfXOptions {
         return title;
     }
 
+    /** Exact font program data keyed by /BaseFont, used for stream replacement. */
+    public Map<String, byte[]> fontData() {
+        return fontData;
+    }
+
     /** Build the vector/image conversion options represented by these PDF/X options. */
     public PdfColorConverter.ColorConvertOptions colorOptions() {
         byte[] profile = outputIntentProfile();
@@ -146,6 +155,7 @@ public final class PdfXOptions {
         private boolean convertLosslessImages;
         private boolean requireEmbeddedFonts;
         private String title;
+        private Map<String, byte[]> fontData;
 
         private Builder() {}
 
@@ -236,6 +246,15 @@ public final class PdfXOptions {
         /** Optional title for the output document information dictionary. */
         public Builder title(String value) {
             this.title = value;
+            return this;
+        }
+
+        /**
+         * Replace existing font program streams by /BaseFont. Caller must supply
+         * data matching the font dictionary; PoDoFo is required.
+         */
+        public Builder fontData(Map<String, byte[]> value) {
+            this.fontData = value == null ? null : Map.copyOf(value);
             return this;
         }
 
