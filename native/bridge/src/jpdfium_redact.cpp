@@ -1353,7 +1353,18 @@ JPDFIUM_EXPORT int32_t jpdfium_page_mark_redacted(int64_t page) JPDFIUM_NOEXCEPT
 JPDFIUM_EXPORT int32_t jpdfium_page_mark_redaction_incomplete(int64_t page) JPDFIUM_NOEXCEPT {
     PageWrapper* pw = decodePage(page);
     if (!pw || !pw->core) return JPDFIUM_ERR_INVALID;
-    pw->core->contentRedacted = true;
-    pw->core->incompleteRedactPages[pw->pageIndex].push_back(RedactArea{});
+    try {
+        pw->core->contentRedacted = true;
+        pw->core->strictCropIncompletePages.insert(pw->pageIndex);
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;  // never let exceptions cross the FFI boundary
+    }
+    return JPDFIUM_OK;
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_page_clear_strict_crop_incomplete(int64_t page) JPDFIUM_NOEXCEPT {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->core) return JPDFIUM_ERR_INVALID;
+    pw->core->strictCropIncompletePages.erase(pw->pageIndex);
     return JPDFIUM_OK;
 }

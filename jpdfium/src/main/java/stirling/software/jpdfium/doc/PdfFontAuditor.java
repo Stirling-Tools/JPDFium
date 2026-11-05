@@ -219,7 +219,8 @@ public final class PdfFontAuditor {
             Set<Long> seenOnPage,
             int depth) {
         if (depth > 32) {
-            return;
+            throw new JPDFiumException(
+                    "Form XObject nesting exceeds 32 levels; font audit is incomplete");
         }
         int type;
         try {

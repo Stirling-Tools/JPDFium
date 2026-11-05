@@ -10,6 +10,7 @@ import stirling.software.jpdfium.exception.RedactUnverifiableException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
@@ -173,6 +174,13 @@ public final class PdfPageGeometry {
                         "strict crop could not remove a boundary-crossing glyph");
             }
         }
+
+        // The full strict-crop audit passed, so a failure recorded by an earlier
+        // attempt on this page no longer applies. Other incomplete redaction
+        // areas on the page stay recorded.
+        try (PdfPage page = doc.page(pageIndex)) {
+            page.clearRedactionIncomplete();
+        }
     }
 
     private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
@@ -188,10 +196,20 @@ public final class PdfPageGeometry {
                         if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
                             continue;
                         }
-                        page.redactInRect(
+                        if (!page.redactInRect(
                                 new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
                                 true,
-                                false);
+                                false)) {
+                            RedactIncompleteException failure = new RedactIncompleteException(
+                                    "strict crop could not redact a boundary-crossing glyph");
+                            try {
+                                page.markRedactionIncomplete();
+                            } catch (Throwable markFailure) {
+                                NativeRuntime.rethrowFatal(markFailure);
+                                failure.addSuppressed(markFailure);
+                            }
+                            throw failure;
+                        }
                     }
                 }
             }

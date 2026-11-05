@@ -850,6 +850,11 @@ class PdfXConverterTest {
             assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
                     doc::saveBytes,
                     "saveBytes() must fail closed with RedactIncompleteException when incomplete state is armed");
+            try (PdfPage page = doc.page(0)) {
+                page.clearRedactionIncomplete();
+            }
+            assertTrue(doc.saveBytes().length > 0,
+                    "a passing strict-crop audit must clear the failure marker");
         }
     }
 

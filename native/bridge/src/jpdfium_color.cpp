@@ -947,10 +947,12 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
     if (!title.empty()) {
         const std::string dc_prefix = XmlEnsurePrefix(first, kDcNs, "dc");
         pugi::xml_node title_node = first.child((dc_prefix + ":title").c_str());
-        if (!title_node) {
-            title_node = first.append_child((dc_prefix + ":title").c_str());
-            pugi::xml_node alt = title_node.append_child("rdf:Alt");
-            pugi::xml_node li = alt.append_child("rdf:li");
+        if (!title_node) title_node = first.append_child((dc_prefix + ":title").c_str());
+        if (!XmlUpdateElement(title_node, "li", kRdfNs, {}, title)) {
+            const std::string rdf_prefix = XmlEnsurePrefix(title_node, kRdfNs, "rdf");
+            pugi::xml_node alt = title_node.child((rdf_prefix + ":Alt").c_str());
+            if (!alt) alt = title_node.append_child((rdf_prefix + ":Alt").c_str());
+            pugi::xml_node li = alt.append_child((rdf_prefix + ":li").c_str());
             li.append_attribute("xml:lang").set_value("x-default");
             li.text().set(title.c_str());
         }
@@ -958,6 +960,71 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
     return true;
 }
 #endif
+
+// Convert a PDF date (D:YYYYMMDDHHmmSS[Z|+HH'mm'|-HH'mm']) to the ISO 8601
+// form XMP requires. Returns an empty string when the value cannot be parsed.
+std::string PdfDateToXmp(const std::string& pdf) {
+    size_t pos = 0;
+    if (pdf.size() >= 2 && pdf[0] == 'D' && pdf[1] == ':') pos = 2;
+    if (pdf.size() - pos < 14) return {};
+
+    auto digit = [&](size_t at) { return at < pdf.size() && pdf[at] >= '0' && pdf[at] <= '9'; };
+    for (size_t i = pos; i < pos + 14; ++i) {
+        if (!digit(i)) return {};
+    }
+    auto number = [&](size_t off, size_t len) {
+        int value = 0;
+        for (size_t i = 0; i < len; ++i) value = value * 10 + (pdf[pos + off + i] - '0');
+        return value;
+    };
+
+    const int year = number(0, 4);
+    const int month = number(4, 2);
+    const int day = number(6, 2);
+    const int hour = number(8, 2);
+    const int minute = number(10, 2);
+    const int second = number(12, 2);
+    if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+        return {};
+    }
+
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d", year, month, day, hour, minute,
+                  second);
+    std::string out(buf);
+
+    size_t tz = pos + 14;
+    if (tz == pdf.size()) return out;
+    if (pdf[tz] == 'Z' && tz + 1 == pdf.size()) {
+        out.push_back('Z');
+        return out;
+    }
+    if ((pdf[tz] != '+' && pdf[tz] != '-') || tz + 1 >= pdf.size()) return {};
+
+    const char sign = pdf[tz];
+    size_t cur = tz + 1;
+    if (!digit(cur) || !digit(cur + 1)) return {};
+    const int tz_hour = (pdf[cur] - '0') * 10 + (pdf[cur + 1] - '0');
+    cur += 2;
+
+    int tz_minute = 0;
+    if (cur < pdf.size()) {
+        if (pdf[cur] == '\'' || pdf[cur] == ':') {
+            ++cur;
+        } else if (!digit(cur)) {
+            return {};
+        }
+        if (!digit(cur) || !digit(cur + 1)) return {};
+        tz_minute = (pdf[cur] - '0') * 10 + (pdf[cur + 1] - '0');
+        cur += 2;
+        if (cur < pdf.size() && pdf[cur] == '\'') ++cur;
+    }
+    if (cur != pdf.size() || tz_hour > 23 || tz_minute > 59) return {};
+
+    std::snprintf(buf, sizeof(buf), "%c%02d:%02d", sign, tz_hour, tz_minute);
+    out += buf;
+    return out;
+}
 
 void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* conformance) {
     const std::string ver = NormaliseString(version, "");
@@ -980,7 +1047,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                 trapped = "False";
         }
         if (info_dict.hasKey("/ModDate")) {
-            mod_date = info_dict.getKey("/ModDate").getUTF8Value();
+            mod_date = PdfDateToXmp(info_dict.getKey("/ModDate").getUTF8Value());
         }
     }
 

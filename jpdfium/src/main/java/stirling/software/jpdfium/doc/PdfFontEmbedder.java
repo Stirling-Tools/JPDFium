@@ -21,10 +21,11 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * and supply a program that matches the font dictionary.
  *
  * <p>The replacement is written through qpdf, preserves the existing
- * {@code /FontFile}, {@code /FontFile2} or {@code /FontFile3} stream type, and
- * updates {@code /Length1} for TrueType programs. When no matching font
- * descriptor exists, the call fails instead of returning a silently unchanged
- * PDF.
+ * {@code /FontFile2} or {@code /FontFile3} stream type, and updates
+ * {@code /Length1} for TrueType programs. Type 1 {@code /FontFile} streams are
+ * rejected because {@code /Length1}-{@code /Length3} cannot be derived. When no
+ * matching font descriptor exists, the call fails instead of returning a
+ * silently unchanged PDF.
  */
 public final class PdfFontEmbedder {
 
