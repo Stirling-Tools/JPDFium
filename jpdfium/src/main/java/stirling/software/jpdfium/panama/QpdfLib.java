@@ -107,7 +107,7 @@ public final class QpdfLib {
         return QPDF_BOUND;
     }
 
-    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE = Symbols.downcallOptional(
+    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_replace_font_stream",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG,
                     ADDRESS, ADDRESS));

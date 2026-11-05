@@ -985,23 +985,14 @@ ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string 
             }
         }
 
-        int replaced = 0;
-        for (auto& object : qpdf->getAllObjects()) {
-            if (!object.isDictionary()) continue;
-            auto type = object.getKey("/Type");
-            if (!type.isName() || type.getName() != "/Font") continue;
-            auto base = object.getKey("/BaseFont");
-            if (!base.isName() || !isFontNameMatch(object, base.getName(), baseFont)) continue;
-            auto descriptor = object.getKey("/FontDescriptor");
-            if (!descriptor.isDictionary()) continue;
+        auto tryReplaceInDescriptor = [&](QPDFObjectHandle& descriptor) -> int {
+            if (!descriptor.isDictionary()) return 0;
+            int count = 0;
             for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
                 auto stream = descriptor.getKey(key);
                 if (!stream.isStream()) continue;
                 if (std::string(key) == "/FontFile") {
-                    // Type 1 /FontFile requires Length1, Length2, and Length3 in ISO 32000-1.
-                    // Raw bytes cannot be safely written without valid length markers.
-                    return {nullptr,
-                            "Type 1 /FontFile replacement without Length1/2/3 is unsupported", -4};
+                    return -4;
                 }
                 std::string bytes(reinterpret_cast<const char*>(fontData.data()), fontData.size());
                 auto replacement = QPDFObjectHandle::newStream(qpdf.get(), bytes);
@@ -1015,7 +1006,60 @@ ReplaceFontResult replaceFontStream(std::span<const uint8_t> input, std::string 
                     if (subtype.isName()) replacementDict.replaceKey("/Subtype", subtype);
                 }
                 descriptor.replaceKey(key, replacement);
-                ++replaced;
+                ++count;
+            }
+            return count;
+        };
+
+        int replaced = 0;
+        std::vector<QPDFObjectHandle> fontCandidates;
+        for (auto& object : qpdf->getAllObjects()) {
+            if (!object.isDictionary()) continue;
+            auto type = object.getKey("/Type");
+            if (type.isName() && type.getName() == "/Font") {
+                fontCandidates.push_back(object);
+            }
+            auto res = object.getKey("/Resources");
+            if (res.isDictionary()) {
+                auto fontDict = res.getKey("/Font");
+                if (fontDict.isDictionary()) {
+                    for (auto const& [name, fontObj] : fontDict.getDictAsMap()) {
+                        if (fontObj.isDictionary()) fontCandidates.push_back(fontObj);
+                    }
+                }
+            }
+        }
+
+        std::set<QPDFObjGen> seen;
+        for (auto& font : fontCandidates) {
+            if (font.hasObjectDescription() && font.getObjGen().getObj() != 0) {
+                if (!seen.insert(font.getObjGen()).second) continue;
+            }
+            auto base = font.getKey("/BaseFont");
+            if (!base.isName() || !isFontNameMatch(font, base.getName(), baseFont)) continue;
+
+            auto descriptor = font.getKey("/FontDescriptor");
+            int r = tryReplaceInDescriptor(descriptor);
+            if (r == -4) {
+                return {nullptr, "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
+                        -4};
+            }
+            replaced += r;
+
+            // Type 0 CID fonts have /FontDescriptor in /DescendantFonts
+            auto descendantFonts = font.getKey("/DescendantFonts");
+            if (descendantFonts.isArray()) {
+                for (auto& df : descendantFonts.getArrayAsVector()) {
+                    if (!df.isDictionary()) continue;
+                    auto descDescriptor = df.getKey("/FontDescriptor");
+                    int dr = tryReplaceInDescriptor(descDescriptor);
+                    if (dr == -4) {
+                        return {nullptr,
+                                "Type 1 /FontFile replacement without Length1/2/3 is unsupported",
+                                -4};
+                    }
+                    replaced += dr;
+                }
             }
         }
         if (replaced == 0) {
