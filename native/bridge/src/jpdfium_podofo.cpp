@@ -17,7 +17,7 @@
 
 #include "jpdfium.h"
 
-#ifdef JPDFIUM_HAS_PODOFO
+#if defined(JPDFIUM_HAS_PODOFO) && !defined(_WIN32)
 
 #include <podofo/podofo.h>
 
