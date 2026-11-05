@@ -366,8 +366,8 @@ if(JPDFIUM_USE_PDFIUM)
         # do not propagate those to jpdfium.
         target_include_directories(jpdfium PRIVATE
             "${podofo_SOURCE_DIR}/src"
-            "${podofo_BINARY_DIR}/src/podofo/auxiliary"
-            "${podofo_BINARY_DIR}/src/podofo/private"
+            "${podofo_BINARY_DIR}/src/podofo/podofo/auxiliary"
+            "${podofo_BINARY_DIR}/src/podofo/podofo/private"
             "${podofo_SOURCE_DIR}/3rdparty/adobe"
             "${podofo_SOURCE_DIR}/3rdparty/chromium")
     endif()
