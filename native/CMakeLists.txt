@@ -364,7 +364,7 @@ if(JPDFIUM_USE_PDFIUM)
         # PoDoFo 1.1.2 exposes its generated configuration header through
         # directory-scoped include_directories; imported FetchContent targets
         # do not propagate those to jpdfium.
-        target_include_directories(jpdfium PRIVATE
+        target_include_directories(jpdfium SYSTEM PRIVATE
             "${podofo_SOURCE_DIR}/src"
             "${podofo_BINARY_DIR}/src/podofo/podofo/auxiliary"
             "${podofo_BINARY_DIR}/src/podofo/podofo/private"
