@@ -23,11 +23,13 @@ public final class StorageOptions {
     private final Mode mode;
     private final Path tempDir;
     private final boolean reuseSourceFile;
+    private final boolean durable;
 
     private StorageOptions(Builder b) {
         this.mode = b.mode;
         this.tempDir = b.tempDir;
         this.reuseSourceFile = b.reuseSourceFile;
+        this.durable = b.durable;
     }
 
     public Mode mode() { return mode; }
@@ -46,6 +48,13 @@ public final class StorageOptions {
      * caller knows the document is untouched since it was opened.
      */
     public boolean reuseSourceFile() { return reuseSourceFile; }
+
+    /**
+     * Whether a file written by {@code mergeFilesToFile} or {@code extractPageRangeToFile} is
+     * flushed to disk (fsync plus directory flush) when it is published. On by default; turn it
+     * off for outputs the caller reads back and deletes, such as files streamed into a response.
+     */
+    public boolean durable() { return durable; }
 
     public static StorageOptions defaults() { return builder().build(); }
 
@@ -90,6 +99,7 @@ public final class StorageOptions {
         private Mode mode = Mode.AUTO;
         private Path tempDir;
         private boolean reuseSourceFile;
+        private boolean durable = true;
 
         private Builder() {}
 
@@ -110,6 +120,12 @@ public final class StorageOptions {
          */
         public Builder reuseSourceFile(boolean reuse) {
             this.reuseSourceFile = reuse;
+            return this;
+        }
+
+        /** Flush published outputs to disk; see {@link StorageOptions#durable()}. */
+        public Builder durable(boolean durable) {
+            this.durable = durable;
             return this;
         }
 

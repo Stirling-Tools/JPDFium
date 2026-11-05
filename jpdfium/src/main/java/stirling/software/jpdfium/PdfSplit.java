@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +18,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -452,8 +452,8 @@ public final class PdfSplit {
             }
             if (staged != null) {
                 try {
-                    part.save(staged);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+                    part.saveTo(staged, SaveOptions.ephemeral());
+                    OutputTransaction.publishStaged(staged, output, options.durable());
                     staged = null;
                 } finally {
                     if (staged != null) {
@@ -481,7 +481,7 @@ public final class PdfSplit {
             return false;
         }
         try {
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -492,7 +492,7 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
+            OutputTransaction.publishStaged(staged, output, options.durable());
             staged = null;
             return true;
         } finally {

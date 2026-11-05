@@ -71,6 +71,38 @@ class PdfMergeSplitFilesTest {
     }
 
     @Test
+    void nonDurableFileOutputsMatchDurableOnes(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+        StorageOptions ephemeral = StorageOptions.builder().durable(false).build();
+
+        Path durableMerge = tmp.resolve("durable-merge.pdf");
+        Path ephemeralMerge = tmp.resolve("ephemeral-merge.pdf");
+        PdfMerge.mergeFilesToFile(List.of(a, b), durableMerge);
+        PdfMerge.mergeFilesToFile(List.of(a, b), ephemeralMerge, ephemeral);
+        byte[] durableBytes = Files.readAllBytes(durableMerge);
+        byte[] ephemeralBytes = Files.readAllBytes(ephemeralMerge);
+        assertEquals(5, PdfVerifier.pageCount(ephemeralBytes, "non-durable merge"));
+        for (int i = 0; i < 5; i++) {
+            assertEquals(PdfVerifier.pageText(durableBytes, i, "durable merge"),
+                    PdfVerifier.pageText(ephemeralBytes, i, "non-durable merge"));
+        }
+
+        Path part = tmp.resolve("part.pdf");
+        Files.writeString(part, "stale");
+        PdfSplit.extractPageRangeToFile(b, 1, 2, part, ephemeral);
+        assertEquals(2, PdfVerifier.pageCount(Files.readAllBytes(part), "non-durable extract"));
+        assertTrue(Files.list(tmp).noneMatch(p -> p.getFileName().toString().startsWith(".jpdfium-stage")),
+                "staging files must not be left behind");
+    }
+
+    @Test
     void extractPageRangeToFileMatchesBytesPath(@TempDir Path tmp) throws Exception {        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
 
