@@ -13,6 +13,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 
@@ -102,6 +103,33 @@ class RotatedMatchRedactTest {
             redacted = doc.saveBytes();
         }
         assertEquals("FORMTEXT", letters(redacted));
+    }
+
+    /**
+     * The painted cover follows the word's quad: a point inside the box around the
+     * tilted word's glyphs, but in its empty corner beside the word, stays unpainted.
+     */
+    @Test
+    void theCoverOnRotatedTextStopsAtTheWord() throws Exception {
+        byte[] pdf = rotatedLine("FORM SECRET TEXT", 30);
+        double left = Double.MAX_VALUE, top = -Double.MAX_VALUE;
+        for (double[] box : RedactTestPages.wordBoxes(pdf, "SECRET")) {
+            left = Math.min(left, box[0]);
+            top = Math.max(top, box[3]);
+        }
+        byte[] redacted;
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            try (PdfPage page = doc.page(0)) {
+                page.redactWordsEx(new String[]{"SECRET"}, 0xFF000000, 0f, false, false, true, false);
+            }
+            redacted = doc.saveBytes();
+        }
+        try (PdfDocument doc = PdfDocument.open(redacted); PdfPage page = doc.page(0)) {
+            BufferedImage image = page.renderAt(72).toBufferedImage(false);
+            int blank = image.getRGB(5, 5);
+            int corner = image.getRGB((int) Math.round(left + 1), image.getHeight() - (int) Math.round(top - 1));
+            assertEquals(blank, corner, "the corner beside the tilted word is left unpainted");
+        }
     }
 
     /** Page point at distance {@code s} along the rotated baseline and {@code t} up from it. */

@@ -28,8 +28,8 @@ publishing workflows, not library releases, so they are not listed here.
   removes the text that redaction left, not merely until any commit on the page
   succeeds.
 - Redacting a word on rotated, mirrored or skewed text no longer removes
-  glyphs of the neighbouring words: the redaction marks the word's own quad
-  instead of the box around it.
+  glyphs of the neighbouring words or paints over them: the redaction marks
+  and covers the word's own quad instead of the box around it.
 
 ## [1.3.0] - 2026-11-05
 

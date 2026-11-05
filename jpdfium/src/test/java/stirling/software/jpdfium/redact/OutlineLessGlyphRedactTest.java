@@ -26,8 +26,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -263,46 +261,21 @@ class OutlineLessGlyphRedactTest {
         }
     }
 
-    private static final Pattern CHAR = Pattern.compile(
-            "\\{\"i\":(\\d+),\"u\":\\d+,\"ox\":[-\\d.eE]+,\"oy\":[-\\d.eE]+,"
-                    + "\"l\":([-\\d.eE]+),\"r\":([-\\d.eE]+),\"b\":([-\\d.eE]+),\"t\":([-\\d.eE]+)\\}");
-    private static final Pattern HIT = Pattern.compile("\"start\":(\\d+),\"len\":(\\d+)");
-
     /** Tallest PDFium glyph box among the chars of the first occurrence of {@code word}. */
     private static double maxGlyphHeight(byte[] pdf, String word) {
         double tallest = 0;
-        for (double[] box : wordBoxes(pdf, word)) tallest = Math.max(tallest, box[3] - box[2]);
+        for (double[] box : RedactTestPages.wordBoxes(pdf, word)) tallest = Math.max(tallest, box[3] - box[2]);
         return tallest;
     }
 
     /** Left and right page x of the first occurrence of {@code word}. */
     private static float[] wordCell(byte[] pdf, String word) {
         double left = Double.MAX_VALUE, right = -Double.MAX_VALUE;
-        for (double[] box : wordBoxes(pdf, word)) {
+        for (double[] box : RedactTestPages.wordBoxes(pdf, word)) {
             left = Math.min(left, box[0]);
             right = Math.max(right, box[1]);
         }
         return new float[]{(float) left, (float) right};
-    }
-
-    /** PDFium's {l, r, b, t} box of each char of the first occurrence of {@code word}. */
-    private static List<double[]> wordBoxes(byte[] pdf, String word) {
-        try (PdfDocument doc = PdfDocument.open(pdf); PdfPage page = doc.page(0)) {
-            Matcher hit = HIT.matcher(page.findTextJson(word));
-            assertTrue(hit.find(), "fixture: the word is extractable");
-            int start = Integer.parseInt(hit.group(1));
-            int end = start + Integer.parseInt(hit.group(2));
-            List<double[]> boxes = new ArrayList<>();
-            Matcher c = CHAR.matcher(page.extractCharPositionsJson());
-            while (c.find()) {
-                int i = Integer.parseInt(c.group(1));
-                if (i >= start && i < end) {
-                    boxes.add(new double[]{Double.parseDouble(c.group(2)), Double.parseDouble(c.group(3)),
-                            Double.parseDouble(c.group(4)), Double.parseDouble(c.group(5))});
-                }
-            }
-            return boxes;
-        }
     }
 
     private static String pdfiumText(byte[] pdf) {

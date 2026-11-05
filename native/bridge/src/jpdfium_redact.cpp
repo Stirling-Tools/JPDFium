@@ -135,13 +135,52 @@ static void markRedactionIncomplete(PageWrapper* pw, const std::vector<FS_RECTF>
     markRedactionIncomplete(pw, areas);
 }
 
-static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch>& applied) {
+// The area a match's REDACT mark covers: its quad where it has one, since that,
+// not the bbox around it, is what the redactor applies on rotated text.
+static RedactArea areaOf(const TextMatch& m) {
+    RedactArea area{makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT), {}};
+    if (m.hasQuad) area.quads.push_back(m.quad);
+    return area;
+}
+
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch>& matches) {
     std::vector<RedactArea> areas;
-    areas.reserve(applied.size());
-    for (const TextMatch& m : applied) {
-        areas.push_back(RedactArea{makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT), {}});
-    }
+    areas.reserve(matches.size());
+    for (const TextMatch& m : matches) areas.push_back(areaOf(m));
     markRedactionIncomplete(pw, areas);
+}
+
+// Paints the cover over a redacted area in `argb` (nothing when fully
+// transparent): over each quad where the area has them, so a cover on rotated
+// text stops at the word as the redaction did, else over its rect.
+static void paintCover(FPDF_PAGE page, const RedactArea& area, uint32_t argb) {
+    unsigned int alf = (argb >> 24) & 0xFF;
+    if (alf == 0) return;
+    unsigned int red = (argb >> 16) & 0xFF;
+    unsigned int grn = (argb >> 8) & 0xFF;
+    unsigned int blu = argb & 0xFF;
+    std::vector<FPDF_PAGEOBJECT> shapes;
+    if (area.quads.empty()) {
+        shapes.push_back(FPDFPageObj_CreateNewRect(area.rect.left, area.rect.bottom,
+                                                   area.rect.right - area.rect.left,
+                                                   area.rect.top - area.rect.bottom));
+    } else {
+        for (const FS_QUADPOINTSF& q : area.quads) {
+            FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(q.x1, q.y1);
+            if (!path) continue;
+            FPDFPath_LineTo(path, q.x2, q.y2);
+            FPDFPath_LineTo(path, q.x4, q.y4);
+            FPDFPath_LineTo(path, q.x3, q.y3);
+            FPDFPath_Close(path);
+            shapes.push_back(path);
+        }
+    }
+    for (FPDF_PAGEOBJECT shape : shapes) {
+        if (!shape) continue;
+        FPDFPageObj_SetFillColor(shape, red, grn, blu, alf);
+        FPDFPath_SetDrawMode(shape, FPDF_FILLMODE_ALTERNATE, 0);
+        FPDFPage_InsertObject(page, shape);
+    }
 }
 
 namespace {
@@ -518,29 +557,14 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             // half-redacted document, so keep the redacted-save guards (no
             // incremental save, sanitize on save) AND fail every save until the
             // caller resolves the page.
-            markRedactionIncomplete(pw, appliedRects);
+            markRedactionIncomplete(pw, sortedMatches);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
             tp = nullptr;
 
-            unsigned int alf = (argb >> 24) & 0xFF;
-            unsigned int red = (argb >> 16) & 0xFF;
-            unsigned int grn = (argb >> 8) & 0xFF;
-            unsigned int blu = argb & 0xFF;
-
-            if (alf > 0) {
-                for (const auto& ar : appliedRects) {
-                    FPDF_PAGEOBJECT rectObj = FPDFPageObj_CreateNewRect(
-                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
-                    if (rectObj) {
-                        FPDFPageObj_SetFillColor(rectObj, red, grn, blu, alf);
-                        FPDFPath_SetDrawMode(rectObj, FPDF_FILLMODE_ALTERNATE, 0);
-                        FPDFPage_InsertObject(pw->page, rectObj);
-                    }
-                }
-            }
+            for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
             FPDFPage_GenerateContent(pw->page);
 
             if (pw->core) {
@@ -583,7 +607,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             // Content was removed but the audit still finds survivors: the page is
             // half-redacted, so no save may serialize it until a commit resolves it.
             if (epdfOk) {
-                markRedactionIncomplete(pw, appliedRects);
+                markRedactionIncomplete(pw, sortedMatches);
             } else {
                 markRedactionIncomplete(pw, matches);
             }
@@ -779,29 +803,14 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             // half-redacted document, so keep the redacted-save guards (no
             // incremental save, sanitize on save) AND fail every save until the
             // caller resolves the page.
-            markRedactionIncomplete(pw, appliedRects);
+            markRedactionIncomplete(pw, sortedMatches);
             return JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
         if (epdfOk) {
             FPDFText_ClosePage(tp);
             tp = nullptr;
 
-            unsigned int alf = (argb >> 24) & 0xFF;
-            unsigned int red = (argb >> 16) & 0xFF;
-            unsigned int grn = (argb >> 8) & 0xFF;
-            unsigned int blu = argb & 0xFF;
-
-            if (alf > 0) {
-                for (const auto& ar : appliedRects) {
-                    FPDF_PAGEOBJECT rectObj = FPDFPageObj_CreateNewRect(
-                        ar.left, ar.bottom, ar.right - ar.left, ar.top - ar.bottom);
-                    if (rectObj) {
-                        FPDFPageObj_SetFillColor(rectObj, red, grn, blu, alf);
-                        FPDFPath_SetDrawMode(rectObj, FPDF_FILLMODE_ALTERNATE, 0);
-                        FPDFPage_InsertObject(pw->page, rectObj);
-                    }
-                }
-            }
+            for (const TextMatch& m : sortedMatches) paintCover(pw->page, areaOf(m), argb);
             FPDFPage_GenerateContent(pw->page);
 
             if (pw->core) {
@@ -843,7 +852,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             // Survivors after a mutation: fail every save until a commit resolves
             // this page (same contract as jpdfium_redact_pattern).
             if (epdfOk) {
-                markRedactionIncomplete(pw, appliedRects);
+                markRedactionIncomplete(pw, sortedMatches);
             } else {
                 markRedactionIncomplete(pw, matches);
             }
@@ -857,7 +866,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             if (!remaining.empty()) {
                 FPDFText_ClosePage(audit);
                 if (epdfOk) {
-                    markRedactionIncomplete(pw, appliedRects);
+                    markRedactionIncomplete(pw, sortedMatches);
                 } else {
                     markRedactionIncomplete(pw, matches);
                 }
@@ -1175,38 +1184,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             }
         }
         if (epdfOk) {
-            unsigned int alf = (argb >> 24) & 0xFF;
-            unsigned int red = (argb >> 16) & 0xFF;
-            unsigned int grn = (argb >> 8) & 0xFF;
-            unsigned int blu = argb & 0xFF;
-
-            if (alf > 0) {
-                for (const auto& item : redactAnnots) {
-                    if (!item.area.quads.empty()) {
-                        for (const auto& q : item.area.quads) {
-                            FPDF_PAGEOBJECT pObj = FPDFPageObj_CreateNewPath(q.x1, q.y1);
-                            if (!pObj) continue;
-                            FPDFPath_LineTo(pObj, q.x2, q.y2);
-                            FPDFPath_LineTo(pObj, q.x4, q.y4);
-                            FPDFPath_LineTo(pObj, q.x3, q.y3);
-                            FPDFPath_Close(pObj);
-                            FPDFPageObj_SetFillColor(pObj, red, grn, blu, alf);
-                            FPDFPath_SetDrawMode(pObj, FPDF_FILLMODE_ALTERNATE, 0);
-                            FPDFPage_InsertObject(pw->page, pObj);
-                        }
-                    } else {
-                        FPDF_PAGEOBJECT rect =
-                            FPDFPageObj_CreateNewRect(item.area.rect.left, item.area.rect.bottom,
-                                                      item.area.rect.right - item.area.rect.left,
-                                                      item.area.rect.top - item.area.rect.bottom);
-                        if (rect) {
-                            FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
-                            FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
-                            FPDFPage_InsertObject(pw->page, rect);
-                        }
-                    }
-                }
-            }
+            for (const RedactArea& area : redactAreas) paintCover(pw->page, area, argb);
             FPDFPage_GenerateContent(pw->page);
 
             // The redactor removed the marks it applied, so they no longer hold a

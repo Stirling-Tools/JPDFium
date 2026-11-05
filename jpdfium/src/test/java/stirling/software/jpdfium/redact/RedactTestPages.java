@@ -24,7 +24,12 @@ import stirling.software.jpdfium.model.Rect;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Small Helvetica pages for redaction tests, and the covers a redaction leaves on them. */
 final class RedactTestPages {
@@ -109,6 +114,31 @@ final class RedactTestPages {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             doc.save(out);
             return out.toByteArray();
+        }
+    }
+
+    private static final Pattern CHAR = Pattern.compile(
+            "\\{\"i\":(\\d+),\"u\":\\d+,\"ox\":[-\\d.eE]+,\"oy\":[-\\d.eE]+,"
+                    + "\"l\":([-\\d.eE]+),\"r\":([-\\d.eE]+),\"b\":([-\\d.eE]+),\"t\":([-\\d.eE]+)\\}");
+    private static final Pattern HIT = Pattern.compile("\"start\":(\\d+),\"len\":(\\d+)");
+
+    /** PDFium's {l, r, b, t} box of each char of the first occurrence of {@code word}. */
+    static List<double[]> wordBoxes(byte[] pdf, String word) {
+        try (PdfDocument doc = PdfDocument.open(pdf); PdfPage page = doc.page(0)) {
+            Matcher hit = HIT.matcher(page.findTextJson(word));
+            assertTrue(hit.find(), "fixture: the word is extractable");
+            int start = Integer.parseInt(hit.group(1));
+            int end = start + Integer.parseInt(hit.group(2));
+            List<double[]> boxes = new ArrayList<>();
+            Matcher c = CHAR.matcher(page.extractCharPositionsJson());
+            while (c.find()) {
+                int i = Integer.parseInt(c.group(1));
+                if (i >= start && i < end) {
+                    boxes.add(new double[]{Double.parseDouble(c.group(2)), Double.parseDouble(c.group(3)),
+                            Double.parseDouble(c.group(4)), Double.parseDouble(c.group(5))});
+                }
+            }
+            return boxes;
         }
     }
 
