@@ -1429,6 +1429,9 @@ public final class PdfDocument implements AutoCloseable {
     /** Set a document information metadata value through the EmbedPDF extension. */
     public void setMetadata(String tag, String value) {
         ensureOpen();
+        if (DocBindings.EPDF_SetMetaText == null) {
+            throw new JPDFiumException("EPDF_SetMetaText is not available in this PDFium build");
+        }
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment tagSeg = arena.allocateFrom(tag);
             MemorySegment valueSeg = FfmHelper.toWideString(arena, value);
@@ -1460,6 +1463,9 @@ public final class PdfDocument implements AutoCloseable {
     /** Set /Trapped to false. */
     public void setTrappedFalse() {
         ensureOpen();
+        if (DocBindings.EPDF_SetMetaTrapped == null) {
+            throw new JPDFiumException("EPDF_SetMetaTrapped is not available in this PDFium build");
+        }
         try {
             int ok = (int) DocBindings.EPDF_SetMetaTrapped.invokeExact(
                     rawHandle(), DocBindings.PDFTRAPPED_FALSE);

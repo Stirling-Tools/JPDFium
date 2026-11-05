@@ -51,7 +51,9 @@ class CropContentContractTest {
     void cropAndRemoveContentStrictRefusesIncrementalSave() throws Exception {
         byte[] input = CropTestPdfGenerator.textGridPdf();
         try (PdfDocument doc = PdfDocument.open(input)) {
-            Rect rect = new Rect(50, 50, 200, 200);
+            // KEEP_A is placed at (100, 700). A crop with width=75 straddles KEEP_A,
+            // triggering word boundary removal and native redaction marking.
+            Rect rect = new Rect(50, 650, 75, 100);
             PdfPageGeometry.cropAndRemoveContentStrict(doc, 0, rect);
             assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
                     doc::saveBytesIncremental,

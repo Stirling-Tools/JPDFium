@@ -1410,7 +1410,7 @@ public final class JpdfiumLib {
     }
 
     private static final MethodHandle jpdfium_page_mark_redacted =
-            Symbols.downcallOptional("jpdfium_page_mark_redacted",
+            Symbols.downcall("jpdfium_page_mark_redacted",
                     FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
 
     public static void pageMarkRedacted(long page) {

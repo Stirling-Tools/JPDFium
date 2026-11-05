@@ -16,6 +16,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -39,7 +40,9 @@ public final class PdfXConverter {
     public static boolean isSupported() {
         return PdfOutputIntent.pdfxSupported()
                 && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)
-                && QpdfLib.isForceVersionFileSupported();
+                && QpdfLib.isForceVersionFileSupported()
+                && DocBindings.EPDF_SetMetaText != null
+                && DocBindings.EPDF_SetMetaTrapped != null;
     }
 
     /** True when {@code standard}'s intent/XMP metadata is wired into this build. */
@@ -187,7 +190,7 @@ public final class PdfXConverter {
     }
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
-        if (document.getTrapped() != stirling.software.jpdfium.panama.DocBindings.PDFTRAPPED_TRUE) {
+        if (document.getTrapped() != DocBindings.PDFTRAPPED_TRUE) {
             document.setTrappedFalse();
         }
         if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
