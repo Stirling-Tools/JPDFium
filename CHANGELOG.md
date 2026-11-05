@@ -17,6 +17,8 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-05
+
 ### Added
 
 - In-process qpdf parity for the operations that previously required the
@@ -45,6 +47,9 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The UTF-8 pattern engine and UTF-32 redaction engine used different C++ structs
+  with the same name, violating the one-definition rule in optimized builds.
+  Their native pattern types now have distinct names.
 - Applying annotation redactions produced by Adobe Acrobat (`commitRedactions`,
   `applyRedaction`, and `applyRedactions`) unexpectedly drew a duplicate black
   box near the bottom-left corner of the page: Acrobat's pre-baked `/RO`
@@ -85,6 +90,29 @@ publishing workflows, not library releases, so they are not listed here.
   was opened without `_O_BINARY`. The shifted offsets made PDFium's own reader
   mis-resolve objects and reload page content as empty; every file-based save
   overload was affected.
+- The linux-x64 natives required glibc 2.43 because the build ran on an
+  unpinned `ubuntu-latest` runner, so they failed to load on Ubuntu 24.04 and
+  any other distribution with an older glibc, with
+  "version `GLIBC_2.43' not found". linux-x64 now builds on Ubuntu 24.04 like
+  linux-arm64. PDFium and vips prebuild producers use the same baseline,
+  and publication gates reject shared libraries and final bundles requiring
+  glibc newer than 2.39, `GLIBCXX_3.4.33` or `CXXABI_1.3.15`.
+  Snapshot CI runs the staged Linux natives on Ubuntu 24.04 and 26.04,
+  including merge/extract preservation and vips codec tests, and rejects
+  skipped compatibility tests.
+- Merging and page extraction through qpdf kept only the pages and dropped the
+  rest of the document: form fields, page labels, named destinations, viewer
+  preferences, XMP metadata, the document language and the document
+  information dictionary. The first input now keeps its document-level data,
+  form fields from every input are carried over (a clashing field name is
+  renamed), and page labels are rebuilt for the new page order. Bookmarks, the
+  structure tree, XFA form and usage-rights signatures are still dropped,
+  because they describe the source document and are wrong once its pages are
+  rearranged, and the output is still written unencrypted.
+- `NOTICE.txt` in the natives jars now credits Skia, PCRE2 and its SLJIT JIT
+  compiler, pugixml, libunibreak, Expat, Brotli, bzip2 and LLVM libc++, which
+  were bundled without a notice, and the natives POMs name the bundled
+  libraries' licenses alongside MIT.
 
 ### Changed
 
@@ -325,7 +353,8 @@ PDFium-backed document, page, text, image, and redaction APIs. Per-version notes
 were not maintained; see the [Releases](https://github.com/Stirling-Tools/JPDFium/releases)
 page and the `v1.0.x` tags.
 
-[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.2.0
 [1.1.5]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.5
 [1.1.4]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.4
