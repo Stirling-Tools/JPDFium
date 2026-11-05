@@ -15,6 +15,8 @@ import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.PdfVersion;
+import stirling.software.jpdfium.model.Rect;
+import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
  * PDF/X metadata bootstrap for PDF/X-1a, PDF/X-3, PDF/X-4 and PDF/X-6:
@@ -36,7 +38,8 @@ public final class PdfXConverter {
     /** True when the loaded native library can run the implemented metadata pipeline. */
     public static boolean isSupported() {
         return PdfOutputIntent.pdfxSupported()
-                && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK);
+                && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)
+                && QpdfLib.isForceVersionFileSupported();
     }
 
     /** True when {@code standard}'s intent/XMP metadata is wired into this build. */
@@ -56,8 +59,9 @@ public final class PdfXConverter {
             applyPageBoxes(metadata);
             applyDocumentInfo(metadata, options);
             requireEmbeddedFonts(metadata, options);
-            return PdfDocument.open(PdfVersionConverter.saveWithVersionToBytes(
-                    metadata.rawHandle(), versionFor(standard)));
+            byte[] out = PdfVersionConverter.forceVersion(
+                    metadata.saveBytes(), versionFor(standard));
+            return PdfDocument.open(out);
         }
     }
 
@@ -183,15 +187,26 @@ public final class PdfXConverter {
     }
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
-        document.setTrappedFalse();
+        if (document.getTrapped() != stirling.software.jpdfium.panama.DocBindings.PDFTRAPPED_TRUE) {
+            document.setTrappedFalse();
+        }
         if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
             document.setMetadata("GTS_PDFXVersion", options.standard().gtsVersion());
+            if (options.standard().gtsConformance() != null) {
+                document.setMetadata("GTS_PDFXConformance", options.standard().gtsConformance());
+            }
+            if (options.title() == null || options.title().isBlank()) {
+                PdfMetadata meta = PdfMetadata.of(document.rawHandleForRead());
+                if (meta.title().isEmpty()) {
+                    throw new JPDFiumException("Title is required for " + options.standard().name());
+                }
+            }
         }
         if (options.title() != null && !options.title().isBlank()) {
             document.setMetadata("Title", options.title());
         }
         PdfMetadata metadata = PdfMetadata.of(document.rawHandleForRead());
-        String now = DateTimeFormatter.ofPattern("'D:'yyyyMMddHHmmss'+00''00'")
+        String now = DateTimeFormatter.ofPattern("'D:'yyyyMMddHHmmss'+00''00'''")
                 .format(Instant.now().atZone(ZoneOffset.UTC));
         if (metadata.creationDate().isEmpty()) {
             document.setMetadata("CreationDate", now);
@@ -204,9 +219,12 @@ public final class PdfXConverter {
     private static void applyPageBoxes(PdfDocument document) {
         for (int i = 0; i < document.pageCount(); i++) {
             try (PdfPage page = document.page(i)) {
-                if (page.getTrimBox().isEmpty()) {
-                    page.setTrimBox(page.getCropBox().orElse(page.getMediaBox()));
+                // ISO 15930 forbids having both TrimBox and ArtBox.
+                if (page.getTrimBox().isPresent() || page.getArtBox().isPresent()) {
+                    continue;
                 }
+                Rect fallback = page.getCropBox().orElseGet(page::getMediaBox);
+                page.setTrimBox(fallback);
             }
         }
     }
@@ -243,8 +261,8 @@ public final class PdfXConverter {
                 applyPageBoxes(metadata);
                 applyDocumentInfo(metadata, options);
                 requireEmbeddedFonts(metadata, options);
-                return PdfVersionConverter.saveWithVersionToBytes(
-                        metadata.rawHandle(), versionFor(standard));
+                return PdfVersionConverter.forceVersion(
+                        metadata.saveBytes(), versionFor(standard));
             }
         }
     }

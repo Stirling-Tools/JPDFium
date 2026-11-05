@@ -991,6 +991,37 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, cons
     }
 }
 
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t inputLen,
+                                                  const char* version, uint8_t** output,
+                                                  int64_t* outputLen) {
+    if (!input || inputLen <= 0 || !version || !*version || !output || !outputLen) return -1;
+    *output = nullptr;
+    *outputLen = 0;
+    try {
+        auto pdf = QPDF::create();
+        pdf->processMemoryFile("jpdfium-mem", reinterpret_cast<const char*>(input),
+                               static_cast<size_t>(inputLen));
+        pdf->getRoot().removeKey("/Version");
+        QPDFWriter writer{*pdf};
+        writer.setOutputMemory();
+        writer.forcePDFVersion(version);
+        WriterLock lock{-1};
+        writer.write();
+        auto buf = writer.getBufferSharedPointer();
+        if (!buf || buf->getSize() == 0) return -1;
+        *outputLen = static_cast<int64_t>(buf->getSize());
+        *output = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,
                                             const char* password, char** json) {
     if (!input || inputLen <= 0 || !json) return -1;

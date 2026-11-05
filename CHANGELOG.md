@@ -17,8 +17,6 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
-## [1.3.1] - 2026-11-05
-
 ### Added
 
 - PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
@@ -44,8 +42,9 @@ publishing workflows, not library releases, so they are not listed here.
   glyphs of the neighbouring words or paints over them: the redaction marks
   and covers the word's own quad instead of the box around it.
 - `PdfVersionConverter` now writes a PDF 2.0 header for `PdfVersion.V2_0`.
-  PDFium's `FPDF_SaveWithVersion` currently falls back to a PDF 1.4 header for
-  version 20 even though the saved object graph is valid.
+  PDFium's `FPDF_SaveWithVersion` rejects version codes above 17 (PDF 1.7) and
+  falls back to keeping the source document's version rather than writing a
+  PDF 2.0 header.
 
 ## [1.3.0] - 2026-11-05
 
@@ -383,8 +382,7 @@ PDFium-backed document, page, text, image, and redaction APIs. Per-version notes
 were not maintained; see the [Releases](https://github.com/Stirling-Tools/JPDFium/releases)
 page and the `v1.0.x` tags.
 
-[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.1...HEAD
-[1.3.1]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.1
+[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.2.0
 [1.1.5]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.5

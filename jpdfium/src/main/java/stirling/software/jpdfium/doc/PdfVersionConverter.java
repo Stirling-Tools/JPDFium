@@ -120,6 +120,20 @@ public final class PdfVersionConverter {
     }
 
     /**
+     * Rewrite PDF bytes with an exact PDF version and no catalog /Version override.
+     */
+    public static byte[] forceVersion(byte[] input, PdfVersion version) {
+        if (input == null || version == null) return null;
+        if (QpdfLib.isForceVersionSupported()) {
+            byte[] out = QpdfLib.forceVersionToBytes(input, version.toString());
+            if (out != null) return out;
+        }
+        try (stirling.software.jpdfium.PdfDocument doc = stirling.software.jpdfium.PdfDocument.open(input)) {
+            return saveWithVersionToBytes(doc.rawHandle(), version);
+        }
+    }
+
+    /**
      * Save the document with a specific PDF version to a caller-supplied sink, writing blocks as
      * they arrive so the document is never materialized on the heap.
      */

@@ -609,6 +609,11 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
                                                        const char* version);
 
+// Rewrite a PDF with an exact base version and no catalog /Version override in memory.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t inputLen,
+                                                  const char* version, uint8_t** output,
+                                                  int64_t* outputLen);
+
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
 // widgets, and flattens annotations. Does NOT do visual redaction (removing

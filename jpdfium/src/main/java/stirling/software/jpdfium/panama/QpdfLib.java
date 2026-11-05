@@ -249,6 +249,10 @@ public final class QpdfLib {
             Symbols.downcallOptionalUnguarded(
                     "jpdfium_qpdf_force_version_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+    private static final MethodHandle FORCE_VERSION_MEM_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_force_version",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
     private static final MethodHandle MERGE_FILES_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_merge_files",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
@@ -591,6 +595,36 @@ public final class QpdfLib {
     /** True when the file-backed exact-version writer resolved. */
     public static boolean isForceVersionFileSupported() {
         return FORCE_VERSION_FILE_HANDLE != null;
+    }
+
+    /** True when the in-memory exact-version writer resolved. */
+    public static boolean isForceVersionSupported() {
+        return FORCE_VERSION_MEM_HANDLE != null;
+    }
+
+    /**
+     * Rewrite PDF bytes with an exact base version and no catalog /Version override.
+     */
+    public static byte[] forceVersionToBytes(byte[] input, String version) {
+        if (FORCE_VERSION_MEM_HANDLE == null || input == null || input.length == 0
+                || version == null || version.isBlank()) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("force version");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            int rc = (int) FORCE_VERSION_MEM_HANDLE.invokeExact(
+                    inputSeg, (long) input.length, call.cString(version), call.outPtr, call.outLen);
+            if (rc != 0) {
+                return null;
+            }
+            return call.copyAndFree("qpdfForceVersion");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf force version failed", t);
+        } finally {
+            releaseSlot(held);
+        }
     }
 
     /**

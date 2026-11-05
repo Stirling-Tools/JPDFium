@@ -13,6 +13,7 @@ import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
+import stirling.software.jpdfium.text.TextWord;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
@@ -152,46 +153,54 @@ public final class PdfPageGeometry {
         requireValidCrop(rect);
         removeBoundaryCrossingText(doc, pageIndex, rect);
         cropAndRemoveContent(doc, pageIndex, rect);
+
+        // Strict audit: verify no non-whitespace text survived outside the crop
+        PageText remaining = PdfTextExtractor.extractPage(doc, pageIndex);
+        float eps = 0.5f;
+        for (TextChar ch : remaining.chars()) {
+            if (Character.isWhitespace(ch.unicode()) || ch.width() <= 0 || ch.height() <= 0) {
+                continue;
+            }
+            if (ch.x() + ch.width() < rect.x() - eps
+                    || ch.x() > rect.x() + rect.width() + eps
+                    || ch.y() + ch.height() < rect.y() - eps
+                    || ch.y() > rect.y() + rect.height() + eps) {
+                throw new RedactIncompleteException(
+                        "strict crop could not remove a boundary-crossing glyph");
+            }
+        }
     }
 
     private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
         PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
-        float epsilon = 0.01f;
         try (PdfPage page = doc.page(pageIndex)) {
-            for (TextChar ch : text.chars()) {
-                if (!intersects(ch, crop) || isFullyInside(ch, crop)) {
+            for (TextWord word : text.allWords()) {
+                if (word.chars().isEmpty() || word.text().trim().isEmpty()
+                        || word.width() <= 0 || word.height() <= 0) {
                     continue;
                 }
-                boolean removed =
-                        page.redactInRect(
-                                new Rect(
-                                        ch.x() - epsilon,
-                                        ch.y() - epsilon,
-                                        ch.width() + 2 * epsilon,
-                                        ch.height() + 2 * epsilon),
-                                true,
-                                false);
-                if (!removed) {
-                    page.markRedacted();
-                    throw new RedactIncompleteException(
-                            "strict crop could not remove a boundary-crossing glyph");
+                if (intersects(word, crop) && !isFullyInside(word, crop)) {
+                    page.redactInRect(
+                            new Rect(word.x(), word.y(), word.width(), word.height()),
+                            true,
+                            false);
                 }
             }
         }
     }
 
-    private static boolean intersects(TextChar ch, Rect crop) {
-        return ch.x() <= crop.x() + crop.width()
-                && ch.x() + ch.width() >= crop.x()
-                && ch.y() <= crop.y() + crop.height()
-                && ch.y() + ch.height() >= crop.y();
+    private static boolean intersects(TextWord w, Rect crop) {
+        return w.x() <= crop.x() + crop.width()
+                && w.x() + w.width() >= crop.x()
+                && w.y() <= crop.y() + crop.height()
+                && w.y() + w.height() >= crop.y();
     }
 
-    private static boolean isFullyInside(TextChar ch, Rect crop) {
-        return ch.x() >= crop.x()
-                && ch.y() >= crop.y()
-                && ch.x() + ch.width() <= crop.x() + crop.width()
-                && ch.y() + ch.height() <= crop.y() + crop.height();
+    private static boolean isFullyInside(TextWord w, Rect crop) {
+        return w.x() >= crop.x()
+                && w.y() >= crop.y()
+                && w.x() + w.width() <= crop.x() + crop.width()
+                && w.y() + w.height() <= crop.y() + crop.height();
     }
 
     /**

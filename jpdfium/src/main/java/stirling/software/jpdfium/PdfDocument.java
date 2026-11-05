@@ -1445,11 +1445,24 @@ public final class PdfDocument implements AutoCloseable {
         }
     }
 
+    /** Get /Trapped status matching {@link DocBindings} constants. */
+    public int getTrapped() {
+        ensureOpen();
+        if (DocBindings.EPDF_GetMetaTrapped == null) return DocBindings.PDFTRAPPED_NOTSET;
+        try {
+            return (int) DocBindings.EPDF_GetMetaTrapped.invokeExact(rawHandle());
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return DocBindings.PDFTRAPPED_NOTSET;
+        }
+    }
+
     /** Set /Trapped to false. */
     public void setTrappedFalse() {
         ensureOpen();
         try {
-            int ok = (int) DocBindings.EPDF_SetMetaTrapped.invokeExact(rawHandle(), 2);
+            int ok = (int) DocBindings.EPDF_SetMetaTrapped.invokeExact(
+                    rawHandle(), DocBindings.PDFTRAPPED_FALSE);
             if (ok == 0) throw new JPDFiumException("EPDF_SetMetaTrapped failed");
             markContentModified();
         } catch (Throwable t) {

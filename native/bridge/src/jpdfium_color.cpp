@@ -929,6 +929,9 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
         if (!info.isDictionary()) info = QPDFObjectHandle::newDictionary();
         if (!info.isIndirect()) info = qpdf->makeIndirectObject(info);
         info.replaceKey("/GTS_PDFXVersion", QPDFObjectHandle::newUnicodeString(ver));
+        if (!conf.empty()) {
+            info.replaceKey("/GTS_PDFXConformance", QPDFObjectHandle::newUnicodeString(conf));
+        }
         qpdf->getTrailer().replaceKey("/Info", info);
     }
 }

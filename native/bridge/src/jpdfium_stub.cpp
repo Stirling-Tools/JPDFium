@@ -1571,6 +1571,21 @@ int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, in
                                          stream_data_mode, decode_level, -1);
 }
 
+int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
+                                       const char* /*version*/) {
+    return stub_copy_pdf_file(in_path, out_path);
+}
+
+int32_t jpdfium_qpdf_force_version(const uint8_t* in, int64_t in_len, const char* /*version*/,
+                                   uint8_t** out_ptr, int64_t* out_len) {
+    if (!in || in_len <= 0 || !out_ptr || !out_len) return -1;
+    *out_ptr = (uint8_t*)malloc((size_t)in_len);
+    if (!*out_ptr) return -1;
+    memcpy(*out_ptr, in, (size_t)in_len);
+    *out_len = in_len;
+    return 0;
+}
+
 int32_t jpdfium_qpdf_sanitize_file(const char* in_path, const char* out_path, int32_t) {
     return stub_copy_pdf_file(in_path, out_path);
 }

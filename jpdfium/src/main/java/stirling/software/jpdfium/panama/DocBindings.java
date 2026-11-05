@@ -52,6 +52,16 @@ public final class DocBindings {
     public static final MethodHandle EPDF_SetMetaText = downcall("EPDF_SetMetaText",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
 
+    /** Trapped status enum values matching FPDF_TRAPPED_STATUS. */
+    public static final int PDFTRAPPED_NOTSET = 0;
+    public static final int PDFTRAPPED_TRUE = 1;
+    public static final int PDFTRAPPED_FALSE = 2;
+    public static final int PDFTRAPPED_UNKNOWN = 3;
+
+    /** Get the document /Trapped status (EmbedPDF extension). */
+    public static final MethodHandle EPDF_GetMetaTrapped = downcall("EPDF_GetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
     /** Set the document /Trapped status (EmbedPDF extension). */
     public static final MethodHandle EPDF_SetMetaTrapped = downcall("EPDF_SetMetaTrapped",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
