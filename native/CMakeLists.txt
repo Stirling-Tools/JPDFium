@@ -324,10 +324,27 @@ if(JPDFIUM_USE_PDFIUM)
 
     # PoDoFo is a normal dependency: font-program replacement, conservative
     # repair and duplicate-image removal are part of the native surface.
-    find_package(podofo CONFIG REQUIRED)
+    find_package(podofo CONFIG QUIET)
+    if(NOT podofo_FOUND)
+        include(FetchContent)
+        FetchContent_Declare(podofo
+            URL https://github.com/podofo/podofo/archive/refs/tags/1.1.2.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        set(PODOFO_BUILD_STATIC ON CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_TEST OFF CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(PODOFO_BUILD_UNSUPPORTED_TOOLS OFF CACHE BOOL "" FORCE)
+        set(PODOFO_WITH_FONTMANAGER OFF CACHE BOOL "" FORCE)
+        set(PODOFO_WITH_AFDKO OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(podofo)
+    endif()
     target_link_libraries(jpdfium PRIVATE podofo::podofo)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
-    message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
+    if(podofo_FOUND)
+        message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
+    else()
+        message(STATUS "PoDoFo enabled: FetchContent 1.1.2")
+    endif()
 
     find_program(CARGO_CMD cargo)
     if(NOT CARGO_CMD)
