@@ -121,11 +121,12 @@ public final class QpdfLib {
      * Replace the stream behind a font descriptor matching {@code baseFont}.
      *
      * <p>The data must be a complete font program matching the existing font
-     * dictionary. The subset prefix is ignored when matching, but the caller
-     * remains responsible for encoding, widths and ToUnicode compatibility.
+     * dictionary. The {@code baseFont} name matching is exact (preserving subset prefix),
+     * and the caller remains responsible for encoding, widths and ToUnicode compatibility.
      *
-     * @return rewritten PDF bytes, or {@code null} when no matching descriptor
-     *         or stream was found
+     * @return rewritten PDF bytes
+     * @throws JPDFiumException when no matching descriptor or stream was found,
+     *                          or if rewriting is refused (e.g. signed/password-protected)
      */
     public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
         if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()

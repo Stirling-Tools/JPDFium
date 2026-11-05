@@ -30,11 +30,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 class PdfFontEmbedderTest {
 
     @Test
-    void replacesAnExistingEmbeddedFontStreamAndIgnoresTheSubsetPrefix() throws Exception {
+    void replacesAnExistingEmbeddedFontStreamWithExactMatching() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf")
                 .toURI());
         byte[] input = Files.readAllBytes(source);
+        Map<String, byte[]> originalFonts = findAllEmbeddedFonts(input);
         FontProgram font = findEmbeddedFont(input);
         assertNotNull(font, "fixture must contain an embedded font");
         assertFalse(font.data().length == 0, "fixture font stream is empty");
@@ -47,6 +48,7 @@ class PdfFontEmbedderTest {
                 Map.of(font.baseName(), replacementData));
 
         assertTrue(output.length > 0);
+        boolean verified = false;
         try (PDDocument pdf = Loader.loadPDF(output)) {
             PDResources resources = pdf.getPage(0).getResources();
             assertTrue(resources.getFontNames().iterator().hasNext(),
@@ -65,12 +67,17 @@ class PdfFontEmbedderTest {
                     assertEquals(replacementData.length,
                             desc.getFontFile2().getCOSObject().getInt(COSName.LENGTH1),
                             "/Length1 must match replacement size");
+                    verified = true;
                 } else {
-                    assertFalse(java.util.Arrays.equals(replacementData, out.toByteArray()),
-                            "non-matching font must remain untouched");
+                    byte[] orig = originalFonts.get(f.getName());
+                    if (orig != null) {
+                        assertArrayEquals(orig, out.toByteArray(),
+                                "non-matching font must remain untouched");
+                    }
                 }
             }
         }
+        assertTrue(verified, "The target font must be verified in the output");
         try (var pdf = PdfDocument.open(output)) {
             assertFalse(PdfFontAuditor.hasNonEmbeddedFonts(pdf),
                     "fixture was already embedded and must remain embedded");
@@ -78,7 +85,50 @@ class PdfFontEmbedderTest {
     }
 
     @Test
-    void cidFontSubsetPrefixStrippingIsRefused() throws Exception {
+    void replacesTrueTypeFontStreamInSimpleTrueTypePdf() throws Exception {
+        assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
+        Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/pdfjs_TrueType_without_cmap.pdf").toURI());
+        byte[] input = Files.readAllBytes(source);
+        FontProgram font = findEmbeddedFont(input);
+        assertNotNull(font, "fixture must contain an embedded font");
+        assertTrue(font.baseName().contains("Masis"), "fixture font should be Masis TrueType");
+
+        byte[] replacementData = new byte[font.data().length];
+        System.arraycopy(font.data(), 0, replacementData, 0, font.data().length);
+        replacementData[replacementData.length - 1] ^= 0x77;
+
+        byte[] output = PdfFontEmbedder.replace(input, Map.of(font.baseName(), replacementData));
+        assertTrue(output.length > 0);
+
+        boolean verified = false;
+        try (PDDocument pdf = Loader.loadPDF(output)) {
+            for (PDPage page : pdf.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources == null) continue;
+                for (COSName name : resources.getFontNames()) {
+                    PDFont f = resources.getFont(name);
+                    var desc = f.getFontDescriptor();
+                    if (desc == null || desc.getFontFile2() == null) continue;
+                    if (f.getName().equals(font.baseName())) {
+                        ByteArrayOutputStream out = new ByteArrayOutputStream();
+                        try (var in = desc.getFontFile2().createInputStream()) {
+                            in.transferTo(out);
+                        }
+                        assertArrayEquals(replacementData, out.toByteArray(),
+                                "stream bytes must match replacement data");
+                        assertEquals(replacementData.length,
+                                desc.getFontFile2().getCOSObject().getInt(COSName.LENGTH1),
+                                "/Length1 must match replacement size");
+                        verified = true;
+                    }
+                }
+            }
+        }
+        assertTrue(verified, "Target TrueType font must be verified in rewritten PDF");
+    }
+
+    @Test
+    void subsetPrefixStrippingIsRefused() throws Exception {
         assumeTrue(PdfFontEmbedder.isAvailable(), "native qpdf font replacement unavailable");
         Path source = Path.of(PdfFontEmbedderTest.class.getResource("/pdfs/general/basic-text.pdf").toURI());
         byte[] input = Files.readAllBytes(source);
@@ -177,6 +227,7 @@ class PdfFontEmbedderTest {
 
         // 1. byte[] overload
         byte[] outBytes = PdfXConverter.applyMetadata(input, options);
+        boolean verified1 = false;
         try (PDDocument pdf = Loader.loadPDF(outBytes)) {
             PDResources resources = pdf.getPage(0).getResources();
             for (COSName name : resources.getFontNames()) {
@@ -185,11 +236,14 @@ class PdfFontEmbedderTest {
                 if (desc != null && desc.getFontFile2() != null && f.getName().equals(font.baseName())) {
                     assertEquals(dummyFont.length, desc.getFontFile2().getCOSObject().getInt(COSName.LENGTH1),
                             "Length1 on byte[] path must match replacement font data");
+                    verified1 = true;
                 }
             }
         }
+        assertTrue(verified1, "font replacement must be verified on byte[] overload");
 
         // 2. PdfDocument overload
+        boolean verified2 = false;
         try (PdfDocument srcDoc = PdfDocument.open(input);
                 PdfDocument resDoc = PdfXConverter.applyMetadata(srcDoc, options)) {
             byte[] outDocBytes = resDoc.saveBytes();
@@ -201,10 +255,37 @@ class PdfFontEmbedderTest {
                     if (desc != null && desc.getFontFile2() != null && f.getName().equals(font.baseName())) {
                         assertEquals(dummyFont.length, desc.getFontFile2().getCOSObject().getInt(COSName.LENGTH1),
                                 "Length1 on PdfDocument path must match replacement font data");
+                        verified2 = true;
                     }
                 }
             }
         }
+        assertTrue(verified2, "font replacement must be verified on PdfDocument overload");
+    }
+
+    private static Map<String, byte[]> findAllEmbeddedFonts(byte[] input) throws Exception {
+        Map<String, byte[]> fonts = new java.util.HashMap<>();
+        try (PDDocument pdf = Loader.loadPDF(input)) {
+            for (PDPage page : pdf.getPages()) {
+                PDResources resources = page.getResources();
+                if (resources == null) continue;
+                for (COSName name : resources.getFontNames()) {
+                    PDFont font = resources.getFont(name);
+                    var descriptor = font.getFontDescriptor();
+                    if (descriptor == null) continue;
+                    var stream = descriptor.getFontFile2() != null ? descriptor.getFontFile2()
+                            : descriptor.getFontFile3() != null ? descriptor.getFontFile3()
+                            : descriptor.getFontFile();
+                    if (stream == null) continue;
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    try (var in = stream.createInputStream()) {
+                        in.transferTo(out);
+                    }
+                    fonts.put(font.getName(), out.toByteArray());
+                }
+            }
+        }
+        return fonts;
     }
 
     private static FontProgram findEmbeddedFont(byte[] input) throws Exception {

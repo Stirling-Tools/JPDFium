@@ -17,8 +17,8 @@ import stirling.software.jpdfium.panama.QpdfLib;
  * <p>This is deliberately not a font-substitution engine: it does not search
  * for a font, change encodings, widths, CID maps or Type3 procedures, and it
  * cannot invent a licensed substitute. Callers must key the data by the
- * document's {@code /BaseFont} and supply a program that matches the font
- * dictionary. A subset prefix such as {@code ABCDEF+} is ignored while matching.
+ * document's exact {@code /BaseFont} name (including subset prefix if present)
+ * and supply a program that matches the font dictionary.
  *
  * <p>The replacement is written through qpdf, preserves the existing
  * {@code /FontFile}, {@code /FontFile2} or {@code /FontFile3} stream type, and
@@ -36,11 +36,11 @@ public final class PdfFontEmbedder {
     }
 
     /**
-     * Replace font streams by {@code /BaseFont}.
+     * Replace font streams by exact {@code /BaseFont}.
      *
      * @param pdf   source document bytes
-     * @param fonts font program bytes keyed by {@code /BaseFont}; the subset
-     *              prefix is optional
+     * @param fonts font program bytes keyed by exact {@code /BaseFont}
+     *              (including subset prefix if present)
      * @return rewritten PDF
      * @throws JPDFiumException when no matching font descriptor exists or the
      *                          replacement cannot be written
@@ -70,10 +70,6 @@ public final class PdfFontEmbedder {
         byte[] current = pdf;
         for (var entry : normalized.entrySet()) {
             current = QpdfLib.replaceFontStream(current, entry.getKey(), entry.getValue());
-            if (current == null) {
-                throw new JPDFiumException(
-                        "no font descriptor or program for /BaseFont " + entry.getKey());
-            }
         }
         return current;
     }
@@ -81,6 +77,22 @@ public final class PdfFontEmbedder {
     /** File-backed variant of {@link #embed(byte[], Map)}. */
     public static byte[] embed(Path input, Map<String, byte[]> fonts) throws IOException {
         return embed(Files.readAllBytes(input), fonts);
+    }
+
+    /**
+     * Alias for {@link #embed(byte[], Map)} emphasizing font stream replacement.
+     *
+     * @param pdf   source document bytes
+     * @param fonts font program bytes keyed by exact {@code /BaseFont}
+     * @return rewritten PDF
+     */
+    public static byte[] replace(byte[] pdf, Map<String, byte[]> fonts) {
+        return embed(pdf, fonts);
+    }
+
+    /** File-backed alias of {@link #replace(byte[], Map)}. */
+    public static byte[] replace(Path input, Map<String, byte[]> fonts) throws IOException {
+        return embed(input, fonts);
     }
 
     private static String normalizeName(String name) {
