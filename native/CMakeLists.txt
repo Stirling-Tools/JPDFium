@@ -336,6 +336,12 @@ if(JPDFIUM_USE_PDFIUM)
         set(PODOFO_BUILD_UNSUPPORTED_TOOLS OFF CACHE BOOL "" FORCE)
         set(PODOFO_WITH_FONTMANAGER OFF CACHE BOOL "" FORCE)
         set(PODOFO_WITH_AFDKO OFF CACHE BOOL "" FORCE)
+        # JPDFium only needs the object model, stream replacement and image
+        # resource traversal. Do not pull optional image codecs into the
+        # static archive; they are not used by those paths.
+        set(CMAKE_DISABLE_FIND_PACKAGE_JPEG ON CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_TIFF ON CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_PNG ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(podofo)
     endif()
     # PoDoFo 1.1.2 does not build with the project's global -Werror flags.
