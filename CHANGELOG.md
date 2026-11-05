@@ -17,8 +17,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
+  return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
+  when the native bundle exports it, instead of formatting and parsing JSON, which
+  was most of the cost of text extraction.
+
 ### Fixed
 
+- `PdfTextExtractor` no longer drops the sign of negative coordinates between -1 and 0,
+  or misreads coordinates the native JSON writes in exponent notation.
 - Word and pattern redaction now removes text drawn with glyphs the embedded
   font has no outline for, such as text using a truncated font subset. These
   pages previously stopped with `RedactIncompleteException`.
