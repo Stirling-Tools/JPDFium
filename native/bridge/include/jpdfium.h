@@ -615,6 +615,13 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version(const uint8_t* input, int64_t 
                                                   const char* version, uint8_t** output,
                                                   int64_t* outputLen);
 
+// Replace the stream behind a matching /BaseFont font descriptor.
+// Caller frees *output with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen);
+
 // In-process qpdf structural sanitization (FFM, no CLI).
 // Scrubs metadata/info/structure, JavaScript actions, embedded files, AcroForm
 // widgets, and flattens annotations. Does NOT do visual redaction (removing

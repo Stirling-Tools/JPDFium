@@ -934,6 +934,68 @@ QpdfResult decryptPdf(std::span<const uint8_t> input, const char* password) {
     }
 }
 
+std::string stripPdfNamePrefix(std::string name) {
+    if (!name.empty() && name.front() == '/') name.erase(name.begin());
+    return name;
+}
+
+std::string stripSubsetPrefix(std::string const& raw) {
+    std::string name = stripPdfNamePrefix(raw);
+    return name.size() > 7 && name[6] == '+' ? name.substr(7) : name;
+}
+
+bool isFontNameMatch(std::string const& candidate, std::string const& requested) {
+    return stripSubsetPrefix(candidate) == stripSubsetPrefix(requested);
+}
+
+QpdfResult replaceFontStream(std::span<const uint8_t> input, std::string const& baseFont,
+                             std::span<const uint8_t> fontData) {
+    try {
+        auto qpdf = QPDF::create();
+        qpdf->processMemoryFile("font-in", reinterpret_cast<const char*>(input.data()),
+                                input.size());
+        int replaced = 0;
+        for (auto& object : qpdf->getAllObjects()) {
+            if (!object.isDictionary()) continue;
+            auto type = object.getKey("/Type");
+            if (!type.isName() || type.getName() != "/Font") continue;
+            auto base = object.getKey("/BaseFont");
+            if (!base.isName() || !isFontNameMatch(base.getName(), baseFont)) continue;
+            auto descriptor = object.getKey("/FontDescriptor");
+            if (!descriptor.isDictionary()) continue;
+            for (char const* key : {"/FontFile", "/FontFile2", "/FontFile3"}) {
+                auto stream = descriptor.getKey(key);
+                if (!stream.isStream()) continue;
+                std::string bytes(reinterpret_cast<const char*>(fontData.data()), fontData.size());
+                auto replacement = QPDFObjectHandle::newStream(qpdf.get(), bytes);
+                auto replacementDict = replacement.getDict();
+                if (std::string(key) == "/FontFile" || std::string(key) == "/FontFile2") {
+                    replacementDict.replaceKey(
+                            "/Length1", QPDFObjectHandle::newInteger(
+                                               static_cast<long long>(fontData.size())));
+                } else {
+                    auto subtype = stream.getKey("/Subtype");
+                    if (subtype.isName()) replacementDict.replaceKey("/Subtype", subtype);
+                }
+                descriptor.replaceKey(key, replacement);
+                ++replaced;
+            }
+        }
+        if (replaced == 0) {
+            return {nullptr, "no matching font descriptor stream"};
+        }
+        QPDFWriter writer{*qpdf};
+        writer.setOutputMemory();
+        WriterLock lock{-1};
+        writer.write();
+        return {writer.getBufferSharedPointer(), ""};
+    } catch (std::exception const& e) {
+        return {nullptr, e.what()};
+    } catch (...) {
+        return {nullptr, "non-standard exception while replacing a font stream"};
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -972,6 +1034,37 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize_ex(const uint8_t* input, int64_t in
         std::memcpy(*output, buf->getBuffer(), static_cast<size_t>(*outputLen));
         return 0;
 
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_replace_font_stream(const uint8_t* input, int64_t inputLen,
+                                                        const char* baseFont,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen) {
+    try {
+        if (!input || inputLen <= 0 || !baseFont || !*baseFont || !fontData || fontLen <= 0 ||
+            !output || !outputLen) {
+            return -1;
+        }
+        *output = nullptr;
+        *outputLen = 0;
+        auto result = replaceFontStream({input, static_cast<size_t>(inputLen)}, baseFont,
+                                        {fontData, static_cast<size_t>(fontLen)});
+        if (!result.ok()) {
+            std::fprintf(stderr, "jpdfium qpdf replace font: %s\n", result.error.c_str());
+            return -1;
+        }
+        auto& buffer = result.buffer;
+        *outputLen = static_cast<int64_t>(buffer->getSize());
+        *output = static_cast<uint8_t*>(malloc(static_cast<size_t>(*outputLen)));
+        if (!*output) {
+            *outputLen = 0;
+            return -1;
+        }
+        std::memcpy(*output, buffer->getBuffer(), static_cast<size_t>(*outputLen));
+        return 0;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

@@ -107,6 +107,56 @@ public final class QpdfLib {
         return QPDF_BOUND;
     }
 
+    private static final MethodHandle REPLACE_FONT_STREAM_HANDLE = Symbols.downcallOptional(
+            "jpdfium_qpdf_replace_font_stream",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, JAVA_LONG,
+                    ADDRESS, ADDRESS));
+
+    /** True when this native build exposes qpdf font-stream replacement. */
+    public static boolean isFontReplacementSupported() {
+        return REPLACE_FONT_STREAM_HANDLE != null;
+    }
+
+    /**
+     * Replace the stream behind a font descriptor matching {@code baseFont}.
+     *
+     * <p>The data must be a complete font program matching the existing font
+     * dictionary. The subset prefix is ignored when matching, but the caller
+     * remains responsible for encoding, widths and ToUnicode compatibility.
+     *
+     * @return rewritten PDF bytes, or {@code null} when no matching descriptor
+     *         or stream was found
+     */
+    public static byte[] replaceFontStream(byte[] input, String baseFont, byte[] fontData) {
+        if (input == null || input.length == 0 || baseFont == null || baseFont.isBlank()
+                || fontData == null || fontData.length == 0
+                || REPLACE_FONT_STREAM_HANDLE == null) {
+            return null;
+        }
+        Semaphore held = acquireSlotOrThrow("font stream replacement");
+        try (QpdfCall call = new QpdfCall()) {
+            MemorySegment inputSeg = call.copyBytes(input);
+            MemorySegment nameSeg = call.cString(baseFont);
+            MemorySegment fontSeg = call.copyBytes(fontData);
+            int rc;
+            try {
+                rc = (int) REPLACE_FONT_STREAM_HANDLE.invokeExact(
+                        inputSeg, (long) input.length, nameSeg, fontSeg, (long) fontData.length,
+                        call.outPtr, call.outLen);
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("qpdf font stream replacement failed", t);
+            }
+            if (rc != 0) return null;
+            return call.copyAndFree("qpdfReplaceFontStream");
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf font stream replacement failed", t);
+        } finally {
+            releaseSlot(held);
+        }
+    }
+
     /**
      * Acquire a slot when bounded; no-op when unlimited.
      *

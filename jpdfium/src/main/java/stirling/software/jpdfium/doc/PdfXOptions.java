@@ -1,5 +1,7 @@
 package stirling.software.jpdfium.doc;
 
+import java.util.Map;
+
 /**
  * PDF/X metadata options. The output-intent ICC profile is also the vector and
  * image conversion target, so separation uses the declared printing condition.
@@ -17,6 +19,7 @@ public final class PdfXOptions {
     private final boolean convertImages;
     private final boolean convertForms;
     private final boolean convertSpecialColors;
+    private final Map<String, byte[]> fontData;
     private final boolean convertSpotColors;
     private final boolean extractBlack;
     private final int jpegQuality;
@@ -35,6 +38,7 @@ public final class PdfXOptions {
         this.convertImages = b.convertImages;
         this.convertForms = b.convertForms;
         this.convertSpecialColors = b.convertSpecialColors;
+        this.fontData = b.fontData == null ? Map.of() : Map.copyOf(b.fontData);
         this.convertSpotColors = b.convertSpotColors;
         this.extractBlack = b.extractBlack;
         this.jpegQuality = b.jpegQuality;
@@ -75,6 +79,11 @@ public final class PdfXOptions {
 
     public boolean convertSpecialColors() {
         return convertSpecialColors;
+    }
+
+    /** Font programs keyed by {@code /BaseFont}; empty leaves fonts unchanged. */
+    public Map<String, byte[]> fontData() {
+        return fontData;
     }
 
     public boolean convertSpotColors() {
@@ -142,6 +151,7 @@ public final class PdfXOptions {
         private boolean convertImages = true;
         private boolean convertForms = false;
         private boolean convertSpecialColors;
+        private Map<String, byte[]> fontData;
         private boolean convertSpotColors;
         private boolean extractBlack = true;
         private int jpegQuality = 90;
@@ -198,6 +208,12 @@ public final class PdfXOptions {
 
         public Builder convertSpecialColors(boolean value) {
             this.convertSpecialColors = value;
+            return this;
+        }
+
+        /** Font programs keyed by {@code /BaseFont}; null/empty leaves fonts unchanged. */
+        public Builder fontData(Map<String, byte[]> value) {
+            this.fontData = value == null ? null : Map.copyOf(value);
             return this;
         }
 
