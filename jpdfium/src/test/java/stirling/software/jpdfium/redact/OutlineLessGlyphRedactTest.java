@@ -112,6 +112,28 @@ class OutlineLessGlyphRedactTest {
     }
 
     /**
+     * A mark from another tool whose quad is flattened onto the baseline, so it has
+     * no area: the redactor then ignores the quads and applies the /Rect, so the
+     * commit must judge it by the rect too. This rect starts just past the first
+     * glyph's origin, so that glyph survives it.
+     */
+    @Test
+    void aMarkWithAnEmptyQuadIsJudgedByItsRect() throws Exception {
+        byte[] pdf = truncatedFontPage(false);
+        float[] cell = wordCell(pdf, "moments");
+        float baseline = 700f;
+        byte[] marked = RedactTestPages.withRedactMark(pdf,
+                new PDRectangle(cell[0] + 0.5f, baseline - 0.25f * SIZE, cell[1] - cell[0] - 0.5f, SIZE),
+                cell[0], baseline, cell[1], baseline, cell[0], baseline, cell[1], baseline);
+        try (PdfDocument doc = PdfDocument.open(marked)) {
+            try (PdfPage page = doc.page(0)) {
+                assertThrows(RedactIncompleteException.class, () -> page.commitRedactions(0xFF000000, true));
+            }
+            assertThrows(RedactIncompleteException.class, doc::saveBytes);
+        }
+    }
+
+    /**
      * A commit that leaves text under its mark keeps the page unsavable. A later
      * commit elsewhere on the page succeeds on its own marks but must not clear
      * that, while one that removes what the first left does.

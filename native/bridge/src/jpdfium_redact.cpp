@@ -173,6 +173,75 @@ static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
     return side != 0;
 }
 
+// Same tolerance as the redactor's own quad checks (kRegionQuadTolerance).
+static constexpr float kQuadTolerance = 1e-4f;
+
+// A usable tilted quad, read as the redactor reads one: finite corners, edges of
+// real length, opposite edges running the same way, and one winding at both
+// ends.
+static bool quadWellFormed(const FS_QUADPOINTSF& q) {
+    const float xs[4] = {q.x1, q.x2, q.x3, q.x4};
+    const float ys[4] = {q.y1, q.y2, q.y3, q.y4};
+    for (int i = 0; i < 4; ++i) {
+        if (!std::isfinite(xs[i]) || !std::isfinite(ys[i])) return false;
+    }
+    float ux = q.x2 - q.x1, uy = q.y2 - q.y1;  // top edge
+    float lx = q.x4 - q.x3, ly = q.y4 - q.y3;  // bottom edge
+    float sx = q.x3 - q.x1, sy = q.y3 - q.y1;  // start side
+    float ex = q.x4 - q.x2, ey = q.y4 - q.y2;  // end side
+    float lenU = std::hypot(ux, uy), lenL = std::hypot(lx, ly);
+    float lenS = std::hypot(sx, sy), lenE = std::hypot(ex, ey);
+    if (lenU <= kQuadTolerance || lenL <= kQuadTolerance || lenS <= kQuadTolerance ||
+        lenE <= kQuadTolerance)
+        return false;
+    if (ux * lx + uy * ly <= 0 || sx * ex + sy * ey <= 0) return false;
+    float startArea = ux * sy - uy * sx;
+    float endArea = lx * ey - ly * ex;
+    if (std::fabs(startArea) <= kQuadTolerance * lenU * lenS) return false;
+    if (std::fabs(endArea) <= kQuadTolerance * lenL * lenE) return false;
+    return std::signbit(startArea) == std::signbit(endArea);
+}
+
+static bool quadAxisAligned(const FS_QUADPOINTSF& q) {
+    float scale =
+        std::max({1.0f, std::hypot(q.x2 - q.x1, q.y2 - q.y1), std::hypot(q.x4 - q.x3, q.y4 - q.y3),
+                  std::hypot(q.x3 - q.x1, q.y3 - q.y1), std::hypot(q.x4 - q.x2, q.y4 - q.y2)});
+    float tol = kQuadTolerance * scale;
+    return std::fabs(q.y1 - q.y2) <= tol && std::fabs(q.y3 - q.y4) <= tol &&
+           std::fabs(q.x1 - q.x3) <= tol && std::fabs(q.x2 - q.x4) <= tol;
+}
+
+// The areas the redactor actually applies for a mark, so the audit checks what
+// was redacted rather than what the mark declared: a well-formed tilted quad as
+// itself, any other quad as the box around its corners, and the mark's rect
+// alone when a quad has non-finite corners or no area, since the redactor then
+// ignores the quads.
+static void appendRedactorAreas(const RedactArea& mark, std::vector<RedactArea>& out) {
+    std::vector<RedactArea> areas;
+    for (const FS_QUADPOINTSF& q : mark.quads) {
+        const float xs[4] = {q.x1, q.x2, q.x3, q.x4};
+        const float ys[4] = {q.y1, q.y2, q.y3, q.y4};
+        bool finite = true;
+        for (int i = 0; i < 4; ++i) finite = finite && std::isfinite(xs[i]) && std::isfinite(ys[i]);
+        float l = std::min({xs[0], xs[1], xs[2], xs[3]});
+        float r = std::max({xs[0], xs[1], xs[2], xs[3]});
+        float b = std::min({ys[0], ys[1], ys[2], ys[3]});
+        float t = std::max({ys[0], ys[1], ys[2], ys[3]});
+        if (!finite || r <= l || t <= b) {
+            out.push_back(RedactArea{mark.rect, {}});
+            return;
+        }
+        RedactArea area{makePageRect(l, b, r, t), {}};
+        if (quadWellFormed(q) && !quadAxisAligned(q)) area.quads.push_back(q);
+        areas.push_back(std::move(area));
+    }
+    if (areas.empty()) {
+        out.push_back(RedactArea{mark.rect, {}});
+        return;
+    }
+    for (RedactArea& a : areas) out.push_back(std::move(a));
+}
+
 // Whether text survived in the areas a redaction covered: hardens commit with the
 // same verified-removal check the other redaction paths run. The redactor reports
 // success without saying which glyphs it removed, and it passes over glyphs it
@@ -1088,7 +1157,7 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         redactAreas.reserve(redactAnnots.size());
         for (const auto& item : redactAnnots) {
             redactRects.push_back(item.area.rect);
-            redactAreas.push_back(item.area);
+            appendRedactorAreas(item.area, redactAreas);
         }
 
         bool epdfOk = true;

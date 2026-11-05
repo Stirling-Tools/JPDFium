@@ -1,6 +1,10 @@
 package stirling.software.jpdfium.redact;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSDictionary;
+import org.apache.pdfbox.cos.COSFloat;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -8,6 +12,7 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.state.RenderingMode;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotation;
 import org.apache.pdfbox.text.PDFTextStripper;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
@@ -81,6 +86,29 @@ final class RedactTestPages {
     static String text(byte[] pdf) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             return new PDFTextStripper().getText(doc).replaceAll("\\s+", " ");
+        }
+    }
+
+    /**
+     * {@code pdf} with a REDACT annotation on page 1, as another tool would leave
+     * one: {@code rect} as its /Rect and {@code quadPoints} (8 numbers per quad, in
+     * /QuadPoints order) as its /QuadPoints, or none when empty.
+     */
+    static byte[] withRedactMark(byte[] pdf, PDRectangle rect, float... quadPoints) throws Exception {
+        try (PDDocument doc = Loader.loadPDF(pdf)) {
+            COSDictionary mark = new COSDictionary();
+            mark.setName(COSName.TYPE, "Annot");
+            mark.setName(COSName.SUBTYPE, "Redact");
+            mark.setItem(COSName.RECT, rect.getCOSArray());
+            if (quadPoints.length > 0) {
+                COSArray quads = new COSArray();
+                for (float v : quadPoints) quads.add(new COSFloat(v));
+                mark.setItem(COSName.QUADPOINTS, quads);
+            }
+            doc.getPage(0).getAnnotations().add(PDAnnotation.createAnnotation(mark));
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            doc.save(out);
+            return out.toByteArray();
         }
     }
 
