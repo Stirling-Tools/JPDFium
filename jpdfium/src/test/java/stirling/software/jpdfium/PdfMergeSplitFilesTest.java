@@ -17,6 +17,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -24,6 +25,10 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.Random;
 import javax.imageio.ImageIO;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
@@ -67,6 +72,41 @@ class PdfMergeSplitFilesTest {
             assertEquals(PdfVerifier.pageText(bytesPath, i, "bytes path"),
                     PdfVerifier.pageText(fileBytes, i, "file path"),
                     "page " + i + " text differs between merge paths");
+        }
+    }
+
+    @Test
+    void fileMergeAndExtractKeepRawStreamsRaw(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path raw = tmp.resolve("raw.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        doc, page, PDPageContentStream.AppendMode.OVERWRITE, false)) {
+                    cs.addRect(10, 10, 100, 100);
+                    cs.fill();
+                }
+            }
+            doc.save(raw.toFile(), CompressParameters.NO_COMPRESSION);
+        }
+
+        Path merged = tmp.resolve("merged.pdf");
+        PdfMerge.mergeFilesToFile(List.of(raw, raw), merged);
+        Path part = tmp.resolve("part.pdf");
+        PdfSplit.extractPageRangeToFile(raw, 1, 1, part);
+
+        for (Path out : List.of(merged, part)) {
+            try (PDDocument doc = Loader.loadPDF(out.toFile())) {
+                for (PDPage page : doc.getPages()) {
+                    COSStream contents = (COSStream) page.getCOSObject().getDictionaryObject(COSName.CONTENTS);
+                    assertNull(contents.getFilters(), out.getFileName() + " content stream was re-encoded");
+                }
+            }
         }
     }
 

@@ -17,6 +17,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- `PdfMerge.mergeFilesToFile`, `PdfSplit.extractPageRangeToFile`, the qpdf byte-array
+  merge and extract, and `PdfSecurity.copyEncryption` keep every stream's existing
+  encoding instead of deflating streams stored without a filter. Image-heavy inputs
+  with raw image data merge several times faster; such outputs are as large as their
+  inputs rather than compressed. `PdfOptimizer` still compresses on request.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
