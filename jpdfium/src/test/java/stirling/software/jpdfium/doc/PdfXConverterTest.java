@@ -7,6 +7,8 @@ import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDStream;
@@ -33,6 +35,7 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -491,6 +494,79 @@ class PdfXConverterTest {
                     () -> PdfXConverter.applyMetadata(doc, options));
             assertFalse(doc.isContentModified(),
                     "a read-only transparency preflight must not mark the document modified");
+        }
+    }
+
+    @Test
+    void optionsWriteTitleTrappedAndDates() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .title("PDF/X title")
+                .requireEmbeddedFonts(false)
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(out)) {
+            assertEquals("PDF/X title", pdfbox.getDocumentInformation().getTitle());
+            assertEquals("False", pdfbox.getDocumentInformation().getTrapped());
+            assertNotNull(pdfbox.getDocumentInformation().getCreationDate());
+            assertNotNull(pdfbox.getDocumentInformation().getModificationDate());
+        }
+    }
+
+    @Test
+    void requireEmbeddedFontsRejectsAllOverloadsAndLeavesDestinationUntouched() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .requireEmbeddedFonts(true)
+                .build();
+        assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(input, options));
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(doc, options));
+        }
+        Path source = Files.createTempFile("jpdfium-font-source-", ".pdf");
+        Path output = Files.createTempFile("jpdfium-font-output-", ".pdf");
+        byte[] sentinel = "untouched".getBytes(StandardCharsets.US_ASCII);
+        try {
+            Files.write(source, input);
+            Files.write(output, sentinel);
+            assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(source, output, options));
+            assertArrayEquals(sentinel, Files.readAllBytes(output),
+                    "a rejected conversion must not replace the destination");
+        } finally {
+            Files.deleteIfExists(source);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    private static byte[] nonEmbeddedTextPdf() throws Exception {
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(pdfbox, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(72, 720);
+                content.showText("Helvetica");
+                content.endText();
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            return bytes.toByteArray();
         }
     }
 

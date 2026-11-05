@@ -19,9 +19,11 @@ import java.util.TreeSet;
 /**
  * Audit fonts used in a PDF document.
  *
- * <p>Enumerates every distinct font referenced by text objects on each page,
- * reporting the font name, family, weight, flags, embedding status, italic
- * angle, and font data size.
+ * <p>Enumerates every distinct font referenced by text objects on each page and
+ * inside nested form XObjects, reporting the font name, family, weight, flags,
+ * embedding status, italic angle, and font data size. Annotation appearance
+ * streams are serialized streams in PDFium, not object trees, so callers that
+ * need a strict font audit must flatten annotations before auditing.
  *
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {

@@ -13,7 +13,6 @@ import stirling.software.jpdfium.panama.FormFillBindings;
 import stirling.software.jpdfium.text.PageText;
 import stirling.software.jpdfium.text.PdfTextExtractor;
 import stirling.software.jpdfium.text.TextChar;
-import stirling.software.jpdfium.text.TextWord;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
@@ -139,9 +138,10 @@ public final class PdfPageGeometry {
     /**
      * Hard crop that also removes a word crossing the crop edge. The normal
      * crop keeps straddling words whole and clips their outside glyphs with the
-     * page box, which leaves that text extractable. This variant redacts the
-     * whole boundary-crossing word before applying the crop, so no outside
-     * text survives.
+     * page box, which leaves that text extractable. This variant redacts each
+     * glyph of a word that crosses the crop edge before applying the crop, so
+     * the outside part is gone while neighbouring words are not redacted as a
+     * side effect.
      *
      * @param doc       open PDF document
      * @param pageIndex zero-based page index
@@ -158,41 +158,39 @@ public final class PdfPageGeometry {
         PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
         float epsilon = 0.01f;
         try (PdfPage page = doc.page(pageIndex)) {
-            for (TextWord word : text.allWords()) {
-                if (!intersects(word, crop) || isFullyInside(word, crop)) {
+            for (TextChar ch : text.chars()) {
+                if (!intersects(ch, crop) || isFullyInside(ch, crop)) {
                     continue;
                 }
-                for (TextChar ch : word.chars()) {
-                    boolean removed =
-                            page.redactInRect(
-                                    new Rect(
-                                            ch.x() - epsilon,
-                                            ch.y() - epsilon,
-                                            ch.width() + 2 * epsilon,
-                                            ch.height() + 2 * epsilon),
-                                    true,
-                                    false);
-                    if (!removed) {
-                        throw new RedactIncompleteException(
-                                "strict crop could not remove a boundary-crossing word");
-                    }
+                boolean removed =
+                        page.redactInRect(
+                                new Rect(
+                                        ch.x() - epsilon,
+                                        ch.y() - epsilon,
+                                        ch.width() + 2 * epsilon,
+                                        ch.height() + 2 * epsilon),
+                                true,
+                                false);
+                if (!removed) {
+                    throw new RedactIncompleteException(
+                            "strict crop could not remove a boundary-crossing glyph");
                 }
             }
         }
     }
 
-    private static boolean intersects(TextWord word, Rect crop) {
-        return word.x() <= crop.x() + crop.width()
-                && word.x() + word.width() >= crop.x()
-                && word.y() <= crop.y() + crop.height()
-                && word.y() + word.height() >= crop.y();
+    private static boolean intersects(TextChar ch, Rect crop) {
+        return ch.x() <= crop.x() + crop.width()
+                && ch.x() + ch.width() >= crop.x()
+                && ch.y() <= crop.y() + crop.height()
+                && ch.y() + ch.height() >= crop.y();
     }
 
-    private static boolean isFullyInside(TextWord word, Rect crop) {
-        return word.x() >= crop.x()
-                && word.y() >= crop.y()
-                && word.x() + word.width() <= crop.x() + crop.width()
-                && word.y() + word.height() <= crop.y() + crop.height();
+    private static boolean isFullyInside(TextChar ch, Rect crop) {
+        return ch.x() >= crop.x()
+                && ch.y() >= crop.y()
+                && ch.x() + ch.width() <= crop.x() + crop.width()
+                && ch.y() + ch.height() <= crop.y() + crop.height();
     }
 
     /**
