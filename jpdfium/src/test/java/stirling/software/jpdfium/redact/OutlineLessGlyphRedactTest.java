@@ -111,6 +111,39 @@ class OutlineLessGlyphRedactTest {
         }
     }
 
+    /**
+     * A commit that leaves text under its mark keeps the page unsavable. A later
+     * commit elsewhere on the page succeeds on its own marks but must not clear
+     * that, while one that removes what the first left does.
+     */
+    @Test
+    void onlyACommitRemovingTheSurvivorsClearsAnUnfinishedPage() throws Exception {
+        byte[] pdf = truncatedFontPage(false);
+        float[] cell = wordCell(pdf, "moments");
+        float baseline = 700f;
+        Rect missesFirstGlyph = new Rect(cell[0] + 0.5f, baseline - 0.25f * SIZE, cell[1] - cell[0] - 0.5f, SIZE);
+        Rect coversWord = new Rect(cell[0] - 0.5f, baseline - 0.25f * SIZE, cell[1] - cell[0] + 0.5f, SIZE);
+        byte[] redacted;
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            try (PdfPage page = doc.page(0)) {
+                page.markRedactRegion(missesFirstGlyph, 0xFF000000);
+                assertThrows(RedactIncompleteException.class, () -> page.commitRedactions(0xFF000000, true));
+
+                assertEquals(1, page.markRedactWords(new String[]{"gardener"}, 0xFF000000, 0f, false, false, false));
+                assertThrows(RedactIncompleteException.class, () -> page.commitRedactions(0xFF000000, true));
+            }
+            assertThrows(RedactIncompleteException.class, doc::saveBytes);
+
+            try (PdfPage page = doc.page(0)) {
+                page.markRedactRegion(coversWord, 0xFF000000);
+                page.commitRedactions(0xFF000000, true);
+            }
+            redacted = doc.saveBytes();
+        }
+        String expected = String.join(" ", LINES).replace("moments ", "").replace("gardener", "");
+        assertEquals(expected, pdfiumText(redacted).strip());
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void regionOverOutlineLessGlyphsRemovesThem(boolean flipped) throws Exception {

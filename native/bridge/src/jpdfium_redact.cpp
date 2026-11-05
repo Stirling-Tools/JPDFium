@@ -113,34 +113,42 @@ struct ScratchGuard {
 
 // A redaction that mutates the page and then stops (JPDFIUM_ERR_REDACT_INCOMPLETE)
 // leaves the surviving content extractable, so record the applied zones and the
-// page whose redaction did not finish. DocCore::hasIncompleteRedaction then makes
-// every save path fail closed until a later commit actually resolves THAT page;
-// the record is per page, so a commit elsewhere cannot clear the failure.
-static void markRedactionIncomplete(PageWrapper* pw, const std::vector<FS_RECTF>& applied) {
+// page whose redaction did not finish, with the areas it covered.
+// DocCore::hasIncompleteRedaction then makes every save path fail closed until a
+// later commit actually resolves THAT page (see resolveIncompleteRedaction); the
+// record is per page, so a commit elsewhere cannot clear the failure.
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<RedactArea>& applied) {
     if (!pw || !pw->core) return;
     pw->core->contentRedacted = true;
-    pw->core->incompleteRedactPages.insert(pw->pageIndex);
-    for (const auto& ar : applied) {
-        pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
+    std::vector<RedactArea>& areas = pw->core->incompleteRedactPages[pw->pageIndex];
+    for (const RedactArea& a : applied) {
+        pw->core->addRedactZone(pw->pageIndex, a.rect.left, a.rect.bottom, a.rect.right,
+                                a.rect.top);
+        areas.push_back(a);
     }
+}
+
+static void markRedactionIncomplete(PageWrapper* pw, const std::vector<FS_RECTF>& applied) {
+    std::vector<RedactArea> areas;
+    areas.reserve(applied.size());
+    for (const FS_RECTF& r : applied) areas.push_back(RedactArea{r, {}});
+    markRedactionIncomplete(pw, areas);
 }
 
 static void markRedactionIncomplete(PageWrapper* pw, const std::vector<TextMatch>& applied) {
-    if (!pw || !pw->core) return;
-    pw->core->contentRedacted = true;
-    pw->core->incompleteRedactPages.insert(pw->pageIndex);
-    for (const auto& m : applied) {
-        pw->core->addRedactZone(pw->pageIndex, m.bboxL, m.bboxB, m.bboxR, m.bboxT);
+    std::vector<RedactArea> areas;
+    areas.reserve(applied.size());
+    for (const TextMatch& m : applied) {
+        areas.push_back(RedactArea{makePageRect(m.bboxL, m.bboxB, m.bboxR, m.bboxT), {}});
     }
+    markRedactionIncomplete(pw, areas);
 }
 
 namespace {
-// A REDACT annotation a commit applies: its /Rect, and its /QuadPoints when the
-// mark covers rotated or wrapped text more tightly than the rect does.
+// A REDACT annotation a commit applies, with the area it covers.
 struct CommitMark {
     FPDF_ANNOTATION annot = nullptr;
-    FS_RECTF rect{};
-    std::vector<FS_QUADPOINTSF> quads;
+    RedactArea area;
 };
 }  // namespace
 
@@ -165,34 +173,51 @@ static bool pointInQuad(double x, double y, const FS_QUADPOINTSF& q) {
     return side != 0;
 }
 
-// Whether text survived the marks a commit applied: hardens commit with the same
-// verified-removal check the other redaction paths run. The redactor reports
+// Whether text survived in the areas a redaction covered: hardens commit with the
+// same verified-removal check the other redaction paths run. The redactor reports
 // success without saying which glyphs it removed, and it passes over glyphs it
 // cannot measure (one with no outline is a point at its origin), so the page is
-// re-extracted: a char at least half inside a plain mark, or centred inside a
-// quad of a quad mark, survived it. A quad mark is not judged by its rect, which
+// re-extracted: a char at least half inside a plain area, or centred inside a
+// quad of a quad area, survived it. A quad area is not judged by its rect, which
 // also spans text beside rotated quads that the redactor rightly kept. Chars
 // PDFium generates (separators it inserts between runs) have no content to
 // remove, and an outline-less glyph is judged by the cell a cover for it spans.
-static bool commitLeftText(FPDF_TEXTPAGE audit, const std::vector<CommitMark>& marks) {
+static bool textLeftIn(FPDF_TEXTPAGE audit, const std::vector<RedactArea>& areas) {
     int n = FPDFText_CountChars(audit);
     for (int ci = 0; ci < n; ++ci) {
         if (FPDFText_IsGenerated(audit, ci) == 1) continue;
         double l, r, b, t;
         if (!outlineAwareCharBox(audit, ci, &l, &r, &b, &t)) continue;
-        for (const CommitMark& mark : marks) {
-            if (mark.quads.empty()) {
-                if (charInRect(l, b, r, t, mark.rect.left, mark.rect.bottom, mark.rect.right,
-                               mark.rect.top))
+        for (const RedactArea& area : areas) {
+            if (area.quads.empty()) {
+                if (charInRect(l, b, r, t, area.rect.left, area.rect.bottom, area.rect.right,
+                               area.rect.top))
                     return true;
                 continue;
             }
-            for (const FS_QUADPOINTSF& q : mark.quads) {
+            for (const FS_QUADPOINTSF& q : area.quads) {
                 if (pointInQuad(0.5 * (l + r), 0.5 * (b + t), q)) return true;
             }
         }
     }
     return false;
+}
+
+// Clears this page's unfinished-redaction record once none of the areas recorded
+// for it still holds text. A commit that verified only its own marks cannot
+// clear it: an earlier failure elsewhere on the page may still have survivors.
+// False while survivors remain, or when the page text cannot be read to tell.
+static bool resolveIncompleteRedaction(PageWrapper* pw) {
+    if (!pw->core) return true;
+    auto it = pw->core->incompleteRedactPages.find(pw->pageIndex);
+    if (it == pw->core->incompleteRedactPages.end()) return true;
+    FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
+    if (!audit) return false;
+    bool survivors = textLeftIn(audit, it->second);
+    FPDFText_ClosePage(audit);
+    if (survivors) return false;
+    pw->core->incompleteRedactPages.erase(it);
+    return true;
 }
 
 int32_t jpdfium_redact_region(int64_t page, float x, float y, float w, float h, uint32_t argb,
@@ -1019,12 +1044,12 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                 if (FPDFAnnot_GetRect(a, &rect)) {
                     CommitMark item;
                     item.annot = a;
-                    item.rect = rect;
+                    item.area.rect = rect;
                     size_t qc = FPDFAnnot_CountAttachmentPoints(a);
                     for (size_t qi = 0; qi < qc; ++qi) {
                         FS_QUADPOINTSF qp;
                         if (FPDFAnnot_GetAttachmentPoints(a, qi, &qp)) {
-                            item.quads.push_back(qp);
+                            item.area.quads.push_back(qp);
                         }
                     }
                     redactAnnots.push_back(std::move(item));
@@ -1045,15 +1070,20 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
         // text matrix shifting artifacts across multiple regions in the same text object.
         std::sort(redactAnnots.begin(), redactAnnots.end(),
                   [](const CommitMark& a, const CommitMark& b) {
-                      if (std::abs(a.rect.bottom - b.rect.bottom) > 2.0f) {
-                          return a.rect.bottom < b.rect.bottom;
+                      if (std::abs(a.area.rect.bottom - b.area.rect.bottom) > 2.0f) {
+                          return a.area.rect.bottom < b.area.rect.bottom;
                       }
-                      return a.rect.left > b.rect.left;
+                      return a.area.rect.left > b.area.rect.left;
                   });
 
         std::vector<FS_RECTF> redactRects;
+        std::vector<RedactArea> redactAreas;
         redactRects.reserve(redactAnnots.size());
-        for (const auto& item : redactAnnots) redactRects.push_back(item.rect);
+        redactAreas.reserve(redactAnnots.size());
+        for (const auto& item : redactAnnots) {
+            redactRects.push_back(item.area.rect);
+            redactAreas.push_back(item.area);
+        }
 
         bool epdfOk = true;
         for (auto& item : redactAnnots) {
@@ -1077,8 +1107,8 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             if (alf > 0) {
                 for (const auto& item : redactAnnots) {
-                    if (!item.quads.empty()) {
-                        for (const auto& q : item.quads) {
+                    if (!item.area.quads.empty()) {
+                        for (const auto& q : item.area.quads) {
                             FPDF_PAGEOBJECT pObj = FPDFPageObj_CreateNewPath(q.x1, q.y1);
                             if (!pObj) continue;
                             FPDFPath_LineTo(pObj, q.x2, q.y2);
@@ -1090,9 +1120,10 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
                             FPDFPage_InsertObject(pw->page, pObj);
                         }
                     } else {
-                        FPDF_PAGEOBJECT rect = FPDFPageObj_CreateNewRect(
-                            item.rect.left, item.rect.bottom, item.rect.right - item.rect.left,
-                            item.rect.top - item.rect.bottom);
+                        FPDF_PAGEOBJECT rect =
+                            FPDFPageObj_CreateNewRect(item.area.rect.left, item.area.rect.bottom,
+                                                      item.area.rect.right - item.area.rect.left,
+                                                      item.area.rect.top - item.area.rect.bottom);
                         if (rect) {
                             FPDFPageObj_SetFillColor(rect, red, grn, blu, alf);
                             FPDFPath_SetDrawMode(rect, FPDF_FILLMODE_ALTERNATE, 0);
@@ -1113,31 +1144,24 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
 
             FPDF_TEXTPAGE audit = FPDFText_LoadPage(pw->page);
             if (!audit) {
-                markRedactionIncomplete(pw, redactRects);
+                markRedactionIncomplete(pw, redactAreas);
                 return JPDFIUM_ERR_REDACT_UNVERIFIABLE;
             }
-            bool survivors = commitLeftText(audit, redactAnnots);
+            bool survivors = textLeftIn(audit, redactAreas);
             FPDFText_ClosePage(audit);
             if (survivors) {
-                markRedactionIncomplete(pw, redactRects);
+                markRedactionIncomplete(pw, redactAreas);
                 return JPDFIUM_ERR_REDACT_INCOMPLETE;
             }
 
             if (pw->core) {
                 pw->core->contentRedacted = true;
-                // This page's rectangles were applied and verified, so an earlier
-                // half-finished redaction on THIS page is resolved. Pages are tracked
-                // individually, so a commit elsewhere cannot clear a page that still
-                // has surviving content.
-                if (!redactRects.empty()) {
-                    pw->core->incompleteRedactPages.erase(pw->pageIndex);
-                }
                 for (const auto& ar : redactRects) {
                     pw->core->addRedactZone(pw->pageIndex, ar.left, ar.bottom, ar.right, ar.top);
                 }
             }
             if (commitCount) *commitCount = static_cast<int32_t>(redactRects.size());
-            return JPDFIUM_OK;
+            return resolveIncompleteRedaction(pw) ? JPDFIUM_OK : JPDFIUM_ERR_REDACT_INCOMPLETE;
         }
 
         // Fallback: Object Fission engine if EPDFPage_ApplyRedactions is unavailable
@@ -1212,16 +1236,11 @@ int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_conten
             FPDFPage_RemoveAnnot(pw->page, redactIndices[i]);
         }
         if (pw->core) {
-            // The fission fallback completed this page's redaction: resolve its
-            // earlier half-finished state. Other pages keep their marker.
-            if (!redactIndices.empty()) {
-                pw->core->incompleteRedactPages.erase(pw->pageIndex);
-            }
             pw->core->unappliedRedactMarksCount =
                 std::max(0, pw->core->unappliedRedactMarksCount -
                                 static_cast<int32_t>(redactIndices.size()));
         }
-        return JPDFIUM_OK;
+        return resolveIncompleteRedaction(pw) ? JPDFIUM_OK : JPDFIUM_ERR_REDACT_INCOMPLETE;
     } catch (...) {
         return JPDFIUM_ERR_NATIVE;
     }

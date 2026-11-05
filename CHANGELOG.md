@@ -24,6 +24,9 @@ publishing workflows, not library releases, so they are not listed here.
   pages previously stopped with `RedactIncompleteException`.
 - `commitRedactions` now verifies that marked text was removed, as the other
   redaction paths do, and raises `RedactIncompleteException` otherwise.
+- A page whose redaction did not finish stays unsavable until a later commit
+  removes the text that redaction left, not merely until any commit on the page
+  succeeds.
 
 ## [1.3.0] - 2026-11-05
 
