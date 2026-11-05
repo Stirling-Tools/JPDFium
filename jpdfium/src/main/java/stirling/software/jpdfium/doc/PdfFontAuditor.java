@@ -84,12 +84,26 @@ public final class PdfFontAuditor {
     ) {}
 
     /**
+     * Check whether font auditing is supported by the loaded native library.
+     */
+    public static boolean isSupported() {
+        return PageEditBindings.FPDFPage_CountObjects != null
+                && PageEditBindings.FPDFPage_GetObject != null
+                && PageEditBindings.FPDFPageObj_GetType != null
+                && PageEditBindings.FPDFTextObj_GetFont != null
+                && PageEditBindings.FPDFFont_GetBaseFontName != null;
+    }
+
+    /**
      * Audit all fonts in the document.
      *
      * @param doc open PDF document
      * @return audit report
      */
     public static AuditReport audit(PdfDocument doc) {
+        if (!isSupported()) {
+            throw new JPDFiumException("Font auditing is not supported by this PDFium build");
+        }
         // Track unique fonts by base name -> builder
         Map<String, FontBuilder> fontMap = new LinkedHashMap<>();
 

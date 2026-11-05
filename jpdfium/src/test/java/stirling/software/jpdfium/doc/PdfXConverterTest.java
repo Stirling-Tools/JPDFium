@@ -872,6 +872,7 @@ class PdfXConverterTest {
 
     @Test
     void fontAuditorDetectsNonEmbeddedFontInAnnotation() throws Exception {
+        assumeTrue(PdfFontAuditor.isSupported(), "font auditor requires full PDFium natives");
         byte[] pdfWithAnnot;
         try (PDDocument pdfbox = new PDDocument()) {
             PDPage page = new PDPage();
@@ -911,6 +912,7 @@ class PdfXConverterTest {
 
     @Test
     void fontAuditorDetectsNonEmbeddedFontInFormXObject() throws Exception {
+        assumeTrue(PdfFontAuditor.isSupported(), "font auditor requires full PDFium natives");
         byte[] pdfWithForm;
         try (PDDocument pdfbox = new PDDocument()) {
             PDPage page = new PDPage();

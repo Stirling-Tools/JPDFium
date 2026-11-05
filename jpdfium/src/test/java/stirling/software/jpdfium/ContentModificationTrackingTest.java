@@ -129,6 +129,7 @@ class ContentModificationTrackingTest {
 
     @Test
     void fontAuditDoesNotMarkModified() {
+        assumeTrue(PdfFontAuditor.isSupported(), "font audit requires real PDFium natives");
         try (PdfDocument doc = PdfDocument.open(TEXT_PDF)) {
             assertNotNull(PdfFontAuditor.audit(doc), "font audit must produce a report");
             assertFalse(doc.isContentModified(),
