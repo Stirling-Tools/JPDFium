@@ -343,6 +343,9 @@ if(JPDFIUM_USE_PDFIUM)
         set(CMAKE_DISABLE_FIND_PACKAGE_TIFF ON CACHE BOOL "" FORCE)
         set(CMAKE_DISABLE_FIND_PACKAGE_PNG ON CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(podofo)
+        set(CMAKE_DISABLE_FIND_PACKAGE_JPEG OFF CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_TIFF OFF CACHE BOOL "" FORCE)
+        set(CMAKE_DISABLE_FIND_PACKAGE_PNG OFF CACHE BOOL "" FORCE)
     endif()
     # PoDoFo 1.1.2 does not build with the project's global -Werror flags.
     # Its own warnings are not JPDFium's warnings; compile the third-party
