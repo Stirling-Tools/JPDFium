@@ -85,6 +85,6 @@ public final class PdfFontEmbedder {
 
     private static String normalizeName(String name) {
         String trimmed = name.trim();
-        return trimmed.length() > 7 && trimmed.charAt(6) == '+' ? trimmed.substring(7) : trimmed;
+        return trimmed.startsWith("/") ? trimmed.substring(1) : trimmed;
     }
 }

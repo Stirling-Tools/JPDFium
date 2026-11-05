@@ -138,19 +138,25 @@ public final class QpdfLib {
             MemorySegment inputSeg = call.copyBytes(input);
             MemorySegment nameSeg = call.cString(baseFont);
             MemorySegment fontSeg = call.copyBytes(fontData);
-            int rc;
-            try {
-                rc = (int) REPLACE_FONT_STREAM_HANDLE.invokeExact(
-                        inputSeg, (long) input.length, nameSeg, fontSeg, (long) fontData.length,
-                        call.outPtr, call.outLen);
-            } catch (Throwable t) {
-                NativeRuntime.rethrowFatal(t);
-                throw new JPDFiumException("qpdf font stream replacement failed", t);
+            int rc = (int) REPLACE_FONT_STREAM_HANDLE.invokeExact(
+                    inputSeg, (long) input.length, nameSeg, fontSeg, (long) fontData.length,
+                    call.outPtr, call.outLen);
+            if (rc == 0) {
+                return call.copyAndFree("qpdfReplaceFontStream");
+            } else if (rc == 1) {
+                throw new JPDFiumException("no font descriptor or program matching /BaseFont " + baseFont);
+            } else if (rc == -2) {
+                throw new JPDFiumException("cannot replace font on password-protected document");
+            } else if (rc == -3) {
+                throw new JPDFiumException("cannot replace font on signed document (/ByteRange present)");
+            } else if (rc == -4) {
+                throw new JPDFiumException("Type 1 /FontFile replacement without Length1/2/3 is unsupported");
+            } else {
+                throw new JPDFiumException("qpdf font stream replacement failed (rc=" + rc + ")");
             }
-            if (rc != 0) return null;
-            return call.copyAndFree("qpdfReplaceFontStream");
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
+            if (t instanceof JPDFiumException jpe) throw jpe;
             throw new JPDFiumException("qpdf font stream replacement failed", t);
         } finally {
             releaseSlot(held);

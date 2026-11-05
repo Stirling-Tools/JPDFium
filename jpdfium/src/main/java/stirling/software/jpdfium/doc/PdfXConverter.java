@@ -61,6 +61,9 @@ public final class PdfXConverter {
                 options.outputIntentProfile(),
                 PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                 standard.gtsVersion(), standard.gtsConformance());
+        if (!options.fontData().isEmpty()) {
+            converted = PdfFontEmbedder.embed(converted, options.fontData());
+        }
         try (PdfDocument metadata = PdfDocument.open(converted)) {
             applyPageBoxes(metadata);
             requireEmbeddedFonts(metadata, options);
@@ -271,6 +274,9 @@ public final class PdfXConverter {
                     options.outputIntentProfile(),
                     PdfOutputIntent.Spec.pdfx(options.conditionIdentifier(), options.info()),
                     standard.gtsVersion(), standard.gtsConformance());
+            if (!options.fontData().isEmpty()) {
+                converted = PdfFontEmbedder.embed(converted, options.fontData());
+            }
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 applyPageBoxes(metadata);
                 requireEmbeddedFonts(metadata, options);
