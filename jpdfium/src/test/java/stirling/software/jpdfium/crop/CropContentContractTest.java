@@ -58,6 +58,12 @@ class CropContentContractTest {
             assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
                     doc::saveBytesIncremental,
                     "saveBytesIncremental() must be refused after successful cropAndRemoveContentStrict");
+            byte[] fullSave = doc.saveBytes();
+            assertTrue(fullSave.length > 0, "full saveBytes() must succeed after successful cropAndRemoveContentStrict");
+            try (PdfDocument saved = PdfDocument.open(fullSave)) {
+                String text = stirling.software.jpdfium.text.PdfTextExtractor.extractPage(saved, 0).plainText();
+                assertFalse(text.contains("KEEP_A"), "KEEP_A straddles crop boundary and must be removed");
+            }
         }
     }
 

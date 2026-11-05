@@ -1456,7 +1456,7 @@ public final class PdfDocument implements AutoCloseable {
             return (int) DocBindings.EPDF_GetMetaTrapped.invokeExact(rawHandle());
         } catch (Throwable t) {
             NativeRuntime.rethrowFatal(t);
-            return DocBindings.PDFTRAPPED_NOTSET;
+            throw new JPDFiumException("Failed to get /Trapped status", t);
         }
     }
 

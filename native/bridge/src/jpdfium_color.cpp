@@ -700,27 +700,52 @@ std::string XmlEscape(const std::string& value) {
     return out;
 }
 
-std::string BuildPdfxXmp(const std::string& version, const std::string& conformance) {
+std::string BuildPdfxXmp(const std::string& version, const std::string& conformance,
+                         const std::string& title = "", const std::string& trapped = "",
+                         const std::string& mod_date = "") {
     const std::string v = XmlEscape(version);
     const std::string c = XmlEscape(conformance);
-    return "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-           "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-           " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-           "  <rdf:Description rdf:about=\"\""
-           " xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\""
-           " xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\""
-           " pdfxid:GTS_PDFXVersion=\"" +
-           v +
-           "\""
-           " pdfx:GTS_PDFXVersion=\"" +
-           v +
-           "\""
-           " pdfx:GTS_PDFXConformance=\"" +
-           c +
-           "\"/>\n"
-           " </rdf:RDF>\n"
-           "</x:xmpmeta>\n"
-           "<?xpacket end=\"w\"?>";
+    std::string s =
+        "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+        " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+        "  <rdf:Description rdf:about=\"\""
+        " xmlns:pdfxid=\"http://www.npes.org/pdfx/ns/id/\""
+        " xmlns:pdfx=\"http://ns.adobe.com/pdfx/1.3/\""
+        " xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\""
+        " xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\""
+        " xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
+        " pdfxid:GTS_PDFXVersion=\"" +
+        v +
+        "\""
+        " pdfx:GTS_PDFXVersion=\"" +
+        v + "\"";
+    if (!c.empty()) {
+        s += " pdfx:GTS_PDFXConformance=\"" + c + "\"";
+    }
+    if (!trapped.empty()) {
+        s += " pdf:Trapped=\"" + XmlEscape(trapped) + "\"";
+    }
+    if (!mod_date.empty()) {
+        s += " xmp:ModifyDate=\"" + XmlEscape(mod_date) + "\"";
+    }
+    if (!title.empty()) {
+        s += ">\n"
+             "   <dc:title>\n"
+             "    <rdf:Alt>\n"
+             "     <rdf:li xml:lang=\"x-default\">" +
+             XmlEscape(title) +
+             "</rdf:li>\n"
+             "    </rdf:Alt>\n"
+             "   </dc:title>\n"
+             "  </rdf:Description>\n";
+    } else {
+        s += "/>\n";
+    }
+    s += " </rdf:RDF>\n"
+         "</x:xmpmeta>\n"
+         "<?xpacket end=\"w\"?>";
+    return s;
 }
 
 // XMP packets are edited as XML, never with libstdc++'s backtracking regex
@@ -731,6 +756,9 @@ constexpr int kMaxXmpDepth = 64;
 constexpr const char* kRdfNs = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 constexpr const char* kPdfxNs = "http://ns.adobe.com/pdfx/1.3/";
 constexpr const char* kPdfxIdNs = "http://www.npes.org/pdfx/ns/id/";
+constexpr const char* kPdfNs = "http://ns.adobe.com/pdf/1.3/";
+constexpr const char* kDcNs = "http://purl.org/dc/elements/1.1/";
+constexpr const char* kXmpNs = "http://ns.adobe.com/xap/1.0/";
 
 #ifdef JPDFIUM_HAS_PUGIXML
 std::string XmlLocalName(const char* name) {
@@ -833,7 +861,8 @@ bool XmlUpdateProperty(const pugi::xml_node& description, const std::string& loc
 }
 
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
-                 const std::string& conformance) {
+                 const std::string& conformance, const std::string& title = "",
+                 const std::string& trapped = "", const std::string& mod_date = "") {
     std::vector<pugi::xml_node> descriptions;
     XmlCollectDescriptions(*document, 0, &descriptions);
     if (descriptions.empty()) return false;
@@ -843,12 +872,22 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
     bool has_pdfxid_version = false;
     bool has_pdfx_version = false;
     bool has_conformance = false;
+    bool has_trapped = false;
+    bool has_modify_date = false;
     for (const pugi::xml_node& description : descriptions) {
         has_pdfxid_version |=
             XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxIdNs, {}, version);
         has_pdfx_version |= XmlUpdateProperty(description, "GTS_PDFXVersion", kPdfxNs, {}, version);
-        has_conformance |=
-            XmlUpdateProperty(description, "GTS_PDFXConformance", kPdfxNs, kPdfxIdNs, conformance);
+        if (!conformance.empty()) {
+            has_conformance |= XmlUpdateProperty(description, "GTS_PDFXConformance", kPdfxNs,
+                                                 kPdfxIdNs, conformance);
+        }
+        if (!trapped.empty()) {
+            has_trapped |= XmlUpdateProperty(description, "Trapped", kPdfNs, {}, trapped);
+        }
+        if (!mod_date.empty()) {
+            has_modify_date |= XmlUpdateProperty(description, "ModifyDate", kXmpNs, {}, mod_date);
+        }
     }
 
     pugi::xml_node first = descriptions.front();
@@ -860,10 +899,29 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
         const std::string prefix = XmlEnsurePrefix(first, kPdfxNs, "pdfx");
         first.append_attribute((prefix + ":GTS_PDFXVersion").c_str()).set_value(version.c_str());
     }
-    if (!has_conformance) {
+    if (!conformance.empty() && !has_conformance) {
         const std::string prefix = XmlEnsurePrefix(first, kPdfxNs, "pdfx");
         first.append_attribute((prefix + ":GTS_PDFXConformance").c_str())
             .set_value(conformance.c_str());
+    }
+    if (!trapped.empty() && !has_trapped) {
+        const std::string prefix = XmlEnsurePrefix(first, kPdfNs, "pdf");
+        first.append_attribute((prefix + ":Trapped").c_str()).set_value(trapped.c_str());
+    }
+    if (!mod_date.empty() && !has_modify_date) {
+        const std::string prefix = XmlEnsurePrefix(first, kXmpNs, "xmp");
+        first.append_attribute((prefix + ":ModifyDate").c_str()).set_value(mod_date.c_str());
+    }
+    if (!title.empty()) {
+        const std::string dc_prefix = XmlEnsurePrefix(first, kDcNs, "dc");
+        pugi::xml_node title_node = first.child((dc_prefix + ":title").c_str());
+        if (!title_node) {
+            title_node = first.append_child((dc_prefix + ":title").c_str());
+            pugi::xml_node alt = title_node.append_child("rdf:Alt");
+            pugi::xml_node li = alt.append_child("rdf:li");
+            li.append_attribute("xml:lang").set_value("x-default");
+            li.text().set(title.c_str());
+        }
     }
     return true;
 }
@@ -872,7 +930,27 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
 void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* conformance) {
     const std::string ver = NormaliseString(version, "");
     if (ver.empty()) return;
-    const std::string conf = NormaliseString(conformance, ver.c_str());
+    const std::string conf = NormaliseString(conformance, "");
+
+    std::string title;
+    std::string trapped;
+    std::string mod_date;
+    QPDFObjectHandle info_dict = qpdf->getTrailer().getKey("/Info");
+    if (info_dict.isDictionary()) {
+        if (info_dict.hasKey("/Title")) {
+            title = info_dict.getKey("/Title").getUTF8Value();
+        }
+        if (info_dict.hasKey("/Trapped")) {
+            std::string tr = info_dict.getKey("/Trapped").getName();
+            if (tr == "/True")
+                trapped = "True";
+            else if (tr == "/False")
+                trapped = "False";
+        }
+        if (info_dict.hasKey("/ModDate")) {
+            mod_date = info_dict.getKey("/ModDate").getUTF8Value();
+        }
+    }
 
     std::string xml;
     QPDFObjectHandle root = qpdf->getRoot();
@@ -893,7 +971,7 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
             // Pathological packet: do not hand it to any parser. Replace it
             // with the minimal PDF/X packet instead of risking stack or heap
             // exhaustion.
-            xml = BuildPdfxXmp(ver, conf);
+            xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
         } else {
             pugi::xml_document document;
             const pugi::xml_parse_result parsed =
@@ -902,19 +980,19 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
                                          pugi::parse_declaration | pugi::parse_comments,
                                      pugi::encoding_auto);
             std::string edited;
-            if (parsed && EditPdfxXml(&document, ver, conf)) {
+            if (parsed && EditPdfxXml(&document, ver, conf, title, trapped, mod_date)) {
                 std::ostringstream serialized;
                 document.save(serialized, "", pugi::format_raw | pugi::format_no_declaration,
                               pugi::encoding_utf8);
                 edited = serialized.str();
             }
-            xml = edited.empty() ? BuildPdfxXmp(ver, conf) : edited;
+            xml = edited.empty() ? BuildPdfxXmp(ver, conf, title, trapped, mod_date) : edited;
         }
 #else
-        xml = BuildPdfxXmp(ver, conf);
+        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
 #endif
     } else {
-        xml = BuildPdfxXmp(ver, conf);
+        xml = BuildPdfxXmp(ver, conf, title, trapped, mod_date);
     }
 
     QPDFObjectHandle metadata = QPDFObjectHandle::newStream(qpdf, xml);

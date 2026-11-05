@@ -41,7 +41,9 @@ public final class PdfXConverter {
         return PdfOutputIntent.pdfxSupported()
                 && PdfColorConverter.supportsColorSpace(PdfColorConverter.ColorSpace.CMYK)
                 && QpdfLib.isForceVersionFileSupported()
+                && QpdfLib.isForceVersionSupported()
                 && DocBindings.EPDF_SetMetaText != null
+                && DocBindings.EPDF_GetMetaTrapped != null
                 && DocBindings.EPDF_SetMetaTrapped != null;
     }
 
@@ -53,6 +55,7 @@ public final class PdfXConverter {
     /** Convert colours in place and apply PDF/X intent metadata. */
     public static PdfDocument applyMetadata(PdfDocument doc, PdfXOptions options) {
         prepare(doc, options);
+        applyDocumentInfo(doc, options);
         PdfXStandard standard = options.standard();
         byte[] converted = PdfOutputIntent.applyPdfxMetadata(doc.saveBytes(),
                 options.outputIntentProfile(),
@@ -60,7 +63,6 @@ public final class PdfXConverter {
                 standard.gtsVersion(), standard.gtsConformance());
         try (PdfDocument metadata = PdfDocument.open(converted)) {
             applyPageBoxes(metadata);
-            applyDocumentInfo(metadata, options);
             requireEmbeddedFonts(metadata, options);
             byte[] out = PdfVersionConverter.forceVersion(
                     metadata.saveBytes(), versionFor(standard));
@@ -84,6 +86,7 @@ public final class PdfXConverter {
                     output.toAbsolutePath().getParent(), "jpdfium-pdfx-meta-", ".pdf");
             try (PdfDocument source = PdfDocument.open(input)) {
                 prepare(source, options);
+                applyDocumentInfo(source, options);
                 source.save(staging);
             }
             PdfXStandard standard = options.standard();
@@ -95,7 +98,6 @@ public final class PdfXConverter {
             }
             try (PdfDocument document = PdfDocument.open(metadata)) {
                 applyPageBoxes(document);
-                applyDocumentInfo(document, options);
                 requireEmbeddedFonts(document, options);
                 document.save(staging);
             }
@@ -255,6 +257,7 @@ public final class PdfXConverter {
         requireSupported(options);
         try (PdfDocument source = PdfDocument.open(input)) {
             prepare(source, options);
+            applyDocumentInfo(source, options);
             PdfXStandard standard = options.standard();
             byte[] converted = PdfOutputIntent.applyPdfxMetadata(source.saveBytes(),
                     options.outputIntentProfile(),
@@ -262,7 +265,6 @@ public final class PdfXConverter {
                     standard.gtsVersion(), standard.gtsConformance());
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 applyPageBoxes(metadata);
-                applyDocumentInfo(metadata, options);
                 requireEmbeddedFonts(metadata, options);
                 return PdfVersionConverter.forceVersion(
                         metadata.saveBytes(), versionFor(standard));
@@ -291,6 +293,10 @@ public final class PdfXConverter {
         }
         validateCmykProfile(profile);
         requireNoTransparency(doc, standard);
+        if (!standard.allowsIccBasedColors() && !options.convertColors()) {
+            throw new JPDFiumException(standard + " forbids ICC-based, Lab, and RGB colour spaces; "
+                    + "colour conversion cannot be disabled");
+        }
         if (options.convertColors()) {
             PdfColorConverter.convert(doc, options.colorOptions());
         }

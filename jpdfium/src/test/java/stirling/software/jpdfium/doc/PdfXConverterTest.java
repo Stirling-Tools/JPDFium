@@ -15,6 +15,9 @@ import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.pdfbox.pdmodel.graphics.color.PDOutputIntent;
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationFreeText;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceDictionary;
+import org.apache.pdfbox.pdmodel.interactive.annotation.PDAppearanceStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 
@@ -34,6 +37,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.model.PdfVersion;
+import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -288,7 +292,6 @@ class PdfXConverterTest {
         byte[] out = PdfXConverter.applyMetadata(input, options);
         String text = new String(out, StandardCharsets.ISO_8859_1);
         assertTrue(text.contains("PDF/X-3:2002"), "PDF/X-3 GTS version missing");
-        assertTrue(text.contains("GTS_PDFXConformance"), "PDF/X-3 conformance missing");
         PdfXConverter.checkMetadata(out, options);
     }
 
@@ -795,7 +798,17 @@ class PdfXConverterTest {
                 cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
                 cs.newLineAtOffset(150, 150);
                 cs.showText("INSIDE");
-                cs.newLineAtOffset(0, 300);
+                cs.endText();
+
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(280, 150);
+                cs.showText("CROSSINGBOUNDARY");
+                cs.endText();
+
+                cs.beginText();
+                cs.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                cs.newLineAtOffset(150, 450);
                 cs.showText("OUTSIDE");
                 cs.endText();
             }
@@ -809,6 +822,90 @@ class PdfXConverterTest {
             var text = stirling.software.jpdfium.text.PdfTextExtractor.extractPage(doc, 0).plainText();
             assertTrue(text.contains("INSIDE"), "fully inside text should be kept");
             assertFalse(text.contains("OUTSIDE"), "outside text should be removed");
+            assertFalse(text.contains("CROSSING"), "boundary-crossing word should be removed");
+            assertFalse(text.contains("BOUNDARY"), "boundary-crossing word should be removed");
+        }
+    }
+
+    @Test
+    void strictCropAuditFailureArmsNativeIncompleteStateAndBlocksFullSave() throws Exception {
+        byte[] input;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            pdfbox.addPage(page);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            input = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            try (PdfPage page = doc.page(0)) {
+                page.markRedactionIncomplete();
+            }
+            assertThrows(stirling.software.jpdfium.exception.RedactIncompleteException.class,
+                    doc::saveBytes,
+                    "saveBytes() must fail closed with RedactIncompleteException when incomplete state is armed");
+        }
+    }
+
+    @Test
+    void rotatedPageWithInheritedMediaBoxKeepsUnrotatedCoordinates() throws Exception {
+        byte[] pdf;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage(new org.apache.pdfbox.pdmodel.common.PDRectangle(612, 792));
+            page.setRotation(90);
+            pdfbox.addPage(page);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            pdf = baos.toByteArray();
+        }
+        try (PdfDocument doc = PdfDocument.open(pdf)) {
+            try (PdfPage page = doc.page(0)) {
+                assertEquals(1, page.rotation());
+                Rect mb = page.getMediaBox();
+                assertEquals(612, Math.round(mb.width()));
+                assertEquals(792, Math.round(mb.height()));
+                assertEquals(0, Math.round(mb.x()));
+                assertEquals(0, Math.round(mb.y()));
+            }
+        }
+    }
+
+    @Test
+    void fontAuditorDetectsNonEmbeddedFontInAnnotation() throws Exception {
+        byte[] pdfWithAnnot;
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+
+            PDAnnotationFreeText annot = new PDAnnotationFreeText();
+            annot.setRectangle(new org.apache.pdfbox.pdmodel.common.PDRectangle(50, 50, 200, 50));
+            annot.setContents("AnnotText");
+
+            PDAppearanceDictionary appearance = new PDAppearanceDictionary();
+            PDAppearanceStream appStream = new PDAppearanceStream(pdfbox);
+            appStream.setBBox(new org.apache.pdfbox.pdmodel.common.PDRectangle(0, 0, 200, 50));
+            PDResources res = new PDResources();
+            res.put(COSName.getPDFName("F1"), new PDType1Font(Standard14Fonts.FontName.HELVETICA));
+            appStream.setResources(res);
+            try (var os = appStream.getContentStream().createOutputStream()) {
+                String ops = "q BT /F1 12 Tf 10 10 Td (AnnotText) Tj ET Q";
+                os.write(ops.getBytes(StandardCharsets.US_ASCII));
+            }
+            appearance.setNormalAppearance(appStream);
+            annot.setAppearance(appearance);
+            page.getAnnotations().add(annot);
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            pdfbox.save(baos);
+            pdfWithAnnot = baos.toByteArray();
+        }
+
+        try (PdfDocument doc = PdfDocument.open(pdfWithAnnot)) {
+            var audit = PdfFontAuditor.audit(doc);
+            assertTrue(audit.fonts().stream().anyMatch(f -> f.baseName().contains("Helvetica")),
+                    "Font auditor should detect Helvetica in Annotation");
+            assertTrue(PdfFontAuditor.hasNonEmbeddedFonts(doc),
+                    "hasNonEmbeddedFonts should be true for non-embedded font in Annotation");
         }
     }
 

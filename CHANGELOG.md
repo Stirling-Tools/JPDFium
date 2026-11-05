@@ -45,6 +45,8 @@ publishing workflows, not library releases, so they are not listed here.
   PDFium's `FPDF_SaveWithVersion` rejects version codes above 17 (PDF 1.7) and
   falls back to keeping the source document's version rather than writing a
   PDF 2.0 header.
+- Refuse incremental saves after `PdfPage.redactInRect` modifies content, failing
+  closed with `RedactedSaveException` to protect redacted pages.
 
 ## [1.3.0] - 2026-11-05
 

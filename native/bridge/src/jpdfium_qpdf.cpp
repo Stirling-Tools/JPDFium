@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <set>
@@ -60,7 +61,8 @@ namespace {
 // after Java created it.
 static FILE* createOutputFile(const char* path) {
 #ifdef _WIN32
-    return std::fopen(path, "wb");
+    std::filesystem::path p = std::filesystem::u8path(path);
+    return ::_wfopen(p.c_str(), L"wb");
 #else
     int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0) return nullptr;

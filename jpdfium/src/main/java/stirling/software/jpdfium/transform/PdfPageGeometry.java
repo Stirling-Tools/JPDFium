@@ -154,17 +154,21 @@ public final class PdfPageGeometry {
         removeBoundaryCrossingText(doc, pageIndex, rect);
         cropAndRemoveContent(doc, pageIndex, rect);
 
-        // Strict audit: verify no non-whitespace text survived outside the crop
+        // Strict audit: verify no non-whitespace text survived outside or across the crop edge
         PageText remaining = PdfTextExtractor.extractPage(doc, pageIndex);
         float eps = 0.5f;
         for (TextChar ch : remaining.chars()) {
             if (Character.isWhitespace(ch.unicode()) || ch.width() <= 0 || ch.height() <= 0) {
                 continue;
             }
-            if (ch.x() + ch.width() < rect.x() - eps
-                    || ch.x() > rect.x() + rect.width() + eps
-                    || ch.y() + ch.height() < rect.y() - eps
-                    || ch.y() > rect.y() + rect.height() + eps) {
+            boolean fullyInside = ch.x() >= rect.x() - eps
+                    && ch.y() >= rect.y() - eps
+                    && ch.x() + ch.width() <= rect.x() + rect.width() + eps
+                    && ch.y() + ch.height() <= rect.y() + rect.height() + eps;
+            if (!fullyInside) {
+                try (PdfPage page = doc.page(pageIndex)) {
+                    page.markRedactionIncomplete();
+                }
                 throw new RedactIncompleteException(
                         "strict crop could not remove a boundary-crossing glyph");
             }
@@ -180,10 +184,15 @@ public final class PdfPageGeometry {
                     continue;
                 }
                 if (intersects(word, crop) && !isFullyInside(word, crop)) {
-                    page.redactInRect(
-                            new Rect(word.x(), word.y(), word.width(), word.height()),
-                            true,
-                            false);
+                    for (TextChar ch : word.chars()) {
+                        if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
+                            continue;
+                        }
+                        page.redactInRect(
+                                new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
+                                true,
+                                false);
+                    }
                 }
             }
         }

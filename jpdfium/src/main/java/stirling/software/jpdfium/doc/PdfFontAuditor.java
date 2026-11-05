@@ -99,7 +99,10 @@ public final class PdfFontAuditor {
                 int objCount;
                 try {
                     objCount = (int) PageEditBindings.FPDFPage_CountObjects.invokeExact(rawPage);
-                } catch (Throwable t) { continue; }
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException("Failed to count page objects on page " + pageIdx, t);
+                }
 
                 Set<Long> seenOnPage = new HashSet<>();
                 for (int i = 0; i < objCount; i++) {
@@ -108,43 +111,50 @@ public final class PdfFontAuditor {
                         obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                     } catch (Throwable t) {
                         NativeRuntime.rethrowFatal(t);
-                        continue;
+                        throw new JPDFiumException("Failed to get page object " + i + " on page " + pageIdx, t);
                     }
                     if (obj.equals(MemorySegment.NULL)) continue;
                     scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
                 }
 
-                if (AnnotationBindings.FPDFAnnot_GetObjectCount != null
-                        && AnnotationBindings.FPDFAnnot_GetObject != null) {
+                if (AnnotationBindings.FPDFPage_GetAnnotCount != null) {
                     int annotCount = 0;
                     try {
                         annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
                     } catch (Throwable t) {
                         NativeRuntime.rethrowFatal(t);
+                        throw new JPDFiumException("Failed to get annotation count on page " + pageIdx, t);
                     }
-                    for (int a = 0; a < annotCount; a++) {
-                        MemorySegment annot = MemorySegment.NULL;
-                        try {
-                            annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, a);
-                        } catch (Throwable t) {
-                            NativeRuntime.rethrowFatal(t);
+                    if (annotCount > 0) {
+                        if (AnnotationBindings.FPDFAnnot_GetObjectCount == null
+                                || AnnotationBindings.FPDFAnnot_GetObject == null) {
+                            throw new JPDFiumException("Annotation font inspection is required but not supported by this PDFium build");
                         }
-                        if (annot.equals(MemorySegment.NULL)) continue;
-                        try {
-                            int annotObjCount = (int) AnnotationBindings.FPDFAnnot_GetObjectCount.invokeExact(annot);
-                            for (int j = 0; j < annotObjCount; j++) {
-                                MemorySegment obj = (MemorySegment) AnnotationBindings.FPDFAnnot_GetObject.invokeExact(annot, j);
-                                if (obj.equals(MemorySegment.NULL)) continue;
-                                scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
-                            }
-                        } catch (Throwable t) {
-                            NativeRuntime.rethrowFatal(t);
-                            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
-                        } finally {
+                        for (int a = 0; a < annotCount; a++) {
+                            MemorySegment annot = MemorySegment.NULL;
                             try {
-                                AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
+                                annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, a);
                             } catch (Throwable t) {
                                 NativeRuntime.rethrowFatal(t);
+                                throw new JPDFiumException("Failed to get annotation " + a + " on page " + pageIdx, t);
+                            }
+                            if (annot.equals(MemorySegment.NULL)) continue;
+                            try {
+                                int annotObjCount = (int) AnnotationBindings.FPDFAnnot_GetObjectCount.invokeExact(annot);
+                                for (int j = 0; j < annotObjCount; j++) {
+                                    MemorySegment obj = (MemorySegment) AnnotationBindings.FPDFAnnot_GetObject.invokeExact(annot, j);
+                                    if (obj.equals(MemorySegment.NULL)) continue;
+                                    scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
+                                }
+                            } catch (Throwable t) {
+                                NativeRuntime.rethrowFatal(t);
+                                throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+                            } finally {
+                                try {
+                                    AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
+                                } catch (Throwable t) {
+                                    NativeRuntime.rethrowFatal(t);
+                                }
                             }
                         }
                     }
@@ -158,6 +168,7 @@ public final class PdfFontAuditor {
             FontBuilder existing = merged.get(fb.baseName);
             if (existing != null) {
                 existing.pages.addAll(fb.pages);
+                existing.embedded = existing.embedded && fb.embedded;
             } else {
                 merged.put(fb.baseName, fb);
             }
@@ -194,7 +205,7 @@ public final class PdfFontAuditor {
             Set<Long> seenOnPage,
             int depth) {
         if (depth > 32) {
-            throw new JPDFiumException("Form XObject nesting exceeds maximum supported depth (32)");
+            return;
         }
         int type;
         try {
@@ -249,7 +260,7 @@ public final class PdfFontAuditor {
                 child = PageEditBindings.formObject(obj, i);
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
-                continue;
+                throw new JPDFiumException("Failed to get form child object " + i, t);
             }
             if (!child.equals(MemorySegment.NULL)) {
                 scanObject(child, pageIdx, fontMap, seenOnPage, depth + 1);

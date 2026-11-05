@@ -124,13 +124,14 @@ public final class PdfVersionConverter {
      */
     public static byte[] forceVersion(byte[] input, PdfVersion version) {
         if (input == null || version == null) return null;
-        if (QpdfLib.isForceVersionSupported()) {
-            byte[] out = QpdfLib.forceVersionToBytes(input, version.toString());
-            if (out != null) return out;
+        if (!QpdfLib.isForceVersionSupported()) {
+            throw new JPDFiumException("forceVersion requires native QPDF version rewrite support");
         }
-        try (stirling.software.jpdfium.PdfDocument doc = stirling.software.jpdfium.PdfDocument.open(input)) {
-            return saveWithVersionToBytes(doc.rawHandle(), version);
+        byte[] out = QpdfLib.forceVersionToBytes(input, version.toString());
+        if (out == null) {
+            throw new JPDFiumException("forceVersion failed to rewrite PDF bytes to version " + version);
         }
+        return out;
     }
 
     /**

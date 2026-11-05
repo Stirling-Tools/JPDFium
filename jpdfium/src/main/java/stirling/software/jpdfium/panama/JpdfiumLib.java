@@ -1410,7 +1410,7 @@ public final class JpdfiumLib {
     }
 
     private static final MethodHandle jpdfium_page_mark_redacted =
-            Symbols.downcall("jpdfium_page_mark_redacted",
+            Symbols.downcallOptional("jpdfium_page_mark_redacted",
                     FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
 
     public static void pageMarkRedacted(long page) {
@@ -1421,6 +1421,22 @@ public final class JpdfiumLib {
             } catch (Throwable t) {
                 NativeRuntime.rethrowFatal(t);
                 throw new JPDFiumException("jpdfium_page_mark_redacted failed", t);
+            }
+        }
+    }
+
+    private static final MethodHandle jpdfium_page_mark_redaction_incomplete =
+            Symbols.downcallOptional("jpdfium_page_mark_redaction_incomplete",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    public static void pageMarkRedactionIncomplete(long page) {
+        if (jpdfium_page_mark_redaction_incomplete != null) {
+            try {
+                int rc = (int) jpdfium_page_mark_redaction_incomplete.invokeExact(page);
+                check(rc, "pageMarkRedactionIncomplete");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("jpdfium_page_mark_redaction_incomplete failed", t);
             }
         }
     }
