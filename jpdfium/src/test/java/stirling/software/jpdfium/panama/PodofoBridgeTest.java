@@ -7,6 +7,9 @@ import java.nio.file.Path;
 import java.util.Map;
 
 import stirling.software.jpdfium.doc.PdfFontEmbedder;
+import stirling.software.jpdfium.doc.CompressOptions;
+import stirling.software.jpdfium.doc.PdfCompressor;
+import stirling.software.jpdfium.PdfDocument;
 
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -42,5 +45,11 @@ class PodofoBridgeTest {
 
         byte[] deduped = PodofoLib.dedupImages(input);
         assertTrue(deduped != null && deduped.length > 0, "image dedup returned no bytes");
+
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            byte[] compressed = PdfCompressor.compress(doc,
+                    CompressOptions.builder().usePodofoImageDedup(true).build()).bytes();
+            assertTrue(compressed.length > 0, "PoDoFo compression returned no bytes");
+        }
     }
 }
