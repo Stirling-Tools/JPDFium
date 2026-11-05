@@ -324,7 +324,11 @@ if(JPDFIUM_USE_PDFIUM)
 
     # PoDoFo is a normal dependency: font-program replacement, conservative
     # repair and duplicate-image removal are part of the native surface.
-    find_package(podofo CONFIG QUIET)
+    option(JPDFIUM_USE_SYSTEM_PODOFO
+        "Use an installed PoDoFo instead of the bundled static build" OFF)
+    if(JPDFIUM_USE_SYSTEM_PODOFO)
+        find_package(podofo CONFIG QUIET)
+    endif()
     if(NOT podofo_FOUND)
         include(FetchContent)
         FetchContent_Declare(podofo
