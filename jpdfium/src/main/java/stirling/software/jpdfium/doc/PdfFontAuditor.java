@@ -19,9 +19,11 @@ import java.util.TreeSet;
 /**
  * Audit fonts used in a PDF document.
  *
- * <p>Enumerates every distinct font referenced by text objects on each page,
- * reporting the font name, family, weight, flags, embedding status, italic
- * angle, and font data size.
+ * <p>Enumerates every distinct font referenced by text objects on each page and
+ * inside nested form XObjects, reporting the font name, family, weight, flags,
+ * embedding status, italic angle, and font data size. Annotation appearance
+ * streams are serialized streams in PDFium, not object trees, so callers that
+ * need a strict font audit must flatten annotations before auditing.
  *
  * <pre>{@code
  * try (PdfDocument doc = PdfDocument.open(Path.of("input.pdf"))) {
@@ -39,6 +41,9 @@ import java.util.TreeSet;
 public final class PdfFontAuditor {
 
     private PdfFontAuditor() {}
+
+    private static final int FPDF_PAGEOBJ_TEXT = 1;
+    private static final int FPDF_PAGEOBJ_FORM = 5;
 
     /**
      * Information about a single font used in the document.
@@ -101,41 +106,7 @@ public final class PdfFontAuditor {
                         obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
                     } catch (Throwable t) { continue; }
                     if (obj.equals(MemorySegment.NULL)) continue;
-
-                    int type;
-                    try {
-                        type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
-                    } catch (Throwable t) { continue; }
-
-                    if (type != 1) continue; // FPDF_PAGEOBJ_TEXT = 1
-
-                    MemorySegment font;
-                    try {
-                        font = (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
-                    } catch (Throwable t) { continue; }
-                    if (font.equals(MemorySegment.NULL)) continue;
-
-                    // Deduplicate by font handle address within a page
-                    long fontAddr = font.address();
-                    if (!seenOnPage.add(fontAddr)) continue;
-
-                    String baseName = getFontBaseName(font);
-                    String key = baseName + "@" + fontAddr;
-
-                    FontBuilder fb = fontMap.get(key);
-                    if (fb == null) {
-                        fb = new FontBuilder();
-                        fb.baseName = baseName;
-                        fb.familyName = getFontFamilyName(font);
-                        fb.embedded = getFontIsEmbedded(font);
-                        fb.weight = getFontWeight(font);
-                        fb.flags = getFontFlags(font);
-                        fb.italicAngle = getFontItalicAngle(font);
-                        fb.fontDataSize = getFontDataSize(font);
-                        fb.pages = new TreeSet<>();
-                        fontMap.put(key, fb);
-                    }
-                    fb.pages.add(pageIdx);
+                    scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
                 }
             }
         }
@@ -173,6 +144,67 @@ public final class PdfFontAuditor {
      */
     public static boolean hasNonEmbeddedFonts(PdfDocument doc) {
         return !audit(doc).nonEmbeddedFonts().isEmpty();
+    }
+
+    private static void scanObject(
+            MemorySegment obj,
+            int pageIdx,
+            Map<String, FontBuilder> fontMap,
+            Set<Long> seenOnPage,
+            int depth) {
+        if (depth > 32) return;
+        int type;
+        try {
+            type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
+        } catch (Throwable t) {
+            return;
+        }
+        if (type == FPDF_PAGEOBJ_TEXT) {
+            MemorySegment font;
+            try {
+                font = (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
+            } catch (Throwable t) {
+                return;
+            }
+            if (font.equals(MemorySegment.NULL)) return;
+            long fontAddr = font.address();
+            if (!seenOnPage.add(fontAddr)) return;
+            String baseName = getFontBaseName(font);
+            String key = baseName + "@" + fontAddr;
+            FontBuilder fb = fontMap.get(key);
+            if (fb == null) {
+                fb = new FontBuilder();
+                fb.baseName = baseName;
+                fb.familyName = getFontFamilyName(font);
+                fb.embedded = getFontIsEmbedded(font);
+                fb.weight = getFontWeight(font);
+                fb.flags = getFontFlags(font);
+                fb.italicAngle = getFontItalicAngle(font);
+                fb.fontDataSize = getFontDataSize(font);
+                fb.pages = new TreeSet<>();
+                fontMap.put(key, fb);
+            }
+            fb.pages.add(pageIdx);
+            return;
+        }
+        if (type != FPDF_PAGEOBJ_FORM) return;
+        int children;
+        try {
+            children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
+        } catch (Throwable t) {
+            return;
+        }
+        for (int i = 0; i < children; i++) {
+            MemorySegment child;
+            try {
+                child = PageEditBindings.formObject(obj, i);
+            } catch (Throwable t) {
+                continue;
+            }
+            if (!child.equals(MemorySegment.NULL)) {
+                scanObject(child, pageIdx, fontMap, seenOnPage, depth + 1);
+            }
+        }
     }
 
     private static String getFontBaseName(MemorySegment font) {

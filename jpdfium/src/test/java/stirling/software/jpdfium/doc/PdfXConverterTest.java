@@ -7,6 +7,8 @@ import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.font.PDType1Font;
+import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDStream;
@@ -30,8 +32,10 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.model.PdfVersion;
 import stirling.software.jpdfium.exception.JPDFiumException;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -286,15 +290,48 @@ class PdfXConverterTest {
     }
 
     @Test
-    void unsupportedStandardsFailBeforeTouchingTheDocument() throws Exception {
-        JPDFiumException ex1A = assertThrows(JPDFiumException.class,
-                () -> PdfXConverter.applyMetadata(new byte[] {1, 2, 3},
-                        PdfXOptions.builder().standard(PdfXStandard.PDF_X_1A).build()));
-        assertTrue(ex1A.getMessage().contains("not supported"), ex1A.getMessage());
-        JPDFiumException ex6 = assertThrows(JPDFiumException.class,
-                () -> PdfXConverter.applyMetadata(new byte[] {1, 2, 3},
-                        PdfXOptions.builder().standard(PdfXStandard.PDF_X_6).build()));
-        assertTrue(ex6.getMessage().contains("not supported"), ex6.getMessage());
+    void versionConverterWritesRequestedVersion() throws Exception {
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        try (var doc = PdfDocument.open(input)) {
+            for (PdfVersion v :
+                    PdfVersion.values()) {
+                byte[] out = PdfVersionConverter.saveWithVersionToBytes(doc.rawHandle(), v);
+                assertTrue(new String(out, 0, 8, StandardCharsets.ISO_8859_1)
+                                .startsWith("%PDF-" + v),
+                        "version converter wrote the wrong header for " + v);
+            }
+            Path file = Files.createTempFile("jpdfium-version-", ".pdf");
+            try {
+                PdfVersionConverter.saveWithVersion(
+                        doc.rawHandle(), PdfVersion.V2_0, file);
+                byte[] head = Files.readAllBytes(file);
+                assertTrue(new String(head, 0, 8, StandardCharsets.ISO_8859_1)
+                                .startsWith("%PDF-2.0"),
+                        "file version converter wrote a non-2.0 header");
+            } finally {
+                Files.deleteIfExists(file);
+            }
+        }
+    }
+
+    @Test
+    void everyStandardWritesItsGtsNamesAndBaseVersion() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] input = Files.readAllBytes(resource("/pdfs/general/minimal.pdf"));
+        for (PdfXStandard standard : PdfXStandard.values()) {
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(standard)
+                    .useCompactCmyk()
+                    .build();
+            byte[] out = PdfXConverter.applyMetadata(input, options);
+            String text = new String(out, StandardCharsets.ISO_8859_1);
+            assertTrue(text.startsWith("%PDF-" + standard.pdfVersion().substring(4)),
+                    standard + " base version missing: " + text.substring(0, 16));
+            assertTrue(text.contains(standard.gtsVersion()), standard + " GTS version missing");
+            assertTrue(text.contains(standard.gtsConformance()),
+                    standard + " GTS conformance missing");
+            PdfXConverter.checkMetadata(out, options);
+        }
     }
 
     @Test
@@ -341,19 +378,26 @@ class PdfXConverterTest {
         Path input = resource("/pdfs/general/basic-text.pdf");
         Path output = Files.createTempFile("jpdfium-pdfx-stream-", ".pdf");
         try {
-            PdfXOptions options = PdfXOptions.builder()
-                    .standard(PdfXStandard.PDF_X_4)
-                    .useCompactCmyk()
-                    .build();
-            PdfXConverter.applyMetadata(input, output, options);
-            byte[] bytes = Files.readAllBytes(output);
-            PdfXConverter.checkMetadata(bytes, options);
-            try (PDDocument pdfbox = Loader.loadPDF(output.toFile())) {
-                assertNotNull(pdfbox.getDocumentCatalog().getMetadata(),
-                        "streamed output has no XMP metadata");
-                assertTrue(pdfbox.getDocumentCatalog().getOutputIntents() != null
-                                && !pdfbox.getDocumentCatalog().getOutputIntents().isEmpty(),
-                        "streamed output has no output intent");
+            for (PdfXStandard standard : PdfXStandard.values()) {
+                PdfXOptions options = PdfXOptions.builder()
+                        .standard(standard)
+                        .useCompactCmyk()
+                        .build();
+                PdfXConverter.applyMetadata(input, output, options);
+                byte[] bytes = Files.readAllBytes(output);
+                PdfXConverter.checkMetadata(bytes, options);
+                try (PDDocument pdfbox = Loader.loadPDF(output.toFile())) {
+                    assertNotNull(pdfbox.getDocumentCatalog().getMetadata(),
+                            "streamed output has no XMP metadata");
+                    assertTrue(pdfbox.getDocumentCatalog().getOutputIntents() != null
+                                    && !pdfbox.getDocumentCatalog().getOutputIntents().isEmpty(),
+                            "streamed output has no output intent");
+                    assertEquals(null, pdfbox.getDocumentCatalog().getVersion(),
+                            standard + " left a catalog /Version override");
+                    assertTrue(pdfbox.getVersion() == Float.parseFloat(
+                                    standard.pdfVersion().substring(4)),
+                            standard + " header version is wrong");
+                }
             }
         } finally {
             Files.deleteIfExists(output);
@@ -450,6 +494,79 @@ class PdfXConverterTest {
                     () -> PdfXConverter.applyMetadata(doc, options));
             assertFalse(doc.isContentModified(),
                     "a read-only transparency preflight must not mark the document modified");
+        }
+    }
+
+    @Test
+    void optionsWriteTitleTrappedAndDates() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .title("PDF/X title")
+                .requireEmbeddedFonts(false)
+                .build();
+        byte[] out = PdfXConverter.applyMetadata(input, options);
+        try (PDDocument pdfbox = Loader.loadPDF(out)) {
+            assertEquals("PDF/X title", pdfbox.getDocumentInformation().getTitle());
+            assertEquals("False", pdfbox.getDocumentInformation().getTrapped());
+            assertNotNull(pdfbox.getDocumentInformation().getCreationDate());
+            assertNotNull(pdfbox.getDocumentInformation().getModificationDate());
+        }
+    }
+
+    @Test
+    void requireEmbeddedFontsRejectsAllOverloadsAndLeavesDestinationUntouched() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        PdfXOptions options = PdfXOptions.builder()
+                .standard(PdfXStandard.PDF_X_4)
+                .outputIntentProfile(icc)
+                .conditionIdentifier("FOGRA39")
+                .info("Coated FOGRA39")
+                .requireEmbeddedFonts(true)
+                .build();
+        assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(input, options));
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(doc, options));
+        }
+        Path source = Files.createTempFile("jpdfium-font-source-", ".pdf");
+        Path output = Files.createTempFile("jpdfium-font-output-", ".pdf");
+        byte[] sentinel = "untouched".getBytes(StandardCharsets.US_ASCII);
+        try {
+            Files.write(source, input);
+            Files.write(output, sentinel);
+            assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(source, output, options));
+            assertArrayEquals(sentinel, Files.readAllBytes(output),
+                    "a rejected conversion must not replace the destination");
+        } finally {
+            Files.deleteIfExists(source);
+            Files.deleteIfExists(output);
+        }
+    }
+
+    private static byte[] nonEmbeddedTextPdf() throws Exception {
+        try (PDDocument pdfbox = new PDDocument()) {
+            PDPage page = new PDPage();
+            pdfbox.addPage(page);
+            try (PDPageContentStream content = new PDPageContentStream(pdfbox, page)) {
+                content.beginText();
+                content.setFont(new PDType1Font(Standard14Fonts.FontName.HELVETICA), 12);
+                content.newLineAtOffset(72, 720);
+                content.showText("Helvetica");
+                content.endText();
+            }
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            pdfbox.save(bytes);
+            return bytes.toByteArray();
         }
     }
 

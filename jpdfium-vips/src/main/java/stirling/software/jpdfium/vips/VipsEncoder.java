@@ -266,8 +266,10 @@ public final class VipsEncoder {
 
     private static VipsOption[] encodeMultiPageOptions(
             VipsEncodeOptions opts, int pageHeight, int bitDepth) {
-        VipsOption[] base = buildOptions(opts);
         boolean customBitDepth = bitDepth < 8;
+        VipsOption[] base = customBitDepth
+                ? buildTiffOptions(opts, VipsForeignTiffPredictor.FOREIGN_TIFF_PREDICTOR_NONE)
+                : buildOptions(opts);
         VipsOption[] options = Arrays.copyOf(base, base.length + (customBitDepth ? 2 : 1));
         options[base.length] = VipsOption.Int("page-height", pageHeight);
         if (customBitDepth) {
@@ -354,11 +356,16 @@ public final class VipsEncoder {
     }
 
     private static VipsOption[] buildTiffOptions(VipsEncodeOptions opts) {
+        return buildTiffOptions(opts, VipsForeignTiffPredictor.FOREIGN_TIFF_PREDICTOR_HORIZONTAL);
+    }
+
+    private static VipsOption[] buildTiffOptions(
+            VipsEncodeOptions opts, VipsForeignTiffPredictor predictor) {
         List<VipsOption> list = new ArrayList<>();
         list.add(VipsOption.Int("Q", opts.quality()));
         if (opts.lossless()) list.add(VipsOption.Boolean("lossless", true));
         list.add(VipsOption.Enum("compression", VipsForeignTiffCompression.FOREIGN_TIFF_COMPRESSION_DEFLATE));
-        list.add(VipsOption.Enum("predictor", VipsForeignTiffPredictor.FOREIGN_TIFF_PREDICTOR_HORIZONTAL));
+        list.add(VipsOption.Enum("predictor", predictor));
         list.add(VipsOption.Boolean("strip", true));
         return list.toArray(VipsOption[]::new);
     }

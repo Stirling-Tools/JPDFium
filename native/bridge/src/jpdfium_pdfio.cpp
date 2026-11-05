@@ -11,6 +11,10 @@
 #include <memory>
 #include <type_traits>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
+
 #include "jpdfium.h"
 #include "jpdfium_internal.h"
 
@@ -25,7 +29,7 @@ static bool pdfio_error_cb(pdfio_file_t*, const char* message, void* data) {
         strncpy(errBuf, message, 511);
         errBuf[511] = '\0';
     }
-    return false;  // stop on fatal
+    return true;  // continue; the caller gets the final failure status
 }
 
 namespace {
@@ -71,6 +75,7 @@ JPDFIUM_EXPORT int32_t jpdfium_pdfio_try_repair(const uint8_t* input, int64_t in
         int fdOut = mkstemp(tmpOut);
         if (fdOut < 0) return JPDFIUM_REPAIR_FAILED;
         close(fdOut);
+        unlink(tmpOut);
         ScopedUnlink unlinkOut(tmpOut);
 
         // PDFio internally calls load_xref, falling back to repair_xref.
