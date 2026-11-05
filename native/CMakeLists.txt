@@ -338,6 +338,18 @@ if(JPDFIUM_USE_PDFIUM)
         set(PODOFO_WITH_AFDKO OFF CACHE BOOL "" FORCE)
         FetchContent_MakeAvailable(podofo)
     endif()
+    # PoDoFo 1.1.2 does not build with the project's global -Werror flags.
+    # Its own warnings are not JPDFium's warnings; compile the third-party
+    # targets without promoting them to errors.
+    foreach(podofo_target podofo_static podofo_shared podofo_private podofo_3rdparty)
+        if(TARGET ${podofo_target})
+            if(MSVC)
+                target_compile_options(${podofo_target} PRIVATE /w)
+            else()
+                target_compile_options(${podofo_target} PRIVATE -w)
+            endif()
+        endif()
+    endforeach()
     target_link_libraries(jpdfium PRIVATE podofo::podofo)
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
     if(podofo_FOUND)
