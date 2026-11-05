@@ -56,4 +56,20 @@ class PdfTextExtractorTest {
         assertTrue(newline.isNewline());
         assertTrue(newline.isWhitespace());
     }
+
+    @Test
+    void parseKeepsTheSignOfNegativeFractions() {
+        String json = "[{\"i\":0,\"u\":65,\"x\":-0.5,\"y\":-12.25,\"w\":8,\"h\":12,\"font\":\"F\",\"size\":9}]";
+        TextChar ch = PdfTextExtractor.parseCharsJson(json).getFirst();
+        assertEquals(-0.5f, ch.x(), 1e-6f);
+        assertEquals(-12.25f, ch.y(), 1e-6f);
+    }
+
+    @Test
+    void parseReadsExponentNotation() {
+        String json = "[{\"i\":0,\"u\":65,\"x\":1e-05,\"y\":2.5e+03,\"w\":8,\"h\":12,\"font\":\"F\",\"size\":9}]";
+        TextChar ch = PdfTextExtractor.parseCharsJson(json).getFirst();
+        assertEquals(1e-5f, ch.x(), 1e-9f);
+        assertEquals(2500f, ch.y(), 1e-3f);
+    }
 }

@@ -191,22 +191,26 @@ public final class PdfTextExtractor {
         try {
             int dot = -1;
             for (int i = start; i < end; i++) {
-                if (s.charAt(i) == '.') {
+                char c = s.charAt(i);
+                if (c == 'e' || c == 'E') {
+                    return Float.parseFloat(s.substring(start, end));
+                }
+                if (c == '.' && dot < 0) {
                     dot = i;
-                    break;
                 }
             }
             if (dot < 0) {
                 return (float) parseIntFast(s, start, end);
             }
-            int intPart = parseIntFast(s, start, dot);
+            boolean negative = start < end && s.charAt(start) == '-';
+            int intPart = Math.abs(parseIntFast(s, start, dot));
             int fracPart = parseIntFast(s, dot + 1, end);
             int fracDigits = end - (dot + 1);
             float frac = fracPart;
             for (int i = 0; i < fracDigits; i++) {
                 frac /= 10.0f;
             }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
+            return negative ? -(intPart + frac) : intPart + frac;
         } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
             try {
                 return Float.parseFloat(s.substring(start, end));
