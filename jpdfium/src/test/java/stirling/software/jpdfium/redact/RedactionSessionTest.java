@@ -363,7 +363,13 @@ class RedactionSessionTest {
             run2 = doc.saveBytes();
         }
 
-        assertArrayEquals(run1, run2, "Redaction output bytes must be deterministic across identical runs");
+        // PDFium's GenerateFileId() now uses random numbers for the trailer /ID
+        // (upstream commit 0a23e6f43), so the identifier differs on every save.
+        // The identifier is metadata, not document content: compare the rest of
+        // the bytes so a real change to a content stream, object ordering or
+        // trailer still fails.
+        assertArrayEquals(normalizeFileId(run1), normalizeFileId(run2),
+                "Redaction output must be deterministic apart from the random trailer /ID");
     }
 
     /**
@@ -417,5 +423,14 @@ class RedactionSessionTest {
             probe = session.markWordsOnPage(0, new String[]{probeWord}, 0xFF000000, 0f, false, false, false);
         }
         assumeTrue(probe > 0, "the loaded native library does not read the page's text");
+    }
+
+    /** Mask the random trailer /ID PDFium writes on every save. */
+    private static byte[] normalizeFileId(byte[] pdf) {
+        String text = new String(pdf, StandardCharsets.ISO_8859_1);
+        String normalized = text.replaceAll(
+                "/ID\\s*\\[\\s*<[0-9A-Fa-f]*>\\s*<[0-9A-Fa-f]*>\\s*]",
+                "/ID[<FILEID><FILEID>]");
+        return normalized.getBytes(StandardCharsets.ISO_8859_1);
     }
 }
