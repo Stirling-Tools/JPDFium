@@ -283,6 +283,7 @@ class PdfXConverterTest {
                 .standard(PdfXStandard.PDF_X_3)
                 .outputIntentProfile(icc)
                 .conditionIdentifier("FOGRA39")
+                .title("PDF/X-3 Document")
                 .build();
         byte[] out = PdfXConverter.applyMetadata(input, options);
         String text = new String(out, StandardCharsets.ISO_8859_1);
@@ -324,6 +325,7 @@ class PdfXConverterTest {
             PdfXOptions options = PdfXOptions.builder()
                     .standard(standard)
                     .useCompactCmyk()
+                    .title("Every Standard Test")
                     .build();
             byte[] out = PdfXConverter.applyMetadata(input, options);
             String text = new String(out, StandardCharsets.ISO_8859_1);

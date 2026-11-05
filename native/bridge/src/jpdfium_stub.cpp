@@ -1572,7 +1572,7 @@ int32_t jpdfium_qpdf_optimize_file(const char* in_path, const char* out_path, in
 }
 
 int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
-                                       const char* /*version*/) {
+                                        const char* /*version*/) {
     return stub_copy_pdf_file(in_path, out_path);
 }
 
