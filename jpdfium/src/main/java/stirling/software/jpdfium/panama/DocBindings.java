@@ -48,6 +48,14 @@ public final class DocBindings {
     public static final MethodHandle FPDF_CloseDocument = downcall("FPDF_CloseDocument",
             FunctionDescriptor.ofVoid(ADDRESS));
 
+    /** Set a document information metadata value (EmbedPDF extension). */
+    public static final MethodHandle EPDF_SetMetaText = downcall("EPDF_SetMetaText",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+
+    /** Set the document /Trapped status (EmbedPDF extension). */
+    public static final MethodHandle EPDF_SetMetaTrapped = downcall("EPDF_SetMetaTrapped",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
+
     /** Get the PDF file version (e.g. 14 for PDF 1.4). Returns 1 on success. */
     public static final MethodHandle FPDF_GetFileVersion = downcall("FPDF_GetFileVersion",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));

@@ -25,8 +25,10 @@ import stirling.software.jpdfium.panama.DocBindings;
 import stirling.software.jpdfium.panama.EmbedPdfDocumentBindings;
 import stirling.software.jpdfium.panama.EmbedPdfTextBindings;
 import stirling.software.jpdfium.panama.JpdfiumLib;
+import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
+import stirling.software.jpdfium.panama.PdfiumRuntime;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -35,6 +37,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemoryLayout;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
@@ -64,7 +67,7 @@ import java.util.function.ObjIntConsumer;
  * <p>Independent {@code PdfDocument} instances may be used from separate threads:
  * PDFium itself is not thread-safe even across independent documents, so every
  * native call is serialised by the
- * {@link stirling.software.jpdfium.panama.PdfiumRuntime} execution domain.
+ * {@link PdfiumRuntime} execution domain.
  * That makes concurrent use safe, but PDFium work does not run in parallel - the
  * throughput ceiling is roughly one thread's worth of PDFium time.
  */
@@ -1424,6 +1427,39 @@ public final class PdfDocument implements AutoCloseable {
         JpdfiumLib.docSetSanitizeOnSave(handle, enable);
     }
 
+    /** Set a document information metadata value through the EmbedPDF extension. */
+    public void setMetadata(String tag, String value) {
+        ensureOpen();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment tagSeg = arena.allocateFrom(tag);
+            MemorySegment valueSeg = FfmHelper.toWideString(arena, value);
+            int ok = (int) DocBindings.EPDF_SetMetaText.invokeExact(
+                    rawHandle(), tagSeg, valueSeg);
+            if (ok == 0) {
+                throw new JPDFiumException("EPDF_SetMetaText failed for " + tag);
+            }
+            markContentModified();
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw t instanceof JPDFiumException jpe ? jpe
+                    : new JPDFiumException("Failed to set metadata " + tag, t);
+        }
+    }
+
+    /** Set /Trapped to false. */
+    public void setTrappedFalse() {
+        ensureOpen();
+        try {
+            int ok = (int) DocBindings.EPDF_SetMetaTrapped.invokeExact(rawHandle(), 2);
+            if (ok == 0) throw new JPDFiumException("EPDF_SetMetaTrapped failed");
+            markContentModified();
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw t instanceof JPDFiumException jpe ? jpe
+                    : new JPDFiumException("Failed to set /Trapped", t);
+        }
+    }
+
     /**
      * Returns the raw FPDF_DOCUMENT MemorySegment for direct PDFium FFM calls.
      *
@@ -1434,7 +1470,7 @@ public final class PdfDocument implements AutoCloseable {
      *
      * <p><strong>Outside the execution-domain guarantee:</strong> direct use of
      * this handle bypasses the admission, batching, and lifecycle ordering that
-     * {@link stirling.software.jpdfium.panama.PdfiumRuntime} enforces for all
+     * {@link PdfiumRuntime} enforces for all
      * built-in operations. It keeps working, but the domain makes no promise
      * about it; prefer the typed API, which is the migration target for scoped
      * advanced access in a future major version.

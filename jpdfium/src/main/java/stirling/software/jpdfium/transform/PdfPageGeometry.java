@@ -5,9 +5,14 @@ import stirling.software.jpdfium.PdfPage;
 import stirling.software.jpdfium.doc.PdfAnnotations;
 import stirling.software.jpdfium.doc.PdfPageEditor;
 import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.exception.RedactIncompleteException;
+import stirling.software.jpdfium.exception.RedactUnverifiableException;
 import stirling.software.jpdfium.model.PageSize;
 import stirling.software.jpdfium.model.Rect;
 import stirling.software.jpdfium.panama.FormFillBindings;
+import stirling.software.jpdfium.text.PageText;
+import stirling.software.jpdfium.text.PdfTextExtractor;
+import stirling.software.jpdfium.text.TextChar;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 
 import java.lang.foreign.Arena;
@@ -115,8 +120,8 @@ public final class PdfPageGeometry {
      * is clipped from view.
      *
      * <p>A post-pass audit fails loudly with
-     * {@link stirling.software.jpdfium.exception.RedactIncompleteException} or
-     * {@link stirling.software.jpdfium.exception.RedactUnverifiableException}
+     * {@link RedactIncompleteException} or
+     * {@link RedactUnverifiableException}
      * when content survives or the audit cannot run. Incremental save is
      * refused afterwards; a full save is required.
      *
@@ -128,6 +133,63 @@ public final class PdfPageGeometry {
      */
     public static void cropAndRemoveContent(PdfDocument doc, int pageIndex, Rect rect) {
         cropAndRemoveContent(doc, pageIndex, rect, AUTO_CONTENT_MARGIN);
+    }
+
+    /**
+     * Hard crop that also removes a word crossing the crop edge. The normal
+     * crop keeps straddling words whole and clips their outside glyphs with the
+     * page box, which leaves that text extractable. This variant redacts the
+     * whole boundary-crossing word before applying the crop, so no outside
+     * text survives.
+     *
+     * @param doc       open PDF document
+     * @param pageIndex zero-based page index
+     * @param rect      crop rectangle in PDF points (x, y, width, height)
+     * @throws IllegalArgumentException if {@code rect} is invalid
+     */
+    public static void cropAndRemoveContentStrict(PdfDocument doc, int pageIndex, Rect rect) {
+        requireValidCrop(rect);
+        removeBoundaryCrossingText(doc, pageIndex, rect);
+        cropAndRemoveContent(doc, pageIndex, rect);
+    }
+
+    private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
+        PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
+        float epsilon = 0.01f;
+        try (PdfPage page = doc.page(pageIndex)) {
+            for (TextChar ch : text.chars()) {
+                if (!intersects(ch, crop) || isFullyInside(ch, crop)) {
+                    continue;
+                }
+                boolean removed =
+                        page.redactInRect(
+                                new Rect(
+                                        ch.x() - epsilon,
+                                        ch.y() - epsilon,
+                                        ch.width() + 2 * epsilon,
+                                        ch.height() + 2 * epsilon),
+                                true,
+                                false);
+                if (!removed) {
+                    throw new RedactIncompleteException(
+                            "strict crop could not remove a boundary-crossing glyph");
+                }
+            }
+        }
+    }
+
+    private static boolean intersects(TextChar ch, Rect crop) {
+        return ch.x() < crop.x() + crop.width()
+                && ch.x() + ch.width() > crop.x()
+                && ch.y() < crop.y() + crop.height()
+                && ch.y() + ch.height() > crop.y();
+    }
+
+    private static boolean isFullyInside(TextChar ch, Rect crop) {
+        return ch.x() >= crop.x()
+                && ch.y() >= crop.y()
+                && ch.x() + ch.width() <= crop.x() + crop.width()
+                && ch.y() + ch.height() <= crop.y() + crop.height();
     }
 
     /**

@@ -864,6 +864,35 @@ int setDocInfoFile(const char* in_path, const char* out_path, const char* const*
     }
 }
 
+int forceVersionFile(const char* in_path, const char* out_path, const char* version) {
+    if (!in_path || !out_path || !version || !*version) return -1;
+    try {
+        auto pdf = QPDF::create();
+        pdf->processFile(in_path);
+        pdf->getRoot().removeKey("/Version");
+
+        FILE* out = createOutputFile(out_path);
+        if (!out) return -1;
+        bool writerOwnsFile = false;
+        try {
+            QPDFWriter writer{*pdf};
+            writer.setOutputFile("jpdfium-out", out, true);
+            writerOwnsFile = true;
+            writer.forcePDFVersion(version);
+            WriterLock lock{-1};
+            writer.write();
+            return 0;
+        } catch (std::exception const& e) {
+            std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
+            if (!writerOwnsFile) std::fclose(out);
+            return -1;
+        }
+    } catch (std::exception const& e) {
+        std::fprintf(stderr, "jpdfium qpdf force version file: %s\n", e.what());
+        return -1;
+    }
+}
+
 QpdfResult decryptPdf(std::span<const uint8_t> input, const char* password) {
     try {
         auto qpdf = QPDF::create();
@@ -938,6 +967,11 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
                                              int32_t streamDataMode, int32_t decodeLevel) {
     return jpdfium_qpdf_optimize_ex(input, inputLen, output, outputLen, flags, compressionLevel,
                                     objectStreamMode, streamDataMode, decodeLevel, -1);
+}
+
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
+                                                       const char* version) {
+    return forceVersionFile(in_path, out_path, version);
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,

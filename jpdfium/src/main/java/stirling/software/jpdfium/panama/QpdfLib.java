@@ -245,6 +245,10 @@ public final class QpdfLib {
                     "jpdfium_qpdf_set_docinfo_file",
                     FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_INT,
                             ADDRESS));
+    private static final MethodHandle FORCE_VERSION_FILE_HANDLE =
+            Symbols.downcallOptionalUnguarded(
+                    "jpdfium_qpdf_force_version_file",
+                    FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
     private static final MethodHandle MERGE_FILES_HANDLE = Symbols.downcallOptionalUnguarded(
             "jpdfium_qpdf_merge_files",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, ADDRESS));
@@ -582,6 +586,43 @@ public final class QpdfLib {
     public static boolean setDocInfoToFile(Path input, Path output, Map<String, String> fields,
             String password) {
         return setDocInfoToFile(input, output, fields, password, 0);
+    }
+
+    /** True when the file-backed exact-version writer resolved. */
+    public static boolean isForceVersionFileSupported() {
+        return FORCE_VERSION_FILE_HANDLE != null;
+    }
+
+    /**
+     * Rewrite a PDF with an exact base version and no catalog /Version override.
+     * The output is staged and published atomically.
+     */
+    public static boolean forceVersionToFile(Path input, Path output, String version) {
+        if (FORCE_VERSION_FILE_HANDLE == null || input == null || output == null
+                || version == null || version.isBlank() || !Files.isReadable(input)) {
+            return false;
+        }
+        Semaphore held = acquireSlotOrThrow("force version");
+        Path staging = null;
+        try (QpdfCall call = new QpdfCall();
+                OutputTransaction tx = OutputTransaction.begin(output)) {
+            rejectAlias(List.of(input), output);
+            staging = tx.staging();
+            MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
+            MemorySegment outSeg = call.cString(staging.toAbsolutePath().toString());
+            int rc = (int) FORCE_VERSION_FILE_HANDLE.invokeExact(inSeg, outSeg,
+                    call.cString(version));
+            if (rc != 0) return false;
+            publish(staging, output, 0);
+            staging = null;
+            return true;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException("qpdf force version failed", t);
+        } finally {
+            deleteQuietly(staging);
+            releaseSlot(held);
+        }
     }
 
     /**

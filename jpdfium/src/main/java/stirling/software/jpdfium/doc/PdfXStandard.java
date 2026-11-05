@@ -1,15 +1,15 @@
 package stirling.software.jpdfium.doc;
 
 /**
- * PDF/X family metadata. Only PDF/X-3 and PDF/X-4 have metadata support; this
- * is not a compliance claim. PDF/X-1a and PDF/X-6 require additional
- * validation/flattening and are rejected.
+ * PDF/X family metadata. The intent/XMP bootstrap is available for every
+ * family member; this is not a compliance claim. PDF/X-1a and PDF/X-3 still
+ * reject transparency, and font embedding remains the caller's responsibility.
  */
 public enum PdfXStandard {
-    PDF_X_1A("PDF 1.3", "PDF/X-1:2001", "PDF/X-1a:2001", false),
+    PDF_X_1A("PDF 1.3", "PDF/X-1:2001", "PDF/X-1a:2001", true),
     PDF_X_3("PDF 1.3", "PDF/X-3:2002", "PDF/X-3:2002", true),
     PDF_X_4("PDF 1.6", "PDF/X-4", "PDF/X-4", true),
-    PDF_X_6("PDF 2.0", "PDF/X-6", "PDF/X-6", false);
+    PDF_X_6("PDF 2.0", "PDF/X-6", "PDF/X-6", true);
 
     private final String pdfVersion;
     private final String gtsVersion;
