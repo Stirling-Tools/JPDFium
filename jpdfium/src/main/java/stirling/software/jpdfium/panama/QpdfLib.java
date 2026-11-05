@@ -301,6 +301,12 @@ public final class QpdfLib {
      * Java heap.
      */
     public static boolean copyEncryptionToFile(Path input, Path output, Path source, String password) {
+        return copyEncryptionToFile(input, output, source, password, true);
+    }
+
+    /** As {@link #copyEncryptionToFile(Path, Path, Path, String)}; {@code durable=false} skips fsync. */
+    public static boolean copyEncryptionToFile(Path input, Path output, Path source, String password,
+                                               boolean durable) {
         if (input == null || output == null || source == null || password == null) {
             throw new IllegalArgumentException("input, output, source and password must not be null");
         }
@@ -316,7 +322,7 @@ public final class QpdfLib {
             throw new JPDFiumException("qpdf encryption copy interrupted while waiting for a job slot", e);
         }
         try (QpdfCall call = new QpdfCall();
-                OutputTransaction tx = OutputTransaction.begin(output)) {
+                OutputTransaction tx = OutputTransaction.begin(output, durable)) {
             rejectAlias(List.of(input, source), output);
             MemorySegment inSeg = call.cString(input.toAbsolutePath().toString());
             MemorySegment sourceSeg = call.cString(source.toAbsolutePath().toString());

@@ -17,6 +17,19 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `StorageOptions.Builder.durable(false)` and `PdfSecurity.copyEncryption(..., SaveOptions)`
+  skip the fsync for file outputs the caller reads back and deletes, such as
+  split parts streamed into a response.
+
+### Changed
+
+- `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
+  staging file without fsync and flush once when they publish the output, which
+  now gets the destination's permissions as other saves do. They previously
+  flushed the staging file and then renamed it without flushing the rename.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
