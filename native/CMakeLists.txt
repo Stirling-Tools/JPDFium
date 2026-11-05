@@ -360,6 +360,17 @@ if(JPDFIUM_USE_PDFIUM)
         endif()
     endforeach()
     target_link_libraries(jpdfium PRIVATE podofo::podofo)
+    if(NOT podofo_FOUND)
+        # PoDoFo 1.1.2 exposes its generated configuration header through
+        # directory-scoped include_directories; imported FetchContent targets
+        # do not propagate those to jpdfium.
+        target_include_directories(jpdfium PRIVATE
+            "${podofo_SOURCE_DIR}/src"
+            "${podofo_BINARY_DIR}/src/podofo/auxiliary"
+            "${podofo_BINARY_DIR}/src/podofo/private"
+            "${podofo_SOURCE_DIR}/3rdparty/adobe"
+            "${podofo_SOURCE_DIR}/3rdparty/chromium")
+    endif()
     target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
     if(podofo_FOUND)
         message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
