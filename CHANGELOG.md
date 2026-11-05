@@ -29,6 +29,11 @@ publishing workflows, not library releases, so they are not listed here.
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
   flushed the staging file and then renamed it without flushing the rename.
+- `PdfMerge.mergeFilesToFile`, `PdfSplit.extractPageRangeToFile`, the qpdf byte-array
+  merge and extract, and `PdfSecurity.copyEncryption` keep every stream's existing
+  encoding instead of deflating streams stored without a filter. Image-heavy inputs
+  with raw image data merge several times faster; such outputs are as large as their
+  inputs rather than compressed. `PdfOptimizer` still compresses on request.
 
 ### Fixed
 
