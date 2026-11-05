@@ -810,6 +810,15 @@ public final class PdfPage implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the characters {@link #extractTextJson()} describes in the packed little-endian
+     * layout of {@code jpdfium_text_get_chars_packed}, or null when the native bundle predates it.
+     */
+    public byte[] extractTextCharsPacked() {
+        ensureOpen();
+        return JpdfiumLib.textGetCharsPacked(handle);
+    }
+
     /** Returns raw character data as JSON: [{i,u,x,y,w,h,font,size}, ...] */
     public String extractTextJson() {
         ensureOpen();

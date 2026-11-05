@@ -3,6 +3,9 @@ package stirling.software.jpdfium.text;
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +34,8 @@ import java.util.List;
  */
 public final class PdfTextExtractor {
 
+    private static final int PACKED_RECORD_BYTES = 32;
+
     private PdfTextExtractor() {}
 
     /**
@@ -42,8 +47,10 @@ public final class PdfTextExtractor {
      */
     public static PageText extractPage(PdfDocument doc, int pageIndex) {
         try (PdfPage page = doc.page(pageIndex)) {
-            String json = page.extractTextJson();
-            List<TextChar> chars = parseCharsJson(json);
+            byte[] packed = page.extractTextCharsPacked();
+            List<TextChar> chars = packed != null
+                    ? parseCharsPacked(packed)
+                    : parseCharsJson(page.extractTextJson());
             List<TextLine> lines = buildLines(chars);
             return new PageText(pageIndex, lines, chars);
         }
@@ -85,6 +92,34 @@ public final class PdfTextExtractor {
      * handed to {@code Integer.parseInt}/{@code Float.parseFloat} as substrings.
      * Malformed objects are skipped wholesale.
      */
+    static List<TextChar> parseCharsPacked(byte[] packed) {
+        ByteBuffer buf = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
+        int count = buf.getInt();
+        int fontCount = buf.getInt();
+        int recordsStart = buf.position();
+        buf.position(recordsStart + count * PACKED_RECORD_BYTES);
+        String[] fonts = new String[fontCount];
+        for (int f = 0; f < fontCount; f++) {
+            int len = buf.getInt();
+            fonts[f] = new String(packed, buf.position(), len, StandardCharsets.UTF_8);
+            buf.position(buf.position() + len);
+        }
+        buf.position(recordsStart);
+        List<TextChar> chars = new ArrayList<>(count);
+        for (int c = 0; c < count; c++) {
+            int index = buf.getInt();
+            int unicode = buf.getInt();
+            float x = buf.getFloat();
+            float y = buf.getFloat();
+            float w = buf.getFloat();
+            float h = buf.getFloat();
+            float size = buf.getFloat();
+            int fontId = buf.getInt();
+            chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
+        }
+        return chars;
+    }
+
     static List<TextChar> parseCharsJson(String json) {
         if (json == null || json.isEmpty() || "[]".equals(json)) return new ArrayList<>();
         final int jsonLength = json.length();
@@ -191,22 +226,26 @@ public final class PdfTextExtractor {
         try {
             int dot = -1;
             for (int i = start; i < end; i++) {
-                if (s.charAt(i) == '.') {
+                char c = s.charAt(i);
+                if (c == 'e' || c == 'E') {
+                    return Float.parseFloat(s.substring(start, end));
+                }
+                if (c == '.' && dot < 0) {
                     dot = i;
-                    break;
                 }
             }
             if (dot < 0) {
                 return (float) parseIntFast(s, start, end);
             }
-            int intPart = parseIntFast(s, start, dot);
+            boolean negative = start < end && s.charAt(start) == '-';
+            int intPart = Math.abs(parseIntFast(s, start, dot));
             int fracPart = parseIntFast(s, dot + 1, end);
             int fracDigits = end - (dot + 1);
             float frac = fracPart;
             for (int i = 0; i < fracDigits; i++) {
                 frac /= 10.0f;
             }
-            return intPart >= 0 ? intPart + frac : intPart - frac;
+            return negative ? -(intPart + frac) : intPart + frac;
         } catch (NumberFormatException | IndexOutOfBoundsException | NullPointerException _) {
             try {
                 return Float.parseFloat(s.substring(start, end));
