@@ -605,8 +605,7 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_set_docinfo_file(const char* in_path, const 
                                                      const char* password);
 
 // Rewrite a file with an exact PDF version and no catalog /Version override.
-JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path,
-                                                       const char* out_path,
+JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
                                                        const char* version);
 
 // In-process qpdf structural sanitization (FFM, no CLI).
