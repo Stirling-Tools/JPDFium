@@ -216,6 +216,7 @@ JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content(int64_t page, float x, float 
 // content (AUTO).
 JPDFIUM_EXPORT int32_t jpdfium_crop_remove_content_ex(int64_t page, float x, float y, float w,
                                                       float h, float margin) JPDFIUM_NOEXCEPT;
+JPDFIUM_EXPORT int32_t jpdfium_page_mark_redacted(int64_t page) JPDFIUM_NOEXCEPT;
 // Content redaction. These entry points mutate the page content stream, so a
 // failure that already mutated (JPDFIUM_ERR_REDACT_INCOMPLETE) leaves part of the
 // original content in place: while such an incomplete redaction is pending, every

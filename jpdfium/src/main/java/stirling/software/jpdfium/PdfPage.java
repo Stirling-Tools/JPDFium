@@ -1368,11 +1368,14 @@ public final class PdfPage implements AutoCloseable {
             rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")), rect.y() + rect.height());
             int ok = (int) redactHandle.invokeExact(rawPageSegment, rectSeg, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
             if (ok != 0) {
-                PdfPageEditor.generateContent(rawPageSegment);
-                return true;
+                ownerDoc.markContentModified();
+                markRedacted();
+                return PdfPageEditor.generateContent(rawPageSegment);
             }
             return false;
         } catch (Throwable t) {
+            markRedacted();
+            NativeRuntime.rethrowFatal(t);
             throw new JPDFiumException("EPDFText_RedactInRect failed", t);
         }
     }
@@ -1422,6 +1425,15 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         ownerDoc.markContentModified();
         return handle;
+    }
+
+    /**
+     * Mark that content on this page has been redacted, refusing subsequent incremental saves.
+     */
+    public void markRedacted() {
+        ensureOpen();
+        ownerDoc.markContentModified();
+        JpdfiumLib.pageMarkRedacted(handle);
     }
 
     /**

@@ -98,7 +98,10 @@ public final class PdfXOptions {
         return convertLosslessImages;
     }
 
-    /** Whether conversion fails instead of returning a file with non-embedded fonts. */
+    /**
+     * Whether conversion fails when {@link PdfFontAuditor} finds a non-embedded font in page
+     * text or nested form XObjects.
+     */
     public boolean requireEmbeddedFonts() {
         return requireEmbeddedFonts;
     }
@@ -227,7 +230,7 @@ public final class PdfXOptions {
             return this;
         }
 
-        /** Fail when the result still contains a non-embedded font. */
+        /** Fail when the audit finds a non-embedded font in page text or form XObjects. */
         public Builder requireEmbeddedFonts(boolean value) {
             this.requireEmbeddedFonts = value;
             return this;

@@ -48,6 +48,18 @@ class CropContentContractTest {
     }
 
     @Test
+    void cropAndRemoveContentStrictRefusesIncrementalSave() throws Exception {
+        byte[] input = CropTestPdfGenerator.textGridPdf();
+        try (PdfDocument doc = PdfDocument.open(input)) {
+            Rect rect = new Rect(50, 50, 200, 200);
+            PdfPageGeometry.cropAndRemoveContentStrict(doc, 0, rect);
+            assertThrows(stirling.software.jpdfium.exception.RedactedSaveException.class,
+                    doc::saveBytesIncremental,
+                    "saveBytesIncremental() must be refused after successful cropAndRemoveContentStrict");
+        }
+    }
+
+    @Test
     void visibleRegionMatchesAClipOnlyCrop() throws Exception {
         byte[] input = CropTestPdfGenerator.twoToneImagePdf();
         byte[] reference = softCrop(input, KEEP_TOP);

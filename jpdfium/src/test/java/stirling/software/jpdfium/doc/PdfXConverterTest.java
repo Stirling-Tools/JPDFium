@@ -515,8 +515,34 @@ class PdfXConverterTest {
         try (PDDocument pdfbox = Loader.loadPDF(out)) {
             assertEquals("PDF/X title", pdfbox.getDocumentInformation().getTitle());
             assertEquals("False", pdfbox.getDocumentInformation().getTrapped());
+            assertTrue(pdfbox.getDocumentInformation().getCOSObject().getItem(COSName.getPDFName("Trapped")) instanceof COSName,
+                    "/Trapped in Info dictionary must be a PDF Name object");
             assertNotNull(pdfbox.getDocumentInformation().getCreationDate());
             assertNotNull(pdfbox.getDocumentInformation().getModificationDate());
+        }
+    }
+
+    @Test
+    void pdfx1aAndPdfx3WriteGtsPdfxVersionToInfoDictionary() throws Exception {
+        assumeTrue(PdfXConverter.isSupported(), "PDF/X native pipeline unavailable");
+        byte[] icc = findCmykProfile().orElse(null);
+        assumeTrue(icc != null, "no CMYK ICC profile available on this machine");
+        byte[] input = nonEmbeddedTextPdf();
+        for (PdfXStandard std : List.of(PdfXStandard.PDF_X_1A, PdfXStandard.PDF_X_3)) {
+            PdfXOptions options = PdfXOptions.builder()
+                    .standard(std)
+                    .outputIntentProfile(icc)
+                    .conditionIdentifier("FOGRA39")
+                    .info("Coated FOGRA39")
+                    .title("PDF/X title")
+                    .requireEmbeddedFonts(false)
+                    .build();
+            byte[] out = PdfXConverter.applyMetadata(input, options);
+            try (PDDocument pdfbox = Loader.loadPDF(out)) {
+                assertEquals(std.gtsVersion(),
+                        pdfbox.getDocumentInformation().getCustomMetadataValue("GTS_PDFXVersion"),
+                        "Expected GTS_PDFXVersion in Info dictionary for " + std);
+            }
         }
     }
 
@@ -533,9 +559,13 @@ class PdfXConverterTest {
                 .info("Coated FOGRA39")
                 .requireEmbeddedFonts(true)
                 .build();
-        assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(input, options));
+        JPDFiumException rej1 = assertThrows(JPDFiumException.class,
+                () -> PdfXConverter.applyMetadata(input, options));
+        assertTrue(rej1.getMessage().contains("embedded fonts"), rej1.getMessage());
         try (PdfDocument doc = PdfDocument.open(input)) {
-            assertThrows(JPDFiumException.class, () -> PdfXConverter.applyMetadata(doc, options));
+            JPDFiumException rej2 = assertThrows(JPDFiumException.class,
+                    () -> PdfXConverter.applyMetadata(doc, options));
+            assertTrue(rej2.getMessage().contains("embedded fonts"), rej2.getMessage());
         }
         Path source = Files.createTempFile("jpdfium-font-source-", ".pdf");
         Path output = Files.createTempFile("jpdfium-font-output-", ".pdf");
@@ -543,8 +573,9 @@ class PdfXConverterTest {
         try {
             Files.write(source, input);
             Files.write(output, sentinel);
-            assertThrows(JPDFiumException.class,
+            JPDFiumException rej3 = assertThrows(JPDFiumException.class,
                     () -> PdfXConverter.applyMetadata(source, output, options));
+            assertTrue(rej3.getMessage().contains("embedded fonts"), rej3.getMessage());
             assertArrayEquals(sentinel, Files.readAllBytes(output),
                     "a rejected conversion must not replace the destination");
         } finally {

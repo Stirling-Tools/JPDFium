@@ -55,10 +55,9 @@ public final class PdfXConverter {
         try (PdfDocument metadata = PdfDocument.open(converted)) {
             applyPageBoxes(metadata);
             applyDocumentInfo(metadata, options);
-            byte[] versioned = PdfVersionConverter.saveWithVersionToBytes(
-                    metadata.rawHandle(), versionFor(standard));
-            requireEmbeddedFonts(versioned, options);
-            return PdfDocument.open(versioned);
+            requireEmbeddedFonts(metadata, options);
+            return PdfDocument.open(PdfVersionConverter.saveWithVersionToBytes(
+                    metadata.rawHandle(), versionFor(standard)));
         }
     }
 
@@ -185,6 +184,9 @@ public final class PdfXConverter {
 
     private static void applyDocumentInfo(PdfDocument document, PdfXOptions options) {
         document.setTrappedFalse();
+        if (options.standard() == PdfXStandard.PDF_X_1A || options.standard() == PdfXStandard.PDF_X_3) {
+            document.setMetadata("GTS_PDFXVersion", options.standard().gtsVersion());
+        }
         if (options.title() != null && !options.title().isBlank()) {
             document.setMetadata("Title", options.title());
         }
@@ -206,13 +208,6 @@ public final class PdfXConverter {
                     page.setTrimBox(page.getCropBox().orElse(page.getMediaBox()));
                 }
             }
-        }
-    }
-
-    private static void requireEmbeddedFonts(byte[] pdf, PdfXOptions options) {
-        if (!options.requireEmbeddedFonts()) return;
-        try (PdfDocument document = PdfDocument.open(pdf)) {
-            requireEmbeddedFonts(document, options);
         }
     }
 
@@ -247,10 +242,9 @@ public final class PdfXConverter {
             try (PdfDocument metadata = PdfDocument.open(converted)) {
                 applyPageBoxes(metadata);
                 applyDocumentInfo(metadata, options);
-                byte[] versioned = PdfVersionConverter.saveWithVersionToBytes(
+                requireEmbeddedFonts(metadata, options);
+                return PdfVersionConverter.saveWithVersionToBytes(
                         metadata.rawHandle(), versionFor(standard));
-                requireEmbeddedFonts(versioned, options);
-                return versioned;
             }
         }
     }

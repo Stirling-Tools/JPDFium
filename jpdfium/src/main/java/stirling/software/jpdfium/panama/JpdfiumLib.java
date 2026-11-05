@@ -1409,6 +1409,22 @@ public final class JpdfiumLib {
         }
     }
 
+    private static final MethodHandle jpdfium_page_mark_redacted =
+            Symbols.downcallOptional("jpdfium_page_mark_redacted",
+                    FunctionDescriptor.of(JAVA_INT, JAVA_LONG));
+
+    public static void pageMarkRedacted(long page) {
+        if (jpdfium_page_mark_redacted != null) {
+            try {
+                int rc = (int) jpdfium_page_mark_redacted.invokeExact(page);
+                check(rc, "pageMarkRedacted");
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("jpdfium_page_mark_redacted failed", t);
+            }
+        }
+    }
+
     public static void redactPattern(long page, String pattern, int argb, boolean removeContent) {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cPattern = a.allocateFrom(pattern);

@@ -792,7 +792,15 @@ bool applyDocInfo(QPDF& pdf, const char* const* keys, const char* const* values,
         std::string key = keys[i];
         if (key.front() != '/') key.insert(key.begin(), '/');
         if (values[i]) {
-            info.replaceKey(key, QPDFObjectHandle::newUnicodeString(values[i]));
+            if (key == "/Trapped") {
+                std::string val = values[i];
+                if (val.empty() || val.front() != '/') {
+                    val.insert(val.begin(), '/');
+                }
+                info.replaceKey(key, QPDFObjectHandle::newName(val));
+            } else {
+                info.replaceKey(key, QPDFObjectHandle::newUnicodeString(values[i]));
+            }
         } else {
             info.removeKey(key);
         }
@@ -976,7 +984,11 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_optimize(const uint8_t* input, int64_t input
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_force_version_file(const char* in_path, const char* out_path,
                                                        const char* version) {
-    return forceVersionFile(in_path, out_path, version);
+    try {
+        return forceVersionFile(in_path, out_path, version);
+    } catch (...) {
+        return JPDFIUM_ERR_NATIVE;
+    }
 }
 
 JPDFIUM_EXPORT int32_t jpdfium_qpdf_inspect(const uint8_t* input, int64_t inputLen,

@@ -921,6 +921,16 @@ void UpdateOrCreatePdfxMetadata(QPDF* qpdf, const char* version, const char* con
     metadata.getDict().replaceKey("/Type", QPDFObjectHandle::newName("/Metadata"));
     metadata.getDict().replaceKey("/Subtype", QPDFObjectHandle::newName("/XML"));
     root.replaceKey("/Metadata", metadata);
+
+    // ISO 15930-1 (PDF/X-1a) and ISO 15930-3 (PDF/X-3) require GTS_PDFXVersion
+    // in the document information dictionary.
+    if (ver.rfind("PDF/X-1", 0) == 0 || ver.rfind("PDF/X-3", 0) == 0) {
+        QPDFObjectHandle info = qpdf->getTrailer().getKey("/Info");
+        if (!info.isDictionary()) info = QPDFObjectHandle::newDictionary();
+        if (!info.isIndirect()) info = qpdf->makeIndirectObject(info);
+        info.replaceKey("/GTS_PDFXVersion", QPDFObjectHandle::newUnicodeString(ver));
+        qpdf->getTrailer().replaceKey("/Info", info);
+    }
 }
 
 std::shared_ptr<Buffer> InjectPdfx(const uint8_t* input, size_t input_len, const uint8_t* icc,

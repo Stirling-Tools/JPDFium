@@ -2,6 +2,9 @@ package stirling.software.jpdfium.doc;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
+import stirling.software.jpdfium.panama.AnnotationBindings;
+import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.PageEditBindings;
 
 import java.lang.foreign.Arena;
@@ -104,9 +107,48 @@ public final class PdfFontAuditor {
                     MemorySegment obj;
                     try {
                         obj = (MemorySegment) PageEditBindings.FPDFPage_GetObject.invokeExact(rawPage, i);
-                    } catch (Throwable t) { continue; }
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                        continue;
+                    }
                     if (obj.equals(MemorySegment.NULL)) continue;
                     scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
+                }
+
+                if (AnnotationBindings.FPDFAnnot_GetObjectCount != null
+                        && AnnotationBindings.FPDFAnnot_GetObject != null) {
+                    int annotCount = 0;
+                    try {
+                        annotCount = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(rawPage);
+                    } catch (Throwable t) {
+                        NativeRuntime.rethrowFatal(t);
+                    }
+                    for (int a = 0; a < annotCount; a++) {
+                        MemorySegment annot = MemorySegment.NULL;
+                        try {
+                            annot = (MemorySegment) AnnotationBindings.FPDFPage_GetAnnot.invokeExact(rawPage, a);
+                        } catch (Throwable t) {
+                            NativeRuntime.rethrowFatal(t);
+                        }
+                        if (annot.equals(MemorySegment.NULL)) continue;
+                        try {
+                            int annotObjCount = (int) AnnotationBindings.FPDFAnnot_GetObjectCount.invokeExact(annot);
+                            for (int j = 0; j < annotObjCount; j++) {
+                                MemorySegment obj = (MemorySegment) AnnotationBindings.FPDFAnnot_GetObject.invokeExact(annot, j);
+                                if (obj.equals(MemorySegment.NULL)) continue;
+                                scanObject(obj, pageIdx, fontMap, seenOnPage, 0);
+                            }
+                        } catch (Throwable t) {
+                            NativeRuntime.rethrowFatal(t);
+                            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
+                        } finally {
+                            try {
+                                AnnotationBindings.FPDFPage_CloseAnnot.invokeExact(annot);
+                            } catch (Throwable t) {
+                                NativeRuntime.rethrowFatal(t);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -152,19 +194,23 @@ public final class PdfFontAuditor {
             Map<String, FontBuilder> fontMap,
             Set<Long> seenOnPage,
             int depth) {
-        if (depth > 32) return;
+        if (depth > 32) {
+            throw new JPDFiumException("Form XObject nesting exceeds maximum supported depth (32)");
+        }
         int type;
         try {
             type = (int) PageEditBindings.FPDFPageObj_GetType.invokeExact(obj);
         } catch (Throwable t) {
-            return;
+            NativeRuntime.rethrowFatal(t);
+            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
         }
         if (type == FPDF_PAGEOBJ_TEXT) {
             MemorySegment font;
             try {
                 font = (MemorySegment) PageEditBindings.FPDFTextObj_GetFont.invokeExact(obj);
             } catch (Throwable t) {
-                return;
+                NativeRuntime.rethrowFatal(t);
+                throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
             }
             if (font.equals(MemorySegment.NULL)) return;
             long fontAddr = font.address();
@@ -188,17 +234,22 @@ public final class PdfFontAuditor {
             return;
         }
         if (type != FPDF_PAGEOBJ_FORM) return;
+        if (!PageEditBindings.formTraversalAvailable()) {
+            throw new JPDFiumException("Form XObject traversal not supported in this PDFium build");
+        }
         int children;
         try {
             children = (int) PageEditBindings.FPDFFormObj_CountObjects.invokeExact(obj);
         } catch (Throwable t) {
-            return;
+            NativeRuntime.rethrowFatal(t);
+            throw t instanceof JPDFiumException jpe ? jpe : new JPDFiumException(t);
         }
         for (int i = 0; i < children; i++) {
             MemorySegment child;
             try {
                 child = PageEditBindings.formObject(obj, i);
             } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
                 continue;
             }
             if (!child.equals(MemorySegment.NULL)) {

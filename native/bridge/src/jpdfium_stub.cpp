@@ -865,6 +865,12 @@ int32_t jpdfium_crop_remove_content_ex(int64_t, float x, float y, float w, float
                ? JPDFIUM_ERR_INVALID
                : JPDFIUM_OK;
 }
+int32_t jpdfium_page_mark_redacted(int64_t page) noexcept {
+    if (auto dit = g_page_doc.find(page); dit != g_page_doc.end()) {
+        g_docs[dit->second].hasMutatedRedaction = true;
+    }
+    return JPDFIUM_OK;
+}
 int32_t jpdfium_redact_pattern(int64_t page, const char*, uint32_t,
                                int32_t remove_content) noexcept {
     if (remove_content == 0) return JPDFIUM_ERR_INVALID;  // visual-only cover is banned

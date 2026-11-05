@@ -172,6 +172,7 @@ public final class PdfPageGeometry {
                                 true,
                                 false);
                 if (!removed) {
+                    page.markRedacted();
                     throw new RedactIncompleteException(
                             "strict crop could not remove a boundary-crossing glyph");
                 }

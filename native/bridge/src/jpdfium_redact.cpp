@@ -1197,3 +1197,10 @@ int32_t jpdfium_doc_save_incremental(int64_t doc, uint8_t** data, int64_t* len) 
     *len = static_cast<int64_t>(sz);
     return JPDFIUM_OK;
 }
+
+JPDFIUM_EXPORT int32_t jpdfium_page_mark_redacted(int64_t page) JPDFIUM_NOEXCEPT {
+    PageWrapper* pw = decodePage(page);
+    if (!pw || !pw->core) return JPDFIUM_ERR_INVALID;
+    pw->core->contentRedacted = true;
+    return JPDFIUM_OK;
+}
