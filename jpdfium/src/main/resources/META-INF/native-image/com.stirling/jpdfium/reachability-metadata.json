@@ -1984,6 +1984,31 @@
           "jfloat",
           "jfloat"
         ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "void*",
+          "void*",
+          "jlong",
+          "void*",
+          "void*"
+        ]
+      },
+      {
+        "returnType": "jint",
+        "parameterTypes": [
+          "void*",
+          "jlong",
+          "jlong",
+          "jint",
+          "void*",
+          "jlong",
+          "void*",
+          "void*"
+        ]
       }
     ],
     "upcalls": [
