@@ -33,8 +33,9 @@ val architecture = when (osArch) {
     else -> throw GradleException("Unsupported os.arch '$osArch'. Declare com.stirling:jpdfium-natives-<platform> explicitly.")
 }
 
+// Keep on the last published release; the release workflow advances this example.
 dependencies {
-    implementation(platform("com.stirling:jpdfium-bom:1.3.1"))
+    implementation(platform("com.stirling:jpdfium-bom:1.3.0"))
     implementation("com.stirling:jpdfium")
     runtimeOnly("com.stirling:jpdfium-natives-$platform-$architecture")
 }
