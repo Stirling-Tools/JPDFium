@@ -5,6 +5,8 @@
 // raw stream behind an existing font descriptor. They do not invent glyph
 // mappings; callers must supply font data that matches the font dictionary.
 
+#include <unistd.h>
+
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -12,7 +14,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "jpdfium.h"
@@ -75,7 +76,7 @@ bool save_document(PdfMemDocument& doc, const std::string& path) {
 }
 
 bool replace_font_data_by_name(PdfMemDocument& doc, const std::string& fontName,
-                                   const uint8_t* fontData, int64_t fontLen) {
+                               const uint8_t* fontData, int64_t fontLen) {
     bool replaced = false;
     for (auto& object : doc.GetObjects()) {
         if (!object->IsDictionary()) continue;
@@ -118,8 +119,7 @@ int dedup_images(PdfMemDocument& doc) {
         PdfObject* type = dict->FindKey("Type");
         PdfObject* subtype = dict->FindKey("Subtype");
         if (!type || !subtype || !type->IsName() || !subtype->IsName()) continue;
-        if (type->GetName().GetString() != "XObject"
-                || subtype->GetName().GetString() != "Image") {
+        if (type->GetName().GetString() != "XObject" || subtype->GetName().GetString() != "Image") {
             continue;
         }
         PdfObjectStream* stream = object->GetStream();
@@ -129,7 +129,8 @@ int dedup_images(PdfMemDocument& doc) {
         PdfObject* width = dict->FindKey("Width");
         PdfObject* height = dict->FindKey("Height");
         if (width && height) {
-            key += "|" + std::to_string(static_cast<long long>(width->GetNumber())) + "x" + std::to_string(static_cast<long long>(height->GetNumber()));
+            key += "|" + std::to_string(static_cast<long long>(width->GetNumber())) + "x" +
+                   std::to_string(static_cast<long long>(height->GetNumber()));
         }
         PdfObject* smask = dict->FindKey("SMask");
         if (smask && smask->IsReference()) key += "|" + reference_key(smask->GetReference());
@@ -188,9 +189,10 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_repair(const uint8_t* input, int64_t input
     }
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
-        const uint8_t* input, int64_t inputLen, int64_t fontNum, int32_t fontGen,
-        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen) {
+JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(const uint8_t* input, int64_t inputLen,
+                                                        int64_t fontNum, int32_t fontGen,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen) {
     if (!input || inputLen <= 0 || !fontData || fontLen <= 0 || !output || !outputLen) {
         return JPDFIUM_REPAIR_FAILED;
     }
@@ -202,7 +204,7 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
         PdfMemDocument doc;
         doc.LoadFromBuffer({reinterpret_cast<const char*>(input), static_cast<size_t>(inputLen)});
         PdfObject* font = doc.GetObjects().GetObject(
-                PdfReference(static_cast<uint32_t>(fontNum), static_cast<uint16_t>(fontGen)));
+            PdfReference(static_cast<uint32_t>(fontNum), static_cast<uint16_t>(fontGen)));
         if (!font) return JPDFIUM_REPAIR_FAILED;
         PdfDictionary* dict = nullptr;
         if (!font->TryGetDictionary(dict) || !dict) return JPDFIUM_REPAIR_FAILED;
@@ -227,12 +229,12 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
     }
 }
 
-
-JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(
-        const uint8_t* input, int64_t inputLen, const char* fontName,
-        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen) {
-    if (!input || inputLen <= 0 || !fontName || !*fontName || !fontData || fontLen <= 0
-            || !output || !outputLen) {
+JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(const uint8_t* input, int64_t inputLen,
+                                                      const char* fontName, const uint8_t* fontData,
+                                                      int64_t fontLen, uint8_t** output,
+                                                      int64_t* outputLen) {
+    if (!input || inputLen <= 0 || !fontName || !*fontName || !fontData || fontLen <= 0 ||
+        !output || !outputLen) {
         return JPDFIUM_REPAIR_FAILED;
     }
     *output = nullptr;
@@ -252,7 +254,6 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(
         return JPDFIUM_REPAIR_FAILED;
     }
 }
-
 
 JPDFIUM_EXPORT int32_t jpdfium_podofo_dedup_images(const uint8_t* input, int64_t inputLen,
                                                    uint8_t** output, int64_t* outputLen,
@@ -289,8 +290,9 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_repair(const uint8_t*, int64_t, uint8_t**,
     return JPDFIUM_ERR_NATIVE;
 }
 
-JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
-        const uint8_t*, int64_t, int64_t, int32_t, const uint8_t*, int64_t, uint8_t**, int64_t*) {
+JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(const uint8_t*, int64_t, int64_t, int32_t,
+                                                        const uint8_t*, int64_t, uint8_t**,
+                                                        int64_t*) {
     return JPDFIUM_ERR_NATIVE;
 }
 

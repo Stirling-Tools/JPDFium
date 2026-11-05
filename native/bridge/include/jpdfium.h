@@ -922,15 +922,17 @@ JPDFIUM_EXPORT int32_t jpdfium_podofo_repair(const uint8_t* input, int64_t input
 // Replace the stream behind an existing /FontFile{,2,3} descriptor. The
 // caller supplies program bytes matching the font dictionary; this does not
 // synthesize missing encodings or widths.
-JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(
-        const uint8_t* input, int64_t inputLen, int64_t fontNum, int32_t fontGen,
-        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen);
+JPDFIUM_EXPORT int32_t jpdfium_podofo_replace_font_data(const uint8_t* input, int64_t inputLen,
+                                                        int64_t fontNum, int32_t fontGen,
+                                                        const uint8_t* fontData, int64_t fontLen,
+                                                        uint8_t** output, int64_t* outputLen);
 
 // Replace every font dictionary whose /BaseFont equals fontName and whose
 // descriptor already has a font program stream.
-JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(
-        const uint8_t* input, int64_t inputLen, const char* fontName,
-        const uint8_t* fontData, int64_t fontLen, uint8_t** output, int64_t* outputLen);
+JPDFIUM_EXPORT int32_t jpdfium_podofo_embed_font_data(const uint8_t* input, int64_t inputLen,
+                                                      const char* fontName, const uint8_t* fontData,
+                                                      int64_t fontLen, uint8_t** output,
+                                                      int64_t* outputLen);
 
 // Remove duplicate image XObjects and rewrite /XObject references. This is a
 // structural optimization; it never recompresses image pixels.
