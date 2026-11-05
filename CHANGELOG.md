@@ -32,6 +32,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- Word and pattern redaction now removes text drawn with glyphs the embedded
+  font has no outline for, such as text using a truncated font subset. These
+  pages previously stopped with `RedactIncompleteException`.
+- `commitRedactions` now verifies that marked text was removed, as the other
+  redaction paths do, and raises `RedactIncompleteException` otherwise.
+- A page whose redaction did not finish stays unsavable until a later commit
+  removes the text that redaction left, not merely until any commit on the page
+  succeeds.
+- Redacting a word on rotated, mirrored or skewed text no longer removes
+  glyphs of the neighbouring words or paints over them: the redaction marks
+  and covers the word's own quad instead of the box around it.
 - `PdfVersionConverter` now writes a PDF 2.0 header for `PdfVersion.V2_0`.
   PDFium's `FPDF_SaveWithVersion` currently falls back to a PDF 1.4 header for
   version 20 even though the saved object graph is valid.
