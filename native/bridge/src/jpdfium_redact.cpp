@@ -393,6 +393,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
         // unrenderable, so the span grows to the whole cluster.
         alignMatchesToShapedClusters(tp, matches);
 #endif
+        orientMatchQuads(tp, matches);
 
         // Expected surviving-text fingerprint (pre-redaction).
         std::vector<char> redactSet(count, 0);
@@ -426,6 +427,7 @@ int32_t jpdfium_redact_pattern(int64_t page, const char* pattern, uint32_t argb,
             rect.right = m.bboxR;
             rect.top = m.bboxT;
             FPDFAnnot_SetRect(annot, &rect);
+            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
 
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
@@ -634,6 +636,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
 #ifdef JPDFIUM_HAS_HARFBUZZ
         alignMatchesToShapedClusters(tp, matches);
 #endif
+        orientMatchQuads(tp, matches);
         std::vector<char>& redactSet = t_redactScratch.redactSet;
         redactSet.assign(count, 0);
         for (auto& m : matches)
@@ -685,6 +688,7 @@ int32_t jpdfium_redact_words_ex(int64_t page, const char** words, int32_t wordCo
             rect.right = m.bboxR;
             rect.top = m.bboxT;
             FPDFAnnot_SetRect(annot, &rect);
+            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
 
             uint32_t rem = 0;
             FPDF_BOOL ok = EPDFPage_ApplyRedactions(pw->page, &annot, 1, &rem);
@@ -980,6 +984,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
         // unrenderable, so the span grows to the whole cluster.
         alignMatchesToShapedClusters(tp, matches);
 #endif
+        orientMatchQuads(tp, matches);
 
         // Create REDACT annotations from matches (zero content mutation)
         unsigned int r = (argb >> 16) & 0xFF;
@@ -997,6 +1002,7 @@ int32_t jpdfium_redact_mark_words(int64_t page, const char** words, int32_t word
             rect.right = m.bboxR;
             rect.top = m.bboxT;
             FPDFAnnot_SetRect(annot, &rect);
+            if (m.hasQuad) FPDFAnnot_AppendAttachmentPoints(annot, &m.quad);
             FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_InteriorColor, r, g, b, 255);
             FPDFPage_CloseAnnot(annot);
             createdCount++;

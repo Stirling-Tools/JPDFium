@@ -181,11 +181,12 @@ static constexpr double kFallbackEm = 10.0;  // pt, for chars with no derivable 
 // PDFium gives a glyph with no outline a box one font unit thick; the thinnest
 // inked glyph (a hyphen, a rule) is tens of units.
 static constexpr double kOutlineLessThicknessEm = 0.002;
-// The band an outline-less glyph's cover spans around the baseline. It paints no
-// ink to hide, so the band only places the cover on its line, and stays short of
-// the baselines above and below at any leading of 1em or more.
-static constexpr double kOutlineLessBelowBaselineEm = 0.25;
-static constexpr double kOutlineLessAboveBaselineEm = 0.75;
+// The band a cover spans around the baseline where it is not fitted to glyph
+// boxes: over an outline-less glyph, and across a rotated match's quad. It reaches
+// into the ink of every glyph on the line, and stays short of the baselines above
+// and below at any leading of 1em or more.
+static constexpr double kBaselineBandBelowEm = 0.25;
+static constexpr double kBaselineBandAboveEm = 0.75;
 // How far past the glyph origin a cover reaches: the redactor hit-tests with
 // strict inequalities, and its origin and PDFium's text-page origin are computed
 // in float along different paths.
@@ -401,8 +402,8 @@ static void coverOutlineLessGlyph(FPDF_TEXTPAGE textPage, int index, double* l, 
         if (*t - *b >= thin) return;
         *l = ox - margin;
         *r = std::max(*r - margin, ox + margin);
-        *b = oy - kOutlineLessBelowBaselineEm * em;
-        *t = oy + kOutlineLessAboveBaselineEm * em;
+        *b = oy - kBaselineBandBelowEm * em;
+        *t = oy + kBaselineBandAboveEm * em;
         return;
     }
     if (std::min(*r - *l, *t - *b) >= thin) return;
@@ -417,6 +418,124 @@ bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r
     if (!FPDFText_GetCharBox(textPage, index, l, r, b, t)) return false;
     coverOutlineLessGlyph(textPage, index, l, r, b, t);
     return true;
+}
+
+namespace {
+// One baseline in page space: an origin on it, the unit writing direction u, and
+// the unit direction v glyphs rise along (not perpendicular to u on skewed text).
+struct BaselineFrame {
+    double ox = 0, oy = 0, ux = 0, uy = 0, vx = 0, vy = 0;
+
+    // (s, t) of a page point: s along the baseline, t up from it.
+    bool locate(double px, double py, double* s, double* t) const {
+        double det = ux * vy - uy * vx;
+        if (std::fabs(det) < 1e-9) return false;
+        double dx = px - ox, dy = py - oy;
+        *s = (dx * vy - dy * vx) / det;
+        *t = (ux * dy - uy * dx) / det;
+        return true;
+    }
+
+    void point(double s, double t, float* x, float* y) const {
+        *x = static_cast<float>(ox + s * ux + t * vx);
+        *y = static_cast<float>(oy + s * uy + t * vy);
+    }
+};
+
+bool charFrame(FPDF_TEXTPAGE tp, int ci, BaselineFrame* f) {
+    FS_MATRIX m;
+    if (!FPDFText_GetMatrix(tp, ci, &m) || !FPDFText_GetCharOrigin(tp, ci, &f->ox, &f->oy))
+        return false;
+    double nu = std::hypot(static_cast<double>(m.a), static_cast<double>(m.b));
+    double nv = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+    if (nu <= 0 || nv <= 0) return false;
+    f->ux = m.a / nu;
+    f->uy = m.b / nu;
+    f->vx = m.c / nv;
+    f->vy = m.d / nv;
+    return true;
+}
+
+// How far char `ci`, at (s, t) in `f`, reaches along the baseline: to the next
+// char's origin when that char carries on along the same baseline, else to the
+// far side of its glyph box.
+double advanceAlong(FPDF_TEXTPAGE tp, int ci, const BaselineFrame& f, double s, double t,
+                    double em) {
+    int next = ci + 1;
+    double nx, ny, ns, nt;
+    if (next < FPDFText_CountChars(tp) && FPDFText_IsGenerated(tp, next) != 1 &&
+        FPDFText_GetCharOrigin(tp, next, &nx, &ny) && f.locate(nx, ny, &ns, &nt) &&
+        std::fabs(nt - t) <= 0.1 * em && ns > s && ns - s <= 2 * em) {
+        return ns - s;
+    }
+    double l, r, b, top;
+    double reach = s;
+    if (FPDFText_GetCharBox(tp, ci, &l, &r, &b, &top)) {
+        const double xs[4] = {l, r, l, r};
+        const double ys[4] = {b, b, top, top};
+        for (int k = 0; k < 4; ++k) {
+            double cs, ct;
+            if (f.locate(xs[k], ys[k], &cs, &ct)) reach = std::max(reach, cs);
+        }
+    }
+    return reach - s;
+}
+}  // namespace
+
+// On rotated, mirrored or skewed text a match's bbox also spans the corners
+// around the tilted word, where the neighbouring glyphs sit, and the redactor
+// removes every glyph a mark touches; the quad is the word's own cell instead.
+// It runs along the baseline from just before the first origin (so an
+// outline-less glyph, a point there, is inside) to just short of where the next
+// glyph starts, across the baseline band. Upright text is left to its bbox, which
+// is already exact there, and so is a match that does not lie on one baseline.
+void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches) {
+    for (TextMatch& m : matches) {
+        m.hasQuad = false;
+        BaselineFrame frame;
+        bool started = false;
+        bool oneBaseline = true;
+        double em = 0, lo = 0, hi = 0;
+        for (int ci : m.charIndices) {
+            if (FPDFText_IsGenerated(tp, ci) == 1) continue;
+            BaselineFrame cf;
+            double cem = charEm(tp, ci, nullptr);
+            if (cem <= 0 || !charFrame(tp, ci, &cf)) {
+                oneBaseline = false;
+                break;
+            }
+            if (!started) {
+                frame = cf;
+                started = true;
+            } else if (std::fabs(cf.ux - frame.ux) > 0.01 || std::fabs(cf.uy - frame.uy) > 0.01 ||
+                       std::fabs(cf.vx - frame.vx) > 0.01 || std::fabs(cf.vy - frame.vy) > 0.01) {
+                oneBaseline = false;
+                break;
+            }
+            double s, t;
+            if (!frame.locate(cf.ox, cf.oy, &s, &t) || std::fabs(t) > 0.1 * cem) {
+                oneBaseline = false;
+                break;
+            }
+            em = std::max(em, cem);
+            lo = std::min(lo, s);
+            hi = std::max(hi, s + advanceAlong(tp, ci, frame, s, t, cem));
+        }
+        if (!started || !oneBaseline) continue;
+        bool upright = frame.ux > 0 && frame.vy > 0 && std::fabs(frame.uy) <= 0.01 &&
+                       std::fabs(frame.vx) <= 0.01;
+        if (upright) continue;
+        double margin = kOriginMarginEm * em;
+        double s0 = lo - margin;
+        double s1 = std::max(hi - margin, lo + margin);
+        double below = -kBaselineBandBelowEm * em;
+        double above = kBaselineBandAboveEm * em;
+        frame.point(s0, above, &m.quad.x1, &m.quad.y1);
+        frame.point(s1, above, &m.quad.x2, &m.quad.y2);
+        frame.point(s0, below, &m.quad.x3, &m.quad.y3);
+        frame.point(s1, below, &m.quad.x4, &m.quad.y4);
+        m.hasQuad = true;
+    }
 }
 
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t) {

@@ -48,6 +48,10 @@ struct TextMatch {
     std::vector<int> charIndices;                      // text-page char indices for matched chars
     float bboxL = 0, bboxB = 0, bboxR = 0, bboxT = 0;  // tight aggregate bbox (PDF coords)
     int group = -1;                                    // -1: a match on its own
+    // The match's own outline on rotated or skewed text (see orientMatchQuads),
+    // whose bbox also spans the corners around it.
+    bool hasQuad = false;
+    FS_QUADPOINTSF quad{};
 };
 
 // PCRE2 matching layer (replaces std::wregex entirely).
@@ -193,6 +197,9 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
 void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>& unicodeSeq,
                              std::vector<TextMatch>& matches);
 void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+// Sets the quad of each match on text that is not upright, for its REDACT mark's
+// /QuadPoints. Must run while `tp` still describes the page the matches came from.
+void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);
