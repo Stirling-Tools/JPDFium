@@ -182,10 +182,10 @@ public final class PdfPageGeometry {
     }
 
     private static boolean intersects(TextWord word, Rect crop) {
-        return word.x() < crop.x() + crop.width()
-                && word.x() + word.width() > crop.x()
-                && word.y() < crop.y() + crop.height()
-                && word.y() + word.height() > crop.y();
+        return word.x() <= crop.x() + crop.width()
+                && word.x() + word.width() >= crop.x()
+                && word.y() <= crop.y() + crop.height()
+                && word.y() + word.height() >= crop.y();
     }
 
     private static boolean isFullyInside(TextWord word, Rect crop) {

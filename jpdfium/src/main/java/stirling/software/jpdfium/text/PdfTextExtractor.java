@@ -189,6 +189,12 @@ public final class PdfTextExtractor {
 
     private static float parseFloatFast(String s, int start, int end) {
         try {
+            for (int i = start; i < end; i++) {
+                char c = s.charAt(i);
+                if (c == 'e' || c == 'E') {
+                    return Float.parseFloat(s.substring(start, end));
+                }
+            }
             int dot = -1;
             for (int i = start; i < end; i++) {
                 if (s.charAt(i) == '.') {

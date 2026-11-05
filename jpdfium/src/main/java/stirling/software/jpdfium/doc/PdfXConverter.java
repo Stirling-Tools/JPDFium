@@ -123,15 +123,15 @@ public final class PdfXConverter {
             throw new JPDFiumException("PDF/X metadata check requires the output intent profile");
         }
         validateCmykProfile(options.outputIntentProfile());
-        byte[][] markers = {
-            ascii("/OutputIntents"),
-            ascii("/GTS_PDFX"),
-            ascii("GTS_PDFXVersion"),
-            ascii(options.standard().gtsVersion())
-        };
-        if (!containsAll(pdf, markers)) {
-            throw new JPDFiumException("PDF/X metadata check: missing or mismatched"
-                    + " GTS_PDFXVersion metadata");
+        if (!containsAll(pdf, new byte[][] {ascii("/OutputIntents")})) {
+            throw new JPDFiumException("PDF/X metadata check: missing /OutputIntents");
+        }
+        if (!containsAll(pdf, new byte[][] {ascii("/GTS_PDFX")})) {
+            throw new JPDFiumException("PDF/X metadata check: missing GTS_PDFX metadata");
+        }
+        if (!containsAll(pdf, new byte[][] {
+                ascii("GTS_PDFXVersion"), ascii(options.standard().gtsVersion())})) {
+            throw new JPDFiumException("PDF/X metadata check: mismatched GTS_PDFXVersion");
         }
     }
 
