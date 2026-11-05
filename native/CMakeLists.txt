@@ -322,16 +322,12 @@ if(JPDFIUM_USE_PDFIUM)
         message(STATUS "PDFio not found; repair bridge reports unavailable")
     endif()
 
-    # Optional PoDoFo: font program replacement and a conservative repair
-    # fallback. Kept opt-in because PoDoFo is LGPL/MPL and pulls in fontconfig.
-    find_package(podofo CONFIG QUIET)
-    if(podofo_FOUND)
-        target_link_libraries(jpdfium PRIVATE podofo::podofo)
-        target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
-        message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
-    else()
-        message(STATUS "PoDoFo not found; PoDoFo bridge reports unavailable")
-    endif()
+    # PoDoFo is a normal dependency: font-program replacement, conservative
+    # repair and duplicate-image removal are part of the native surface.
+    find_package(podofo CONFIG REQUIRED)
+    target_link_libraries(jpdfium PRIVATE podofo::podofo)
+    target_compile_definitions(jpdfium PRIVATE JPDFIUM_HAS_PODOFO=1)
+    message(STATUS "PoDoFo enabled: ${podofo_VERSION}")
 
     find_program(CARGO_CMD cargo)
     if(NOT CARGO_CMD)

@@ -1,6 +1,6 @@
 # Optional native dependencies
 
-The default bridge builds without PoDoFo or PDFio. Both are detected by CMake and compile into the same `libjpdfium` when present.
+PDFio is optional. PoDoFo is a required native dependency and is linked into `libjpdfium` whenever the bridge is built.
 
 ## PDFio
 
@@ -26,7 +26,7 @@ cmake --build native/build-real -j
 
 Set `JPDFIUM_HAS_PDFIO=1` automatically; `RepairLib.pdfioRepair` then reports a real status instead of `unavailable`.
 
-## PoDoFo
+## PoDoFo (required)
 
 PoDoFo supplies a font-program replacement bridge and a conservative repair path.
 
