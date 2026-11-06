@@ -1,6 +1,6 @@
 # Installation
 
-JPDFium publishes to https://maven.stirlingpdf.com under the `com.stirling` group. Releases up to 1.3.0 are also on Maven Central. The current release is **1.3.0**.
+JPDFium publishes to https://maven.stirlingpdf.com under the `com.stirling` group, and releases are also published to Maven Central. The current release is **1.3.0**.
 
 ## Requirements
 
