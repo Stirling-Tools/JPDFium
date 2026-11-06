@@ -2,7 +2,9 @@ package stirling.software.jpdfium.text;
 
 import stirling.software.jpdfium.PdfDocument;
 import stirling.software.jpdfium.PdfPage;
+import stirling.software.jpdfium.exception.JPDFiumException;
 
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -93,14 +95,29 @@ public final class PdfTextExtractor {
      * Malformed objects are skipped wholesale.
      */
     static List<TextChar> parseCharsPacked(byte[] packed) {
+        try {
+            return decodeCharsPacked(packed);
+        } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException e) {
+            throw new JPDFiumException("malformed packed text characters", e);
+        }
+    }
+
+    private static List<TextChar> decodeCharsPacked(byte[] packed) {
         ByteBuffer buf = ByteBuffer.wrap(packed).order(ByteOrder.LITTLE_ENDIAN);
         int count = buf.getInt();
         int fontCount = buf.getInt();
         int recordsStart = buf.position();
-        buf.position(recordsStart + count * PACKED_RECORD_BYTES);
+        long recordsEnd = recordsStart + (long) count * PACKED_RECORD_BYTES;
+        if (count < 0 || fontCount < 0 || recordsEnd > packed.length) {
+            throw new IllegalArgumentException("counts exceed the buffer");
+        }
+        buf.position((int) recordsEnd);
         String[] fonts = new String[fontCount];
         for (int f = 0; f < fontCount; f++) {
             int len = buf.getInt();
+            if (len < 0 || len > buf.remaining()) {
+                throw new IllegalArgumentException("font name exceeds the buffer");
+            }
             fonts[f] = new String(packed, buf.position(), len, StandardCharsets.UTF_8);
             buf.position(buf.position() + len);
         }
@@ -115,6 +132,9 @@ public final class PdfTextExtractor {
             float h = buf.getFloat();
             float size = buf.getFloat();
             int fontId = buf.getInt();
+            if (fontId < 0 || fontId >= fontCount) {
+                throw new IllegalArgumentException("font id " + fontId + " out of range");
+            }
             chars.add(new TextChar(index, unicode, x, y, w, h, fonts[fontId], size));
         }
         return chars;
