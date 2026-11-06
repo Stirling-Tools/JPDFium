@@ -141,6 +141,8 @@ class PdfEncryptionCopyTest {
         assertEquals(shared, Files.getPosixFilePermissions(durable));
         assertEquals(PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(ephemeral));
         assertNoStagingFiles();
+        assertThrows(IllegalArgumentException.class,
+                () -> PdfSecurity.copyEncryption(input, ephemeral, source, OWNER, null));
     }
 
     @ParameterizedTest
