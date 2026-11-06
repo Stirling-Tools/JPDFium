@@ -38,6 +38,10 @@ publishing workflows, not library releases, so they are not listed here.
   encoding instead of deflating streams stored without a filter. Image-heavy inputs
   with raw image data merge several times faster; such outputs are as large as their
   inputs rather than compressed. `PdfOptimizer` still compresses on request.
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
 
 ### Fixed
 
