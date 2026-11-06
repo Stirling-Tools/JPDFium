@@ -205,6 +205,12 @@ JPDFIUM_EXPORT void jpdfium_free_buffer(uint8_t* buffer) JPDFIUM_NOEXCEPT;
 // Returns per-character data as a compact JSON array: [{i,u,x,y,w,h,font,size}, ...]
 // The caller owns the returned string and must free it with jpdfium_free_string.
 JPDFIUM_EXPORT int32_t jpdfium_text_get_chars(int64_t page, char** json);
+// Same characters as jpdfium_text_get_chars, packed little-endian instead of JSON:
+// int32 char_count, int32 font_count; char_count records of
+// {int32 index, int32 unicode, float x, float y, float w, float h, float font_size, int32 font_id};
+// then font_count entries of {int32 byte_length, UTF-8 bytes}. font_id indexes that table.
+// The caller owns *data and must free it with jpdfium_free_buffer.
+JPDFIUM_EXPORT int32_t jpdfium_text_get_chars_packed(int64_t page, uint8_t** data, int64_t* len);
 JPDFIUM_EXPORT int32_t jpdfium_text_find(int64_t page, const char* query, char** json);
 JPDFIUM_EXPORT void jpdfium_free_string(char* str) JPDFIUM_NOEXCEPT;
 
@@ -318,6 +324,21 @@ JPDFIUM_EXPORT int32_t jpdfium_annot_clear_redacts(int64_t page) JPDFIUM_NOEXCEP
 // Returns the number of REDACT annotations that were committed in *commitCount.
 JPDFIUM_EXPORT int32_t jpdfium_redact_commit(int64_t page, uint32_t argb, int32_t remove_content,
                                              int32_t* commitCount) JPDFIUM_NOEXCEPT;
+
+// Decoder for image encodings PDFium has no codec for (JPEG XL, HEIF, AVIF).
+// Redaction calls it to erase part of such an image instead of dropping the
+// whole picture. It receives the image bytes and an |out| buffer of |out_len|
+// bytes, and returns 1 after filling |out| completely with one frame: an
+// 8-byte little-endian [width][height] header, then straight R,G,B,A. Any
+// other result keeps the fail-closed fallback (the image is not kept). Only
+// bytes that start with a JPEG XL, HEIF or AVIF signature are passed in, and
+// only for images of at most 100 million pixels. NULL clears the decoder.
+// Thread-safe, but clearing or replacing it does not wait for a decode that
+// is already running: keep the old function valid until no redaction that
+// could have picked it up is still in progress.
+typedef int32_t (*jpdfium_image_decoder_fn)(const uint8_t* data, int64_t len, uint8_t* out,
+                                            int64_t out_len);
+JPDFIUM_EXPORT void jpdfium_set_image_decoder(jpdfium_image_decoder_fn decoder) JPDFIUM_NOEXCEPT;
 
 // JSON report of the last mandatory sanitize stage (qpdf pass) on a
 // redacted save. Caller frees with jpdfium_free_string. Returns "" (empty

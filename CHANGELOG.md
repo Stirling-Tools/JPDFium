@@ -19,6 +19,53 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- `StorageOptions.Builder.durable(false)` and `PdfSecurity.copyEncryption(..., SaveOptions)`
+  skip the fsync for file outputs the caller reads back and deletes, such as
+  split parts streamed into a response.
+- `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
+  return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
+  when the native bundle exports it, instead of formatting and parsing JSON, which
+  was most of the cost of text extraction.
+
+### Changed
+
+- `PdfMerge.mergeFilesToFile` and `PdfSplit.extractPageRangeToFile` write their
+  staging file without fsync and flush once when they publish the output, which
+  now gets the destination's permissions as other saves do. They previously
+  flushed the staging file and then renamed it without flushing the rename.
+- `PdfMerge.mergeFilesToFile`, `PdfSplit.extractPageRangeToFile`, the qpdf byte-array
+  merge and extract, and `PdfSecurity.copyEncryption` keep every stream's existing
+  encoding instead of deflating streams stored without a filter. Image-heavy inputs
+  with raw image data merge several times faster; such outputs are as large as their
+  inputs rather than compressed. `PdfOptimizer` still compresses on request.
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
+
+### Fixed
+
+- `PdfTextExtractor` no longer drops the sign of negative coordinates between -1 and 0,
+  or misreads coordinates the native JSON writes in exponent notation.
+- Word and pattern redaction now removes text drawn with glyphs the embedded
+  font has no outline for, such as text using a truncated font subset. These
+  pages previously stopped with `RedactIncompleteException`.
+- `commitRedactions` now verifies that marked text was removed, as the other
+  redaction paths do, and raises `RedactIncompleteException` otherwise.
+- A page whose redaction did not finish stays unsavable until a later commit
+  removes the text that redaction left, not merely until any commit on the page
+  succeeds.
+- Redacting a word on rotated, mirrored or skewed text no longer removes
+  glyphs of the neighbouring words or paints over them: the redaction marks
+  and covers the word's own quad instead of the box around it.
+
+## [1.3.0] - 2026-11-05
+
+### Added
+
 - In-process qpdf parity for the operations that previously required the
   `qpdf` executable: QDF repair (`PdfOptimizer.repair`), content normalization,
   unreferenced page-resource cleanup, full compression-level control, and
@@ -45,6 +92,17 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Fixed
 
+- The UTF-8 pattern engine and UTF-32 redaction engine used different C++ structs
+  with the same name, violating the one-definition rule in optimized builds.
+  Their native pattern types now have distinct names.
+- Applying annotation redactions produced by Adobe Acrobat (`commitRedactions`,
+  `applyRedaction`, and `applyRedactions`) unexpectedly drew a duplicate black
+  box near the bottom-left corner of the page: Acrobat's pre-baked `/RO`
+  (Redact Overlay) Form XObject uses an offset matrix translation that the
+  native overlay flattening ignored. Existing `/RO` streams are now stripped
+  before applying redactions, preventing misaligned overlays from being
+  flattened into the page. This also drops any overlay text or custom colour
+  baked into Acrobat's `/RO` stream.
 - Whole-word redaction skipped pages where words are separated by control
   characters (some fonts map the space glyph to U+0002): the keyword prefilter
   reads text without those characters and saw the words joined. The prefilter
@@ -57,6 +115,19 @@ publishing workflows, not library releases, so they are not listed here.
   also erased the same pixels in the other placements, which nothing covered.
   Such a request now fails with `RedactIncompleteException` before the page
   changes, and the document can still be saved.
+- Redacting part of a JPEG XL, HEIF or AVIF image (encodings PDFium cannot
+  decode) dropped the whole picture. With an image codec registered (the
+  `jpdfium-vips` module) the image is now decoded, only the covered pixels are
+  erased, and the rest is kept. Without one it still fails closed. The bridge
+  adds `jpdfium_set_image_decoder`, which `JpdfiumLib` registers at startup.
+- A partly redacted image grew on save: the erased image was always stored as
+  8-bit RGB with a soft mask, even when it was opaque. It now gets a soft mask
+  only when it has transparency. Gray images are rewritten as `/DeviceGray`
+  by a qpdf pass at save, and 1-bit scans (JBIG2, CCITT) stay 1-bit. On an A4
+  300 dpi scan the redacted page drops from about 256 KB to 96 KB. If that pass
+  cannot run, the image keeps PDFium's 8-bit `/Indexed` gray form, which is
+  still fully redacted. The pass is file-to-file, so a large save does not hold
+  the whole document in memory.
 - Content redaction crashed on Windows inside HarfBuzz: the shaping cache handed
   it font bytes it had marked read-only from a buffer that died with the function,
   so shaping read freed memory. HarfBuzz now owns a copy of the font data.
@@ -64,6 +135,29 @@ publishing workflows, not library releases, so they are not listed here.
   was opened without `_O_BINARY`. The shifted offsets made PDFium's own reader
   mis-resolve objects and reload page content as empty; every file-based save
   overload was affected.
+- The linux-x64 natives required glibc 2.43 because the build ran on an
+  unpinned `ubuntu-latest` runner, so they failed to load on Ubuntu 24.04 and
+  any other distribution with an older glibc, with
+  "version `GLIBC_2.43' not found". linux-x64 now builds on Ubuntu 24.04 like
+  linux-arm64. PDFium and vips prebuild producers use the same baseline,
+  and publication gates reject shared libraries and final bundles requiring
+  glibc newer than 2.39, `GLIBCXX_3.4.33` or `CXXABI_1.3.15`.
+  Snapshot CI runs the staged Linux natives on Ubuntu 24.04 and 26.04,
+  including merge/extract preservation and vips codec tests, and rejects
+  skipped compatibility tests.
+- Merging and page extraction through qpdf kept only the pages and dropped the
+  rest of the document: form fields, page labels, named destinations, viewer
+  preferences, XMP metadata, the document language and the document
+  information dictionary. The first input now keeps its document-level data,
+  form fields from every input are carried over (a clashing field name is
+  renamed), and page labels are rebuilt for the new page order. Bookmarks, the
+  structure tree, XFA form and usage-rights signatures are still dropped,
+  because they describe the source document and are wrong once its pages are
+  rearranged, and the output is still written unencrypted.
+- `NOTICE.txt` in the natives jars now credits Skia, PCRE2 and its SLJIT JIT
+  compiler, pugixml, libunibreak, Expat, Brotli, bzip2 and LLVM libc++, which
+  were bundled without a notice, and the natives POMs name the bundled
+  libraries' licenses alongside MIT.
 
 ### Changed
 
@@ -325,7 +419,8 @@ PDFium-backed document, page, text, image, and redaction APIs. Per-version notes
 were not maintained; see the [Releases](https://github.com/Stirling-Tools/JPDFium/releases)
 page and the `v1.0.x` tags.
 
-[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/Stirling-Tools/JPDFium/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.3.0
 [1.2.0]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.2.0
 [1.1.5]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.5
 [1.1.4]: https://github.com/Stirling-Tools/JPDFium/releases/tag/v1.1.4

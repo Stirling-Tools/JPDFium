@@ -106,8 +106,9 @@ jobs:
         # Every mode builds with Skia + AGG and ships lib/pdfium-use-skia, so
         # the bridge defaults to Skia and jpdfium_init_ex(0) can force AGG.
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: component }
-          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: static    }
+          # Keep the target libc stable when ubuntu-latest moves to a newer LTS.
+          - { platform: linux-x64,    runner: ubuntu-24.04,      target_cpu: x64,   mode: component }
+          - { platform: linux-x64,    runner: ubuntu-24.04,      target_cpu: x64,   mode: static    }
           # linux-arm64 cross-compiles from an x64 host. Native arm64 hosts hit
           # an "Exec format error" because Chromium's bundled clang for arm64
           # hosts isn't usable in this PDFium revision - the binary in
@@ -115,8 +116,8 @@ jobs:
           # Cross-compiling from x64 with target_cpu=arm64 uses the x64 clang
           # binary with --target=aarch64-linux-gnu, which works. This is also
           # how bblanchon/pdfium-binaries handles linux-arm64.
-          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: component }
-          - { platform: linux-arm64,  runner: ubuntu-latest,     target_cpu: arm64, mode: static    }
+          - { platform: linux-arm64,  runner: ubuntu-24.04,      target_cpu: arm64, mode: component }
+          - { platform: linux-arm64,  runner: ubuntu-24.04,      target_cpu: arm64, mode: static    }
           # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
           # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
           # from the host - GitHub cannot run JS actions in Alpine containers on
@@ -148,8 +149,8 @@ jobs:
           - { platform: windows-arm64, runner: windows-2022,     target_cpu: arm64, mode: static    }
           # Experimental JavaScript / XFA variants (linux-x64 only: V8 builds
           # are hours long and add tens of MB). Warn-only below.
-          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: v8 }
-          - { platform: linux-x64,    runner: ubuntu-latest,     target_cpu: x64,   mode: xfa }
+          - { platform: linux-x64,    runner: ubuntu-24.04,      target_cpu: x64,   mode: v8 }
+          - { platform: linux-x64,    runner: ubuntu-24.04,      target_cpu: x64,   mode: xfa }
           # Experimental FreeBSD x64 cross-compile
           - { platform: freebsd-x64,  runner: ubuntu-latest,     target_cpu: x64,   target_os: freebsd, mode: component }
           - { platform: freebsd-x64,  runner: ubuntu-latest,     target_cpu: x64,   target_os: freebsd, mode: static }
@@ -228,6 +229,11 @@ jobs:
           export FREEBSD_SYSROOT="${FREEBSD_SYSROOT:-}"
           export JPDFIUM_BUILD_MODE="$JPDFIUM_BUILD_MODE"
           bash native/setup-pdfium.sh
+
+      - name: Check glibc floor
+        # Static archives are checked after linking the final native bundle.
+        if: (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64') && matrix.mode != 'static' && (matrix.mode != 'v8' && matrix.mode != 'xfa' || inputs.build-experimental == true)
+        run: bash native/ci/check-glibc-floor.sh native/pdfium/lib
 
       # musl: build PDFium inside an Alpine container via docker run (GitHub
       # cannot host JS actions in Alpine containers on arm64 runners).

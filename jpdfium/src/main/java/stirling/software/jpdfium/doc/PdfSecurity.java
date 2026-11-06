@@ -8,6 +8,7 @@ import stirling.software.jpdfium.model.FlattenMode;
 import stirling.software.jpdfium.panama.FontLib;
 import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.OutputTransaction;
+import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.panama.QpdfLib;
 import stirling.software.jpdfium.redact.pii.XmpRedactor;
 
@@ -107,7 +108,17 @@ public final class PdfSecurity {
      *         is unencrypted, the input is encrypted, or the output cannot be safely published
      */
     public static void copyEncryption(Path input, Path output, Path source, String password) {
-        if (!QpdfLib.copyEncryptionToFile(input, output, source, password)) {
+        copyEncryption(input, output, source, password, SaveOptions.fast());
+    }
+
+    /**
+     * As {@link #copyEncryption(Path, Path, Path, String)}, publishing with {@code options}:
+     * {@link SaveOptions#durable()} false skips the fsync for outputs the caller reads back and
+     * deletes. Other save options do not apply.
+     */
+    public static void copyEncryption(Path input, Path output, Path source, String password,
+                                      SaveOptions options) {
+        if (!QpdfLib.copyEncryptionToFile(input, output, source, password, options.durable())) {
             throw new JPDFiumException("PDF encryption copy is unavailable in this native bundle");
         }
     }

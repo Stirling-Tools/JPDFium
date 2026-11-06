@@ -2,6 +2,11 @@ package stirling.software.jpdfium;
 
 import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.Test;
+import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
+import org.apache.pdfbox.cos.COSStream;
+import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.Loader;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.StorageOptions;
@@ -67,6 +72,73 @@ class PdfMergeSplitFilesTest {
             assertEquals(PdfVerifier.pageText(bytesPath, i, "bytes path"),
                     PdfVerifier.pageText(fileBytes, i, "file path"),
                     "page " + i + " text differs between merge paths");
+        }
+    }
+
+    @Test
+    void nonDurableFileOutputsMatchDurableOnes(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path a = tmp.resolve("a.pdf");
+        Path b = tmp.resolve("b.pdf");
+        Files.write(a, SyntheticPdfFactory.createDiverse(2));
+        Files.write(b, SyntheticPdfFactory.createDiverse(3));
+        StorageOptions ephemeral = StorageOptions.builder().durable(false).build();
+
+        Path durableMerge = tmp.resolve("durable-merge.pdf");
+        Path ephemeralMerge = tmp.resolve("ephemeral-merge.pdf");
+        PdfMerge.mergeFilesToFile(List.of(a, b), durableMerge);
+        PdfMerge.mergeFilesToFile(List.of(a, b), ephemeralMerge, ephemeral);
+        byte[] durableBytes = Files.readAllBytes(durableMerge);
+        byte[] ephemeralBytes = Files.readAllBytes(ephemeralMerge);
+        assertEquals(5, PdfVerifier.pageCount(ephemeralBytes, "non-durable merge"));
+        for (int i = 0; i < 5; i++) {
+            assertEquals(PdfVerifier.pageText(durableBytes, i, "durable merge"),
+                    PdfVerifier.pageText(ephemeralBytes, i, "non-durable merge"));
+        }
+
+        Path part = tmp.resolve("part.pdf");
+        Files.writeString(part, "stale");
+        PdfSplit.extractPageRangeToFile(b, 1, 2, part, ephemeral);
+        assertEquals(2, PdfVerifier.pageCount(Files.readAllBytes(part), "non-durable extract"));
+        assertTrue(Files.list(tmp).noneMatch(p -> p.getFileName().toString().startsWith(".jpdfium-stage")),
+                "staging files must not be left behind");
+    }
+
+    @Test
+    void fileMergeAndExtractKeepRawStreamsRaw(@TempDir Path tmp) throws Exception {
+        assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
+        assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
+        assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+
+        Path raw = tmp.resolve("raw.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            for (int i = 0; i < 2; i++) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(
+                        doc, page, PDPageContentStream.AppendMode.OVERWRITE, false)) {
+                    cs.addRect(10, 10, 100, 100);
+                    cs.fill();
+                }
+            }
+            doc.save(raw.toFile(), CompressParameters.NO_COMPRESSION);
+        }
+
+        Path merged = tmp.resolve("merged.pdf");
+        PdfMerge.mergeFilesToFile(List.of(raw, raw), merged);
+        Path part = tmp.resolve("part.pdf");
+        PdfSplit.extractPageRangeToFile(raw, 1, 1, part);
+
+        for (Path out : List.of(merged, part)) {
+            try (PDDocument doc = Loader.loadPDF(out.toFile())) {
+                for (PDPage page : doc.getPages()) {
+                    COSStream contents = (COSStream) page.getCOSObject().getDictionaryObject(COSName.CONTENTS);
+                    assertNull(contents.getFilters(), out.getFileName() + " content stream was re-encoded");
+                }
+            }
         }
     }
 

@@ -45,7 +45,14 @@ public final class PdfMerge {
      * Publish a staging file this class owns, reporting a publication that
      * landed without a confirmed directory sync instead of assuming durability.
      */
-    private static void publishStagedFile(Path staged, Path output) throws IOException {
+    private static void publishStagedFile(Path staged, Path output, boolean durable)
+            throws IOException {
+        if (!durable) {
+            // Internal, caller-owned staging file: the bytes are already in the page cache
+            // and the caller reopens or deletes the result, so skip the fsync.
+            OutputTransaction.publishStaged(staged, output, false);
+            return;
+        }
         if (OutputTransaction.publishStagedDurable(staged, output)
                 == OutputTransaction.Durability.UNCONFIRMED) {
             LOG.log(System.Logger.Level.WARNING,
@@ -386,7 +393,7 @@ public final class PdfMerge {
             Path staged = OutputTransaction.stagingFile(options, output);
             try {
                 Files.copy(paths.getFirst(), staged, StandardCopyOption.REPLACE_EXISTING);
-                publishStagedFile(staged, output);
+                publishStagedFile(staged, output, options.durable());
                 staged = null;
             } finally {
                 deleteQuietly(staged);
@@ -411,7 +418,7 @@ public final class PdfMerge {
                 // the staged write itself must not duplicate that work.
                 merged.saveTo(staged, SaveOptions.ephemeral());
             }
-            publishStagedFile(staged, output);
+            publishStagedFile(staged, output, options.durable());
             staged = null;
         } finally {
             deleteQuietly(staged);
@@ -448,7 +455,7 @@ public final class PdfMerge {
             // this method owns, so this is the only rename and the only fsync on
             // the merge-to-file path. Nothing is fsynced under an intermediate
             // name that is about to be renamed away.
-            publishStagedFile(staged, output);
+            publishStagedFile(staged, output, options.durable());
             staged = null;
             return true;
         } finally {

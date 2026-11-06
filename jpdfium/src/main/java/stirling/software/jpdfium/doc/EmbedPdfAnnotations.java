@@ -33,6 +33,39 @@ public final class EmbedPdfAnnotations {
     private static final int FLAT_NORMALDISPLAY = 0;
     /** {@code EPDFPage_FlattenAnnotations} return value: at least one flattened. */
     private static final int FLATTEN_SUCCESS = 1;
+    /** PDFium annotation subtype for {@code /Redact}. */
+    private static final int FPDF_ANNOT_REDACT = 28;
+
+    /** Outcome of applying every pending redact annotation on a page. */
+    private record ApplyAllResult(boolean applied, int removed) {}
+
+    /**
+     * Drop Acrobat's pre-baked {@code /RO} overlay from one annotation.
+     *
+     * <p>Adobe Acrobat stores the overlay as a Form XObject whose {@code /Matrix}
+     * offsets the content. The EmbedPDF fork ignores that matrix when flattening
+     * {@code /RO}, so the overlay is painted again near the page origin. Removing
+     * the key makes the native apply path use only its own redaction boxes.
+     *
+     * <p>No-op when the pinned PDFium build does not expose
+     * {@code EPDFAnnot_RemoveKey}.
+     */
+    private static void stripRedactOverlay(MemorySegment annot) {
+        MethodHandle removeKey = EmbedPdfAnnotationBindings.EPDFAnnot_RemoveKey;
+        if (removeKey == null) return;
+        try (Arena arena = Arena.ofConfined()) {
+            int subtype = (int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot);
+            if (subtype != FPDF_ANNOT_REDACT) return;
+            MemorySegment keySeg = arena.allocateFrom("RO");
+            int ok = (int) removeKey.invokeExact(annot, keySeg);
+            if (ok == 0) throw new JPDFiumException("EPDFAnnot_RemoveKey(RO) failed");
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        }
+    }
 
     private EmbedPdfAnnotations() {}
     /**
@@ -239,50 +272,137 @@ public final class EmbedPdfAnnotations {
             throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
         }
         MemorySegment annot = openAnnot(page, index);
+        int removed;
         try (Arena arena = Arena.ofConfined()) {
+            stripRedactOverlay(annot);
             MemorySegment marks = arena.allocate(ValueLayout.ADDRESS);
             marks.set(ValueLayout.ADDRESS, 0, annot);
             MemorySegment countSeg = arena.allocate(JAVA_INT);
             int ok = (int) apply.invokeExact(page, marks, 1, countSeg);
             if (ok == 0) throw new JPDFiumException("EPDFPage_ApplyRedactions failed");
-            return countSeg.get(JAVA_INT, 0);
-        } catch (Throwable t) { throw new JPDFiumException(t); }
-        finally { closeAnnot(annot); }
+            removed = countSeg.get(JAVA_INT, 0);
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        } finally { closeAnnot(annot); }
+        PdfPageEditor.generateContent(page);
+        return removed;
     }
 
     /**
      * Apply all redact annotations on a page.
      *
+     * <p>Marks are applied one at a time. If a later mark fails, earlier marks
+     * stay applied, page content is regenerated before the failure propagates,
+     * and the page is left partially redacted.
+     *
      * @param page raw FPDF_PAGE
      * @return true if any redactions were applied
+     * @throws JPDFiumException when a redaction apply or content regeneration fails
      */
     public static boolean applyAllRedactions(MemorySegment page) {
-        MethodHandle apply = EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions;
-        if (apply == null) {
-            throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
-        }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment countSeg = arena.allocate(JAVA_INT);
-            return (int) apply.invokeExact(page, MemorySegment.NULL, 0, countSeg) != 0;
-        } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
+        return applyAllRedactMarks(page).applied();
     }
 
     /**
      * Apply all redact annotations on a page and return the count of side-effect removed annotations.
      *
+     * <p>Marks are applied one at a time. If a later mark fails, earlier marks
+     * stay applied, page content is regenerated before the failure propagates,
+     * and the page is left partially redacted.
+     *
      * @param page raw FPDF_PAGE
      * @return count of non-redact annotations removed as a side effect
+     * @throws JPDFiumException when a redaction apply or content regeneration fails
      */
     public static int applyAllRedactionsWithCount(MemorySegment page) {
+        return applyAllRedactMarks(page).removed();
+    }
+
+    /**
+     * Apply every REDACT annotation one at a time, highest index first.
+     *
+     * <p>Applying them individually matches {@code commitRedactions} and avoids
+     * the all-at-once entry point synthesising a misplaced overlay once
+     * Acrobat's {@code /RO} key has been removed.
+     */
+    private static ApplyAllResult applyAllRedactMarks(MemorySegment page) {
         MethodHandle apply = EmbedPdfAnnotationBindings.EPDFPage_ApplyRedactions;
         if (apply == null) {
             throw new UnsupportedOperationException("EPDFPage_ApplyRedactions is not supported by this PDFium build");
         }
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment countSeg = arena.allocate(JAVA_INT);
-            int ok = (int) apply.invokeExact(page, MemorySegment.NULL, 0, countSeg);
-            return (ok != 0) ? countSeg.get(JAVA_INT, 0) : 0;
-        } catch (Throwable t) { throw new JPDFiumException("EPDFPage_ApplyRedactions failed", t); }
+        boolean applied = false;
+        int removed = 0;
+        Throwable pending = null;
+        try {
+            while (true) {
+                int index = lastRedactIndex(page);
+                if (index < 0) break;
+                MemorySegment annot = openAnnot(page, index);
+                try {
+                    stripRedactOverlay(annot);
+                    try (Arena arena = Arena.ofConfined()) {
+                        MemorySegment marks = arena.allocate(ValueLayout.ADDRESS);
+                        marks.set(ValueLayout.ADDRESS, 0, annot);
+                        MemorySegment countSeg = arena.allocate(JAVA_INT);
+                        int ok = (int) apply.invokeExact(page, marks, 1, countSeg);
+                        if (ok == 0) throw new JPDFiumException("EPDFPage_ApplyRedactions failed");
+                        applied = true;
+                        removed += countSeg.get(JAVA_INT, 0);
+                    }
+                } catch (JPDFiumException e) {
+                    throw e;
+                } catch (Throwable t) {
+                    NativeRuntime.rethrowFatal(t);
+                    throw new JPDFiumException(t);
+                } finally { closeAnnot(annot); }
+            }
+        } catch (RuntimeException | Error e) {
+            pending = e;
+            throw e;
+        } finally {
+            if (applied) {
+                try {
+                    PdfPageEditor.generateContent(page);
+                } catch (Throwable gen) {
+                    NativeRuntime.rethrowFatal(gen);
+                    if (pending != null) {
+                        pending.addSuppressed(gen);
+                    } else {
+                        throw gen instanceof JPDFiumException e ? e : new JPDFiumException(gen);
+                    }
+                }
+            }
+        }
+        return new ApplyAllResult(applied, removed);
+    }
+
+    private static int lastRedactIndex(MemorySegment page) {
+        int count;
+        try {
+            count = (int) AnnotationBindings.FPDFPage_GetAnnotCount.invokeExact(page);
+        } catch (JPDFiumException e) {
+            throw e;
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            throw new JPDFiumException(t);
+        }
+        for (int i = count - 1; i >= 0; i--) {
+            MemorySegment annot = openAnnot(page, i);
+            try {
+                if ((int) AnnotationBindings.FPDFAnnot_GetSubtype.invokeExact(annot) == FPDF_ANNOT_REDACT) {
+                    return i;
+                }
+            } catch (JPDFiumException e) {
+                throw e;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException(t);
+            } finally { closeAnnot(annot); }
+        }
+        return -1;
     }
 
     /**

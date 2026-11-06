@@ -1496,6 +1496,38 @@ public final class JpdfiumLib {
         });
     }
 
+    private static final MethodHandle TEXT_GET_CHARS_PACKED_HANDLE = Symbols.downcallOptional(
+            "jpdfium_text_get_chars_packed",
+            FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, ADDRESS));
+
+    /**
+     * Characters of a page in the packed layout documented on
+     * {@code jpdfium_text_get_chars_packed}, or null when the loaded bridge predates it.
+     */
+    public static byte[] textGetCharsPacked(long page) {
+        if (TEXT_GET_CHARS_PACKED_HANDLE == null) return null;
+        return PdfiumRuntime.execute(() -> {
+            try (Arena a = Arena.ofConfined()) {
+                MemorySegment dataOut = a.allocate(ADDRESS);
+                MemorySegment lenOut = a.allocate(JAVA_LONG);
+                check((int) TEXT_GET_CHARS_PACKED_HANDLE.invokeExact(page, dataOut, lenOut),
+                        "textGetCharsPacked");
+                MemorySegment data = dataOut.get(ADDRESS, 0);
+                long len = lenOut.get(JAVA_LONG, 0);
+                try {
+                    return data.reinterpret(len).toArray(JAVA_BYTE);
+                } finally {
+                    JpdfiumH.jpdfium_free_buffer(data);
+                }
+            } catch (RuntimeException re) {
+                throw re;
+            } catch (Throwable t) {
+                NativeRuntime.rethrowFatal(t);
+                throw new JPDFiumException("textGetCharsPacked failed", t);
+            }
+        });
+    }
+
     public static String textGetChars(long page) {
         return PdfiumRuntime.execute(() -> {
             check(JpdfiumH.jpdfium_text_get_chars(page, SCRATCH.get().addr), "textGetChars");

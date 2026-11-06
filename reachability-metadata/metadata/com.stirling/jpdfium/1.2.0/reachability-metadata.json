@@ -171,6 +171,20 @@
       "type": "stirling.software.jpdfium.panama.QpdfLib"
     },
     {
+      "type": "stirling.software.jpdfium.panama.RedactImageDecoder",
+      "methods": [
+        {
+          "name": "decode",
+          "parameterTypes": [
+            "java.lang.foreign.MemorySegment",
+            "long",
+            "java.lang.foreign.MemorySegment",
+            "long"
+          ]
+        }
+      ]
+    },
+    {
       "type": "stirling.software.jpdfium.panama.RepairLib"
     },
     {
