@@ -595,7 +595,7 @@ public final class JpdfiumLib {
 
     /**
      * Publish an untouched source file instead of re-serializing the open
-     * document. Used by {@link PdfDocument#saveTo(Path, SaveOptions)} when the
+     * document. Used by {@code PdfDocument.saveTo(Path, SaveOptions)} when the
      * live document still matches its open-time bytes, so a lazy temp-owned
      * document can be saved without ever opening PDFium.
      */

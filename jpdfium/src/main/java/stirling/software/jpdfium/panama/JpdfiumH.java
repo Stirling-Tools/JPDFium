@@ -33,6 +33,9 @@ public class JpdfiumH extends JpdfiumH$shared {
 
     static final Arena LIBRARY_ARENA = Arena.ofAuto();
 
+    static final SymbolLookup SYMBOL_LOOKUP = SymbolLookup.loaderLookup()
+            .or(Linker.nativeLinker().defaultLookup());
+
 
     private static class jpdfium_abi_version {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
