@@ -914,11 +914,6 @@ public final class PdfSplit {
     }
 
     /**
-     * Materialize a document snapshot at {@code target}. An untouched
-     * file-backed document is copied straight from its source file so no
-     * PDFium serialization (or lazy native open) is needed.
-     */
-    /**
      * Materialize a document snapshot at {@code target}. An untouched,
      * file-backed document is copied straight from its source file when the
      * caller opted into source reuse, so no PDFium serialization (or lazy

@@ -144,16 +144,6 @@ public final class StorageOptions {
             return this;
         }
 
-        /**
-         * Require the published output to survive a crash (fsync of the file and
-         * directory). Defaults to true; disable only when the output is
-         * rebuildable or the caller owns durability.
-         */
-        public Builder durable(boolean durable) {
-            this.durable = durable;
-            return this;
-        }
-
         /** Dir for temp files, null for the platform default. */
         public Builder tempDir(Path tempDir) {
             this.tempDir = tempDir;
