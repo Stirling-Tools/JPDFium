@@ -472,7 +472,8 @@ void assemblePages(QPDF& primary, std::vector<PageSelection> const& selections) 
 void configureAssembledWriter(QPDFWriter& w) {
     w.setPreserveEncryption(false);
     w.setObjectStreamMode(qpdf_o_generate);
-    w.setCompressStreams(true);
+    w.setCompressStreams(false);
+    w.setDecodeLevel(qpdf_dl_none);
 }
 
 QpdfResult mergePdfs(const uint8_t* const* inputs, const int64_t* inputLens, int32_t count) {
@@ -1733,6 +1734,8 @@ JPDFIUM_EXPORT int32_t jpdfium_qpdf_copy_encryption_file(const char* in_path, co
             // no fresh key is generated (callers wanting a new key use
             // jpdfium_qpdf_encrypt_file instead).
             w.copyEncryptionParameters(*source);
+            w.setCompressStreams(false);
+            w.setDecodeLevel(qpdf_dl_none);
             WriterLock lock{-1};
             w.write();
             return 0;
