@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.StorageOptions;
 import stirling.software.jpdfium.doc.PdfPageEditor;
+import stirling.software.jpdfium.doc.PdfSecurity;
 import stirling.software.jpdfium.panama.NativeRuntime;
 import stirling.software.jpdfium.panama.QpdfLib;
 
@@ -16,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -27,16 +29,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.Random;
 import javax.imageio.ImageIO;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.pdfwriter.compress.CompressParameters;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.encryption.AccessPermission;
+import org.apache.pdfbox.pdmodel.encryption.StandardProtectionPolicy;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 
@@ -208,36 +216,92 @@ class PdfMergeSplitFilesTest {
     }
 
     @Test
-    void fileMergeAndExtractKeepRawStreamsRaw(@TempDir Path tmp) throws Exception {
+    void qpdfOutputsKeepEveryStreamEncoding(@TempDir Path tmp) throws Exception {
         assumeTrue(NativeRuntime.isFull(), "needs real PDFium native library");
         assumeTrue(QpdfLib.isMergeFilesSupported(), "needs file-backed qpdf merge symbol");
         assumeTrue(QpdfLib.isExtractFileSupported(), "needs file-backed qpdf extract symbol");
+        assumeTrue(PdfSecurity.isCopyEncryptionSupported(), "needs the native encryption-copy API");
 
-        Path raw = tmp.resolve("raw.pdf");
-        try (PDDocument doc = new PDDocument()) {
-            for (int i = 0; i < 2; i++) {
-                PDPage page = new PDPage(PDRectangle.A4);
-                doc.addPage(page);
-                try (PDPageContentStream cs = new PDPageContentStream(
-                        doc, page, PDPageContentStream.AppendMode.OVERWRITE, false)) {
-                    cs.addRect(10, 10, 100, 100);
-                    cs.fill();
-                }
-            }
-            doc.save(raw.toFile(), CompressParameters.NO_COMPRESSION);
-        }
+        Path source = tmp.resolve("mixed.pdf");
+        Files.write(source, rawAndFlatePages());
+        byte[] sourceBytes = Files.readAllBytes(source);
+        List<PageStream> expected = pageStreams(sourceBytes, null);
+        assertNull(expected.get(0).filters());
+        assertEquals(COSName.FLATE_DECODE, expected.get(1).filters());
 
         Path merged = tmp.resolve("merged.pdf");
-        PdfMerge.mergeFilesToFile(List.of(raw, raw), merged);
-        Path part = tmp.resolve("part.pdf");
-        PdfSplit.extractPageRangeToFile(raw, 1, 1, part);
+        PdfMerge.mergeFilesToFile(List.of(source, source), merged);
+        assertPagesKeepEncoding(expected, List.of(0, 1, 0, 1), Files.readAllBytes(merged), null);
 
-        for (Path out : List.of(merged, part)) {
-            try (PDDocument doc = Loader.loadPDF(out.toFile())) {
-                for (PDPage page : doc.getPages()) {
-                    COSStream contents = (COSStream) page.getCOSObject().getDictionaryObject(COSName.CONTENTS);
-                    assertNull(contents.getFilters(), out.getFileName() + " content stream was re-encoded");
+        Path part = tmp.resolve("part.pdf");
+        PdfSplit.extractPageRangeToFile(source, 1, 1, part);
+        assertPagesKeepEncoding(expected, List.of(1), Files.readAllBytes(part), null);
+
+        assertPagesKeepEncoding(expected, List.of(0, 1, 0, 1),
+                QpdfLib.merge(List.of(sourceBytes, sourceBytes)), null);
+        assertPagesKeepEncoding(expected, List.of(1, 0),
+                QpdfLib.extractPages(sourceBytes, new int[] {1, 0}), null);
+
+        Path protection = tmp.resolve("protection.pdf");
+        try (PDDocument doc = new PDDocument()) {
+            doc.addPage(new PDPage(PDRectangle.A4));
+            StandardProtectionPolicy policy =
+                    new StandardProtectionPolicy("owner", "user", new AccessPermission());
+            policy.setEncryptionKeyLength(256);
+            doc.protect(policy);
+            doc.save(protection.toFile());
+        }
+        Path protectedOut = tmp.resolve("protected.pdf");
+        PdfSecurity.copyEncryption(source, protectedOut, protection, "owner");
+        assertPagesKeepEncoding(expected, List.of(0, 1), Files.readAllBytes(protectedOut), "user");
+    }
+
+    private record PageStream(COSBase filters, byte[] encoded, byte[] decoded) {}
+
+    private static byte[] rawAndFlatePages() throws IOException {
+        try (PDDocument doc = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage raw = new PDPage(PDRectangle.A4);
+            doc.addPage(raw);
+            try (PDPageContentStream cs = new PDPageContentStream(
+                    doc, raw, PDPageContentStream.AppendMode.OVERWRITE, false)) {
+                cs.addRect(10, 10, 100, 100);
+                cs.fill();
+            }
+            PDPage flate = new PDPage(PDRectangle.A4);
+            doc.addPage(flate);
+            byte[] content = "0 0 1 rg 20 20 200 200 re f\n".getBytes(StandardCharsets.US_ASCII);
+            flate.setContents(new PDStream(doc, new ByteArrayInputStream(content), COSName.FLATE_DECODE));
+            doc.save(out, CompressParameters.NO_COMPRESSION);
+            return out.toByteArray();
+        }
+    }
+
+    private static List<PageStream> pageStreams(byte[] pdf, String password) throws IOException {
+        List<PageStream> streams = new ArrayList<>();
+        try (PDDocument doc = password == null ? Loader.loadPDF(pdf) : Loader.loadPDF(pdf, password)) {
+            for (PDPage page : doc.getPages()) {
+                COSStream contents = (COSStream) page.getCOSObject().getDictionaryObject(COSName.CONTENTS);
+                try (InputStream encoded = contents.createRawInputStream();
+                     InputStream decoded = contents.createInputStream()) {
+                    streams.add(new PageStream(contents.getFilters(),
+                            encoded.readAllBytes(), decoded.readAllBytes()));
                 }
+            }
+        }
+        return streams;
+    }
+
+    private static void assertPagesKeepEncoding(List<PageStream> source, List<Integer> sourcePages,
+            byte[] output, String password) throws IOException {
+        List<PageStream> actual = pageStreams(output, password);
+        assertEquals(sourcePages.size(), actual.size(), "page count");
+        for (int i = 0; i < actual.size(); i++) {
+            PageStream want = source.get(sourcePages.get(i));
+            PageStream got = actual.get(i);
+            assertEquals(want.filters(), got.filters(), "filters of output page " + i);
+            assertArrayEquals(want.decoded(), got.decoded(), "content of output page " + i);
+            if (password == null) {
+                assertArrayEquals(want.encoded(), got.encoded(), "encoded bytes of output page " + i);
             }
         }
     }

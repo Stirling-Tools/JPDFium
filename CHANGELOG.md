@@ -50,11 +50,13 @@ publishing workflows, not library releases, so they are not listed here.
 - `PdfRedactor.redact` with fewer than eight literal words no longer reads every
   page's text in Java before the native redaction reads it again; the native
   redaction already skips pages without a match.
-- `PdfMerge.mergeFilesToFile`, `PdfSplit.extractPageRangeToFile`, the qpdf byte-array
-  merge and extract, and `PdfSecurity.copyEncryption` keep every stream's existing
-  encoding instead of deflating streams stored without a filter. Image-heavy inputs
-  with raw image data merge several times faster; such outputs are as large as their
-  inputs rather than compressed. `PdfOptimizer` still compresses on request.
+- qpdf merge, page extract and encryption copy (`PdfMerge.mergeFilesToFile`,
+  `PdfSplit.extractPageRangeToFile`, the qpdf byte-array merge and extract, and
+  `PdfSecurity.copyEncryption`) keep every stream's existing encoding instead of
+  decoding and deflating it. Image-heavy inputs with raw image data merge several
+  times faster; such outputs are as large as their inputs rather than compressed.
+  The PDFium fallback, used when qpdf is unavailable or rejects an input, still
+  compresses unfiltered streams, and `PdfOptimizer` still compresses on request.
 
 ### Fixed
 
