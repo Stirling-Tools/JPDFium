@@ -43,6 +43,14 @@ PLATFORM_DIST="$SCRIPT_DIR/dist/$PLATFORM"
 
 # Find the prepared .dat. The Linux prep job names it icudt<major>l.dat
 # under native/dist/icu-data/; the workflow downloads it before this step.
+# It stages more than one major, so follow the ICU pkg-config resolves when
+# the caller does not pin one. Picking the first file can select data for a
+# different major than the bridge links on newer runners.
+PKG_ICU_VERSION=$(pkg-config --modversion icu-uc 2>/dev/null || true)
+if [ -z "${ICU_VER:-}" ] && [ -n "$PKG_ICU_VERSION" ]; then
+    ICU_VER="${PKG_ICU_VERSION%%.*}"
+fi
+
 TRIMMED_DAT=""
 if [ -n "${ICU_VER:-}" ]; then
     TRIMMED_DAT="$SHARED_DAT_DIR/icudt${ICU_VER}l.dat"
@@ -98,11 +106,8 @@ if [ -n "${BREW_BIN:-}" ]; then
         fi
     done
 fi
-# The bridge links the ICU that pkg-config resolves, which can be newer than
-# the prepared data (release uses unversioned brew icu4c). Wrapping a
-# different major would produce a dylib libicuuc never loads, so skip rather
-# than stage a useless file.
-PKG_ICU_VERSION=$(pkg-config --modversion icu-uc 2>/dev/null || true)
+# Keep the sanity check: an explicitly requested major, or a missing .dat for
+# the major pkg-config resolves, must not stage a dylib libicuuc never loads.
 if [ -n "$PKG_ICU_VERSION" ]; then
     PKG_ICU_VER=${PKG_ICU_VERSION%%.*}
     if [ "$PKG_ICU_VER" != "$ICU_VER" ]; then

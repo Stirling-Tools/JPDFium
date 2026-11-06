@@ -21,8 +21,8 @@ jobs:
   # Cross-build trimmed ICU data once on Linux, ahead of the matrix, so the
   # darwin + windows legs can stay within their size budgets (the full ICU data
   # is ~30-33 MB; the trimmed set ~2 MB). build-minimal-icu-windows.sh produces
-  # BOTH the trimmed windows icudt78.dll and the bare icudt78l.dat that macOS
-  # wraps into libicudata via clang. Mirrors snapshot/release prep-icu-data.
+  # both the trimmed Windows ICU DLLs and the bare icudt<major>l.dat files that
+  # macOS wraps into libicudata via clang. Mirrors snapshot/release prep-icu-data.
   prep-icu-data:
     runs-on: ubuntu-latest
     defaults:
@@ -376,7 +376,7 @@ jobs:
         run: bash native/build-minimal-icu.sh
 
       - name: Download bare trimmed ICU .dat (macOS)
-        # brew icu4c@78 doesn't ship icupkg/pkgdata, so we don't trim locally;
+        # brew icu4c doesn't ship icupkg/pkgdata, so we don't trim locally;
         # we download the pre-trimmed .dat produced once on Linux by the
         # prep-icu-data job and wrap it on macOS via clang. The .dat is
         # platform-agnostic.
@@ -388,9 +388,9 @@ jobs:
 
       - name: Build minimal ICU data (macOS)
         if: startsWith(matrix.platform, 'darwin-')
-        # Wraps the downloaded icudt78l.dat into a libicudata.<MAJ>.dylib via a
-        # clang .incbin asm stub, pre-staged so the bundler picks it up instead
-        # of brew's full 33 MB copy - keeps the darwin bundles within budget.
+        # Wraps the icudt<major>l.dat matching the bridge's ICU into a
+        # libicudata.<MAJ>.dylib via a clang .incbin asm stub, pre-staged so
+        # the bundler picks it up instead of brew's full 33 MB copy.
         run: bash native/build-minimal-icu-macos.sh
 
       - name: Import macOS signing certificate
