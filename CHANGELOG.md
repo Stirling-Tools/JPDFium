@@ -42,6 +42,9 @@ publishing workflows, not library releases, so they are not listed here.
   `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
   from its file instead of being saved through PDFium before every extract.
   `SplitCounters.extractSerializations` counts the snapshots they still take.
+- `PdfRedactor.redact` with fewer than eight literal words no longer reads every
+  page's text in Java before the native redaction reads it again; the native
+  redaction already skips pages without a match.
 
 ### Fixed
 
