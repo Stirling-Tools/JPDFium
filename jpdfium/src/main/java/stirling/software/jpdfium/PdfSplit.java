@@ -114,16 +114,13 @@ public final class PdfSplit {
             // bytes from the original until writing finishes.
             // https://qpdf.readthedocs.io/en/stable/design.html
             int epoch = doc.structureEpoch();
-            Path src = doc.sourcePath();
             // Snapshot first, in its own try: only a snapshot-step failure
             // falls through to the per-range path below. Extraction-loop
             // failures are RuntimeExceptions and propagate after cleanup.
-            Path reusable = null;
+            Path reusable = reusableSource(doc, options);
             boolean ownsReusable = false;
             try {
-                if (src != null && options.reuseSourceFile() && Files.isReadable(src)) {
-                    reusable = src;
-                } else {
+                if (reusable == null) {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
                     doc.saveTo(reusable, SaveOptions.ephemeral());
@@ -498,12 +495,12 @@ public final class PdfSplit {
         }
     }
 
-    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
     private static Path reusableSource(PdfDocument doc, StorageOptions options) {
         Path src = doc.sourcePath();
         return src != null && options.reuseSourceFile() && Files.isReadable(src) ? src : null;
     }
 
+    /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */
     private static void deleteQuietly(Path path) {
         if (path != null) {
             try {
