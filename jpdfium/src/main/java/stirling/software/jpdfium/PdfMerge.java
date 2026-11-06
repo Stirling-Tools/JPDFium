@@ -1,10 +1,11 @@
 package stirling.software.jpdfium;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -329,7 +330,9 @@ public final class PdfMerge {
             // Use staging so the destination is replaced only on success and aliased
             // inputs (src == output) are handled safely, matching the multi-input path.
             try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
-                Files.copy(paths.getFirst(), tx.staging(), StandardCopyOption.REPLACE_EXISTING);
+                try (OutputStream out = Files.newOutputStream(tx.staging(), StandardOpenOption.TRUNCATE_EXISTING)) {
+                    Files.copy(paths.getFirst(), out);
+                }
                 tx.publish(SaveOptions.ephemeral());
             }
             return;

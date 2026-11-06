@@ -113,11 +113,15 @@ public final class PdfSecurity {
 
     /**
      * As {@link #copyEncryption(Path, Path, Path, String)}, publishing with {@code options}:
-     * {@link SaveOptions#durable()} false skips the fsync for outputs the caller reads back and
-     * deletes. Other save options do not apply.
+     * {@link SaveOptions#durable()} false is for outputs the caller reads back and deletes. It
+     * skips the file and directory flush and permission mirroring, so on POSIX the output is
+     * owner-only. Other save options do not apply.
+     *
+     * @throws IllegalArgumentException for null arguments or a password containing NUL
      */
     public static void copyEncryption(Path input, Path output, Path source, String password,
                                       SaveOptions options) {
+        if (options == null) throw new IllegalArgumentException("options must not be null");
         if (!QpdfLib.copyEncryptionToFile(input, output, source, password, options.durable())) {
             throw new JPDFiumException("PDF encryption copy is unavailable in this native bundle");
         }

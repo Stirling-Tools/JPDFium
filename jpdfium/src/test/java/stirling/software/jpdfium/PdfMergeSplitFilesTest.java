@@ -20,6 +20,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -133,6 +134,15 @@ class PdfMergeSplitFilesTest {
         PdfMerge.mergeFilesToFile(List.of(a, b), ephemeralMerge, ephemeral);
         assertEquals(shared, Files.getPosixFilePermissions(durableMerge));
         assertEquals(ownerOnly, Files.getPosixFilePermissions(ephemeralMerge));
+
+        Files.setPosixFilePermissions(a, PosixFilePermissions.fromString("rw-rw-rw-"));
+        Path durableCopy = existingFile(tmp, "durable-copy.pdf", shared);
+        Path ephemeralCopy = existingFile(tmp, "ephemeral-copy.pdf", shared);
+        PdfMerge.mergeFilesToFile(List.of(a), durableCopy);
+        PdfMerge.mergeFilesToFile(List.of(a), ephemeralCopy, ephemeral);
+        assertEquals(shared, Files.getPosixFilePermissions(durableCopy));
+        assertEquals(ownerOnly, Files.getPosixFilePermissions(ephemeralCopy));
+        assertArrayEquals(Files.readAllBytes(a), Files.readAllBytes(ephemeralCopy));
 
         Path durablePart = existingFile(tmp, "durable-part.pdf", shared);
         Path ephemeralPart = existingFile(tmp, "ephemeral-part.pdf", shared);
