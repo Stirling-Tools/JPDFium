@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,6 +18,7 @@ import stirling.software.jpdfium.doc.PdfPageImporter;
 import stirling.software.jpdfium.exception.JPDFiumException;
 import stirling.software.jpdfium.model.SaveOptions;
 import stirling.software.jpdfium.model.StorageOptions;
+import stirling.software.jpdfium.panama.OutputTransaction;
 import stirling.software.jpdfium.panama.QpdfLib;
 
 /**
@@ -52,9 +52,12 @@ public final class PdfSplit {
         public final AtomicLong sourceSerializations = new AtomicLong();
         public final AtomicLong sourceLoads = new AtomicLong();
         public final AtomicLong outputWrites = new AtomicLong();
+        /** Live-document snapshots taken by {@code extractPageRange} and {@code extractPages}. */
+        public final AtomicLong extractSerializations = new AtomicLong();
 
         void reset() {
             sourceSerializations.set(0);
+            extractSerializations.set(0);
             sourceLoads.set(0);
             outputWrites.set(0);
         }
@@ -111,16 +114,13 @@ public final class PdfSplit {
             // bytes from the original until writing finishes.
             // https://qpdf.readthedocs.io/en/stable/design.html
             int epoch = doc.structureEpoch();
-            Path src = doc.sourcePath();
             // Snapshot first, in its own try: only a snapshot-step failure
             // falls through to the per-range path below. Extraction-loop
             // failures are RuntimeExceptions and propagate after cleanup.
-            Path reusable = null;
+            Path reusable = reusableSource(doc, options);
             boolean ownsReusable = false;
             try {
-                if (src != null && options.reuseSourceFile() && Files.isReadable(src)) {
-                    reusable = src;
-                } else {
+                if (reusable == null) {
                     reusable = options.createTempFile("jpdfium-split-src", ".pdf");
                     ownsReusable = true;
                     doc.saveTo(reusable, SaveOptions.ephemeral());
@@ -246,10 +246,16 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits; serialize the live document first.
-                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.saveTo(materialized, SaveOptions.ephemeral());
-                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                // in-memory edits, so it is only read directly when the caller
+                // vouches for it; otherwise serialize the live document first.
+                Path extractFrom = reusableSource(doc, options);
+                if (extractFrom == null) {
+                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                    COUNTERS.extractSerializations.incrementAndGet();
+                    extractFrom = materialized;
+                }
+                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -334,10 +340,16 @@ public final class PdfSplit {
             Path materialized = null;
             try {
                 // The source file behind an open document may be stale after
-                // in-memory edits; serialize the live document first.
-                materialized = options.createTempFile("jpdfium-split-src", ".pdf");
-                doc.saveTo(materialized, SaveOptions.ephemeral());
-                FileExtract extracted = extractToTemp(materialized, pageIndices, remappedBookmarks, options);
+                // in-memory edits, so it is only read directly when the caller
+                // vouches for it; otherwise serialize the live document first.
+                Path extractFrom = reusableSource(doc, options);
+                if (extractFrom == null) {
+                    materialized = options.createTempFile("jpdfium-split-src", ".pdf");
+                    doc.saveTo(materialized, SaveOptions.ephemeral());
+                    COUNTERS.extractSerializations.incrementAndGet();
+                    extractFrom = materialized;
+                }
+                FileExtract extracted = extractToTemp(extractFrom, pageIndices, remappedBookmarks, options);
                 if (extracted.part() != null) return extracted.part();
                 rejected = extracted.rejected();
             } catch (Exception _) {
@@ -444,24 +456,9 @@ public final class PdfSplit {
             // Save to a staging file first, then atomically replace the output.
             // A direct save to output would corrupt the file when output aliases input
             // (the document is still open), and a failed save would leave a partial file.
-            Path staged;
-            try {
-                staged = options.createStagingFile(output);
-            } catch (IOException _) {
-                staged = null;
-            }
-            if (staged != null) {
-                try {
-                    part.save(staged);
-                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-                    staged = null;
-                } finally {
-                    if (staged != null) {
-                        try { Files.deleteIfExists(staged); } catch (IOException _) {}
-                    }
-                }
-            } else {
-                part.save(output);
+            try (OutputTransaction tx = OutputTransaction.begin(output, options.durable())) {
+                part.saveTo(tx.staging(), SaveOptions.ephemeral());
+                tx.publish(SaveOptions.ephemeral());
             }
         }
     }
@@ -474,14 +471,15 @@ public final class PdfSplit {
      */
     private static boolean stageNativeExtract(Path input, int[] pageIndices, int expectedPages,
                                               Path output, StorageOptions options) throws IOException {
-        Path staged;
+        OutputTransaction tx;
         try {
-            staged = options.createStagingFile(output);
+            tx = OutputTransaction.begin(output, options.durable());
         } catch (IOException _) {
             return false;
         }
-        try {
-            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged) || Files.size(staged) == 0) {
+        try (tx) {
+            Path staged = tx.staging();
+            if (!QpdfLib.extractPagesToFile(input, pageIndices, staged, false) || Files.size(staged) == 0) {
                 return false;
             }
             // The native extractor skips out-of-range indices; verify the
@@ -492,12 +490,14 @@ public final class PdfSplit {
                             + expectedPages + " requested pages");
                 }
             }
-            Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING);
-            staged = null;
+            tx.publish(SaveOptions.ephemeral());
             return true;
-        } finally {
-            deleteQuietly(staged);
         }
+    }
+
+    private static Path reusableSource(PdfDocument doc, StorageOptions options) {
+        Path src = doc.sourcePath();
+        return src != null && options.reuseSourceFile() && Files.isReadable(src) ? src : null;
     }
 
     /** Best-effort temp cleanup: a failed delete must not mask the real outcome. */

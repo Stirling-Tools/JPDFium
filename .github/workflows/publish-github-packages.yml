@@ -72,7 +72,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest,    target_cpu: x64   }
+          - { platform: linux-x64,    runner: ubuntu-24.04,     target_cpu: x64   }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm, target_cpu: arm64 }
           # musl / Alpine (linux-musl-*). Built inside a matching-arch Alpine
           # container (eclipse-temurin:25-jdk-alpine = musl JDK) via docker run
@@ -84,7 +84,7 @@ jobs:
           # darwin-x64 runs natively on an Intel runner: Homebrew lives at
           # /usr/local and no Rosetta translation is involved.
           - { platform: darwin-x64,   runner: macos-15-intel,   target_cpu: x64   }
-          - { platform: darwin-arm64, runner: macos-14,         target_cpu: arm64 }
+          - { platform: darwin-arm64, runner: macos-15,         target_cpu: arm64 }
           - { platform: windows-x64,  runner: windows-latest,   target_cpu: x64   }
           - { platform: windows-arm64, runner: windows-11-arm,  target_cpu: arm64 }
           - { platform: freebsd-x64,  runner: ubuntu-latest,    target_cpu: x64   }
@@ -174,7 +174,7 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
-          # macos-14 is arm64. To cross-compile darwin-x64 we need x86_64
+          # macos-15 is arm64. To cross-compile darwin-x64 we need x86_64
           # builds of every pkg-config dep the bridge links against. The
           # cleanest path is a second Homebrew install at /usr/local managed
           # by Rosetta - Homebrew refuses dual-arch in a single prefix and
@@ -200,7 +200,7 @@ jobs:
             tar xz --strip-components=1 -C /usr/local/Homebrew -f /tmp/brew.tgz
             sudo ln -sf /usr/local/Homebrew/bin/brew /usr/local/bin/brew
           fi
-          # /usr/local/share/man pre-exists root-owned on macos-14 runners;
+          # /usr/local/share/man pre-exists root-owned on macos-15 runners;
           # brew needs it writable regardless of which path above installed it.
           sudo chown -R "$(whoami):admin" /usr/local/share/man 2>/dev/null || true
           # Build tools only generate files; native bottles are fine.
@@ -463,6 +463,26 @@ jobs:
           SIZE_GATE_STRICT=1 bash native/bundle-runtime-deps.sh ${{ matrix.platform }}
           ls -la native/dist/${{ matrix.platform }}/
 
+      - name: Check glibc floor
+        # The natives must load on the oldest supported glibc distribution,
+        # not just the runner that linked them.
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/${{ matrix.platform }}
+
+      - name: Check Linux runtime compatibility and preservation
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-linux-compatibility.sh ${{ matrix.platform }}
+        timeout-minutes: 60
+
+      - name: Upload Linux compatibility reports
+        if: always() && (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-compat-${{ matrix.platform }}
+          path: jpdfium/build/test-results/nativeCompatibilityTest*/TEST-*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Sanity check
         # Skipped musl legs (no musl PDFium prebuild yet) or freebsd have no dist dir.
         if: (matrix.libc != 'musl' && (matrix.platform != 'freebsd-x64' || steps.fetch.outputs.freebsd_missing != 'true')) || steps.musl.outcome == 'success'
@@ -564,7 +584,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |

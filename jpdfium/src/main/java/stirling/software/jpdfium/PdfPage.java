@@ -29,6 +29,7 @@ import stirling.software.jpdfium.panama.FfmHelper;
 import stirling.software.jpdfium.panama.JpdfiumLib;
 import stirling.software.jpdfium.panama.PdfiumBuffers;
 import stirling.software.jpdfium.panama.NativeRuntime;
+import stirling.software.jpdfium.panama.PageEditBindings;
 import stirling.software.jpdfium.panama.TextPageBindings;
 import stirling.software.jpdfium.transform.PdfPageBoxes;
 
@@ -810,6 +811,15 @@ public final class PdfPage implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the characters {@link #extractTextJson()} describes in the packed little-endian
+     * layout of {@code jpdfium_text_get_chars_packed}, or null when the native bundle predates it.
+     */
+    public byte[] extractTextCharsPacked() {
+        ensureOpen();
+        return JpdfiumLib.textGetCharsPacked(handle);
+    }
+
     /** Returns raw character data as JSON: [{i,u,x,y,w,h,font,size}, ...] */
     public String extractTextJson() {
         ensureOpen();
@@ -1239,11 +1249,31 @@ public final class PdfPage implements AutoCloseable {
     }
 
     /**
-     * Get the CropBox of this page, if set.
+     * Get the rotation of this page (0=0, 1=90, 2=180, 3=270 degrees).
+     */
+    public int rotation() {
+        ensureOpen();
+        try {
+            return (int) PageEditBindings.FPDFPage_GetRotation.invokeExact(rawPageSegment);
+        } catch (Throwable t) {
+            NativeRuntime.rethrowFatal(t);
+            return 0;
+        }
+    }
+
+    /**
+     * Get the CropBox of this page.
      */
     public Optional<Rect> getCropBox() {
         ensureOpen();
-        return PdfPageBoxes.getCropBox(rawPageSegment);
+        Optional<Rect> direct = PdfPageBoxes.getCropBox(rawPageSegment);
+        if (direct.isPresent()) {
+            return direct;
+        }
+        if (ownerDoc != null) {
+            return ownerDoc.getPageBoxes(pageIndex).cropBox();
+        }
+        return Optional.empty();
     }
 
     /**
@@ -1260,8 +1290,24 @@ public final class PdfPage implements AutoCloseable {
      */
     public Rect getMediaBox() {
         ensureOpen();
-        return PdfPageBoxes.getMediaBox(rawPageSegment)
-                .orElseGet(() -> new Rect(0, 0, size().width(), size().height()));
+        Optional<Rect> direct = PdfPageBoxes.getMediaBox(rawPageSegment);
+        if (direct.isPresent()) {
+            return direct.get();
+        }
+        if (ownerDoc != null) {
+            PageBoxes boxes = ownerDoc.getPageBoxes(pageIndex);
+            if (boxes.mediaBox() != null) {
+                return boxes.mediaBox();
+            }
+        }
+        int rot = rotation();
+        PageSize sz = size();
+        float w = sz.width();
+        float h = sz.height();
+        if (rot == 1 || rot == 3) {
+            return new Rect(0, 0, h, w);
+        }
+        return new Rect(0, 0, w, h);
     }
 
     /**
@@ -1368,12 +1414,21 @@ public final class PdfPage implements AutoCloseable {
             rectSeg.set(ValueLayout.JAVA_FLOAT, EmbedPdfTextBindings.FS_RECTF_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("top")), rect.y() + rect.height());
             int ok = (int) redactHandle.invokeExact(rawPageSegment, rectSeg, recurseForms ? 1 : 0, drawBlackBoxes ? 1 : 0);
             if (ok != 0) {
-                PdfPageEditor.generateContent(rawPageSegment);
-                return true;
+                ownerDoc.markContentModified();
+                markRedacted();
+                return PdfPageEditor.generateContent(rawPageSegment);
             }
             return false;
         } catch (Throwable t) {
-            throw new JPDFiumException("EPDFText_RedactInRect failed", t);
+            NativeRuntime.rethrowFatal(t);
+            JPDFiumException failure = new JPDFiumException("EPDFText_RedactInRect failed", t);
+            try {
+                markRedacted();
+            } catch (Throwable markFailure) {
+                NativeRuntime.rethrowFatal(markFailure);
+                failure.addSuppressed(markFailure);
+            }
+            throw failure;
         }
     }
 
@@ -1422,6 +1477,30 @@ public final class PdfPage implements AutoCloseable {
         ensureOpen();
         ownerDoc.markContentModified();
         return handle;
+    }
+
+    /**
+     * Mark that content on this page has been redacted, refusing subsequent incremental saves.
+     */
+    public void markRedacted() {
+        ensureOpen();
+        ownerDoc.markContentModified();
+        JpdfiumLib.pageMarkRedacted(handle);
+    }
+
+    public void markRedactionIncomplete() {
+        ensureOpen();
+        ownerDoc.markContentModified();
+        JpdfiumLib.pageMarkRedactionIncomplete(handle);
+    }
+
+    /**
+     * Clear the strict-crop failure marker after a full strict-crop audit passes.
+     * Other unresolved redaction areas on this page stay recorded.
+     */
+    public void clearRedactionIncomplete() {
+        ensureOpen();
+        JpdfiumLib.pageClearRedactionIncomplete(handle);
     }
 
     /**

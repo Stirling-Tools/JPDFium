@@ -40,14 +40,14 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
 
       - name: Validate Gradle Wrapper checksum
-        uses: gradle/actions/wrapper-validation@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+        uses: gradle/actions/wrapper-validation@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - uses: actions/setup-java@816722acf8fd27c9d1e9ae6ee6085da07e0d44c1 # v5.7.0
         with:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
@@ -111,7 +111,7 @@ jobs:
         # Temurin 25 is a jmod-less runtime under JEP 493. ProGuard still needs
         # Java library class files, so use GraalVM's full JDK for this
         # measurement only; the production build stays on Temurin.
-        uses: graalvm/setup-graalvm@27b360dbb857524eaf0b4c4cef364d38e5b4f173 # v1.6.7
+        uses: graalvm/setup-graalvm@f70bc8032f90a104502824a54bcb94b6f01715bc # v1.6.8
         with:
           java-version: '25'
           distribution: 'graalvm'
@@ -194,7 +194,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -224,7 +224,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install system libvips and codec dependencies
         run: |
@@ -268,7 +268,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -320,7 +320,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -365,7 +365,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -440,7 +440,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -470,7 +470,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -536,7 +536,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           native-image-job-reports: 'true'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         run: |
@@ -568,7 +568,7 @@ jobs:
           distribution: 'temurin'
           java-version: '25'
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Run the README example against the published artifacts
         run: ./gradlew -p examples/render-first-page run --args="sample.pdf page-1.png" --no-daemon

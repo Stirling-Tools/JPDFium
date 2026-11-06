@@ -18,6 +18,7 @@
 #include <vector>
 
 struct DocCore;
+struct ErasedGrayImage;
 
 #ifdef JPDFIUM_HAS_PCRE2
 #define PCRE2_CODE_UNIT_WIDTH 32
@@ -47,6 +48,10 @@ struct TextMatch {
     std::vector<int> charIndices;                      // text-page char indices for matched chars
     float bboxL = 0, bboxB = 0, bboxR = 0, bboxT = 0;  // tight aggregate bbox (PDF coords)
     int group = -1;                                    // -1: a match on its own
+    // The match's own outline on rotated or skewed text (see orientMatchQuads),
+    // whose bbox also spans the corners around it.
+    bool hasQuad = false;
+    FS_QUADPOINTSF quad{};
 };
 
 // PCRE2 matching layer (replaces std::wregex entirely).
@@ -147,7 +152,8 @@ std::u32string survivingFingerprint(const std::u32string& normalizedText,
                                     const std::vector<char>& redactSet);
 bool eraseImagePixels(FPDF_DOCUMENT doc, FPDF_PAGE page, FPDF_PAGEOBJECT imageObj,
                       const FS_MATRIX& imgMatrix, std::span<const FS_RECTF> rects, uint32_t argb,
-                      bool* pixelsChanged = nullptr);
+                      bool* pixelsChanged = nullptr,
+                      std::vector<ErasedGrayImage>* grayImages = nullptr);
 bool charInRect(double l, double b, double r, double t, float rl, float rb, float rr, float rt);
 std::u32string decomposeLigatures(const std::u32string& input);
 uint32_t unicodeToWinAnsiCharcode(uint32_t unicode);
@@ -172,6 +178,10 @@ class ScopedCoverPage {
     ScopedCoverPage(const ScopedCoverPage&) = delete;
     ScopedCoverPage& operator=(const ScopedCoverPage&) = delete;
 };
+// The page-space box of a char, with a glyph the font has no outline for given
+// the cell a cover must span to remove it rather than PDFium's one-unit sliver.
+bool outlineAwareCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b,
+                         double* t);
 bool matchCharBox(FPDF_TEXTPAGE textPage, int index, double* l, double* r, double* b, double* t);
 bool recomputeMatchBbox(FPDF_TEXTPAGE textPage, TextMatch& m);
 int32_t logicalMatchCount(const std::vector<TextMatch>& matches);
@@ -187,6 +197,9 @@ void scanPagePatterns(DocCore* core, FPDF_TEXTPAGE tp, const std::u32string& wte
 void alignMatchesToGraphemes(FPDF_TEXTPAGE textPage, const std::vector<uint32_t>& unicodeSeq,
                              std::vector<TextMatch>& matches);
 void alignMatchesToShapedClusters(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
+// Sets the quad of each match on text that is not upright, for its REDACT mark's
+// /QuadPoints. Must run while `tp` still describes the page the matches came from.
+void orientMatchQuads(FPDF_TEXTPAGE tp, std::vector<TextMatch>& matches);
 bool auditNoSurvivorsInRegion(FPDF_PAGE page, const std::vector<FS_RECTF>& regions,
                               const std::vector<FPDF_PAGEOBJECT>& exclude);
 void deletePatternCache(void* p);

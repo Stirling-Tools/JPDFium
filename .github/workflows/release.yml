@@ -81,7 +81,7 @@ jobs:
       matrix:
         include:
           - platform: linux-x64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             shell: bash
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
@@ -483,6 +483,12 @@ jobs:
           echo "--- staged ---"
           ls -la native/dist/${{ matrix.platform }}/
 
+      - name: Check glibc floor
+        # The natives must load on the oldest supported glibc distribution,
+        # not just the runner that linked them.
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/${{ matrix.platform }}
+
       - name: Sanity check
         # Skipped musl legs (no musl PDFium prebuild yet) or freebsd have no dist dir.
         if: (matrix.libc != 'musl' && (matrix.platform != 'freebsd-x64' || steps.fetch.outputs.freebsd_missing != 'true')) || steps.musl.outcome == 'success'
@@ -527,6 +533,20 @@ jobs:
         if: always() && matrix.libc != 'musl' && matrix.platform != 'darwin-x64' && !startsWith(matrix.platform, 'freebsd-')
         run: bash native/ci/check-smoke-ran.sh jpdfium/build/test-results/nativeSmokeTest
 
+
+      - name: Check Linux runtime compatibility and preservation
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-linux-compatibility.sh ${{ matrix.platform }}
+        timeout-minutes: 60
+
+      - name: Upload Linux compatibility reports
+        if: always() && (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-compat-${{ matrix.platform }}
+          path: jpdfium/build/test-results/nativeCompatibilityTest*/TEST-*.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
       # darwin-x64 runs on an Intel (macos-15-intel) host; run its x86_64
       # smoke with an x86_64 JDK so it gets the same
@@ -595,7 +615,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-15         }
@@ -617,7 +637,7 @@ jobs:
           distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Download staged natives for ${{ matrix.platform }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
@@ -662,7 +682,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           # darwin-x64 runs on an Intel runner: the keg-only deps resolve
           # from /usr/local and the bundler asserts x86_64.
@@ -684,7 +704,7 @@ jobs:
         with:
           distribution: ${{ matrix.platform == 'windows-arm64' && 'microsoft' || 'temurin' }}
           java-version: '25'
-      - uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+      - uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Download core natives for ${{ matrix.platform }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.1
@@ -882,6 +902,10 @@ jobs:
           [ "$bad" -eq 0 ] || { echo "ERROR: non-x86_64 binaries staged for darwin-x64" >&2; exit 1; }
 
 
+      - name: Check glibc floor
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-glibc-floor.sh native/dist/vips-${{ matrix.platform }}
+
       - name: Build vips natives jar
         run: ./gradlew :jpdfium-natives:jpdfium-natives-vips-${{ matrix.platform }}:jar --no-daemon
 
@@ -915,6 +939,20 @@ jobs:
           retention-days: 7
 
 
+      - name: Check Linux vips runtime compatibility
+        if: matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64'
+        run: bash native/ci/check-linux-compatibility.sh ${{ matrix.platform }} vips
+        timeout-minutes: 60
+
+      - name: Upload Linux vips compatibility reports
+        if: always() && (matrix.platform == 'linux-x64' || matrix.platform == 'linux-arm64')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-vips-compat-${{ matrix.platform }}
+          path: jpdfium-vips/build/test-results/vipsSmokeTest*/TEST-*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   # ── Fan in: assemble, sign, publish everything from one runner ────────────
   publish:
     needs: [build-natives, build-vips-natives, cli-binaries]
@@ -933,7 +971,7 @@ jobs:
           java-version: '25'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@1cff18a4cfab5cd8d4c49a8ccf11c1ad18bb30b9 # v6.3.0
+        uses: gradle/actions/setup-gradle@c8a326d85724fce2ae59a38810306f4a058f26a4 # v6.3.0
 
       - name: Install jextract
         # jpdfium/build.gradle.kts uses jextract to generate JpdfiumH.java
@@ -1049,7 +1087,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: linux-x64,    runner: ubuntu-latest    }
+          - { platform: linux-x64,    runner: ubuntu-24.04     }
           - { platform: linux-arm64,  runner: ubuntu-24.04-arm }
           - { platform: darwin-x64,   runner: macos-15-intel }
           - { platform: darwin-arm64, runner: macos-15         }
