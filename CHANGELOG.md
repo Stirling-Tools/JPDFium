@@ -17,6 +17,13 @@ publishing workflows, not library releases, so they are not listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
+  `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
+  from its file instead of being saved through PDFium before every extract.
+  `SplitCounters.extractSerializations` counts the snapshots they still take.
+
 ### Fixed
 
 - Word and pattern redaction now removes text drawn with glyphs the embedded
