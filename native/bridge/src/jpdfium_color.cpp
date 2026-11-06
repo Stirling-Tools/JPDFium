@@ -890,6 +890,23 @@ bool XmlRemoveProperty(pugi::xml_node description, const std::string& local,
     return !attributes.empty() || !elements.empty();
 }
 
+pugi::xml_node FindTitleDefaultLi(const pugi::xml_node& node, int depth) {
+    if (depth > kMaxXmpDepth) return {};
+    for (pugi::xml_node child : node.children()) {
+        if (child.type() != pugi::node_element) continue;
+        if (XmlLocalName(child.name()) == "li") {
+            const std::string ns = XmlNamespaceUri(child, XmlPrefix(child.name()));
+            if (ns == kRdfNs) {
+                pugi::xml_attribute lang = child.attribute("xml:lang");
+                if (!lang || std::string(lang.value()) == "x-default") return child;
+            }
+        }
+        pugi::xml_node found = FindTitleDefaultLi(child, depth + 1);
+        if (found) return found;
+    }
+    return {};
+}
+
 bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
                  const std::string& conformance, const std::string& title = "",
                  const std::string& trapped = "", const std::string& mod_date = "") {
@@ -948,14 +965,15 @@ bool EditPdfxXml(pugi::xml_document* document, const std::string& version,
         const std::string dc_prefix = XmlEnsurePrefix(first, kDcNs, "dc");
         pugi::xml_node title_node = first.child((dc_prefix + ":title").c_str());
         if (!title_node) title_node = first.append_child((dc_prefix + ":title").c_str());
-        if (!XmlUpdateElement(title_node, "li", kRdfNs, {}, title)) {
+        pugi::xml_node li = FindTitleDefaultLi(title_node, 0);
+        if (!li) {
             const std::string rdf_prefix = XmlEnsurePrefix(title_node, kRdfNs, "rdf");
             pugi::xml_node alt = title_node.child((rdf_prefix + ":Alt").c_str());
             if (!alt) alt = title_node.append_child((rdf_prefix + ":Alt").c_str());
-            pugi::xml_node li = alt.append_child((rdf_prefix + ":li").c_str());
+            li = alt.append_child((rdf_prefix + ":li").c_str());
             li.append_attribute("xml:lang").set_value("x-default");
-            li.text().set(title.c_str());
         }
+        li.text().set(title.c_str());
     }
     return true;
 }

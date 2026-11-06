@@ -186,33 +186,40 @@ public final class PdfPageGeometry {
     private static void removeBoundaryCrossingText(PdfDocument doc, int pageIndex, Rect crop) {
         PageText text = PdfTextExtractor.extractPage(doc, pageIndex);
         try (PdfPage page = doc.page(pageIndex)) {
-            for (TextWord word : text.allWords()) {
-                if (word.chars().isEmpty() || word.text().trim().isEmpty()
-                        || word.width() <= 0 || word.height() <= 0) {
-                    continue;
-                }
-                if (intersects(word, crop) && !isFullyInside(word, crop)) {
-                    for (TextChar ch : word.chars()) {
-                        if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
-                            continue;
-                        }
-                        if (!page.redactInRect(
-                                new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
-                                true,
-                                false)) {
-                            RedactIncompleteException failure = new RedactIncompleteException(
-                                    "strict crop could not redact a boundary-crossing glyph");
-                            try {
-                                page.markRedactionIncomplete();
-                            } catch (Throwable markFailure) {
-                                NativeRuntime.rethrowFatal(markFailure);
-                                failure.addSuppressed(markFailure);
+            try {
+                for (TextWord word : text.allWords()) {
+                    if (word.chars().isEmpty() || word.text().trim().isEmpty()
+                            || word.width() <= 0 || word.height() <= 0) {
+                        continue;
+                    }
+                    if (intersects(word, crop) && !isFullyInside(word, crop)) {
+                        for (TextChar ch : word.chars()) {
+                            if (ch.isWhitespace() || ch.width() <= 0 || ch.height() <= 0) {
+                                continue;
                             }
-                            throw failure;
+                            if (!page.redactInRect(
+                                    new Rect(ch.x(), ch.y(), ch.width(), ch.height()),
+                                    true,
+                                    false)) {
+                                throw new RedactIncompleteException(
+                                        "strict crop could not redact a boundary-crossing glyph");
+                            }
                         }
                     }
                 }
+            } catch (RuntimeException failure) {
+                markIncompletePreservingFailure(page, failure);
+                throw failure;
             }
+        }
+    }
+
+    private static void markIncompletePreservingFailure(PdfPage page, Throwable failure) {
+        try {
+            page.markRedactionIncomplete();
+        } catch (Throwable markFailure) {
+            NativeRuntime.rethrowFatal(markFailure);
+            failure.addSuppressed(markFailure);
         }
     }
 
