@@ -37,16 +37,10 @@ publishing workflows, not library releases, so they are not listed here.
   staging file without fsync and flush once when they publish the output, which
   now gets the destination's permissions as other saves do. They previously
   flushed the staging file and then renamed it without flushing the rename.
-
-### Changed
-
 - `PdfSplit.extractPageRange` and `PdfSplit.extractPages` honour
   `StorageOptions.reuseSourceFile`: an untouched file-backed document is read
   from its file instead of being saved through PDFium before every extract.
   `SplitCounters.extractSerializations` counts the snapshots they still take.
-
-### Changed
-
 - `PdfRedactor.redact` with fewer than eight literal words no longer reads every
   page's text in Java before the native redaction reads it again; the native
   redaction already skips pages without a match.
