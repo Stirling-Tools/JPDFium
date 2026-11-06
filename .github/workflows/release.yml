@@ -1038,7 +1038,7 @@ jobs:
 
       - name: Stage on the Stirling Maven repo
         id: stage
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
         with:
           step: stage
           repo-dir: build/r2-repo
@@ -1143,7 +1143,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Release the verified staging set
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
         with:
           step: promote
           endpoint: ${{ secrets.R2_ENDPOINT }}
@@ -1251,7 +1251,7 @@ jobs:
     environment: maven
     steps:
       - name: Delete this run's staging copy
-        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # main
+        uses: Stirling-Tools/maven-r2-publish/release@0a5de1828b80dc12ff16023a2aadf6dd9a6faff4 # v1.0.0
         with:
           step: cleanup
           endpoint: ${{ secrets.R2_ENDPOINT }}
