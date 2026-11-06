@@ -139,6 +139,12 @@ public final class AnnotationBindings {
     public static final MethodHandle FPDFAnnot_SetBorder = downcall("FPDFAnnot_SetBorder",
             FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_FLOAT, JAVA_FLOAT, JAVA_FLOAT));
 
+    public static final MethodHandle FPDFAnnot_GetObjectCount = downcallOptional("FPDFAnnot_GetObjectCount",
+            FunctionDescriptor.of(JAVA_INT, ADDRESS));
+
+    public static final MethodHandle FPDFAnnot_GetObject = downcallOptional("FPDFAnnot_GetObject",
+            FunctionDescriptor.of(ADDRESS, ADDRESS, JAVA_INT));
+
     /** Layout of FS_QUADPOINTSF: { float x1,y1,x2,y2,x3,y3,x4,y4 }. */
     public static final StructLayout FS_QUADPOINTSF_LAYOUT = MemoryLayout.structLayout(
             JAVA_FLOAT.withName("x1"), JAVA_FLOAT.withName("y1"),

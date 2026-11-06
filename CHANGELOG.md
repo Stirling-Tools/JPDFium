@@ -19,6 +19,14 @@ publishing workflows, not library releases, so they are not listed here.
 
 ### Added
 
+- PDF/X-1a, PDF/X-3, PDF/X-4, and PDF/X-6 metadata bootstrap. `PdfXConverter`
+  now sets the standard base version, writes a missing `/TrimBox`, and
+  optionally fails on non-embedded fonts. `PdfXOptions` gains
+  `requireEmbeddedFonts(...)`; `checkMetadata(Path)` adds a file-backed
+  metadata check.
+- `PdfPageGeometry.cropAndRemoveContentStrict(...)`, which removes a word that
+  crosses the crop edge instead of leaving its outside glyphs clipped and
+  extractable.
 - `PdfPage.extractTextCharsPacked()` and the native `jpdfium_text_get_chars_packed`
   return a page's characters in a packed binary layout. `PdfTextExtractor` uses it
   when the native bundle exports it, instead of formatting and parsing JSON, which
@@ -37,6 +45,12 @@ publishing workflows, not library releases, so they are not listed here.
 - Redacting a word on rotated, mirrored or skewed text no longer removes
   glyphs of the neighbouring words or paints over them: the redaction marks
   and covers the word's own quad instead of the box around it.
+- `PdfVersionConverter` now writes a PDF 2.0 header for `PdfVersion.V2_0`.
+  PDFium's `FPDF_SaveWithVersion` rejects version codes above 17 (PDF 1.7) and
+  falls back to keeping the source document's version rather than writing a
+  PDF 2.0 header.
+- Refuse incremental saves after `PdfPage.redactInRect` modifies content, failing
+  closed with `RedactedSaveException` to protect redacted pages.
 
 ## [1.3.0] - 2026-11-05
 
