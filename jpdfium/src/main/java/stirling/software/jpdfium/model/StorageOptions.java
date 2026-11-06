@@ -52,8 +52,10 @@ public final class StorageOptions {
 
     /**
      * Whether a file written by {@code mergeFilesToFile} or {@code extractPageRangeToFile} is
-     * flushed to disk (fsync plus directory flush) when it is published. On by default; turn it
-     * off for outputs the caller reads back and deletes, such as files streamed into a response.
+     * published durably: fsynced, given the replaced file's permissions, then renamed with a
+     * best-effort directory flush. On by default. Turn it off for outputs the caller reads back
+     * and deletes, such as files streamed into a response; those are renamed into place owner-only
+     * and without fsync.
      */
     public boolean durable() { return durable; }
 
